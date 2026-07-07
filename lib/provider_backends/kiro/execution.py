@@ -51,7 +51,11 @@ def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     # bun runtime and tui.js under ~/Library/Application Support/kiro-cli,
     # read the login token from ~/Library/Keychains, and pass its shell
     # integration checks against ~/.bashrc / ~/.zshrc.
-    return {"KIRO_HOME": str(kiro_home / ".kiro")}
+    #
+    # KIRO_HOME points at the isolated directory itself — the launcher and
+    # home projection treat that directory *as* ~/.kiro, so sessions/,
+    # settings/, agents/ live directly beneath it (no extra .kiro/ layer).
+    return {"KIRO_HOME": str(kiro_home)}
 
 
 def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:
