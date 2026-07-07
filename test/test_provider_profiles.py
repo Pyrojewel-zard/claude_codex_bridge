@@ -25,6 +25,7 @@ import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
 from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
 from provider_backends.droid.home import materialize_droid_home_config
+from provider_backends.kiro.home import materialize_kiro_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 import provider_core.projected_assets as projected_assets
 import provider_profiles.codex_home_config as codex_home_config
@@ -2631,6 +2632,95 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     assert (target_home / 'sessions').is_dir()
     assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
     assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_kiro_home_config_creates_isolated_layout(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-kiro-home'
+    (source_home / '.kiro' / 'settings').mkdir(parents=True, exist_ok=True)
+    (source_home / '.kiro' / 'settings' / 'cli.json').write_text(
+        '{"model":"kirocli"}\n', encoding='utf-8'
+    )
+    (source_home / '.kiro' / 'settings' / 'survey_state.json').write_text(
+        '{"seen":true}\n', encoding='utf-8'
+    )
+    # Session directory in source must NOT be copied into the isolated home
+    # (multi-agent isolation requires that each agent maintain its own sessions).
+    (source_home / '.kiro' / 'sessions' / 'cli').mkdir(parents=True, exist_ok=True)
+    (source_home / '.kiro' / 'sessions' / 'cli' / 'shared.jsonl').write_text('leak\n', encoding='utf-8')
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    assert (target_home / '.kiro' / 'sessions').is_dir()
+    assert (target_home / '.kiro' / 'settings').is_dir()
+    # Settings preferences are inherited so the CLI does not reset per agent.
+    assert (target_home / '.kiro' / 'settings' / 'cli.json').read_text(
+        encoding='utf-8'
+    ) == '{"model":"kirocli"}\n'
+    assert (target_home / '.kiro' / 'settings' / 'survey_state.json').read_text(
+        encoding='utf-8'
+    ) == '{"seen":true}\n'
+    # Sessions must remain per-agent — no source leak.
+    assert not (target_home / '.kiro' / 'sessions' / 'cli').exists()
+
+
+def test_materialize_kiro_home_config_is_idempotent(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-kiro-home'
+    (source_home / '.kiro' / 'settings').mkdir(parents=True, exist_ok=True)
+    (source_home / '.kiro' / 'settings' / 'cli.json').write_text('{}\n', encoding='utf-8')
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+    # A second run must not raise and must leave the layout intact.
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    assert (target_home / '.kiro' / 'settings' / 'cli.json').read_text(encoding='utf-8') == '{}\n'
+    assert (target_home / '.kiro' / 'sessions').is_dir()
+
+
+def test_materialize_kiro_home_config_symlinks_macos_keychain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr('provider_backends.kiro.home.platform.system', lambda: 'Darwin')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-kiro-home'
+    keychains = source_home / 'Library' / 'Keychains'
+    keychains.mkdir(parents=True, exist_ok=True)
+    (keychains / 'login.keychain-db').write_text('kc\n', encoding='utf-8')
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    link = target_home / 'Library' / 'Keychains'
+    assert link.is_symlink()
+    assert link.resolve() == keychains.resolve()
+    # Running again must reuse the existing symlink without failure.
+    materialize_kiro_home_config(target_home, source_home=source_home)
+    assert link.is_symlink()
+
+
+def test_materialize_kiro_home_config_skips_keychain_on_non_darwin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr('provider_backends.kiro.home.platform.system', lambda: 'Linux')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-kiro-home'
+    (source_home / 'Library' / 'Keychains').mkdir(parents=True, exist_ok=True)
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    assert not (target_home / 'Library').exists()
+
+
+def test_materialize_kiro_home_config_survives_missing_source(tmp_path: Path) -> None:
+    source_home = tmp_path / 'nonexistent-source'
+    target_home = tmp_path / 'managed-kiro-home'
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    assert (target_home / '.kiro' / 'sessions').is_dir()
+    assert (target_home / '.kiro' / 'settings').is_dir()
+    # Nothing to inherit — settings dir is empty.
+    assert list((target_home / '.kiro' / 'settings').iterdir()) == []
 
 
 def test_materialize_codex_home_config_writes_project_memory_bundle(tmp_path: Path) -> None:
