@@ -46,7 +46,12 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
 def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     kiro_home = _state_path(request, "kiro_home", fallback="home")
     kiro_home.mkdir(parents=True, exist_ok=True)
-    return {"HOME": str(kiro_home)}
+    # Override KIRO_HOME (kiro-cli's own knob for the .kiro tree) rather than
+    # HOME. The user's real HOME must stay visible so kiro-cli can find its
+    # bun runtime and tui.js under ~/Library/Application Support/kiro-cli,
+    # read the login token from ~/Library/Keychains, and pass its shell
+    # integration checks against ~/.bashrc / ~/.zshrc.
+    return {"KIRO_HOME": str(kiro_home / ".kiro")}
 
 
 def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:

@@ -1,38 +1,44 @@
-"""Kiro provider isolated HOME projection.
+"""Kiro provider isolated ``KIRO_HOME`` projection.
 
-The CCB runtime launches each kiro agent under an isolated HOME (see
+CCB launches each kiro agent under an isolated ``KIRO_HOME`` (see
 ``lib/provider_backends/native_cli_support/launcher.py``) so that multiple
 agents on the same provider do not fight over ``~/.kiro/sessions/`` or share
-the same conversation history. Without any seeding, however, the isolated HOME
-is an empty directory: kiro-cli then reports "not logged in" and — on macOS —
-triggers a Keychain authorisation prompt the first time it tries to read or
-write ``kirocli:social:token``.
+the same conversation history.
 
-This module mirrors the pattern used by ``claude/launcher_runtime/home.py``,
-scaled down to what kiro actually needs:
+Unlike claude/codex, kiro-cli **has a first-class knob for this**: the
+``KIRO_HOME`` environment variable overrides the ``~/.kiro`` directory used
+for global agents, prompts, skills, steering, settings, and sessions
+(introduced in kiro-cli via the same-named CLI change; see the kiro-cli
+changelog). Because it only redirects the ``.kiro`` tree — **not** the whole
+``$HOME`` — kiro-cli still finds:
 
-* create ``<HOME>/.kiro/{sessions,settings}`` so kiro can start writing
-  session state inside the isolated tree (session isolation is intentional —
-  we do **not** copy the user's real ``~/.kiro/sessions/``);
-* copy the user's ``~/.kiro/settings/*.json`` (CLI preferences) into the
-  isolated ``settings/`` directory so per-user options survive;
-* on macOS, symlink ``~/Library/Keychains`` into the isolated HOME so
-  kiro-cli sees the existing ``kirocli:social:token`` item and skips both
-  the login prompt and the "new application wants to access your keychain"
-  system dialog;
-* on macOS, symlink ``~/Library/Application Support/kiro-cli`` into the
-  isolated HOME. kiro-cli locates its bun runtime, ``tui.js`` entry
-  script, and ``data.sqlite3`` state under Application Support, and it
-  cannot start (``error: No such file or directory``) if the isolated HOME
-  has no projection to those files.
+* its bun runtime and ``tui.js`` under
+  ``~/Library/Application Support/kiro-cli`` (macOS locates that path via
+  ``$HOME``);
+* the login token under ``~/Library/Keychains``;
+* the user's ``~/.bashrc`` / ``~/.zshrc`` for its shell-integration checks.
 
-The materialize function is idempotent: it may run on every agent launch.
+So this projection only has to seed the isolated ``.kiro`` directory itself
+— no HOME override, no Keychain symlink, no Application Support redirect.
+
+Steps performed by :func:`materialize_kiro_home_config`:
+
+1. create ``<KIRO_HOME>/{sessions,settings,agents}`` so kiro can start
+   writing state without racing on ``mkdir``;
+2. copy the user's ``~/.kiro/settings/*.json`` (CLI preferences) into
+   the isolated ``settings/`` directory so per-user options survive;
+3. **do not** copy ``~/.kiro/sessions/`` — session isolation is the
+   whole point.
+
+The function is idempotent and best-effort: missing sources are skipped,
+unexpected errors are swallowed, so a bad seed does not abort the agent
+launch (the user can still log in manually inside the pane if projection
+fails).
 """
 
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 from pathlib import Path
 
@@ -40,18 +46,16 @@ from provider_core.source_home import current_provider_source_home
 
 
 _KIRO_INHERITED_SETTINGS = ("cli.json", "survey_state.json")
-_KIRO_MACOS_APP_SUPPORT_DIR = "kiro-cli"
 
 
 def managed_kiro_home_for_runtime(runtime_dir: Path) -> Path:
-    """Return the isolated HOME directory kiro should run under.
+    """Return the isolated ``KIRO_HOME`` directory kiro should run under.
 
-    Mirrors ``managed_droid_home_for_runtime``: the CCB provider-state layout
+    Mirrors ``managed_droid_home_for_runtime``. The CCB provider-state layout
     stores per-agent provider data under
-    ``.ccb/agents/<agent>/provider-state/kiro/home``. When a ``runtime_dir``
-    already lives inside a ``provider-runtime`` tree we resolve back to that
-    canonical location; otherwise we fall back to a sibling ``kiro-home``
-    directory next to the runtime dir.
+    ``.ccb/agents/<agent>/provider-state/kiro/home``; the value that ends up
+    exported as ``KIRO_HOME`` is exactly this directory (kiro-cli treats it
+    like ``~/.kiro``).
     """
 
     runtime_dir = Path(runtime_dir).expanduser()
@@ -66,27 +70,16 @@ def materialize_kiro_home_config(
     profile=None,
     source_home: Path | None = None,
 ) -> Path:
-    """Populate the isolated kiro HOME from the user's real HOME.
+    """Populate the isolated ``KIRO_HOME`` directory from the user's ``~/.kiro``.
 
-    Steps:
+    ``target_home`` is the value CCB exports as ``KIRO_HOME`` — kiro-cli
+    treats it as its ``~/.kiro`` directory, so we create ``sessions/``,
+    ``settings/``, ``agents/`` directly inside it (no extra ``.kiro/`` layer).
 
-    1. ensure ``<target_home>/.kiro/{sessions,settings}`` exist;
-    2. copy inherited settings files (``cli.json`` etc.) if the source has
-       them and the isolated tree does not carry a fresher user-authored
-       copy (a plain per-file copy is used — kiro settings are user-scoped
-       preferences, not per-conversation state, so it is safe to share);
-    3. on macOS, mount the user's ``~/Library/Keychains`` as a symlink so
-       kiro-cli can read/write ``kirocli:social:token`` without triggering
-       a "new application" Keychain authorisation prompt;
-    4. on macOS, mount ``~/Library/Application Support/kiro-cli`` as a
-       symlink so kiro-cli can locate its bun runtime, entry script, and
-       sqlite state (without this projection kiro-cli aborts with
-       ``error: No such file or directory`` before login).
-
-    All disk operations are best-effort: a missing source is skipped, and
-    unexpected errors are swallowed so a bad seed does not abort the agent
-    launch (the user can still log in manually inside the pane if projection
-    fails).
+    ``source_home`` defaults to the user's real ``$HOME``; the user's actual
+    ``~/.kiro/settings/*.json`` (CLI preferences) is copied so per-user
+    options survive per-agent isolation. Sessions are intentionally not
+    copied: each agent must keep its own conversation history.
     """
 
     del profile  # reserved for future per-profile knobs (inherit_settings etc.)
@@ -96,18 +89,16 @@ def materialize_kiro_home_config(
     )
 
     target_home.mkdir(parents=True, exist_ok=True)
-    target_kiro_dir = target_home / ".kiro"
-    target_kiro_dir.mkdir(parents=True, exist_ok=True)
-    (target_kiro_dir / "sessions").mkdir(parents=True, exist_ok=True)
-    (target_kiro_dir / "settings").mkdir(parents=True, exist_ok=True)
+    (target_home / "sessions").mkdir(parents=True, exist_ok=True)
+    (target_home / "settings").mkdir(parents=True, exist_ok=True)
+    (target_home / "agents").mkdir(parents=True, exist_ok=True)
 
-    if target_home.resolve() == source_root.resolve():
-        # Running against the real user HOME: nothing to project.
+    source_kiro_dir = source_root / ".kiro"
+    if target_home.resolve() == source_kiro_dir.resolve():
+        # Running against the real ~/.kiro: nothing to project.
         return target_home
 
-    _materialize_settings(source_root, target_kiro_dir)
-    _materialize_macos_keychains_link(source_root, target_home)
-    _materialize_macos_app_support_link(source_root, target_home)
+    _materialize_settings(source_kiro_dir, target_home)
     return target_home
 
 
@@ -117,11 +108,11 @@ def _system_home_root() -> Path:
     return Path.home().expanduser()
 
 
-def _materialize_settings(source_home: Path, target_kiro_dir: Path) -> None:
-    source_settings = source_home / ".kiro" / "settings"
+def _materialize_settings(source_kiro_dir: Path, target_home: Path) -> None:
+    source_settings = source_kiro_dir / "settings"
     if not source_settings.is_dir():
         return
-    target_settings = target_kiro_dir / "settings"
+    target_settings = target_home / "settings"
     for name in _KIRO_INHERITED_SETTINGS:
         src = source_settings / name
         if not src.is_file():
@@ -132,104 +123,6 @@ def _materialize_settings(source_home: Path, target_kiro_dir: Path) -> None:
         except Exception:
             # Best-effort; kiro-cli can re-create defaults if seeding fails.
             pass
-
-
-def _materialize_macos_keychains_link(source_home: Path, target_home: Path) -> None:
-    """Symlink ``~/Library/Keychains`` into the isolated HOME on macOS.
-
-    kiro-cli stores its login token as a Keychain item
-    (``kirocli:social:token``). macOS considers a Keychain access "new"
-    whenever the calling app runs under a HOME whose ``Library/Keychains``
-    it has not previously touched, which triggers the authorisation
-    prompt. Mounting the real keychain directory as a symlink lets
-    kiro-cli see the item the user already authorised, so the prompt does
-    not fire again on every agent restart.
-
-    Non-Darwin platforms and missing source directories are ignored.
-    """
-
-    _symlink_macos_library_child(
-        source_home=source_home,
-        target_home=target_home,
-        relative=("Keychains",),
-        require_source_dir=True,
-    )
-
-
-def _materialize_macos_app_support_link(source_home: Path, target_home: Path) -> None:
-    """Symlink ``~/Library/Application Support/kiro-cli`` into the isolated HOME.
-
-    kiro-cli keeps the bulk of its runtime state under
-    ``$HOME/Library/Application Support/kiro-cli`` on macOS, including:
-
-    * ``bun`` — the JS runtime the CLI actually execs;
-    * ``tui.js`` — the entry-point TUI script bun loads;
-    * ``data.sqlite3`` — persisted session / auth cache;
-    * ``history``, ``knowledge_bases/``, ``shell/`` — per-user CLI state.
-
-    Because macOS resolves "Application Support" via ``$HOME``, running
-    kiro-cli under an isolated HOME with no projection leaves the CLI
-    unable to find ``bun`` or ``tui.js`` and it crashes with
-    ``error: No such file or directory (os error 2)`` before it even
-    reaches its login flow.
-
-    Symlinking the whole ``kiro-cli`` directory (rather than copying)
-    matches how ``Library/Keychains`` is handled and keeps state coherent
-    across agents — kiro-cli was not designed for parallel HOMEs, and
-    duplicating its sqlite + bun binary per agent would waste disk and
-    still race on writes. Session isolation is already provided by the
-    per-agent ``.kiro/sessions/`` dir inside the isolated HOME.
-    """
-
-    _symlink_macos_library_child(
-        source_home=source_home,
-        target_home=target_home,
-        relative=("Application Support", _KIRO_MACOS_APP_SUPPORT_DIR),
-        require_source_dir=True,
-    )
-
-
-def _symlink_macos_library_child(
-    *,
-    source_home: Path,
-    target_home: Path,
-    relative: tuple[str, ...],
-    require_source_dir: bool,
-) -> None:
-    """Idempotently mount a ``~/Library/<...>`` path into ``<target_home>/Library/<...>``.
-
-    Best-effort: skip silently on non-Darwin, missing source, or when a
-    real directory already lives at the target (never clobber user data).
-    """
-
-    if platform.system() != "Darwin":
-        return
-    if not relative:
-        return
-    source = source_home
-    for part in ("Library", *relative):
-        source = source / part
-    if require_source_dir and not source.is_dir():
-        return
-    if not source.exists():
-        return
-    target = target_home
-    for part in ("Library", *relative):
-        target = target / part
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink():
-            try:
-                if target.resolve() == source.resolve():
-                    return
-            except Exception:
-                pass
-            target.unlink()
-        elif target.exists():
-            return
-        target.symlink_to(source, target_is_directory=source.is_dir())
-    except Exception:
-        pass
 
 
 __all__ = [

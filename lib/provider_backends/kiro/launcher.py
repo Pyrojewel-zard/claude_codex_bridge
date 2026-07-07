@@ -5,7 +5,7 @@ from provider_core.contracts import ProviderRuntimeLauncher
 
 
 def build_runtime_launcher() -> ProviderRuntimeLauncher:
-    return build_native_cli_runtime_launcher(NativeCliLaunchConfig(provider="kiro", home_env="HOME"))
+    return build_native_cli_runtime_launcher(NativeCliLaunchConfig(provider="kiro", home_env="KIRO_HOME"))
 
 
 __all__ = ["build_runtime_launcher"]
