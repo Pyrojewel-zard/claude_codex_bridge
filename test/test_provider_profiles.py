@@ -2711,6 +2711,42 @@ def test_materialize_kiro_home_config_skips_keychain_on_non_darwin(
     assert not (target_home / 'Library').exists()
 
 
+def test_materialize_kiro_home_config_symlinks_macos_app_support(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr('provider_backends.kiro.home.platform.system', lambda: 'Darwin')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-kiro-home'
+    app_support = source_home / 'Library' / 'Application Support' / 'kiro-cli'
+    app_support.mkdir(parents=True, exist_ok=True)
+    (app_support / 'tui.js').write_text('// entry\n', encoding='utf-8')
+    (app_support / 'bun').write_text('bun-binary\n', encoding='utf-8')
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    link = target_home / 'Library' / 'Application Support' / 'kiro-cli'
+    assert link.is_symlink()
+    assert link.resolve() == app_support.resolve()
+    # tui.js and bun should be visible through the symlink.
+    assert (link / 'tui.js').read_text(encoding='utf-8') == '// entry\n'
+    # Second run must not raise.
+    materialize_kiro_home_config(target_home, source_home=source_home)
+    assert link.is_symlink()
+
+
+def test_materialize_kiro_home_config_skips_app_support_on_non_darwin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr('provider_backends.kiro.home.platform.system', lambda: 'Linux')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-kiro-home'
+    (source_home / 'Library' / 'Application Support' / 'kiro-cli').mkdir(parents=True, exist_ok=True)
+
+    materialize_kiro_home_config(target_home, source_home=source_home)
+
+    assert not (target_home / 'Library').exists()
+
+
 def test_materialize_kiro_home_config_survives_missing_source(tmp_path: Path) -> None:
     source_home = tmp_path / 'nonexistent-source'
     target_home = tmp_path / 'managed-kiro-home'
