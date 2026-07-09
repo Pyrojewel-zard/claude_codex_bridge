@@ -42,14 +42,24 @@ def _spec(
     )
 
 
-def test_kimi_start_cmd_uses_env_override_and_auto_without_implicit_restore(monkeypatch, tmp_path: Path) -> None:
+def test_kimi_start_cmd_uses_env_override_and_auto_and_continues_by_default(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("KIMI_START_CMD", "/tmp/stub-kimi --profile test")
     command = ParsedStartCommand(project=None, agent_names=("kimi_agent",), restore=True, auto_permission=True)
     spec = _spec("kimi_agent", "kimi", startup_args=("--model", "kimi-k2"))
 
     cmd = build_kimi_start_cmd(command, spec, tmp_path / "runtime", "launch-1")
 
-    assert cmd.endswith("/tmp/stub-kimi --profile test --auto-approve --model kimi-k2")
+    assert cmd.endswith("/tmp/stub-kimi --profile test --auto-approve --continue --model kimi-k2")
+
+
+def test_kimi_start_cmd_omits_continue_when_context_is_reset(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("KIMI_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("kimi_agent",), restore=False, auto_permission=True)
+    spec = _spec("kimi_agent", "kimi", startup_args=("--model", "kimi-k2"))
+
+    cmd = build_kimi_start_cmd(command, spec, tmp_path / "runtime", "launch-1")
+
+    assert cmd.endswith("kimi --auto-approve --model kimi-k2")
     assert "--continue" not in cmd
 
 

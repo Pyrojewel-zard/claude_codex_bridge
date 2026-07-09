@@ -20,6 +20,8 @@ from workspace.models import WorkspacePlan
 
 _AUTO_FLAG = "--auto-approve"
 _AUTO_FLAGS = {"--auto-approve", "--auto", "--yes", "-y", "--yolo"}
+_CONTINUE_FLAG = "--continue"
+_SESSION_FLAGS = {"-c", "--continue", "-S", "--session"}
 
 
 def build_runtime_launcher() -> ProviderRuntimeLauncher:
@@ -71,6 +73,8 @@ def build_start_cmd(
     if command.auto_permission and not _has_any(cmd_parts, _AUTO_FLAGS) and not _has_any(spec.startup_args, _AUTO_FLAGS):
         cmd_parts.append(_AUTO_FLAG)
     cmd_parts.extend(_skill_dir_args(launch_context.get("kimi_skill_dirs"), existing_parts=(*cmd_parts, *spec.startup_args)))
+    if command.restore and not _has_session_flag((*cmd_parts, *spec.startup_args)):
+        cmd_parts.append(_CONTINUE_FLAG)
     cmd_parts.extend(spec.startup_args)
     cmd = " ".join(shlex.quote(str(part)) for part in cmd_parts)
     cmd = apply_provider_command_template(cmd, spec.provider_command_template)
@@ -119,6 +123,12 @@ def build_session_payload(
 def _has_any(parts: tuple[str, ...] | list[str], flags: set[str]) -> bool:
     normalized = {str(part).strip() for part in parts}
     return bool(flags & normalized)
+
+
+def _has_session_flag(parts: tuple[str, ...] | list[str]) -> bool:
+    if _has_any(parts, _SESSION_FLAGS):
+        return True
+    return any(str(part).strip().startswith("--session=") for part in parts)
 
 
 def _skill_dir_args(raw_dirs: object, *, existing_parts: tuple[str, ...] | list[str]) -> list[str]:
