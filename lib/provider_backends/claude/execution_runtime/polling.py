@@ -299,9 +299,84 @@ def _process_event(
         return None
     if role == "system":
         return handle_system_event(submission, poll, event, now=now, state=state)
-    if role == "assistant" and poll.anchor_seen:
-        handle_assistant_event(submission, poll, event, now=now)
+    if role == "assistant":
+        # Always bookkeep assistant uuids even before the anchor is seen, so
+        # that when a turn_duration system event arrives later its
+        # parent_uuid match does not short-circuit on an empty
+        # last_assistant_uuid. Without this, a prompt that landed as a
+        # Claude-CLI `queue-operation` record (busy REPL) — even after the
+        # structured_event fix — would still fail to match turn_duration
+        # because assistant tool_use chunks before anchor_seen were skipped
+        # entirely. Full event handling (chunks/reply_buffer/turn boundary
+        # emission) still requires anchor_seen.
+        _bookkeep_assistant_uuid_pre_anchor(poll, event)
+        if poll.anchor_seen:
+            handle_assistant_event(submission, poll, event, now=now)
     return None
+
+
+def _bookkeep_assistant_uuid_pre_anchor(poll, event: dict) -> None:
+    """Track the latest assistant uuid even before the anchor is seen, so that
+    `is_turn_boundary_event` can match a subsequent system/turn_duration
+    event's parent_uuid against it. Without this, an assistant turn composed
+    entirely of tool_use chunks (no text reply yet, as in pm dispatching
+    parallel asks) leaves last_assistant_uuid empty; when the final
+    end_turn/turn_duration finally arrives, parent_uuid check in
+    event_reading/turns.py fails the `if not last_assistant_uuid: return False`
+    guard and the turn boundary is missed. We read from the raw entry
+    (event["entry"]) so that tool_use-only assistant events (which produce no
+    extract_message text and are therefore elided by structured_event) are
+    still observed.
+    See docs/claude-queue-operation-completion-deadlock-diagnosis.md.
+    """
+    if poll.anchor_seen or poll.reached_turn_boundary:
+        return
+    entry = event.get("entry") if isinstance(event, dict) else None
+    if not isinstance(entry, dict):
+        # Fallback: structured event may carry a top-level uuid.
+        euid = str(event.get("uuid") or "").strip()
+        if euid:
+            poll.last_assistant_uuid = euid
+        return
+    entry_type = str(entry.get("type") or "").strip().lower()
+    if entry_type != "assistant":
+        return
+    msg = entry.get("message")
+    if not isinstance(msg, dict):
+        return
+    if str(msg.get("role") or "").strip().lower() != "assistant":
+        return
+    # Skip subagent/session child entries conservatively; top-level assistant
+    # tool_use for bash/ask is not a subagent.
+    content = msg.get("content")
+    if isinstance(content, list):
+        all_subagent = bool(content)
+        for item in content:
+            if not isinstance(item, dict):
+                all_subagent = False
+                break
+            if item.get("type") != "tool_use":
+                all_subagent = False
+                break
+            inp = item.get("input") if isinstance(item.get("input"), dict) else {}
+            nm = str(item.get("name") or "").lower()
+            if nm in {"task", "subagent", "spawn_subagent"}:
+                continue
+            sub_name = str(inp.get("subagent_name") or inp.get("agent_name") or "").strip()
+            if not sub_name:
+                all_subagent = False
+                break
+        if all_subagent:
+            return
+    euid = str(entry.get("uuid") or "").strip()
+    if euid:
+        poll.last_assistant_uuid = euid
+
+
+def _event_is_subagent(entry: object) -> bool:
+    # Retained for backwards compatibility; replaced by inline logic in
+    # _bookkeep_assistant_uuid_pre_anchor.
+    return False
 
 
 __all__ = [
