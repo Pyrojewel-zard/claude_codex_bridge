@@ -28,7 +28,9 @@ def pytest_configure() -> None:
 def _write_provider_stub_launchers(bin_dir: Path) -> None:
     stub_path = (repo_root / "test" / "stubs" / "provider_stub.py").resolve()
     python_exe = sys.executable
-    providers = ("codex", "gemini", "claude", "opencode", "droid", "agy", "kimi", "deepcode", "grok", "qodercli")
+    providers = (
+        "codex", "gemini", "claude", "opencode", "droid", "agy", "kimi", "deepcode", "grok", "qodercli", "qoderclicn",
+    )
     for provider in providers:
         posix_launcher = bin_dir / provider
         posix_launcher.write_text(
@@ -55,6 +57,8 @@ def _stub_provider_name(provider: str) -> str:
         return "deepseek"
     if provider == "qodercli":
         return "qoder"
+    if provider == "qoderclicn":
+        return "qoderclicn"
     return provider
 
 

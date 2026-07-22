@@ -23,13 +23,14 @@ from provider_backends.qoder.execution import (
     _qoder_session_id_for_job,
     observe_qoder_output,
 )
+from provider_backends.qoderclicn.execution import _build_command as build_qoderclicn_command
 from provider_backends.zai.execution import observe_zai_output
 from provider_core.pathing import session_filename_for_agent
 from provider_core.registry import build_default_backend_registry
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
 
 
-PROVIDERS = ("qwen", "qoder", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
+PROVIDERS = ("qwen", "qoder", "qoderclicn", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
 STRUCTURED_PROVIDERS = ("qwen", "cursor", "copilot", "pi", "omp")
 
 
@@ -95,6 +96,51 @@ def _adapter(provider: str):
     assert backend is not None
     assert backend.execution_adapter is not None
     return backend.execution_adapter
+
+
+@pytest.mark.parametrize(
+    ("provider", "start_env", "executable", "build_command"),
+    [
+        ("qoder", "QODER_START_CMD", "qodercli", build_qoder_command),
+        ("qoderclicn", "QODERCLICN_START_CMD", "qoderclicn", build_qoderclicn_command),
+    ],
+)
+def test_qoder_cli_headless_command_uses_print_and_agent_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    start_env: str,
+    executable: str,
+    build_command,
+) -> None:
+    monkeypatch.delenv(start_env, raising=False)
+    work_dir = tmp_path / provider
+    work_dir.mkdir()
+    config_dir = work_dir / ".ccb" / "agents" / f"{provider}1" / "provider-state" / provider / "data"
+    request = NativeCliExecutionRequest(
+        provider=provider,
+        job=_job(provider, work_dir),
+        work_dir=work_dir,
+        session_data={f"{provider}_data_dir": str(config_dir)},
+        prompt="Reply exactly once.",
+        request_anchor="CCB_REQ_ID: job",
+    )
+
+    command = build_command(request)
+
+    assert command == [
+        executable,
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--config-dir",
+        str(config_dir),
+        "--session-id",
+        f"job_{provider}_run123",
+        "Reply exactly once.",
+    ]
+    assert "--bare" not in command
+    assert config_dir.is_dir()
 
 
 def _install_stub(monkeypatch, provider: str, *, mode: str = "") -> None:

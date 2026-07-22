@@ -1965,6 +1965,8 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv('CODEX_START_CMD', '/tmp/stub-codex --profile test')
     monkeypatch.setenv('AGY_START_CMD', '/tmp/stub-agy --profile test')
     monkeypatch.setenv('QWEN_START_CMD', '/tmp/stub-qwen --profile test')
+    monkeypatch.setenv('QODER_START_CMD', '/tmp/stub-qoder --profile test')
+    monkeypatch.setenv('QODERCLICN_START_CMD', '/tmp/stub-qoderclicn --profile test')
     monkeypatch.setenv('CURSOR_START_CMD', '/tmp/stub-cursor --profile test')
     monkeypatch.setenv('COPILOT_START_CMD', '/tmp/stub-copilot --profile test')
     monkeypatch.setenv('CRUSH_START_CMD', '/tmp/stub-crush --profile test')
@@ -1978,6 +1980,8 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     assert runtime_launch._provider_start_parts('codex') == ['/tmp/stub-codex', '--profile', 'test']
     assert runtime_launch._provider_start_parts('agy') == ['/tmp/stub-agy', '--profile', 'test']
     assert runtime_launch._provider_start_parts('qwen') == ['/tmp/stub-qwen', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('qoder') == ['/tmp/stub-qoder', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('qoderclicn') == ['/tmp/stub-qoderclicn', '--profile', 'test']
     assert runtime_launch._provider_start_parts('cursor') == ['/tmp/stub-cursor', '--profile', 'test']
     assert runtime_launch._provider_start_parts('copilot') == ['/tmp/stub-copilot', '--profile', 'test']
     assert runtime_launch._provider_start_parts('crush') == ['/tmp/stub-crush', '--profile', 'test']
@@ -2001,6 +2005,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     monkeypatch.delenv('DEEPSEEK_START_CMD', raising=False)
     monkeypatch.delenv('QWEN_START_CMD', raising=False)
     monkeypatch.delenv('QODER_START_CMD', raising=False)
+    monkeypatch.delenv('QODERCLICN_START_CMD', raising=False)
     monkeypatch.delenv('CURSOR_START_CMD', raising=False)
     monkeypatch.delenv('COPILOT_START_CMD', raising=False)
     monkeypatch.delenv('CRUSH_START_CMD', raising=False)
@@ -2017,6 +2022,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     assert runtime_launch._provider_start_parts('deepseek') == ['deepcode']
     assert runtime_launch._provider_start_parts('qwen') == ['qwen']
     assert runtime_launch._provider_start_parts('qoder') == ['qodercli']
+    assert runtime_launch._provider_start_parts('qoderclicn') == ['qoderclicn']
     assert runtime_launch._provider_start_parts('cursor') == ['agent']
     assert runtime_launch._provider_start_parts('copilot') == ['copilot']
     assert runtime_launch._provider_start_parts('crush') == ['crush']
@@ -2031,6 +2037,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     [
         ('qwen', 'qwen', 'QWEN_HOME'),
         ('qoder', 'qodercli', None),
+        ('qoderclicn', 'qoderclicn', None),
         ('cursor', 'agent', 'HOME'),
         ('copilot', 'copilot', 'COPILOT_HOME'),
         ('crush', 'crush', None),
@@ -2128,6 +2135,13 @@ def test_native_cli_launcher_builds_provider_state_payload(
             default_executable,
             '--directory',
             str(plan.workspace_path),
+            '--demo',
+        ]
+    elif provider in {'qoder', 'qoderclicn'}:
+        assert visible_parts == [
+            default_executable,
+            '--config-dir',
+            str(state_dir / 'data'),
             '--demo',
         ]
     else:
