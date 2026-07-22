@@ -1089,19 +1089,19 @@ def parse_config(tokens: list[str], *, project: str | None, error_type):
     if action == 'ui':
         parser = argparse.ArgumentParser(prog='ccb config ui', add_help=False)
         parser.add_argument('--no-open', dest='no_open', action='store_true')
-        parser.add_argument('--port', type=int, default=0)
+        parser.add_argument('--port', type=int)
         namespace = parse_args(
             parser,
             tokens[1:],
             error_message='invalid config ui command',
             error_type=error_type,
         )
-        if not 0 <= int(namespace.port) <= 65535:
+        if namespace.port is not None and not 0 <= int(namespace.port) <= 65535:
             raise error_type('config ui --port must be between 0 and 65535')
         return ParsedConfigUiCommand(
             project=project,
             no_open=bool(namespace.no_open),
-            port=int(namespace.port),
+            port=int(namespace.port) if namespace.port is not None else None,
         )
     raise error_type('config supports: validate, effective, migrate, ui')
 

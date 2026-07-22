@@ -310,7 +310,9 @@ def test_phase2_config_ui_opens_and_serves_project_panel(monkeypatch, tmp_path: 
         url = 'http://127.0.0.1:43210/?token=test'
         summary = {
             'config_ui_status': 'serving',
-            'url': url,
+            'url': 'http://127.0.0.1:43210/',
+            'bind': 'loopback',
+            'token_source': 'ephemeral',
             'project_root': str(project_root),
         }
 
@@ -337,13 +339,14 @@ def test_phase2_config_ui_opens_and_serves_project_panel(monkeypatch, tmp_path: 
     assert code == 0, stderr
     assert seen == {
         'project_root': project_root.resolve(),
-        'port': 0,
+        'port': None,
         'opened_url': _FakeHandle.url,
         'served': True,
         'closed': True,
     }
     assert 'config_ui_status: serving' in stdout
-    assert f'url: {_FakeHandle.url}' in stdout
+    assert 'url: http://127.0.0.1:43210/' in stdout
+    assert _FakeHandle.url not in stdout
     assert (project_root / '.ccb' / 'ccb.config').exists() is False
 
 
