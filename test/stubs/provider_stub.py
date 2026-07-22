@@ -820,6 +820,23 @@ def _request_message(prompt: str) -> str:
         return raw
 
 
+def _sync_prompt_buffer_request(
+    line: str,
+    current_lines: list[str],
+    current_req: str,
+) -> tuple[list[str], str]:
+    match = REQ_ID_RE.match(line)
+    if not match:
+        return current_lines, current_req
+
+    next_req = match.group(1).strip()
+    # Exact-turn prompts can complete before optional guidance has drained from
+    # stdin. A new outer anchor starts a fresh request, so drop that stale tail.
+    if current_lines and current_req != next_req:
+        current_lines = []
+    return current_lines, next_req
+
+
 def _looks_like_exact_turn_prompt(provider: str, line: str, current_lines: list[str], current_req: str) -> bool:
     if not current_req:
         return False
@@ -1877,9 +1894,7 @@ def main(argv: list[str]) -> int:
         if not line and not current_lines:
             continue
 
-        m = REQ_ID_RE.match(line)
-        if m:
-            current_req = m.group(1).strip()
+        current_lines, current_req = _sync_prompt_buffer_request(line, current_lines, current_req)
 
         current_lines.append(line)
 

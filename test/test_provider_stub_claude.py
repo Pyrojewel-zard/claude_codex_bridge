@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import runpy
 from pathlib import Path
+from typing import Any
 
 from provider_backends.claude.comm_runtime.parsing import structured_event
 from provider_backends.claude.execution_runtime.state_machine_runtime.system_events import (
@@ -13,8 +14,12 @@ from provider_backends.claude.execution_runtime.state_machine_runtime.system_eve
 STUB_PATH = Path(__file__).resolve().parent / "stubs" / "provider_stub.py"
 
 
+def _stub_namespace() -> dict[str, Any]:
+    return runpy.run_path(str(STUB_PATH))
+
+
 def test_claude_stub_emits_activatable_native_session_records(tmp_path: Path) -> None:
-    handler = runpy.run_path(str(STUB_PATH))["_handle_claude"]
+    handler = _stub_namespace()["_handle_claude"]
     session_path = tmp_path / "session.jsonl"
     request_id = "job_exact"
     prompt = f"CCB_REQ_ID: {request_id}\n\nRun the requested task."
@@ -35,3 +40,36 @@ def test_claude_stub_emits_activatable_native_session_records(tmp_path: Path) ->
     assert events[2]["role"] == "system"
     assert events[2]["subtype"] == "turn_duration"
     assert records[2]["parentUuid"] == records[1]["uuid"]
+
+
+def test_claude_stub_starts_sequential_request_after_unconsumed_prompt_tail() -> None:
+    namespace = _stub_namespace()
+    sync_request = namespace["_sync_prompt_buffer_request"]
+    looks_complete = namespace["_looks_like_exact_turn_prompt"]
+    stream = (
+        "CCB_REQ_ID: job_first\n\n"
+        "first request\n\n"
+        "CCB reply guidance:\n"
+        "- Keep the reply concise.\n\n"
+        "Reply in English.\n\n"
+        "CCB_REQ_ID: job_second\n\n"
+        "second request\n\n"
+    )
+    current_lines: list[str] = []
+    current_req = ""
+    completed: list[tuple[str, str]] = []
+
+    for line in stream.splitlines():
+        if not line and not current_lines:
+            continue
+        current_lines, current_req = sync_request(line, current_lines, current_req)
+        current_lines.append(line)
+        if looks_complete("claude", line, current_lines, current_req):
+            completed.append((current_req, "\n".join(current_lines).strip()))
+            current_lines = []
+            current_req = ""
+
+    assert completed == [
+        ("job_first", "CCB_REQ_ID: job_first\n\nfirst request"),
+        ("job_second", "CCB_REQ_ID: job_second\n\nsecond request"),
+    ]
