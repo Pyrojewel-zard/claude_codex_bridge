@@ -100,10 +100,30 @@ class RelayFrame:
             raise MobileRelayError('relay frame requires v2 schema_version')
         _required_text(self.session_id, 'session_id')
         _positive_int(self.seq, 'seq')
-        if self.kind not in {'client_hello', 'host_hello', 'gateway_envelope', 'ack', 'close'}:
+        if self.kind not in {
+            'client_hello',
+            'host_hello',
+            'host_register',
+            'gateway_envelope',
+            'heartbeat',
+            'ack',
+            'error',
+            'close',
+        }:
             raise MobileRelayError(f'unknown relay frame kind: {self.kind}')
         _reject_cleartext_keys(self.payload, f'{self.kind}.payload')
-        if self.kind == 'client_hello':
+        if self.kind == 'host_register':
+            _required_text(self.payload.get('host_id'), 'host_register.host_id')
+            _required_base64_text(self.payload.get('nonce_b64'), 'host_register.nonce_b64')
+            _positive_int(self.payload.get('proof_expires_at'), 'host_register.proof_expires_at')
+            _required_base64_text(self.payload.get('signature_b64'), 'host_register.signature_b64')
+            versions = _positive_int_list(self.payload.get('supported_versions'), 'host_register.supported_versions')
+            if _SCHEMA_VERSION not in versions:
+                raise MobileRelayError('host_register.supported_versions must include relay v2')
+            capabilities = _string_set(self.payload.get('capabilities'))
+            if 'relay.forward' not in capabilities:
+                raise MobileRelayError('host_register.capabilities must include relay.forward')
+        elif self.kind == 'client_hello':
             _required_text(self.payload.get('host_id'), 'client_hello.host_id')
             _required_text(self.payload.get('device_id'), 'client_hello.device_id')
             _required_base64_text(self.payload.get('client_pubkey_b64'), 'client_hello.client_pubkey_b64')
@@ -127,6 +147,8 @@ class RelayFrame:
             _required_base64_text(envelope.get('nonce_b64'), 'envelope.nonce_b64')
         elif self.kind == 'ack' and 'ack_seq' in self.payload:
             _positive_int(self.payload.get('ack_seq'), 'ack.ack_seq')
+        elif self.kind == 'error':
+            _required_text(self.payload.get('reason'), 'error.reason')
         elif self.kind == 'close' and 'reason' in self.payload:
             _required_text(self.payload.get('reason'), 'close.reason')
 
