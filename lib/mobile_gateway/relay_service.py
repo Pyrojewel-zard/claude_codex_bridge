@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -10,7 +11,7 @@ import signal
 import ssl
 import sqlite3
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,7 @@ class ProductionRelayConfig:
     heartbeat_interval: float = 20.0
     unauth_rate_limit: int = 30
     unauth_rate_limit_window: float = 60.0
+    unauth_rate_limit_max_keys: int = 10_000
     trusted_proxy_cidrs: tuple[str, ...] = ('127.0.0.1/32', '::1/128')
 
     def validate(self) -> 'ProductionRelayConfig':
@@ -73,7 +75,13 @@ class ProductionRelayConfig:
             raise ValueError('relay peer queue limit must be positive')
         if self.write_timeout <= 0 or self.handshake_timeout <= 0 or self.idle_timeout <= 0:
             raise ValueError('relay timeouts must be positive')
-        if self.unauth_rate_limit <= 0 or self.unauth_rate_limit_window <= 0:
+        if self.heartbeat_interval <= 0:
+            raise ValueError('relay heartbeat interval must be positive')
+        if (
+            self.unauth_rate_limit <= 0
+            or self.unauth_rate_limit_window <= 0
+            or self.unauth_rate_limit_max_keys <= 0
+        ):
             raise ValueError('relay unauthenticated rate limit must be positive')
         if not self.public_origin.startswith('wss://'):
             raise ValueError('relay public origin must be wss://')
@@ -132,6 +140,7 @@ class ProductionRelayConfig:
             heartbeat_interval=float(os.environ.get('CCB_RELAY_HEARTBEAT_INTERVAL_SECONDS', '20')),
             unauth_rate_limit=int(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT', '30')),
             unauth_rate_limit_window=float(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT_WINDOW_SECONDS', '60')),
+            unauth_rate_limit_max_keys=int(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT_MAX_KEYS', '10000')),
             trusted_proxy_cidrs=_csv_tuple(os.environ.get('CCB_RELAY_TRUSTED_PROXIES'), default=('127.0.0.1/32', '::1/128')),
             unsafe_plaintext_for_tests=os.environ.get('CCB_RELAY_UNSAFE_PLAINTEXT_FOR_TESTS') == '1',
         )
@@ -244,20 +253,42 @@ class _RelaySessionState:
 
 
 class _SlidingWindowRateLimiter:
-    def __init__(self, *, limit: int, window_seconds: float) -> None:
+    def __init__(self, *, limit: int, window_seconds: float, max_keys: int) -> None:
         self._limit = limit
         self._window_seconds = window_seconds
-        self._hits: dict[str, deque[float]] = {}
+        self._max_keys = max_keys
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
-        hits = self._hits.setdefault(key, deque())
+        self._prune(now)
+        hits = self._hits.get(key)
+        if hits is None:
+            while len(self._hits) >= self._max_keys:
+                self._hits.popitem(last=False)
+            hits = deque()
+            self._hits[key] = hits
+        else:
+            self._hits.move_to_end(key)
         while hits and now - hits[0] > self._window_seconds:
             hits.popleft()
         if len(hits) >= self._limit:
             return False
         hits.append(now)
         return True
+
+    @property
+    def key_count(self) -> int:
+        return len(self._hits)
+
+    def _prune(self, now: float) -> None:
+        for key in tuple(self._hits):
+            hits = self._hits[key]
+            while hits and now - hits[0] > self._window_seconds:
+                hits.popleft()
+            if hits:
+                continue
+            del self._hits[key]
 
 
 class _RendezvousReplayStore:
@@ -305,15 +336,49 @@ class _RendezvousReplayStore:
         self._initialized = True
 
 
+class _RelayInstanceLock:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._fd: int | None = None
+
+    def acquire(self) -> None:
+        if self._fd is not None:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            raise RuntimeError('another relay service instance owns the admission database') from exc
+        except Exception:
+            os.close(fd)
+            raise
+        self._fd = fd
+
+    def release(self) -> None:
+        fd = self._fd
+        self._fd = None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 class ProductionRelayService:
     def __init__(self, config: ProductionRelayConfig, *, admission_store: RelayAdmissionStore) -> None:
         self.config = config
         self._store = admission_store
         self._rendezvous_replays = _RendezvousReplayStore(config.rendezvous_replay_db_path())
+        self._instance_lock = _RelayInstanceLock(config.state_dir / 'relay-service.lock')
         self._metrics = _Metrics()
         self._rate_limiter = _SlidingWindowRateLimiter(
             limit=config.unauth_rate_limit,
             window_seconds=config.unauth_rate_limit_window,
+            max_keys=config.unauth_rate_limit_max_keys,
         )
         self._trusted_proxy_networks = _parse_trusted_proxy_networks(config.trusted_proxy_cidrs)
         self._hosts: dict[str, _PeerEndpoint] = {}
@@ -353,43 +418,56 @@ class ProductionRelayService:
 
     async def start(self) -> None:
         self.config.validate()
-        app = web.Application(client_max_size=self.config.protocol_max_msg_bytes())
-        app.router.add_get('/v2/host', self._host_socket)
-        app.router.add_get('/v2/phone', self._phone_socket)
-        runner = web.AppRunner(app, access_log=None)
-        await runner.setup()
-        site = web.TCPSite(
-            runner,
-            host=self.config.listen_host,
-            port=self.config.listen_port,
-            ssl_context=self.config.ssl_context(),
-        )
-        await site.start()
-        server = site._server
-        if server is None or not server.sockets:
-            raise RuntimeError('relay service did not bind a socket')
-        self._bound_port = int(server.sockets[0].getsockname()[1])
-        self._app = app
-        self._runner = runner
-        self._site = site
-        admin_app = web.Application(client_max_size=4096)
-        admin_app.router.add_get('/healthz', self._health)
-        admin_app.router.add_get('/readyz', self._ready)
-        admin_app.router.add_get('/metrics', self._metrics_response)
-        admin_runner = web.AppRunner(admin_app, access_log=None)
-        await admin_runner.setup()
-        admin_site = web.TCPSite(admin_runner, host=self.config.admin_host, port=self.config.admin_port)
-        await admin_site.start()
-        admin_server = admin_site._server
-        if admin_server is None or not admin_server.sockets:
-            raise RuntimeError('relay admin service did not bind a socket')
-        self._admin_bound_port = int(admin_server.sockets[0].getsockname()[1])
-        self._admin_app = admin_app
-        self._admin_runner = admin_runner
-        self._admin_site = admin_site
+        self._instance_lock.acquire()
+        try:
+            self._store.reconcile_active_sessions()
+            self._draining = False
+            app = web.Application(client_max_size=self.config.protocol_max_msg_bytes())
+            app.router.add_get('/v2/host', self._host_socket)
+            app.router.add_get('/v2/phone', self._phone_socket)
+            runner = web.AppRunner(app, access_log=None)
+            await runner.setup()
+            site = web.TCPSite(
+                runner,
+                host=self.config.listen_host,
+                port=self.config.listen_port,
+                ssl_context=self.config.ssl_context(),
+            )
+            await site.start()
+            server = site._server
+            if server is None or not server.sockets:
+                raise RuntimeError('relay service did not bind a socket')
+            self._bound_port = int(server.sockets[0].getsockname()[1])
+            self._app = app
+            self._runner = runner
+            self._site = site
+            admin_app = web.Application(client_max_size=4096)
+            admin_app.router.add_get('/healthz', self._health)
+            admin_app.router.add_get('/readyz', self._ready)
+            admin_app.router.add_get('/metrics', self._metrics_response)
+            admin_runner = web.AppRunner(admin_app, access_log=None)
+            await admin_runner.setup()
+            admin_site = web.TCPSite(admin_runner, host=self.config.admin_host, port=self.config.admin_port)
+            await admin_site.start()
+            admin_server = admin_site._server
+            if admin_server is None or not admin_server.sockets:
+                raise RuntimeError('relay admin service did not bind a socket')
+            self._admin_bound_port = int(admin_server.sockets[0].getsockname()[1])
+            self._admin_app = admin_app
+            self._admin_runner = admin_runner
+            self._admin_site = admin_site
+        except Exception:
+            await self._cleanup_runners()
+            self._instance_lock.release()
+            raise
 
     async def stop(self) -> None:
-        await self.drain()
+        if self._runner is not None or self._admin_runner is not None:
+            await self.drain()
+        await self._cleanup_runners()
+        self._instance_lock.release()
+
+    async def _cleanup_runners(self) -> None:
         admin_runner = self._admin_runner
         if admin_runner is not None:
             await admin_runner.cleanup()
@@ -460,7 +538,10 @@ class ProductionRelayService:
     async def _host_socket(self, request: web.Request) -> web.StreamResponse:
         self._reject_if_draining()
         self._check_rate_limit(request)
-        ws = web.WebSocketResponse(max_msg_size=self.config.protocol_max_msg_bytes())
+        ws = web.WebSocketResponse(
+            max_msg_size=self.config.protocol_max_msg_bytes(),
+            heartbeat=self.config.heartbeat_interval,
+        )
         await ws.prepare(request)
         endpoint = _PeerEndpoint(
             role='host',
@@ -471,7 +552,10 @@ class ProductionRelayService:
         endpoint.start_writer(self._note_slow_consumer)
         host_id = ''
         try:
-            frame = await self._receive_frame(ws, timeout=self.config.handshake_timeout)
+            frame = await self._receive_frame(
+                ws,
+                timeout=min(self.config.handshake_timeout, self.config.idle_timeout),
+            )
             host_id = await self._register_host(endpoint, frame)
             endpoint.host_id = host_id
             self._metrics.host_connections += 1
@@ -488,7 +572,10 @@ class ProductionRelayService:
     async def _phone_socket(self, request: web.Request) -> web.StreamResponse:
         self._reject_if_draining()
         self._check_rate_limit(request)
-        ws = web.WebSocketResponse(max_msg_size=self.config.protocol_max_msg_bytes())
+        ws = web.WebSocketResponse(
+            max_msg_size=self.config.protocol_max_msg_bytes(),
+            heartbeat=self.config.heartbeat_interval,
+        )
         await ws.prepare(request)
         endpoint = _PeerEndpoint(
             role='phone',
@@ -499,7 +586,10 @@ class ProductionRelayService:
         endpoint.start_writer(self._note_slow_consumer)
         session_id = ''
         try:
-            frame = await self._receive_frame(ws, timeout=self.config.handshake_timeout)
+            frame = await self._receive_frame(
+                ws,
+                timeout=min(self.config.handshake_timeout, self.config.idle_timeout),
+            )
             session = await self._open_phone_session(endpoint, frame)
             session_id = session.session_id
             self._metrics.phone_connections += 1
@@ -585,7 +675,7 @@ class ProductionRelayService:
 
     async def _host_reader(self, endpoint: _PeerEndpoint) -> None:
         while not endpoint.closed and not self._draining:
-            frame = await self._receive_frame(endpoint.websocket, timeout=self.config.idle_timeout)
+            frame = await self._receive_frame(endpoint.websocket, timeout=None)
             if frame.kind == 'heartbeat':
                 await endpoint.send_frame(_ack_frame(frame))
                 continue
@@ -612,7 +702,7 @@ class ProductionRelayService:
 
     async def _phone_reader(self, endpoint: _PeerEndpoint, session_id: str) -> None:
         while not endpoint.closed and not self._draining:
-            frame = await self._receive_frame(endpoint.websocket, timeout=self.config.idle_timeout)
+            frame = await self._receive_frame(endpoint.websocket, timeout=None)
             if frame.kind == 'heartbeat':
                 await endpoint.send_frame(_ack_frame(frame))
                 continue
@@ -667,9 +757,9 @@ class ProductionRelayService:
         self._metrics.frames_forwarded += 1
         self._metrics.bytes_forwarded += len(encoded)
 
-    async def _receive_frame(self, ws: web.WebSocketResponse, *, timeout: float) -> RelayFrame:
+    async def _receive_frame(self, ws: web.WebSocketResponse, *, timeout: float | None) -> RelayFrame:
         try:
-            message = await asyncio.wait_for(ws.receive(), timeout=timeout)
+            message = await ws.receive() if timeout is None else await asyncio.wait_for(ws.receive(), timeout=timeout)
         except asyncio.TimeoutError as exc:
             raise MobileRelayError('relay peer idle timeout') from exc
         if message.type == WSMsgType.TEXT:
@@ -920,6 +1010,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--heartbeat-interval-seconds', type=float, default=float(os.environ.get('CCB_RELAY_HEARTBEAT_INTERVAL_SECONDS', '20')))
     parser.add_argument('--unauth-rate-limit', type=int, default=int(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT', '30')))
     parser.add_argument('--unauth-rate-window-seconds', type=float, default=float(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT_WINDOW_SECONDS', '60')))
+    parser.add_argument('--unauth-rate-limit-max-keys', type=int, default=int(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT_MAX_KEYS', '10000')))
     parser.add_argument('--trusted-proxy', action='append', default=None)
     parser.add_argument('--unsafe-plaintext-for-tests', action='store_true')
     return parser
@@ -950,6 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
         heartbeat_interval=float(args.heartbeat_interval_seconds),
         unauth_rate_limit=int(args.unauth_rate_limit),
         unauth_rate_limit_window=float(args.unauth_rate_window_seconds),
+        unauth_rate_limit_max_keys=int(args.unauth_rate_limit_max_keys),
         trusted_proxy_cidrs=trusted_proxy_cidrs,
     )
     store = RelayAdmissionStore(

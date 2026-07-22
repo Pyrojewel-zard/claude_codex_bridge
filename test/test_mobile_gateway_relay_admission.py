@@ -328,6 +328,60 @@ def test_relay_host_byte_quota_is_bounded_and_restart_safe(tmp_path) -> None:
     assert reopened.record_host_bytes(host_id=credential.host_id, byte_count=1)['quota_usage']['bytes_used'] == 1
 
 
+def test_relay_reconciles_only_stale_active_session_reservations(tmp_path) -> None:
+    now = [9_000]
+    store = RelayAdmissionStore(
+        tmp_path / 'relay.sqlite3',
+        admission_secrets=_admission_secrets(),
+        now=lambda: now[0],
+    )
+    invitation = store.issue_invitation(ttl_seconds=120, max_sessions=3)
+    credential = store.claim_invitation(
+        invitation.invitation,
+        host_public_key_b64=host_public_key_b64(generate_host_private_key()),
+    )
+    store.reserve_host_session(host_id=credential.host_id, session_id='stale-1')
+    store.reserve_host_session(host_id=credential.host_id, session_id='stale-2')
+
+    assert store.reconcile_active_sessions() == 2
+    assert store.host_status(credential.host_id)['quota_usage']['active_sessions'] == 0
+    assert store.reconcile_active_sessions() == 0
+    reconciled = [
+        item
+        for item in store.audit_records()
+        if item['event'] == 'host_sessions_reconciled'
+    ]
+    assert reconciled == [
+        {
+            'event': 'host_sessions_reconciled',
+            'subject_type': 'host',
+            'subject_id': credential.host_id,
+            'at': 9_000,
+            'detail': {'count': 2, 'reason': 'relay_service_restart'},
+        }
+    ]
+
+
+def test_relay_normal_byte_accounting_does_not_append_per_frame_audit(tmp_path) -> None:
+    store = RelayAdmissionStore(
+        tmp_path / 'relay.sqlite3',
+        admission_secrets=_admission_secrets(),
+        now=lambda: 10_000,
+    )
+    invitation = store.issue_invitation(ttl_seconds=120, max_bytes_per_day=100)
+    credential = store.claim_invitation(
+        invitation.invitation,
+        host_public_key_b64=host_public_key_b64(generate_host_private_key()),
+    )
+    baseline = len(store.audit_records())
+
+    for _ in range(20):
+        store.record_host_bytes(host_id=credential.host_id, byte_count=1)
+
+    assert store.host_status(credential.host_id)['quota_usage']['bytes_used'] == 20
+    assert len(store.audit_records()) == baseline
+
+
 def _assert_secret_not_persisted(db_path, secret: str) -> None:
     secret_bytes = secret.encode('utf-8')
     _assert_blob_not_persisted(db_path, secret_bytes)

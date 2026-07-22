@@ -380,13 +380,16 @@ async def _rate_limit_idle_timeout_restart_and_graceful_drain(tmp_path: Path) ->
         async with _client_session() as client:
             idle_host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
             await asyncio.sleep(0.5)
-            idle_message = await idle_host.receive()
-            if idle_message.type == aiohttp.WSMsgType.TEXT:
+            try:
+                idle_message = await idle_host.receive()
+            except aiohttp.ClientConnectionError:
+                idle_message = None
+            if idle_message is not None and idle_message.type == aiohttp.WSMsgType.TEXT:
                 assert json.loads(idle_message.data)['payload'] == {
                     'code': 'relay_rejected',
                     'message': 'relay request rejected',
                 }
-            else:
+            elif idle_message is not None:
                 assert idle_host.closed or idle_message.type in {
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -419,6 +422,100 @@ async def _rate_limit_idle_timeout_restart_and_graceful_drain(tmp_path: Path) ->
             assert excinfo.value.status == 503
     finally:
         await restarted.stop()
+
+
+def test_registered_connections_use_heartbeat_instead_of_business_idle_timeout(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_registered_connections_use_heartbeat(tmp_path))
+
+
+async def _registered_connections_use_heartbeat(tmp_path: Path) -> None:
+    service, issued = await _started_service(
+        tmp_path,
+        idle_timeout=0.1,
+        heartbeat_interval=0.2,
+    )
+    try:
+        async with _client_session() as client:
+            host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
+            await host.send_json(
+                _host_register_frame(issued, session_id='heartbeat-host').to_json()
+            )
+            assert (await host.receive_json())['kind'] == 'ack'
+
+            pending_receive = asyncio.create_task(host.receive())
+            await asyncio.sleep(0.7)
+            assert not host.closed
+            await host.send_json(
+                {
+                    'schema_version': 2,
+                    'session_id': 'host-control',
+                    'seq': 2,
+                    'kind': 'heartbeat',
+                    'payload': {},
+                }
+            )
+            message = await pending_receive
+            assert message.type == aiohttp.WSMsgType.TEXT
+            assert json.loads(message.data)['kind'] == 'ack'
+    finally:
+        await service.stop()
+
+
+def test_service_start_reconciles_crashed_sessions_and_enforces_single_instance(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_service_start_reconciles_crashed_sessions(tmp_path))
+
+
+async def _service_start_reconciles_crashed_sessions(tmp_path: Path) -> None:
+    service, issued = await _started_service(tmp_path)
+    issued.store.reserve_host_session(
+        host_id=issued.host_id,
+        session_id='orphaned-after-crash',
+    )
+    await service.stop()
+    assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == 1
+
+    restarted = ProductionRelayService(service.config, admission_store=issued.store)
+    await restarted.start()
+    try:
+        assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == 0
+        duplicate = ProductionRelayService(service.config, admission_store=issued.store)
+        with pytest.raises(RuntimeError, match='another relay service instance'):
+            await duplicate.start()
+        await duplicate.stop()
+    finally:
+        await restarted.stop()
+
+
+def test_rate_limiter_bounds_unique_source_keys(tmp_path: Path) -> None:
+    asyncio.run(_rate_limiter_bounds_unique_source_keys(tmp_path))
+
+
+async def _rate_limiter_bounds_unique_source_keys(tmp_path: Path) -> None:
+    service, _issued = await _started_service(
+        tmp_path,
+        unauth_rate_limit=10,
+        unauth_rate_limit_max_keys=3,
+    )
+    try:
+        async with _client_session() as client:
+            for index in range(8):
+                address = f'203.0.113.{index + 1}'
+                socket = await client.ws_connect(
+                    service.url('/v2/host'),
+                    ssl=_client_ssl(),
+                    headers={
+                        'X-CCB-Client-IP': address,
+                        'X-Forwarded-For': address,
+                    },
+                )
+                await socket.close()
+        assert service._rate_limiter.key_count <= 3
+    finally:
+        await service.stop()
 
 
 def test_public_admin_endpoints_absent_and_admin_loopback_only(tmp_path: Path) -> None:
@@ -626,6 +723,8 @@ async def _started_service(
     idle_timeout: float = 5.0,
     unauth_rate_limit: int = 100,
     unauth_rate_limit_window: float = 60.0,
+    unauth_rate_limit_max_keys: int = 10_000,
+    heartbeat_interval: float = 0.1,
     trusted_proxy_cidrs: tuple[str, ...] = ('127.0.0.1/32', '::1/128'),
 ) -> tuple[ProductionRelayService, _IssuedHost]:
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -656,9 +755,10 @@ async def _started_service(
         peer_queue_limit=peer_queue_limit,
         write_timeout=1.0,
         idle_timeout=idle_timeout,
-        heartbeat_interval=0.1,
+        heartbeat_interval=heartbeat_interval,
         unauth_rate_limit=unauth_rate_limit,
         unauth_rate_limit_window=unauth_rate_limit_window,
+        unauth_rate_limit_max_keys=unauth_rate_limit_max_keys,
         trusted_proxy_cidrs=trusted_proxy_cidrs,
     )
     service = ProductionRelayService(config, admission_store=store)

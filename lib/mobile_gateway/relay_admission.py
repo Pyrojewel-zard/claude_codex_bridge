@@ -434,6 +434,56 @@ class RelayAdmissionStore:
         payload['relay_status'] = 'host_quota_released'
         return payload
 
+    def reconcile_active_sessions(self, *, reason: str = 'relay_service_restart') -> int:
+        """Release reservations left behind by a stopped single relay instance.
+
+        The production relay is intentionally a single-instance service backed by
+        one admission database. WebSocket sessions are process-local, so any row
+        still marked active before the listener starts cannot have a live peer.
+        """
+        now = self._now_s()
+        released = 0
+        with self._transaction() as conn:
+            rows = conn.execute(
+                '''
+                SELECT host_id, COUNT(*) AS session_count
+                FROM relay_host_sessions
+                WHERE state = 'active'
+                GROUP BY host_id
+                '''
+            ).fetchall()
+            if not rows:
+                return 0
+            released = sum(int(row['session_count'] or 0) for row in rows)
+            conn.execute(
+                '''
+                UPDATE relay_host_sessions
+                SET state = 'released', released_at = ?
+                WHERE state = 'active'
+                ''',
+                (now,),
+            )
+            conn.execute(
+                '''
+                UPDATE relay_hosts
+                SET active_sessions = 0, updated_at = ?
+                WHERE active_sessions != 0
+                ''',
+                (now,),
+            )
+            for row in rows:
+                self._audit(
+                    conn,
+                    'host_sessions_reconciled',
+                    'host',
+                    str(row['host_id']),
+                    {
+                        'count': int(row['session_count'] or 0),
+                        'reason': _redacted_text(reason),
+                    },
+                )
+        return released
+
     def record_host_bytes(self, *, host_id: str, byte_count: int) -> dict[str, object]:
         base_host_id = _required_text(host_id, 'host_id')
         if int(byte_count) < 0:
@@ -461,7 +511,6 @@ class RelayAdmissionStore:
                 ''',
                 (new_total, window_started_at, now, base_host_id),
             )
-            self._audit(conn, 'host_bytes_recorded', 'host', base_host_id, {'bytes': int(byte_count)})
             row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
         payload = self._host_row(row)
         payload['relay_status'] = 'host_quota_recorded'
