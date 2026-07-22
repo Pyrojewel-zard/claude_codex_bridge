@@ -77,7 +77,7 @@ class RelayGatewayEnvelope {
   }
 }
 
-abstract interface class RelayGatewayEnvelopeCodec {
+abstract interface class _RelayGatewayEnvelopeCodec {
   Future<RelayGatewayEnvelope> seal({
     required String sessionId,
     required int sequence,
@@ -86,8 +86,8 @@ abstract interface class RelayGatewayEnvelopeCodec {
   });
 }
 
-class RelayV2AeadEnvelopeCodec implements RelayGatewayEnvelopeCodec {
-  RelayV2AeadEnvelopeCodec({required RelayCryptoSession session})
+class _RelayV2AeadEnvelopeCodec implements _RelayGatewayEnvelopeCodec {
+  _RelayV2AeadEnvelopeCodec({required RelayCryptoSession session})
     : _session = session;
 
   final RelayCryptoSession _session;
@@ -121,40 +121,13 @@ class RelayV2AeadEnvelopeCodec implements RelayGatewayEnvelopeCodec {
   }
 }
 
-class TestOnlyLocalOpaqueRelayEnvelopeCodec
-    implements RelayGatewayEnvelopeCodec {
-  const TestOnlyLocalOpaqueRelayEnvelopeCodec({this.keyId = 'local-test-key'});
-
-  final String keyId;
-
-  @override
-  Future<RelayGatewayEnvelope> seal({
-    required String sessionId,
-    required int sequence,
-    required String operation,
-    required Map<String, Object?> payload,
-  }) async {
-    final payloadSize = utf8.encode(jsonEncode(payload)).length;
-    final opaque = utf8.encode('opaque-local-relay:$operation:$payloadSize');
-    final nonce = utf8.encode('$sessionId:$sequence');
-    return RelayGatewayEnvelope(
-      sessionId: sessionId,
-      sequence: sequence,
-      operation: operation,
-      ciphertextB64: base64UrlEncode(opaque),
-      nonceB64: base64UrlEncode(nonce),
-      keyId: keyId,
-    );
-  }
-}
-
 class RelayGatewayTransport implements GatewayTransport {
   RelayGatewayTransport({
     required GatewayTransport inner,
     required this.sessionId,
-    required RelayGatewayEnvelopeCodec codec,
+    required RelayCryptoSession cryptoSession,
   }) : _inner = inner,
-       _codec = codec {
+       _codec = _RelayV2AeadEnvelopeCodec(session: cryptoSession) {
     if (inner.profile.routeProvider.kind != RouteProviderKind.relay) {
       throw ArgumentError.value(
         inner.profile.routeProvider.kind.wireName,
@@ -165,7 +138,7 @@ class RelayGatewayTransport implements GatewayTransport {
   }
 
   final GatewayTransport _inner;
-  final RelayGatewayEnvelopeCodec _codec;
+  final _RelayGatewayEnvelopeCodec _codec;
   final String sessionId;
   final _sealedRequests = <RelayGatewayEnvelope>[];
   int _nextSequence = 1;
@@ -441,7 +414,9 @@ String _requiredText(Object? value, String name) {
 String _requiredBase64Text(Object? value, String name) {
   final text = _requiredText(value, name);
   try {
-    base64Url.decode(text);
+    base64Url.decode(
+      text.padRight(text.length + ((4 - text.length % 4) % 4), '='),
+    );
   } on FormatException catch (error) {
     throw FormatException('relay envelope invalid base64 field: $name', error);
   }

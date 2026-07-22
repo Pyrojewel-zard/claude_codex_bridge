@@ -280,7 +280,23 @@ def test_relay_host_session_quota_is_atomic_and_restart_safe(tmp_path) -> None:
     reopened = RelayAdmissionStore(db_path, admission_secrets=secrets, now=lambda: now[0])
     status = reopened.host_status(credential.host_id)
     assert status['quota_usage']['active_sessions'] == 3
-    reopened.release_host_session(host_id=credential.host_id, session_id=str(successes[0]['session_id']))
+    retry = reopened.reserve_host_session(host_id=credential.host_id, session_id=str(successes[0]['session_id']))
+    assert retry['idempotent'] is True
+    assert retry['quota_usage']['active_sessions'] == 3
+
+    second_invitation = reopened.issue_invitation(ttl_seconds=120, max_sessions=3)
+    second_credential = reopened.claim_invitation(
+        second_invitation.invitation,
+        host_public_key_b64=host_public_key_b64(generate_host_private_key()),
+    )
+    with pytest.raises(RelayAdmissionError, match='identity conflict'):
+        reopened.reserve_host_session(host_id=second_credential.host_id, session_id=str(successes[0]['session_id']))
+    assert reopened.host_status(second_credential.host_id)['quota_usage']['active_sessions'] == 0
+
+    released_session_id = str(successes[0]['session_id'])
+    reopened.release_host_session(host_id=credential.host_id, session_id=released_session_id)
+    with pytest.raises(RelayAdmissionError, match='identity conflict'):
+        reopened.reserve_host_session(host_id=credential.host_id, session_id=released_session_id)
     assert reopened.reserve_host_session(host_id=credential.host_id, session_id='session-after-release')['quota_usage'][
         'active_sessions'
     ] == 3

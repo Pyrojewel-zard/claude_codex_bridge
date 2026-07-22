@@ -350,7 +350,13 @@ class RelayAdmissionStore:
                 (base_session_id,),
             ).fetchone()
             if existing is not None:
-                raise RelayAdmissionError('relay host session already reserved')
+                if str(existing['host_id']) == base_host_id and str(existing['state']) == 'active':
+                    payload = self._host_row(host)
+                    payload['session_id'] = base_session_id
+                    payload['relay_status'] = 'host_quota_reserved'
+                    payload['idempotent'] = True
+                    return payload
+                raise RelayAdmissionError('relay host session identity conflict')
             quota = _json_object(str(host['quota_json'] or '{}'))
             active_sessions = int(host['active_sessions'] or 0)
             max_sessions = _quota_limit(quota, 'max_sessions')
@@ -377,6 +383,7 @@ class RelayAdmissionStore:
         payload = self._host_row(row)
         payload['session_id'] = base_session_id
         payload['relay_status'] = 'host_quota_reserved'
+        payload['idempotent'] = False
         return payload
 
     def release_host_session(self, *, host_id: str, session_id: str) -> dict[str, object]:
