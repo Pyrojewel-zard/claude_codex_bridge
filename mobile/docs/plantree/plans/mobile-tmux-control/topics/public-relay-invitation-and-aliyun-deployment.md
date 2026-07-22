@@ -149,6 +149,15 @@ remain necessary even after protocol validation.
 - add short-lived session capability verification and host revocation;
 - add concurrency, expiry, crash-boundary, migration, and log-redaction tests.
 
+Current candidate evidence, 2026-07-22:
+[history/public-relay-ab-package-20260722.md](../history/public-relay-ab-package-20260722.md).
+This is a local Package A/B implementation checkpoint only: it freezes the v2
+crypto/admission boundaries, adds shared Python/Dart vectors, transactional
+SQLite/WAL one-time invitation storage, host PoP session capabilities, and
+operator-local CLI rendering. It does not claim Package C/D relay service,
+host connector, public WSS, Android public-route acceptance, or Alibaba Cloud
+deployment.
+
 ### Package C: Production Relay Service
 
 - replace the in-memory-only public boundary with an async TLS/WSS relay

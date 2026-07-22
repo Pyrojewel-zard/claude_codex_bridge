@@ -37,6 +37,7 @@ export 'transport/gateway_route_diagnostics.dart';
 export 'transport/gateway_terminal_transport.dart';
 export 'transport/http_gateway_transport.dart';
 export 'transport/relay_gateway_transport.dart';
+export 'transport/relay_crypto.dart';
 export 'transport/relay_protocol.dart';
 export 'transport/route_provider.dart';
 export 'transport/terminal_transport.dart';

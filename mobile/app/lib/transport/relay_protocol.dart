@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'relay_crypto.dart';
 import 'relay_gateway_transport.dart';
 
 enum RelayFrameKind {
@@ -362,20 +363,7 @@ void _rejectProhibitedCleartextKeys(Object? value, String path) {
   }
 }
 
-const _prohibitedCleartextKeys = {
-  'authorization',
-  'bearer_token',
-  'device_token',
-  'gateway_url',
-  'pairing_code',
-  'paste_text',
-  'project_id',
-  'route_provider',
-  'terminal_id',
-  'terminal_token',
-  'text',
-  'websocket_url',
-};
+const _prohibitedCleartextKeys = relayProhibitedPlaintextFields;
 
 Map<String, Object?> _map(Object? value, String name) {
   if (value is Map) {

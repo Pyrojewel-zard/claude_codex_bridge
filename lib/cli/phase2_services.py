@@ -32,6 +32,7 @@ from cli.render import (
     render_observer_notice,
     render_pend,
     render_ps,
+    render_relay_operator,
     render_reload,
     render_restart,
     render_queue,
@@ -73,6 +74,7 @@ from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.ps import ps_summary
 from cli.services.queue import queue_target
+from cli.services.relay_operator import relay_operator_command
 from cli.services.reload import reload_config
 from cli.services.restart import restart_agent
 from cli.services.resubmit import resubmit_message
@@ -121,6 +123,7 @@ def build_phase2_dispatch_services(**overrides):
         ps_summary=ps_summary,
         question_command=question_command,
         queue_target=queue_target,
+        relay_operator_command=relay_operator_command,
         reload_config=reload_config,
         restart_agent=restart_agent,
         revoke_mobile_device=revoke_mobile_device,
@@ -153,6 +156,7 @@ def build_phase2_dispatch_services(**overrides):
         render_observer_notice=render_observer_notice,
         render_pend=render_pend,
         render_ps=render_ps,
+        render_relay_operator=render_relay_operator,
         render_reload=render_reload,
         render_restart=render_restart,
         render_queue=render_queue,

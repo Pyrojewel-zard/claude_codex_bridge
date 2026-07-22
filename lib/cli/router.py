@@ -449,6 +449,28 @@ _COMMAND_HELP = {
             multi-project registry.
           - Stopping the gateway does not stop ccbd, provider panes, or tmux.
     """,
+    "relay": """
+        usage: ccb relay <invite|host> <issue|status|list|revoke>
+
+        CCB hosted relay operator-local admission:
+          ccb relay invite issue --db /path/to/relay-admission.sqlite3 --ttl-seconds 900 --json
+              Create one one-time host invitation. This is the only command
+              that prints the raw invitation, exactly once, to explicit
+              operator output.
+          ccb relay invite status --db /path/to/relay-admission.sqlite3 <invite_id> [--json]
+          ccb relay invite list --db /path/to/relay-admission.sqlite3 [--json]
+          ccb relay invite revoke --db /path/to/relay-admission.sqlite3 <invite_id> [--reason TEXT] [--json]
+          ccb relay host status --db /path/to/relay-admission.sqlite3 <host_id> [--json]
+          ccb relay host list --db /path/to/relay-admission.sqlite3 [--json]
+          ccb relay host revoke --db /path/to/relay-admission.sqlite3 <host_id> [--reason TEXT] [--json]
+
+        Safety:
+          - This is not a public HTTP/admin route.
+          - Raw invitation secrets are not stored in logs, audit records, or
+            the SQLite admission database.
+          - Status/list/revoke output is redacted and never prints an
+            invitation value.
+    """,
     "loop": """
         usage:
           ccb loop capacity <ensure|status|release> ...

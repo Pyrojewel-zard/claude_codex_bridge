@@ -4,23 +4,12 @@ import base64
 from dataclasses import dataclass
 from typing import Mapping
 
+from .relay_crypto import RELAY_PROHIBITED_PLAINTEXT_FIELDS
+
 
 _SCHEMA_VERSION = 1
 
-_PROHIBITED_CLEARTEXT_KEYS = {
-    'authorization',
-    'bearer_token',
-    'device_token',
-    'gateway_url',
-    'pairing_code',
-    'paste_text',
-    'project_id',
-    'route_provider',
-    'terminal_id',
-    'terminal_token',
-    'text',
-    'websocket_url',
-}
+_PROHIBITED_CLEARTEXT_KEYS = set(RELAY_PROHIBITED_PLAINTEXT_FIELDS)
 
 
 class MobileRelayError(RuntimeError):

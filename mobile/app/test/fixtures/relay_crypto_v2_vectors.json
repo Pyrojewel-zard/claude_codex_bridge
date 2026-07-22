@@ -1,0 +1,26 @@
+{
+  "client_seed_b64": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+  "client_public_key_b64": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
+  "frame": {
+    "ciphertext_b64": "KxcS2DpYRUzV7JEslzF7CX4awWC8tx1TEP7ilFKDAg2pVNkRtk4Mx8KAV4us98u9j538MAU3cw",
+    "direction": "phone_to_host",
+    "key_id": "ccb-relay-v2-session",
+    "nonce_b64": "mH08sAAAAAAAAAAB",
+    "op": "vector_ping",
+    "schema_version": 2,
+    "seq": 1,
+    "session_id": "relay-v2-vector-session"
+  },
+  "host_fingerprint": "sha256:7tOFok73l2rd5bozN9Nvo5ULvBKMXSzacmz_ACgl2vA",
+  "host_seed_b64": "ZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5_gIGCg4Q",
+  "host_public_key_b64": "VxR2nRFr92Q2rnS8eT0sMK0ZA8WaxSc4BcfiaYtBDDY",
+  "key_confirmation": {
+    "host_b64": "YkKMh_qh3HY0puYmtwneu4rDhucI6ySUVkWJWX_XASg",
+    "phone_b64": "cxn9V2sFOn8b3YJWybshsTFL-NVQaxZO6NWqYcDtlhk"
+  },
+  "plaintext_b64": "eyJraW5kIjoicmVsYXlfdmVjdG9yIiwidmFsdWUiOiJoZWxsbyJ9",
+  "protocol": "ccb-relay-v2",
+  "schema_version": 2,
+  "session_id": "relay-v2-vector-session",
+  "transcript_hash_b64": "Jfv-3q_wz7hsRAm9isyV-9n7EoG00Dkox6CoPssGEjw"
+}

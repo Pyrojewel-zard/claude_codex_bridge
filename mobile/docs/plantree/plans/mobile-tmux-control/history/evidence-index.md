@@ -2,6 +2,21 @@
 
 Date: 2026-06-29
 
+## 2026-07-22: Public Relay Package A/B Candidate
+
+Evidence:
+
+- [public-relay-ab-package-20260722.md](public-relay-ab-package-20260722.md)
+
+Result:
+
+- Local Package A/B implementation checkpoint only: relay crypto protocol v2,
+  deterministic Python/Dart vectors, SQLite/WAL one-time invitation store,
+  host PoP session capabilities, and local operator CLI are covered by Python
+  and Flutter tests.
+- No production relay listener, public WSS acceptance, Android public-route
+  acceptance, host connector, or cloud deployment is claimed.
+
 ## 2026-07-14: Paseo-Inspired Device-Bound Push Integration
 
 Evidence:

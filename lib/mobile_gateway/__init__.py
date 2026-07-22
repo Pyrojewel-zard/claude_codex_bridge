@@ -7,6 +7,8 @@ from .service import (
     parse_listen_address,
 )
 from .pairing import MobileGatewayPairingError, MobileGatewayPairingStore
+from .relay_admission import RelayAdmissionError, RelayAdmissionStore
+from .relay_crypto import RelayCryptoError, RelayV2Envelope
 from .project_registry import (
     HOST_PROJECT_REGISTRY_FILENAME,
     HOST_PROJECT_REGISTRY_RECORD_TYPE,
@@ -28,6 +30,10 @@ __all__ = [
     'MobileGatewayProject',
     'MobileGatewayProjectRegistry',
     'MobileGatewayService',
+    'RelayAdmissionError',
+    'RelayAdmissionStore',
+    'RelayCryptoError',
+    'RelayV2Envelope',
     'build_mobile_gateway_server',
     'discover_running_mobile_gateway_projects',
     'load_mobile_gateway_project_registry',

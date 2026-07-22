@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+import base64
+import json
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
+
+import pytest
+
+from cli.parser import CliParser
+from cli.render import render_relay_operator
+from cli.services.relay_operator import relay_operator_command
+from mobile_gateway.relay_admission import (
+    RelayAdmissionError,
+    RelayAdmissionStore,
+    generate_host_private_key,
+    host_public_key_b64,
+    sign_host_session_proof,
+)
+
+
+def test_relay_invitation_issue_stores_only_keyed_verifier(tmp_path) -> None:
+    now = [1_000]
+    store = RelayAdmissionStore(tmp_path / 'relay.sqlite3', now=lambda: now[0])
+
+    issued = store.issue_invitation(label='operator-visible label', ttl_seconds=120)
+
+    assert issued.invitation.startswith('ccb-relay-inv-v2.')
+    status = store.invitation_status(issued.invite_id)
+    assert status['state'] == 'unused'
+    assert 'invitation' not in status
+    _assert_secret_not_persisted(tmp_path / 'relay.sqlite3', issued.invitation)
+    assert issued.invitation not in json.dumps(store.audit_records(), sort_keys=True)
+
+
+def test_relay_invitation_concurrent_claim_yields_exactly_one_host_credential(tmp_path) -> None:
+    store = RelayAdmissionStore(tmp_path / 'relay.sqlite3', now=lambda: 2_000)
+    issued = store.issue_invitation(ttl_seconds=600)
+    host_private = generate_host_private_key()
+    host_public = host_public_key_b64(host_private)
+
+    def claim_once() -> dict[str, object]:
+        try:
+            credential = RelayAdmissionStore(tmp_path / 'relay.sqlite3', now=lambda: 2_000).claim_invitation(
+                issued.invitation,
+                host_public_key_b64=host_public,
+            )
+            return {'ok': credential.to_json()}
+        except RelayAdmissionError as exc:
+            return {'error': str(exc)}
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(executor.map(lambda _index: claim_once(), range(12)))
+
+    successes = [result['ok'] for result in results if 'ok' in result]
+    failures = [result['error'] for result in results if 'error' in result]
+    assert len(successes) == 1
+    assert len(failures) == 11
+    assert all(issued.invitation not in failure for failure in failures)
+    credential = successes[0]
+    assert credential['type'] == 'ccb_relay_host_credential_v1'
+    assert credential['host_public_key_b64'] == host_public
+    assert credential['invitation_id'] == issued.invite_id
+    assert store.invitation_status(issued.invite_id)['state'] == 'consumed'
+    assert len(store.list_hosts()) == 1
+    with pytest.raises(RelayAdmissionError, match='not claimable'):
+        store.claim_invitation(issued.invitation, host_public_key_b64=host_public)
+    _assert_secret_not_persisted(tmp_path / 'relay.sqlite3', issued.invitation)
+
+
+def test_relay_invitation_restart_expiry_and_revoke_are_persistent(tmp_path) -> None:
+    now = [3_000]
+    db_path = tmp_path / 'relay.sqlite3'
+    store = RelayAdmissionStore(db_path, now=lambda: now[0])
+    expired = store.issue_invitation(ttl_seconds=5)
+    revoked = store.issue_invitation(ttl_seconds=120)
+
+    now[0] += 6
+    reopened = RelayAdmissionStore(db_path, now=lambda: now[0])
+    assert reopened.invitation_status(expired.invite_id)['state'] == 'expired'
+    with pytest.raises(RelayAdmissionError, match='not claimable'):
+        reopened.claim_invitation(
+            expired.invitation,
+            host_public_key_b64=host_public_key_b64(generate_host_private_key()),
+        )
+
+    revoked_status = reopened.revoke_invitation(revoked.invite_id, reason='operator rotation')
+    assert revoked_status['state'] == 'revoked'
+    with pytest.raises(RelayAdmissionError, match='not claimable'):
+        reopened.claim_invitation(
+            revoked.invitation,
+            host_public_key_b64=host_public_key_b64(generate_host_private_key()),
+        )
+    states = {item['invite_id']: item['state'] for item in reopened.list_invitations()}
+    assert states == {expired.invite_id: 'expired', revoked.invite_id: 'revoked'}
+
+
+def test_relay_host_pop_session_capability_and_revocation(tmp_path) -> None:
+    now = [4_000]
+    store = RelayAdmissionStore(tmp_path / 'relay.sqlite3', now=lambda: now[0])
+    invitation = store.issue_invitation(ttl_seconds=120)
+    host_private = generate_host_private_key()
+    credential = store.claim_invitation(
+        invitation.invitation,
+        host_public_key_b64=host_public_key_b64(host_private),
+    )
+    nonce_b64 = _b64(b'session nonce 1')
+    proof_expires_at = now[0] + 30
+    signature = sign_host_session_proof(
+        host_private,
+        host_id=credential.host_id,
+        nonce_b64=nonce_b64,
+        expires_at=proof_expires_at,
+    )
+
+    capability = store.issue_session_capability(
+        host_id=credential.host_id,
+        nonce_b64=nonce_b64,
+        proof_expires_at=proof_expires_at,
+        signature_b64=signature,
+        ttl_seconds=60,
+        scopes=('relay.connect', 'relay.forward'),
+    )
+
+    verified = store.verify_session_capability(str(capability['capability']))
+    assert verified['host_id'] == credential.host_id
+    assert verified['scopes'] == ['relay.connect', 'relay.forward']
+    tampered = str(capability['capability'])[:-1] + 'A'
+    with pytest.raises(RelayAdmissionError, match='signature rejected'):
+        store.verify_session_capability(tampered)
+    bad_signature = sign_host_session_proof(
+        generate_host_private_key(),
+        host_id=credential.host_id,
+        nonce_b64=nonce_b64,
+        expires_at=proof_expires_at,
+    )
+    with pytest.raises(RelayAdmissionError, match='proof rejected'):
+        store.issue_session_capability(
+            host_id=credential.host_id,
+            nonce_b64=nonce_b64,
+            proof_expires_at=proof_expires_at,
+            signature_b64=bad_signature,
+        )
+
+    assert store.revoke_host(credential.host_id, reason='operator rotation')['state'] == 'revoked'
+    with pytest.raises(RelayAdmissionError, match='not active'):
+        store.verify_session_capability(str(capability['capability']))
+
+
+def test_relay_operator_cli_json_and_human_outputs_redact_except_issue(tmp_path) -> None:
+    db_path = tmp_path / 'relay.sqlite3'
+    context = SimpleNamespace(paths=SimpleNamespace(ccbd_mobile_dir=tmp_path / 'mobile'))
+    issue_command = CliParser().parse(
+        ['relay', 'invite', 'issue', '--db', str(db_path), '--ttl-seconds', '120', '--json']
+    )
+
+    issue_payload = relay_operator_command(context, issue_command)
+    issue_lines = render_relay_operator(issue_payload)
+
+    raw_invitation = str(issue_payload['invitation'])
+    assert sum(1 for line in issue_lines if line.startswith('invitation: ')) == 1
+    assert raw_invitation in '\n'.join(issue_lines)
+
+    invite_id = str(issue_payload['invite_id'])
+    status_command = CliParser().parse(['relay', 'invite', 'status', '--db', str(db_path), invite_id, '--json'])
+    status_payload = relay_operator_command(context, status_command)
+    list_command = CliParser().parse(['relay', 'invite', 'list', '--db', str(db_path)])
+    list_payload = relay_operator_command(context, list_command)
+    list_lines = render_relay_operator(list_payload)
+
+    assert 'invitation' not in status_payload
+    assert raw_invitation not in json.dumps(status_payload, sort_keys=True)
+    assert raw_invitation not in '\n'.join(list_lines)
+    assert raw_invitation not in json.dumps(list_payload, sort_keys=True)
+    _assert_secret_not_persisted(db_path, raw_invitation)
+
+
+def _assert_secret_not_persisted(db_path, secret: str) -> None:
+    secret_bytes = secret.encode('utf-8')
+    candidates = [db_path, db_path.with_name(db_path.name + '-wal'), db_path.with_name(db_path.name + '-shm')]
+    for path in candidates:
+        if path.exists():
+            assert secret_bytes not in path.read_bytes()
+
+
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode('ascii').rstrip('=')
