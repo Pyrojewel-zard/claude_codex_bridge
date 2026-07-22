@@ -64,6 +64,9 @@ Date: 2026-05-30
   generated WezTerm config, JSON manifest, and source-wrapper validation from
   `/home/bfly/yunwei/test_ccb2`. Evidence is recorded in
   [history/workbench-bundle-slice-2026-06-15.md](history/workbench-bundle-slice-2026-06-15.md).
+- Added a compact rich-only Yazi layout that hides the parent-directory column
+  and retains the current-directory and preview columns at a `4:3` proportion;
+  the safe profile keeps Yazi's default three-column layout.
 - Superseded the early `ccb rich-install` setup command. The product entry for
   installing/updating the rich workbench is now `ccb update rich`.
 - Landed the `rich` layout alias slice:
