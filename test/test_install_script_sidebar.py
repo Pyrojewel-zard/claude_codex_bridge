@@ -131,9 +131,10 @@ def test_sidebar_package_script_stages_release_artifact() -> None:
     assert 'CCB_AGENT_SIDEBAR_WRAPPER' in text
     assert 'tar -C "$REPO_ROOT/dist" -czf "$OUT_TAR" "$ARTIFACT_NAME"' in text
     assert 'write_sha256_file "$OUT_TAR" "$OUT_SHA"' in text
-    assert 'sha256sum "$path" > "$output"' in text
-    assert 'shasum -a 256 "$path" > "$output"' in text
+    assert '(cd "$directory" && sha256sum "$filename") > "$output"' in text
+    assert '(cd "$directory" && shasum -a 256 "$filename") > "$output"' in text
     assert 'hashlib.sha256' in text
+    assert 'path.name' in text
 
 
 def test_sidebar_build_script_executes_copy_path_with_fake_cargo(tmp_path: Path) -> None:
@@ -273,7 +274,16 @@ def test_sidebar_package_script_executes_artifact_dry_run(tmp_path: Path) -> Non
     checksum_parts = checksum_text.split()
     assert len(checksum_parts) == 2
     assert len(checksum_parts[0]) == 64
-    assert checksum_parts[1].endswith('ccb-agent-sidebar-linux-x86_64.tar.gz')
+    assert checksum_parts[1] == 'ccb-agent-sidebar-linux-x86_64.tar.gz'
+    checksum_check = subprocess.run(
+        ['sha256sum', '-c', checksum.name],
+        cwd=artifact.parent,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    assert checksum_check.returncode == 0, checksum_check.stderr
     listing = subprocess.run(
         ['tar', '-tzf', str(artifact)],
         stdout=subprocess.PIPE,
