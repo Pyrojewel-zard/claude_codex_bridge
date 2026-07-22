@@ -946,19 +946,40 @@ def _claude_session_path() -> Path:
 
 
 def _handle_claude(req_id: str, prompt: str, delay_s: float, session_path: Path) -> None:
+    user_uuid = f"user-{uuid.uuid4().hex}"
     user_entry = {
-        "type": "event_msg",
-        "payload": {"type": "assistant_message", "role": "user", "message": prompt},
+        "type": "user",
+        "uuid": user_uuid,
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": prompt}],
+        },
     }
     _append_jsonl(session_path, user_entry)
     if delay_s:
         time.sleep(delay_s)
     reply = f"stub reply for {req_id}\nCCB_DONE: {req_id}"
+    assistant_uuid = f"assistant-{uuid.uuid4().hex}"
     assistant_entry = {
-        "type": "event_msg",
-        "payload": {"type": "assistant_message", "role": "assistant", "message": reply},
+        "type": "assistant",
+        "uuid": assistant_uuid,
+        "parentUuid": user_uuid,
+        "message": {
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": reply}],
+        },
     }
     _append_jsonl(session_path, assistant_entry)
+    _append_jsonl(
+        session_path,
+        {
+            "type": "system",
+            "subtype": "turn_duration",
+            "parentUuid": assistant_uuid,
+            "durationMs": max(1, int(delay_s * 1000)),
+        },
+    )
 
 
 def _opencode_storage_root() -> Path:
@@ -1799,7 +1820,7 @@ def main(argv: list[str]) -> int:
             return
         if provider == "claude":
             assert claude_session_path is not None
-            _handle_claude(req_id, _request_message(prompt) or prompt, delay_s, claude_session_path)
+            _handle_claude(req_id, prompt, delay_s, claude_session_path)
             _write_hook_event(provider, Path.cwd(), req_id, f"stub reply for {req_id}")
             return
         if provider == "opencode":
