@@ -4,10 +4,10 @@ import base64
 from dataclasses import dataclass
 from typing import Mapping
 
-from .relay_crypto import RELAY_PROHIBITED_PLAINTEXT_FIELDS
+from .relay_crypto import RELAY_PROHIBITED_PLAINTEXT_FIELDS, RELAY_PROTOCOL_VERSION
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = RELAY_PROTOCOL_VERSION
 
 _PROHIBITED_CLEARTEXT_KEYS = set(RELAY_PROHIBITED_PLAINTEXT_FIELDS)
 
@@ -57,8 +57,8 @@ class RelayHostRegistration:
         return payload
 
     def _validate(self) -> 'RelayHostRegistration':
-        if self.schema_version < 1:
-            raise MobileRelayError('relay host registration schema_version invalid')
+        if self.schema_version != _SCHEMA_VERSION:
+            raise MobileRelayError('relay host registration requires v2 schema_version')
         _required_text(self.host_id, 'host_id')
         _required_text(self.server_fingerprint, 'server_fingerprint')
         _required_base64_text(self.host_pubkey_b64, 'host_pubkey_b64')
@@ -96,8 +96,8 @@ class RelayFrame:
         }
 
     def validate(self) -> None:
-        if self.schema_version < 1:
-            raise MobileRelayError('relay frame schema_version invalid')
+        if self.schema_version != _SCHEMA_VERSION:
+            raise MobileRelayError('relay frame requires v2 schema_version')
         _required_text(self.session_id, 'session_id')
         _positive_int(self.seq, 'seq')
         if self.kind not in {'client_hello', 'host_hello', 'gateway_envelope', 'ack', 'close'}:
@@ -108,13 +108,15 @@ class RelayFrame:
             _required_text(self.payload.get('device_id'), 'client_hello.device_id')
             _required_base64_text(self.payload.get('client_pubkey_b64'), 'client_hello.client_pubkey_b64')
             versions = _positive_int_list(self.payload.get('supported_versions'), 'client_hello.supported_versions')
-            if not versions:
-                raise MobileRelayError('client_hello.supported_versions is required')
+            if _SCHEMA_VERSION not in versions:
+                raise MobileRelayError('client_hello.supported_versions must include relay v2')
         elif self.kind == 'host_hello':
             _required_text(self.payload.get('host_id'), 'host_hello.host_id')
             _required_text(self.payload.get('server_fingerprint'), 'host_hello.server_fingerprint')
             _required_base64_text(self.payload.get('host_pubkey_b64'), 'host_hello.host_pubkey_b64')
-            _positive_int(self.payload.get('accepted_version'), 'host_hello.accepted_version')
+            accepted_version = _positive_int(self.payload.get('accepted_version'), 'host_hello.accepted_version')
+            if accepted_version != _SCHEMA_VERSION:
+                raise MobileRelayError('relay host_hello downgrade rejected')
         elif self.kind == 'gateway_envelope':
             envelope = _object_map(self.payload.get('envelope'), 'envelope')
             if _required_text(envelope.get('session_id'), 'envelope.session_id') != self.session_id:
@@ -158,8 +160,8 @@ class RelayHandshakeTranscript:
             'client_hello.supported_versions',
         )
         accepted_version = _positive_int(host_hello.payload.get('accepted_version'), 'host_hello.accepted_version')
-        if accepted_version not in supported_versions:
-            raise MobileRelayError('relay handshake version mismatch')
+        if _SCHEMA_VERSION not in supported_versions or accepted_version != _SCHEMA_VERSION:
+            raise MobileRelayError('relay handshake downgrade rejected')
         return cls(
             session_id=client_hello.session_id,
             host_id=host_id,
@@ -217,7 +219,9 @@ class LocalRelayServerHarness:
             client_hello.payload.get('supported_versions'),
             'client_hello.supported_versions',
         )
-        accepted_version = 1 if 1 in supported_versions else max(supported_versions)
+        if _SCHEMA_VERSION not in supported_versions:
+            raise MobileRelayError('relay v2 is required')
+        accepted_version = _SCHEMA_VERSION
         frame = RelayFrame(
             session_id=client_hello.session_id,
             seq=client_hello.seq + 1,

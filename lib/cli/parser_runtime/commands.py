@@ -151,6 +151,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 target=target,
                 action=action,
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 ttl_seconds=int(namespace.ttl_seconds),
                 label=_optional_parser_text(namespace.label),
                 max_sessions=int(namespace.max_sessions),
@@ -168,6 +169,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 action=action,
                 invite_id=str(namespace.invite_id),
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
         if action == 'list':
@@ -179,6 +181,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 target=target,
                 action=action,
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
         if action == 'revoke':
@@ -194,6 +197,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 invite_id=str(namespace.invite_id),
                 reason=_optional_parser_text(namespace.reason),
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
     if target == 'host':
@@ -208,6 +212,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 action=action,
                 host_id=str(namespace.host_id),
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
         if action == 'list':
@@ -219,6 +224,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 target=target,
                 action=action,
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
         if action == 'revoke':
@@ -234,6 +240,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 host_id=str(namespace.host_id),
                 reason=_optional_parser_text(namespace.reason),
                 db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
     raise error_type('relay supports invite issue/status/list/revoke and host status/list/revoke')
@@ -1229,6 +1236,7 @@ def _parse_csv_values(text: str) -> tuple[str, ...]:
 
 def _add_relay_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--db', dest='db_path', default=None)
+    parser.add_argument('--secrets', dest='secrets_path', default=None)
     parser.add_argument('--json', dest='json_output', action='store_true')
 
 

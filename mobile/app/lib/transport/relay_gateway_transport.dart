@@ -8,18 +8,21 @@ import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
 import '../models/readable_terminal_history.dart';
 import 'gateway_transport.dart';
+import 'relay_crypto.dart';
 import 'route_provider.dart';
 
 class RelayGatewayEnvelope {
-  const RelayGatewayEnvelope({
+  RelayGatewayEnvelope({
     required this.sessionId,
     required this.sequence,
     required this.operation,
     required this.ciphertextB64,
     required this.nonceB64,
-    this.schemaVersion = 1,
+    this.schemaVersion = relayProtocolVersion,
     this.keyId,
-  });
+  }) {
+    _validate();
+  }
 
   final int schemaVersion;
   final String sessionId;
@@ -31,9 +34,12 @@ class RelayGatewayEnvelope {
 
   factory RelayGatewayEnvelope.fromJson(Map<String, Object?> json) {
     return RelayGatewayEnvelope(
-      schemaVersion: _int(json['schema_version'], fallback: 1),
+      schemaVersion: _int(
+        json['schema_version'],
+        fallback: relayProtocolVersion,
+      ),
       sessionId: _requiredText(json['session_id'], 'session_id'),
-      sequence: _requiredPositiveInt(json['seq'], 'seq'),
+      sequence: _requiredSequence(json['seq'], 'seq'),
       operation: _requiredText(json['op'], 'op'),
       ciphertextB64: _requiredBase64Text(
         json['ciphertext_b64'],
@@ -45,6 +51,7 @@ class RelayGatewayEnvelope {
   }
 
   Map<String, Object?> toJson() {
+    _validate();
     return {
       'schema_version': schemaVersion,
       'session_id': sessionId,
@@ -55,10 +62,23 @@ class RelayGatewayEnvelope {
       if (_hasText(keyId)) 'key_id': keyId,
     };
   }
+
+  void _validate() {
+    if (schemaVersion != relayProtocolVersion) {
+      throw const FormatException(
+        'relay gateway envelope requires v2 schema_version',
+      );
+    }
+    _requiredText(sessionId, 'session_id');
+    _requiredSequence(sequence, 'seq');
+    _requiredText(operation, 'op');
+    _requiredBase64Text(ciphertextB64, 'ciphertext_b64');
+    _requiredBase64Text(nonceB64, 'nonce_b64');
+  }
 }
 
 abstract interface class RelayGatewayEnvelopeCodec {
-  RelayGatewayEnvelope seal({
+  Future<RelayGatewayEnvelope> seal({
     required String sessionId,
     required int sequence,
     required String operation,
@@ -66,18 +86,54 @@ abstract interface class RelayGatewayEnvelopeCodec {
   });
 }
 
-class LocalOpaqueRelayEnvelopeCodec implements RelayGatewayEnvelopeCodec {
-  const LocalOpaqueRelayEnvelopeCodec({this.keyId = 'local-test-key'});
+class RelayV2AeadEnvelopeCodec implements RelayGatewayEnvelopeCodec {
+  RelayV2AeadEnvelopeCodec({required RelayCryptoSession session})
+    : _session = session;
 
-  final String keyId;
+  final RelayCryptoSession _session;
 
   @override
-  RelayGatewayEnvelope seal({
+  Future<RelayGatewayEnvelope> seal({
     required String sessionId,
     required int sequence,
     required String operation,
     required Map<String, Object?> payload,
-  }) {
+  }) async {
+    if (sessionId != _session.sessionId) {
+      throw const FormatException('relay v2 codec session mismatch');
+    }
+    final frame = await _session.seal(
+      operation: operation,
+      plaintext: utf8.encode(jsonEncode(payload)),
+    );
+    if (frame.sequence != sequence) {
+      throw const FormatException('relay v2 codec sequence mismatch');
+    }
+    return RelayGatewayEnvelope(
+      schemaVersion: frame.schemaVersion,
+      sessionId: frame.sessionId,
+      sequence: frame.sequence,
+      operation: frame.operation,
+      ciphertextB64: frame.ciphertextB64,
+      nonceB64: frame.nonceB64,
+      keyId: frame.keyId,
+    );
+  }
+}
+
+class TestOnlyLocalOpaqueRelayEnvelopeCodec
+    implements RelayGatewayEnvelopeCodec {
+  const TestOnlyLocalOpaqueRelayEnvelopeCodec({this.keyId = 'local-test-key'});
+
+  final String keyId;
+
+  @override
+  Future<RelayGatewayEnvelope> seal({
+    required String sessionId,
+    required int sequence,
+    required String operation,
+    required Map<String, Object?> payload,
+  }) async {
     final payloadSize = utf8.encode(jsonEncode(payload)).length;
     final opaque = utf8.encode('opaque-local-relay:$operation:$payloadSize');
     final nonce = utf8.encode('$sessionId:$sequence');
@@ -96,7 +152,7 @@ class RelayGatewayTransport implements GatewayTransport {
   RelayGatewayTransport({
     required GatewayTransport inner,
     required this.sessionId,
-    RelayGatewayEnvelopeCodec codec = const LocalOpaqueRelayEnvelopeCodec(),
+    required RelayGatewayEnvelopeCodec codec,
   }) : _inner = inner,
        _codec = codec {
     if (inner.profile.routeProvider.kind != RouteProviderKind.relay) {
@@ -281,11 +337,14 @@ class RelayGatewayTransport implements GatewayTransport {
     GatewayTerminalHandle handle, {
     int? resumeCursor,
   }) {
-    _seal('terminal_frames', {
-      'terminal_id': handle.terminalId,
-      if (resumeCursor != null) 'resume_cursor': resumeCursor,
+    return Stream.fromFuture(
+      _seal('terminal_frames', {
+        'terminal_id': handle.terminalId,
+        if (resumeCursor != null) 'resume_cursor': resumeCursor,
+      }),
+    ).asyncExpand((_) {
+      return _inner.terminalFrames(handle, resumeCursor: resumeCursor);
     });
-    return _inner.terminalFrames(handle, resumeCursor: resumeCursor);
   }
 
   @override
@@ -354,13 +413,13 @@ class RelayGatewayTransport implements GatewayTransport {
     String operation,
     Map<String, Object?> payload,
     Future<T> Function() action,
-  ) {
-    _seal(operation, payload);
+  ) async {
+    await _seal(operation, payload);
     return action();
   }
 
-  void _seal(String operation, Map<String, Object?> payload) {
-    final envelope = _codec.seal(
+  Future<void> _seal(String operation, Map<String, Object?> payload) async {
+    final envelope = await _codec.seal(
       sessionId: sessionId,
       sequence: _nextSequence,
       operation: operation,
@@ -401,12 +460,28 @@ int _int(Object? value, {required int fallback}) {
   return int.tryParse((value ?? '').toString()) ?? fallback;
 }
 
-int _requiredPositiveInt(Object? value, String name) {
-  final parsed = value is int ? value : int.tryParse((value ?? '').toString());
-  if (parsed == null || parsed < 1) {
+bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
+
+int _requiredSequence(Object? value, String name) {
+  BigInt? parsed;
+  if (value is BigInt) {
+    parsed = value;
+  } else if (value is int) {
+    parsed = BigInt.from(value);
+  } else {
+    parsed = BigInt.tryParse((value ?? '').toString());
+  }
+  if (parsed == null || parsed < BigInt.one) {
     throw FormatException('relay envelope missing positive integer: $name');
   }
-  return parsed;
+  if (parsed > relayMaxSequence) {
+    throw FormatException('relay envelope sequence exceeds uint64: $name');
+  }
+  final maxDartInt = BigInt.parse('9223372036854775807');
+  if (parsed > maxDartInt) {
+    throw FormatException(
+      'relay envelope sequence exceeds Dart int range: $name',
+    );
+  }
+  return parsed.toInt();
 }
-
-bool _hasText(String? value) => value != null && value.trim().isNotEmpty;

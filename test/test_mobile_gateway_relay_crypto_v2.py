@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mobile_gateway.relay_crypto import (
+    RELAY_MAX_SEQUENCE,
     RelayCryptoError,
     RelayV2Envelope,
     assert_no_prohibited_plaintext,
@@ -90,6 +91,7 @@ def test_relay_v2_rejects_downgrade_fingerprint_and_plaintext_fields() -> None:
     vector = _fixture()
     with pytest.raises(RelayCryptoError, match='failed closed'):
         negotiate_relay_v2([1])
+    assert negotiate_relay_v2([1, 2]) == 2
 
     with pytest.raises(RelayCryptoError, match='fingerprint'):
         derive_relay_v2_key_schedule(
@@ -121,6 +123,27 @@ def test_relay_v2_best_effort_zeroizes_session_keys() -> None:
     assert phone.key_material_erased() is True
     with pytest.raises(RelayCryptoError, match='closed'):
         phone.seal(op='closed', plaintext=b'payload')
+
+
+def test_relay_v2_sequence_limit_is_explicit_and_closes_session() -> None:
+    vector = _fixture()
+    phone, host = _sessions(vector)
+    phone._next_send_seq = RELAY_MAX_SEQUENCE
+
+    final_frame = phone.seal(op='last', plaintext=b'last')
+
+    assert final_frame.seq == RELAY_MAX_SEQUENCE
+    with pytest.raises(RelayCryptoError, match='sequence exhausted'):
+        phone.seal(op='overflow', plaintext=b'overflow')
+    assert phone.closed is True
+
+    host._next_receive_seq = RELAY_MAX_SEQUENCE + 1
+    with pytest.raises(RelayCryptoError, match='sequence exhausted'):
+        host.open(final_frame)
+    assert host.closed is True
+
+    with pytest.raises(RelayCryptoError, match='uint64'):
+        RelayV2Envelope.from_json({**final_frame.to_json(), 'seq': RELAY_MAX_SEQUENCE + 1})
 
 
 def _sessions(vector: dict[str, object]):

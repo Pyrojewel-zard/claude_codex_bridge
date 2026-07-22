@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 RELAY_PROTOCOL_VERSION = 2
 RELAY_PROTOCOL_NAME = 'ccb-relay-v2'
 RELAY_KEY_ID = 'ccb-relay-v2-session'
+RELAY_MAX_SEQUENCE = (1 << 64) - 1
 
 RELAY_CLEAR_ENVELOPE_FIELDS = frozenset(
     {
@@ -91,7 +92,7 @@ class RelayV2Envelope:
         envelope = cls(
             schema_version=_int(payload.get('schema_version'), fallback=0),
             session_id=_required_text(payload.get('session_id'), 'session_id'),
-            seq=_positive_int(payload.get('seq'), 'seq'),
+            seq=_sequence_int(payload.get('seq'), 'seq'),
             direction=_direction(payload.get('direction')),
             op=_required_text(payload.get('op'), 'op'),
             nonce_b64=_required_base64_text(payload.get('nonce_b64'), 'nonce_b64'),
@@ -118,7 +119,7 @@ class RelayV2Envelope:
         if self.schema_version != RELAY_PROTOCOL_VERSION:
             raise RelayCryptoError('relay v2 envelope schema_version mismatch')
         _required_text(self.session_id, 'session_id')
-        _positive_int(self.seq, 'seq')
+        _sequence_int(self.seq, 'seq')
         _required_text(self.op, 'op')
         _required_base64_text(self.nonce_b64, 'nonce_b64')
         _required_base64_text(self.ciphertext_b64, 'ciphertext_b64')
@@ -213,6 +214,9 @@ class RelayCryptoSession:
 
     def seal(self, *, op: str, plaintext: bytes) -> RelayV2Envelope:
         self._require_open()
+        if self._next_send_seq > RELAY_MAX_SEQUENCE:
+            self.close()
+            raise RelayCryptoError('relay v2 sequence exhausted')
         sequence = self._next_send_seq
         self._next_send_seq += 1
         nonce = _nonce(self._send_nonce_prefix, sequence)
@@ -235,6 +239,9 @@ class RelayCryptoSession:
 
     def open(self, envelope: RelayV2Envelope | Mapping[str, object]) -> bytes:
         self._require_open()
+        if self._next_receive_seq > RELAY_MAX_SEQUENCE:
+            self.close()
+            raise RelayCryptoError('relay v2 sequence exhausted')
         frame = envelope if isinstance(envelope, RelayV2Envelope) else RelayV2Envelope.from_json(envelope)
         if frame.session_id != self.session_id:
             raise RelayCryptoError('relay v2 session mismatch')
@@ -472,7 +479,7 @@ def _transcript(
 def _nonce(prefix: bytes, seq: int) -> bytes:
     if len(prefix) != 4:
         raise RelayCryptoError('relay v2 nonce prefix invalid')
-    return bytes(prefix) + int(seq).to_bytes(8, 'big')
+    return bytes(prefix) + _sequence_int(seq, 'seq').to_bytes(8, 'big')
 
 
 def _direction(value: object) -> RelayDirection:
@@ -524,9 +531,17 @@ def _positive_int(value: object, name: str) -> int:
     return parsed
 
 
+def _sequence_int(value: object, name: str) -> int:
+    parsed = _positive_int(value, name)
+    if parsed > RELAY_MAX_SEQUENCE:
+        raise RelayCryptoError(f'relay v2 sequence exceeds uint64: {name}')
+    return parsed
+
+
 __all__ = [
     'RELAY_CLEAR_ENVELOPE_FIELDS',
     'RELAY_KEY_ID',
+    'RELAY_MAX_SEQUENCE',
     'RELAY_PROHIBITED_PLAINTEXT_FIELDS',
     'RELAY_PROTOCOL_NAME',
     'RELAY_PROTOCOL_VERSION',

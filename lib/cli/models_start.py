@@ -61,6 +61,7 @@ class ParsedRelayCommand:
     invite_id: str | None = None
     host_id: str | None = None
     db_path: str | None = None
+    secrets_path: str | None = None
     ttl_seconds: int = 900
     label: str | None = None
     reason: str | None = None

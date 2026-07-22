@@ -453,21 +453,25 @@ _COMMAND_HELP = {
         usage: ccb relay <invite|host> <issue|status|list|revoke>
 
         CCB hosted relay operator-local admission:
-          ccb relay invite issue --db /path/to/relay-admission.sqlite3 --ttl-seconds 900 --json
+          ccb relay invite issue --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json --ttl-seconds 900 --json
               Create one one-time host invitation. This is the only command
               that prints the raw invitation, exactly once, to explicit
               operator output.
-          ccb relay invite status --db /path/to/relay-admission.sqlite3 <invite_id> [--json]
-          ccb relay invite list --db /path/to/relay-admission.sqlite3 [--json]
-          ccb relay invite revoke --db /path/to/relay-admission.sqlite3 <invite_id> [--reason TEXT] [--json]
-          ccb relay host status --db /path/to/relay-admission.sqlite3 <host_id> [--json]
-          ccb relay host list --db /path/to/relay-admission.sqlite3 [--json]
-          ccb relay host revoke --db /path/to/relay-admission.sqlite3 <host_id> [--reason TEXT] [--json]
+          ccb relay invite status --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <invite_id> [--json]
+          ccb relay invite list --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json [--json]
+          ccb relay invite revoke --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <invite_id> [--reason TEXT] [--json]
+          ccb relay host status --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <host_id> [--json]
+          ccb relay host list --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json [--json]
+          ccb relay host revoke --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <host_id> [--reason TEXT] [--json]
 
         Safety:
           - This is not a public HTTP/admin route.
           - Raw invitation secrets are not stored in logs, audit records, or
             the SQLite admission database.
+          - Admission HMAC keys must come from --secrets,
+            CCB_RELAY_ADMISSION_SECRETS, or both
+            CCB_RELAY_VERIFIER_KEY_B64 and CCB_RELAY_CAPABILITY_KEY_B64; the
+            same key material is required after restart.
           - Status/list/revoke output is redacted and never prints an
             invitation value.
     """,

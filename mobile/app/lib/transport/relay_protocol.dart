@@ -31,7 +31,7 @@ class RelayFrame {
     required this.sequence,
     required this.kind,
     Map<String, Object?> payload = const {},
-    this.schemaVersion = 1,
+    this.schemaVersion = relayProtocolVersion,
   }) : payload = Map.unmodifiable(_map(payload, 'payload')) {
     _validateFrame(
       schemaVersion: schemaVersion,
@@ -54,7 +54,7 @@ class RelayFrame {
     required String hostId,
     required String deviceId,
     required String clientPublicKeyB64,
-    Set<int> supportedVersions = const {1},
+    Set<int> supportedVersions = const {relayProtocolVersion},
   }) {
     return RelayFrame(
       sessionId: sessionId,
@@ -78,7 +78,7 @@ class RelayFrame {
     required String hostId,
     required String serverFingerprint,
     required String hostPublicKeyB64,
-    int acceptedVersion = 1,
+    int acceptedVersion = relayProtocolVersion,
   }) {
     return RelayFrame(
       sessionId: sessionId,
@@ -107,7 +107,10 @@ class RelayFrame {
 
   factory RelayFrame.fromJson(Map<String, Object?> json) {
     return RelayFrame(
-      schemaVersion: _int(json['schema_version'], fallback: 1),
+      schemaVersion: _int(
+        json['schema_version'],
+        fallback: relayProtocolVersion,
+      ),
       sessionId: _requiredText(json['session_id'], 'session_id'),
       sequence: _requiredPositiveInt(json['seq'], 'seq'),
       kind: RelayFrameKind.fromWireName(_requiredText(json['kind'], 'kind')),
@@ -188,8 +191,9 @@ class RelayHandshakeTranscript {
       hostHello.payload['accepted_version'],
       'host_hello.accepted_version',
     );
-    if (!supportedVersions.contains(acceptedVersion)) {
-      throw const FormatException('relay handshake version mismatch');
+    if (!supportedVersions.contains(relayProtocolVersion) ||
+        acceptedVersion != relayProtocolVersion) {
+      throw const FormatException('relay handshake downgrade rejected');
     }
     final clientPublicKeyB64 = _requiredBase64Text(
       clientHello.payload['client_pubkey_b64'],
@@ -222,7 +226,7 @@ class RelayHostRegistration {
     required this.hostId,
     required this.serverFingerprint,
     required this.hostPublicKeyB64,
-    this.schemaVersion = 1,
+    this.schemaVersion = relayProtocolVersion,
     Set<String> capabilities = const {},
     Map<String, String> diagnostics = const {},
   }) : capabilities = Set.unmodifiable(_stringSet(capabilities)),
@@ -230,9 +234,9 @@ class RelayHostRegistration {
     _requiredText(hostId, 'host_id');
     _requiredText(serverFingerprint, 'server_fingerprint');
     _requiredBase64Text(hostPublicKeyB64, 'host_pubkey_b64');
-    if (schemaVersion < 1) {
+    if (schemaVersion != relayProtocolVersion) {
       throw const FormatException(
-        'relay host registration schema_version invalid',
+        'relay host registration requires v2 schema_version',
       );
     }
   }
@@ -251,7 +255,10 @@ class RelayHostRegistration {
     }
     _rejectProhibitedCleartextKeys(json, 'relay_host_registration');
     return RelayHostRegistration(
-      schemaVersion: _int(json['schema_version'], fallback: 1),
+      schemaVersion: _int(
+        json['schema_version'],
+        fallback: relayProtocolVersion,
+      ),
       hostId: _requiredText(json['host_id'], 'host_id'),
       serverFingerprint: _requiredText(
         json['server_fingerprint'],
@@ -286,8 +293,8 @@ void _validateFrame({
   required RelayFrameKind kind,
   required Map<String, Object?> payload,
 }) {
-  if (schemaVersion < 1) {
-    throw const FormatException('relay frame schema_version invalid');
+  if (schemaVersion != relayProtocolVersion) {
+    throw const FormatException('relay frame requires v2 schema_version');
   }
   _requiredText(sessionId, 'session_id');
   if (sequence < 1) {
@@ -306,9 +313,9 @@ void _validateFrame({
         payload['supported_versions'],
         'client_hello.supported_versions',
       );
-      if (supportedVersions.isEmpty) {
+      if (!supportedVersions.contains(relayProtocolVersion)) {
         throw const FormatException(
-          'client_hello.supported_versions is required',
+          'client_hello.supported_versions must include relay v2',
         );
       }
     case RelayFrameKind.hostHello:
@@ -321,10 +328,13 @@ void _validateFrame({
         payload['host_pubkey_b64'],
         'host_hello.host_pubkey_b64',
       );
-      _requiredPositiveInt(
+      final acceptedVersion = _requiredPositiveInt(
         payload['accepted_version'],
         'host_hello.accepted_version',
       );
+      if (acceptedVersion != relayProtocolVersion) {
+        throw const FormatException('relay host_hello downgrade rejected');
+      }
     case RelayFrameKind.gatewayEnvelope:
       final envelope = RelayGatewayEnvelope.fromJson(
         _map(payload['envelope'], 'envelope'),

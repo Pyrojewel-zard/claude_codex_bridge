@@ -5,6 +5,8 @@ import 'package:cryptography/cryptography.dart';
 const relayProtocolVersion = 2;
 const relayProtocolName = 'ccb-relay-v2';
 const relayKeyId = 'ccb-relay-v2-session';
+final BigInt relayMaxSequence = BigInt.parse('18446744073709551615');
+final BigInt _relayMaxDartIntSequence = BigInt.parse('9223372036854775807');
 
 const relayClearEnvelopeFields = {
   'schema_version',
@@ -109,7 +111,7 @@ class RelayV2Envelope {
     return RelayV2Envelope(
       schemaVersion: _int(json['schema_version'], fallback: 0),
       sessionId: _requiredText(json['session_id'], 'session_id'),
-      sequence: _requiredPositiveInt(json['seq'], 'seq'),
+      sequence: _requiredSequence(json['seq'], 'seq'),
       direction: RelayCryptoDirection.fromWireName(
         _requiredText(json['direction'], 'direction'),
       ),
@@ -142,9 +144,7 @@ class RelayV2Envelope {
       throw const FormatException('relay v2 envelope schema_version mismatch');
     }
     _requiredText(sessionId, 'session_id');
-    if (sequence < 1) {
-      throw const FormatException('relay v2 field must be positive integer');
-    }
+    _requiredSequence(sequence, 'seq');
     _requiredText(operation, 'op');
     _requiredBase64Text(nonceB64, 'nonce_b64');
     _requiredBase64Text(ciphertextB64, 'ciphertext_b64');
@@ -232,14 +232,14 @@ class RelayV2KeySchedule {
     );
     final bytes = derived.bytes;
     final confirmKey = bytes.sublist(72, 104);
-    final phoneConfirmation = await Hmac.sha256().calculateMac(
-      [...utf8.encode('phone'), ...transcriptHash],
-      secretKey: SecretKey(confirmKey),
-    );
-    final hostConfirmation = await Hmac.sha256().calculateMac(
-      [...utf8.encode('host'), ...transcriptHash],
-      secretKey: SecretKey(confirmKey),
-    );
+    final phoneConfirmation = await Hmac.sha256().calculateMac([
+      ...utf8.encode('phone'),
+      ...transcriptHash,
+    ], secretKey: SecretKey(confirmKey));
+    final hostConfirmation = await Hmac.sha256().calculateMac([
+      ...utf8.encode('host'),
+      ...transcriptHash,
+    ], secretKey: SecretKey(confirmKey));
     return RelayV2KeySchedule._(
       sessionId: sessionId,
       clientPublicKeyB64: clientPublicKeyB64,
@@ -307,10 +307,20 @@ class RelayCryptoSession {
     required List<int> receiveKey,
     required List<int> sendNoncePrefix,
     required List<int> receiveNoncePrefix,
+    Object? initialSendSequence = 1,
+    Object? initialReceiveSequence = 1,
   }) : _sendKey = List<int>.of(sendKey),
        _receiveKey = List<int>.of(receiveKey),
        _sendNoncePrefix = List<int>.of(sendNoncePrefix),
-       _receiveNoncePrefix = List<int>.of(receiveNoncePrefix);
+       _receiveNoncePrefix = List<int>.of(receiveNoncePrefix),
+       _nextSendSequence = _requiredPositiveBigInt(
+         initialSendSequence,
+         'initial_send_sequence',
+       ),
+       _nextReceiveSequence = _requiredPositiveBigInt(
+         initialReceiveSequence,
+         'initial_receive_sequence',
+       );
 
   final String sessionId;
   final RelayCryptoDirection sendDirection;
@@ -319,8 +329,8 @@ class RelayCryptoSession {
   final List<int> _receiveKey;
   final List<int> _sendNoncePrefix;
   final List<int> _receiveNoncePrefix;
-  int _nextSendSequence = 1;
-  int _nextReceiveSequence = 1;
+  BigInt _nextSendSequence;
+  BigInt _nextReceiveSequence;
   bool _closed = false;
 
   bool get closed => _closed;
@@ -330,8 +340,18 @@ class RelayCryptoSession {
     required List<int> plaintext,
   }) async {
     _requireOpen();
-    final sequence = _nextSendSequence;
-    _nextSendSequence += 1;
+    if (_nextSendSequence > relayMaxSequence) {
+      close();
+      throw const RelayCryptoException('relay v2 sequence exhausted');
+    }
+    if (_nextSendSequence > _relayMaxDartIntSequence) {
+      close();
+      throw const RelayCryptoException(
+        'relay v2 sequence exceeds Dart int range',
+      );
+    }
+    final sequence = _nextSendSequence.toInt();
+    _nextSendSequence += BigInt.one;
     final nonce = _nonce(_sendNoncePrefix, sequence);
     final secretBox = await Chacha20.poly1305Aead().encrypt(
       plaintext,
@@ -357,13 +377,17 @@ class RelayCryptoSession {
 
   Future<List<int>> open(RelayV2Envelope envelope) async {
     _requireOpen();
+    if (_nextReceiveSequence > relayMaxSequence) {
+      close();
+      throw const RelayCryptoException('relay v2 sequence exhausted');
+    }
     if (envelope.sessionId != sessionId) {
       throw const RelayCryptoException('relay v2 session mismatch');
     }
     if (envelope.direction != receiveDirection) {
       throw const RelayCryptoException('relay v2 direction mismatch');
     }
-    if (envelope.sequence != _nextReceiveSequence) {
+    if (BigInt.from(envelope.sequence) != _nextReceiveSequence) {
       throw const RelayCryptoException(
         'relay v2 sequence replay or reorder rejected',
       );
@@ -396,7 +420,7 @@ class RelayCryptoSession {
           keyId: envelope.keyId,
         ),
       );
-      _nextReceiveSequence += 1;
+      _nextReceiveSequence += BigInt.one;
       return plaintext;
     } on SecretBoxAuthenticationError catch (error) {
       throw RelayCryptoException(
@@ -488,6 +512,7 @@ List<int> _nonce(List<int> prefix, int sequence) {
   if (prefix.length != 4) {
     throw const RelayCryptoException('relay v2 nonce prefix invalid');
   }
+  _requiredSequence(sequence, 'seq');
   final suffix = List<int>.filled(8, 0);
   var value = sequence;
   for (var index = 7; index >= 0; index -= 1) {
@@ -518,9 +543,27 @@ int _int(Object? value, {required int fallback}) {
   return int.tryParse((value ?? '').toString()) ?? fallback;
 }
 
-int _requiredPositiveInt(Object? value, String name) {
-  final parsed = value is int ? value : int.tryParse((value ?? '').toString());
-  if (parsed == null || parsed < 1) {
+int _requiredSequence(Object? value, String name) {
+  final parsed = _requiredPositiveBigInt(value, name);
+  if (parsed > relayMaxSequence) {
+    throw FormatException('relay v2 sequence exceeds uint64: $name');
+  }
+  if (parsed > _relayMaxDartIntSequence) {
+    throw FormatException('relay v2 sequence exceeds Dart int range: $name');
+  }
+  return parsed.toInt();
+}
+
+BigInt _requiredPositiveBigInt(Object? value, String name) {
+  BigInt? parsed;
+  if (value is BigInt) {
+    parsed = value;
+  } else if (value is int) {
+    parsed = BigInt.from(value);
+  } else {
+    parsed = BigInt.tryParse((value ?? '').toString());
+  }
+  if (parsed == null || parsed < BigInt.one) {
     throw FormatException('relay v2 field must be positive integer: $name');
   }
   return parsed;
@@ -532,7 +575,9 @@ String _b64(List<int> value) {
 
 List<int> _b64Decode(String value) {
   final text = value.trim();
-  return base64Url.decode(text.padRight(text.length + ((4 - text.length % 4) % 4), '='));
+  return base64Url.decode(
+    text.padRight(text.length + ((4 - text.length % 4) % 4), '='),
+  );
 }
 
 bool _constantTimeEquals(List<int> left, List<int> right) {

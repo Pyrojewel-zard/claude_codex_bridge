@@ -89,7 +89,7 @@ def test_local_relay_negotiates_handshake_from_app_frame_shape() -> None:
     assert transcript.session_id == 'relay-session-demo'
     assert transcript.host_id == 'host-relay'
     assert transcript.device_id == 'dev-relay'
-    assert transcript.accepted_version == 1
+    assert transcript.accepted_version == 2
     assert transcript.server_fingerprint == 'host-fp-demo'
     assert relay.diagnostics_for_host('host-relay') == {
         'host_id': 'host-relay',
@@ -98,6 +98,40 @@ def test_local_relay_negotiates_handshake_from_app_frame_shape() -> None:
         'session_count': 1,
         'forwarded_count': 0,
     }
+
+
+def test_relay_rejects_v1_downgrade_even_when_client_lists_legacy_version() -> None:
+    relay = _registered_relay()
+    client_hello = RelayFrame(
+        session_id='relay-session-demo',
+        seq=1,
+        kind='client_hello',
+        payload={
+            'host_id': 'host-relay',
+            'device_id': 'dev-relay',
+            'client_pubkey_b64': _b64('client public key'),
+            'supported_versions': [1, 2],
+        },
+    )
+
+    host_hello = RelayFrame.from_json(relay.host_hello_for(client_hello.to_json()))
+
+    assert host_hello.payload['accepted_version'] == 2
+    with pytest.raises(MobileRelayError, match='downgrade'):
+        RelayHandshakeTranscript.negotiate(
+            client_hello=client_hello,
+            host_hello=RelayFrame(
+                session_id='relay-session-demo',
+                seq=2,
+                kind='host_hello',
+                payload={
+                    'host_id': 'host-relay',
+                    'server_fingerprint': 'host-fp-demo',
+                    'host_pubkey_b64': _b64('host public key'),
+                    'accepted_version': 1,
+                },
+            ),
+        )
 
 
 def test_local_relay_forwards_only_opaque_gateway_envelopes() -> None:
@@ -109,7 +143,7 @@ def test_local_relay_forwards_only_opaque_gateway_envelopes() -> None:
         kind='gateway_envelope',
         payload={
             'envelope': {
-                'schema_version': 1,
+                'schema_version': 2,
                 'session_id': 'relay-session-demo',
                 'seq': 3,
                 'op': 'send_terminal_frame',
@@ -123,7 +157,7 @@ def test_local_relay_forwards_only_opaque_gateway_envelopes() -> None:
     ack = relay.forward_from_phone(frame.to_json())
 
     assert ack == {
-        'schema_version': 1,
+        'schema_version': 2,
         'session_id': 'relay-session-demo',
         'seq': 4,
         'kind': 'ack',
@@ -160,7 +194,7 @@ def test_relay_rejects_cleartext_route_and_terminal_fields() -> None:
         kind='gateway_envelope',
         payload={
             'envelope': {
-                'schema_version': 1,
+                'schema_version': 2,
                 'session_id': 'relay-session-demo',
                 'seq': 3,
                 'op': 'open_terminal',
@@ -195,7 +229,7 @@ def test_relay_reports_disconnected_host_without_stopping_runtime() -> None:
                 kind='gateway_envelope',
                 payload={
                     'envelope': {
-                        'schema_version': 1,
+                        'schema_version': 2,
                         'session_id': 'relay-session-demo',
                         'seq': 3,
                         'op': 'health',
@@ -267,7 +301,7 @@ def test_relay_validates_base64_and_handshake_mismatches() -> None:
             'host_id': 'other-host',
             'device_id': 'dev-relay',
             'client_pubkey_b64': _b64('client public key'),
-            'supported_versions': [1],
+            'supported_versions': [2],
         },
     )
     with pytest.raises(MobileRelayError, match='not registered'):
@@ -297,7 +331,7 @@ def _client_hello() -> RelayFrame:
             'host_id': 'host-relay',
             'device_id': 'dev-relay',
             'client_pubkey_b64': _b64('client public key'),
-            'supported_versions': [1],
+            'supported_versions': [2],
         },
     )
 

@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from mobile_gateway.relay_admission import RelayAdmissionStore
+from mobile_gateway.relay_admission import RelayAdmissionSecrets, RelayAdmissionStore
 
 
 def relay_operator_command(context, command) -> dict[str, object]:
-    store = RelayAdmissionStore(_relay_db_path(context, command))
+    store = RelayAdmissionStore(
+        _relay_db_path(context, command),
+        admission_secrets=RelayAdmissionSecrets.from_operator_config(_relay_secrets_path(command)),
+    )
     target = str(getattr(command, 'target', '') or '')
     action = str(getattr(command, 'action', '') or '')
     if target == 'invite' and action == 'issue':
@@ -56,6 +59,13 @@ def _relay_db_path(context, command) -> Path:
 def _redacted_db_path(path: Path) -> str:
     resolved = Path(path).expanduser()
     return str(resolved)
+
+
+def _relay_secrets_path(command) -> Path | None:
+    explicit = str(getattr(command, 'secrets_path', '') or '').strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    return None
 
 
 __all__ = ['relay_operator_command']

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sqlite3
 import time
@@ -23,10 +24,80 @@ CAPABILITY_PREFIX = 'ccb-relay-cap-v1'
 ADMISSION_SCHEMA_VERSION = 1
 DEFAULT_INVITATION_TTL_SECONDS = 15 * 60
 DEFAULT_SESSION_TTL_SECONDS = 5 * 60
+QUOTA_WINDOW_SECONDS = 24 * 60 * 60
+OPERATOR_SECRETS_PATH_ENV = 'CCB_RELAY_ADMISSION_SECRETS'
+OPERATOR_VERIFIER_KEY_ENV = 'CCB_RELAY_VERIFIER_KEY_B64'
+OPERATOR_CAPABILITY_KEY_ENV = 'CCB_RELAY_CAPABILITY_KEY_B64'
 
 
 class RelayAdmissionError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class RelayAdmissionSecrets:
+    verifier_key: bytes
+    capability_key: bytes
+    source: str = 'injected'
+
+    def __post_init__(self) -> None:
+        if len(self.verifier_key) != 32:
+            raise RelayAdmissionError('relay verifier key must be 32 bytes')
+        if len(self.capability_key) != 32:
+            raise RelayAdmissionError('relay capability key must be 32 bytes')
+
+    @classmethod
+    def generate_for_testing(cls) -> 'RelayAdmissionSecrets':
+        return cls(
+            verifier_key=secrets.token_bytes(32),
+            capability_key=secrets.token_bytes(32),
+            source='test-generated',
+        )
+
+    @classmethod
+    def from_json_file(cls, path: str | Path) -> 'RelayAdmissionSecrets':
+        secret_path = Path(path).expanduser()
+        _require_owner_only_file(secret_path, 'relay admission secret file')
+        try:
+            payload = json.loads(secret_path.read_text(encoding='utf-8'))
+        except OSError as exc:
+            raise RelayAdmissionError('relay admission secrets are unavailable') from exc
+        except json.JSONDecodeError as exc:
+            raise RelayAdmissionError('relay admission secrets JSON invalid') from exc
+        if not isinstance(payload, Mapping):
+            raise RelayAdmissionError('relay admission secrets JSON invalid')
+        return cls(
+            verifier_key=_b64decode(_required_text(payload.get('verifier_key_b64'), 'verifier_key_b64')),
+            capability_key=_b64decode(_required_text(payload.get('capability_key_b64'), 'capability_key_b64')),
+            source=f'file:{secret_path}',
+        )
+
+    @classmethod
+    def from_operator_config(cls, path: str | Path | None = None) -> 'RelayAdmissionSecrets':
+        explicit_path = str(path or '').strip()
+        if explicit_path:
+            return cls.from_json_file(explicit_path)
+        env_path = str(os.environ.get(OPERATOR_SECRETS_PATH_ENV) or '').strip()
+        if env_path:
+            return cls.from_json_file(env_path)
+        verifier = str(os.environ.get(OPERATOR_VERIFIER_KEY_ENV) or '').strip()
+        capability = str(os.environ.get(OPERATOR_CAPABILITY_KEY_ENV) or '').strip()
+        if verifier and capability:
+            return cls(
+                verifier_key=_b64decode(verifier),
+                capability_key=_b64decode(capability),
+                source='env',
+            )
+        raise RelayAdmissionError('relay admission secrets are required')
+
+    def fingerprint(self) -> str:
+        payload = _canonical_json(
+            {
+                'capability_key_sha256': _b64(hashlib.sha256(self.capability_key).digest()),
+                'verifier_key_sha256': _b64(hashlib.sha256(self.verifier_key).digest()),
+            }
+        )
+        return 'sha256:' + _b64(hashlib.sha256(payload.encode('utf-8')).digest())
 
 
 @dataclass(frozen=True)
@@ -73,11 +144,26 @@ class RelayHostCredential:
 
 
 class RelayAdmissionStore:
-    def __init__(self, path: str | Path, *, now: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        admission_secrets: RelayAdmissionSecrets | None = None,
+        now: Callable[[], float] | None = None,
+    ) -> None:
+        if admission_secrets is None:
+            raise RelayAdmissionError('relay admission secrets are required')
         self.path = Path(path).expanduser()
+        self._secrets = admission_secrets
+        self._secrets_fingerprint = admission_secrets.fingerprint()
         self._now = now or time.time
+        parent_existed = self.path.parent.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not parent_existed:
+            self.path.parent.chmod(0o700)
+        self._prepare_storage_file()
         self._migrate()
+        self._harden_storage_permissions()
 
     def issue_invitation(
         self,
@@ -144,8 +230,9 @@ class RelayAdmissionStore:
                 '''
                 INSERT INTO relay_hosts(
                     host_id, invitation_id, host_public_key_b64, host_public_key_sha256,
-                    state, issued_at, revoked_at, quota_json, updated_at
-                ) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?)
+                    state, issued_at, revoked_at, quota_json, active_sessions,
+                    bytes_used, bytes_window_started_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, 0, 0, ?, ?)
                 ''',
                 (
                     host_id,
@@ -154,6 +241,7 @@ class RelayAdmissionStore:
                     host_public_key_hash,
                     now,
                     _canonical_json(quota),
+                    now,
                     now,
                 ),
             )
@@ -232,14 +320,140 @@ class RelayAdmissionStore:
             if str(row['state']) == 'active':
                 conn.execute(
                     '''
-                    UPDATE relay_hosts SET state = 'revoked', revoked_at = ?, updated_at = ?
+                    UPDATE relay_hosts
+                    SET state = 'revoked', revoked_at = ?, active_sessions = 0, updated_at = ?
                     WHERE host_id = ? AND state = 'active'
                     ''',
                     (now, now, host_id),
                 )
+                conn.execute(
+                    '''
+                    UPDATE relay_host_sessions
+                    SET state = 'released', released_at = ?
+                    WHERE host_id = ? AND state = 'active'
+                    ''',
+                    (now, host_id),
+                )
                 self._audit(conn, 'host_revoked', 'host', host_id, {'reason': _redacted_text(reason)})
                 row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (host_id,)).fetchone()
         return self._host_row(row)
+
+    def reserve_host_session(self, *, host_id: str, session_id: str) -> dict[str, object]:
+        base_host_id = _required_text(host_id, 'host_id')
+        base_session_id = _required_text(session_id, 'session_id')
+        now = self._now_s()
+        with self._transaction() as conn:
+            row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
+            host = self._require_active_host_row(row)
+            existing = conn.execute(
+                'SELECT * FROM relay_host_sessions WHERE session_id = ?',
+                (base_session_id,),
+            ).fetchone()
+            if existing is not None:
+                raise RelayAdmissionError('relay host session already reserved')
+            quota = _json_object(str(host['quota_json'] or '{}'))
+            active_sessions = int(host['active_sessions'] or 0)
+            max_sessions = _quota_limit(quota, 'max_sessions')
+            if active_sessions >= max_sessions:
+                self._audit(conn, 'host_session_quota_rejected', 'host', base_host_id, {'limit': max_sessions})
+                raise RelayAdmissionError('relay host session quota exceeded')
+            conn.execute(
+                '''
+                INSERT INTO relay_host_sessions(session_id, host_id, state, reserved_at, released_at)
+                VALUES (?, ?, 'active', ?, NULL)
+                ''',
+                (base_session_id, base_host_id, now),
+            )
+            conn.execute(
+                '''
+                UPDATE relay_hosts
+                SET active_sessions = active_sessions + 1, updated_at = ?
+                WHERE host_id = ? AND state = 'active'
+                ''',
+                (now, base_host_id),
+            )
+            self._audit(conn, 'host_session_reserved', 'host', base_host_id, {'session_id': base_session_id})
+            row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
+        payload = self._host_row(row)
+        payload['session_id'] = base_session_id
+        payload['relay_status'] = 'host_quota_reserved'
+        return payload
+
+    def release_host_session(self, *, host_id: str, session_id: str) -> dict[str, object]:
+        base_host_id = _required_text(host_id, 'host_id')
+        base_session_id = _required_text(session_id, 'session_id')
+        now = self._now_s()
+        with self._transaction() as conn:
+            row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
+            host = self._require_active_host_row(row)
+            session = conn.execute(
+                'SELECT * FROM relay_host_sessions WHERE session_id = ?',
+                (base_session_id,),
+            ).fetchone()
+            if session is None or str(session['host_id']) != base_host_id:
+                raise RelayAdmissionError('relay host session not found')
+            if str(session['state']) == 'active':
+                conn.execute(
+                    '''
+                    UPDATE relay_host_sessions
+                    SET state = 'released', released_at = ?
+                    WHERE session_id = ? AND state = 'active'
+                    ''',
+                    (now, base_session_id),
+                )
+                conn.execute(
+                    '''
+                    UPDATE relay_hosts
+                    SET active_sessions = CASE
+                        WHEN active_sessions > 0 THEN active_sessions - 1
+                        ELSE 0
+                    END,
+                    updated_at = ?
+                    WHERE host_id = ? AND state = 'active'
+                    ''',
+                    (now, base_host_id),
+                )
+                self._audit(conn, 'host_session_released', 'host', base_host_id, {'session_id': base_session_id})
+                row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
+            else:
+                row = host
+        payload = self._host_row(row)
+        payload['session_id'] = base_session_id
+        payload['relay_status'] = 'host_quota_released'
+        return payload
+
+    def record_host_bytes(self, *, host_id: str, byte_count: int) -> dict[str, object]:
+        base_host_id = _required_text(host_id, 'host_id')
+        if int(byte_count) < 0:
+            raise RelayAdmissionError('relay host byte count must be non-negative')
+        now = self._now_s()
+        with self._transaction() as conn:
+            row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
+            host = self._require_active_host_row(row)
+            quota = _json_object(str(host['quota_json'] or '{}'))
+            max_bytes = _quota_limit(quota, 'max_bytes_per_day')
+            window_started_at = int(host['bytes_window_started_at'] or 0)
+            bytes_used = int(host['bytes_used'] or 0)
+            if window_started_at <= 0 or now - window_started_at >= QUOTA_WINDOW_SECONDS:
+                window_started_at = now
+                bytes_used = 0
+            new_total = bytes_used + int(byte_count)
+            if new_total > max_bytes:
+                self._audit(conn, 'host_byte_quota_rejected', 'host', base_host_id, {'limit': max_bytes})
+                raise RelayAdmissionError('relay host byte quota exceeded')
+            conn.execute(
+                '''
+                UPDATE relay_hosts
+                SET bytes_used = ?, bytes_window_started_at = ?, updated_at = ?
+                WHERE host_id = ? AND state = 'active'
+                ''',
+                (new_total, window_started_at, now, base_host_id),
+            )
+            self._audit(conn, 'host_bytes_recorded', 'host', base_host_id, {'bytes': int(byte_count)})
+            row = conn.execute('SELECT * FROM relay_hosts WHERE host_id = ?', (base_host_id,)).fetchone()
+        payload = self._host_row(row)
+        payload['relay_status'] = 'host_quota_recorded'
+        return payload
 
     def issue_session_capability(
         self,
@@ -380,8 +594,26 @@ class RelayAdmissionStore:
                     issued_at INTEGER NOT NULL,
                     revoked_at INTEGER,
                     quota_json TEXT NOT NULL,
+                    active_sessions INTEGER NOT NULL DEFAULT 0,
+                    bytes_used INTEGER NOT NULL DEFAULT 0,
+                    bytes_window_started_at INTEGER NOT NULL DEFAULT 0,
                     updated_at INTEGER NOT NULL,
                     FOREIGN KEY(invitation_id) REFERENCES relay_invitations(invite_id)
+                )
+                '''
+            )
+            self._ensure_column(conn, 'relay_hosts', 'active_sessions', 'INTEGER NOT NULL DEFAULT 0')
+            self._ensure_column(conn, 'relay_hosts', 'bytes_used', 'INTEGER NOT NULL DEFAULT 0')
+            self._ensure_column(conn, 'relay_hosts', 'bytes_window_started_at', 'INTEGER NOT NULL DEFAULT 0')
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS relay_host_sessions(
+                    session_id TEXT PRIMARY KEY,
+                    host_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('active', 'released')),
+                    reserved_at INTEGER NOT NULL,
+                    released_at INTEGER,
+                    FOREIGN KEY(host_id) REFERENCES relay_hosts(host_id)
                 )
                 '''
             )
@@ -398,14 +630,15 @@ class RelayAdmissionStore:
                 '''
             )
             self._ensure_metadata(conn, 'schema_version', str(ADMISSION_SCHEMA_VERSION))
-            self._ensure_metadata(conn, 'verifier_key_b64', _b64(secrets.token_bytes(32)))
-            self._ensure_metadata(conn, 'capability_key_b64', _b64(secrets.token_bytes(32)))
+            self._verify_external_secret_fingerprint(conn)
+            self._harden_storage_permissions()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=10.0, isolation_level=None, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA busy_timeout=10000')
         conn.execute('PRAGMA foreign_keys=ON')
+        self._harden_storage_permissions()
         return conn
 
     @contextmanager
@@ -420,19 +653,13 @@ class RelayAdmissionStore:
             raise
         finally:
             conn.close()
-
-    def _metadata(self, key: str) -> str:
-        with closing(self._connect()) as conn:
-            row = conn.execute('SELECT value FROM relay_metadata WHERE key = ?', (key,)).fetchone()
-        if row is None:
-            raise RelayAdmissionError('relay admission store metadata missing')
-        return str(row['value'])
+            self._harden_storage_permissions()
 
     def _verifier_key(self) -> bytes:
-        return _b64decode(self._metadata('verifier_key_b64'))
+        return self._secrets.verifier_key
 
     def _capability_key(self) -> bytes:
-        return _b64decode(self._metadata('capability_key_b64'))
+        return self._secrets.capability_key
 
     def _host_record(self, host_id: str) -> sqlite3.Row:
         with closing(self._connect()) as conn:
@@ -465,6 +692,7 @@ class RelayAdmissionStore:
             'issued_at': int(row['issued_at']),
             'revoked_at': _optional_int(row['revoked_at']),
             'quota': _json_object(str(row['quota_json'] or '{}')),
+            'quota_usage': _quota_usage(row),
         }
 
     def _audit(
@@ -489,6 +717,58 @@ class RelayAdmissionStore:
             'INSERT OR IGNORE INTO relay_metadata(key, value) VALUES (?, ?)',
             (key, value),
         )
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+        columns = {str(row['name']) for row in conn.execute(f'PRAGMA table_info({table})').fetchall()}
+        if column not in columns:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {declaration}')
+
+    def _verify_external_secret_fingerprint(self, conn: sqlite3.Connection) -> None:
+        embedded = conn.execute(
+            '''
+            SELECT key FROM relay_metadata
+            WHERE key IN ('verifier_key_b64', 'capability_key_b64')
+            '''
+        ).fetchall()
+        if embedded:
+            raise RelayAdmissionError('relay admission DB contains persisted secrets')
+        row = conn.execute('SELECT value FROM relay_metadata WHERE key = ?', ('secrets_fingerprint',)).fetchone()
+        if row is None:
+            if self._has_admission_data(conn):
+                raise RelayAdmissionError('relay admission secrets fingerprint missing')
+            conn.execute(
+                'INSERT INTO relay_metadata(key, value) VALUES (?, ?)',
+                ('secrets_fingerprint', self._secrets_fingerprint),
+            )
+            return
+        if not hmac.compare_digest(str(row['value']), self._secrets_fingerprint):
+            raise RelayAdmissionError('relay admission secrets changed')
+
+    @staticmethod
+    def _has_admission_data(conn: sqlite3.Connection) -> bool:
+        for table in ('relay_invitations', 'relay_hosts'):
+            row = conn.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone()
+            if row is not None:
+                return True
+        return False
+
+    def _require_active_host_row(self, row: sqlite3.Row | None) -> sqlite3.Row:
+        if row is None:
+            raise RelayAdmissionError('relay host not found')
+        if str(row['state']) != 'active':
+            raise RelayAdmissionError('relay host is not active')
+        return row
+
+    def _prepare_storage_file(self) -> None:
+        if not self.path.exists():
+            self.path.touch(mode=0o600, exist_ok=False)
+        self._harden_storage_permissions()
+
+    def _harden_storage_permissions(self) -> None:
+        for path in _sqlite_storage_paths(self.path):
+            if path.exists():
+                path.chmod(0o600)
 
     def _now_s(self) -> int:
         return int(self._now())
@@ -559,6 +839,25 @@ def _quota(*, max_sessions: int, max_bytes_per_day: int) -> dict[str, object]:
     return {'max_sessions': int(max_sessions), 'max_bytes_per_day': int(max_bytes_per_day)}
 
 
+def _quota_limit(quota: Mapping[str, object], name: str) -> int:
+    try:
+        value = int(quota.get(name) or 0)
+    except (TypeError, ValueError) as exc:
+        raise RelayAdmissionError(f'relay quota limit invalid: {name}') from exc
+    if value <= 0:
+        raise RelayAdmissionError(f'relay quota limit invalid: {name}')
+    return value
+
+
+def _quota_usage(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        'active_sessions': int(row['active_sessions'] or 0),
+        'bytes_used': int(row['bytes_used'] or 0),
+        'bytes_window_started_at': int(row['bytes_window_started_at'] or 0),
+        'window_seconds': QUOTA_WINDOW_SECONDS,
+    }
+
+
 def _canonical_json(value: Mapping[str, object]) -> str:
     return json.dumps(dict(value), ensure_ascii=True, sort_keys=True, separators=(',', ':'))
 
@@ -609,6 +908,19 @@ def _optional_int(value: object) -> int | None:
     return int(value)
 
 
+def _sqlite_storage_paths(path: Path) -> tuple[Path, Path, Path]:
+    return (path, path.with_name(path.name + '-wal'), path.with_name(path.name + '-shm'))
+
+
+def _require_owner_only_file(path: Path, label: str) -> None:
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError as exc:
+        raise RelayAdmissionError(f'{label} is unavailable') from exc
+    if mode & 0o077:
+        raise RelayAdmissionError(f'{label} must be owner-only')
+
+
 __all__ = [
     'ADMISSION_SCHEMA_VERSION',
     'CAPABILITY_PREFIX',
@@ -616,6 +928,7 @@ __all__ = [
     'DEFAULT_SESSION_TTL_SECONDS',
     'INVITATION_PREFIX',
     'RelayAdmissionError',
+    'RelayAdmissionSecrets',
     'RelayAdmissionStore',
     'RelayHostCredential',
     'RelayIssuedInvitation',

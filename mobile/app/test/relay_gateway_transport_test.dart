@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
 import 'package:test/test.dart';
@@ -11,6 +12,7 @@ void main() {
       final transport = RelayGatewayTransport(
         inner: inner,
         sessionId: 'relay-session-demo',
+        codec: const TestOnlyLocalOpaqueRelayEnvelopeCodec(),
       );
 
       final health = await transport.health();
@@ -135,14 +137,58 @@ void main() {
           ),
         ),
         sessionId: 'relay-session-demo',
+        codec: const TestOnlyLocalOpaqueRelayEnvelopeCodec(),
       ),
       throwsA(isA<ArgumentError>()),
     );
   });
 
+  test('seals gateway operations with explicit relay v2 AEAD codec', () async {
+    final phoneSession = RelayCryptoSession(
+      sessionId: 'relay-session-demo',
+      sendDirection: RelayCryptoDirection.phoneToHost,
+      receiveDirection: RelayCryptoDirection.hostToPhone,
+      sendKey: List<int>.filled(32, 7),
+      receiveKey: List<int>.filled(32, 9),
+      sendNoncePrefix: const [1, 2, 3, 4],
+      receiveNoncePrefix: const [5, 6, 7, 8],
+    );
+    final hostSession = RelayCryptoSession(
+      sessionId: 'relay-session-demo',
+      sendDirection: RelayCryptoDirection.hostToPhone,
+      receiveDirection: RelayCryptoDirection.phoneToHost,
+      sendKey: List<int>.filled(32, 9),
+      receiveKey: List<int>.filled(32, 7),
+      sendNoncePrefix: const [5, 6, 7, 8],
+      receiveNoncePrefix: const [1, 2, 3, 4],
+    );
+    final transport = RelayGatewayTransport(
+      inner: _RecordingGatewayTransport(_relayProfile()),
+      sessionId: 'relay-session-demo',
+      codec: RelayV2AeadEnvelopeCodec(session: phoneSession),
+    );
+
+    await transport.getProjectView('proj-demo');
+
+    final envelope = transport.sealedRequests.single;
+    final envelopeJson = envelope.toJson();
+    expect(envelope.schemaVersion, relayProtocolVersion);
+    expect(envelope.keyId, relayKeyId);
+    expect(envelopeJson.toString(), isNot(contains('proj-demo')));
+    final plaintext = utf8.decode(
+      await hostSession.open(
+        RelayV2Envelope.fromJson({
+          ...envelopeJson,
+          'direction': RelayCryptoDirection.phoneToHost.wireName,
+        }),
+      ),
+    );
+    expect(jsonDecode(plaintext), containsPair('project_id', 'proj-demo'));
+  });
+
   test('parses relay envelope and rejects malformed opaque fields', () {
     final envelope = RelayGatewayEnvelope.fromJson({
-      'schema_version': 1,
+      'schema_version': relayProtocolVersion,
       'session_id': 'relay-session-demo',
       'seq': 3,
       'op': 'get_project_view',
@@ -152,7 +198,7 @@ void main() {
     });
 
     expect(envelope.toJson(), {
-      'schema_version': 1,
+      'schema_version': relayProtocolVersion,
       'session_id': 'relay-session-demo',
       'seq': 3,
       'op': 'get_project_view',
@@ -167,6 +213,28 @@ void main() {
         'op': 'get_project_view',
         'ciphertext_b64': 'not base64!',
         'nonce_b64': 'bm9uY2U',
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => RelayGatewayEnvelope.fromJson({
+        'schema_version': 1,
+        'session_id': 'relay-session-demo',
+        'seq': 1,
+        'op': 'get_project_view',
+        'ciphertext_b64': 'b3BhcXVl',
+        'nonce_b64': 'bm9uY2U=',
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => RelayGatewayEnvelope.fromJson({
+        'schema_version': relayProtocolVersion,
+        'session_id': 'relay-session-demo',
+        'seq': (relayMaxSequence + BigInt.one).toString(),
+        'op': 'get_project_view',
+        'ciphertext_b64': 'b3BhcXVl',
+        'nonce_b64': 'bm9uY2U=',
       }),
       throwsFormatException,
     );

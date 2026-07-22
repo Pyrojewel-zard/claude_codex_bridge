@@ -113,6 +113,17 @@ relay signing keys, and database backups are operational secrets and must be
 owner-readable only. "No data storage" in product language must be stated as
 "no CCB business payload storage," not as zero security metadata.
 
+Package B admission key material is deployment-owned configuration, not
+database state. Operators must provide it with `--secrets`, with
+`CCB_RELAY_ADMISSION_SECRETS`, or with both
+`CCB_RELAY_VERIFIER_KEY_B64` and `CCB_RELAY_CAPABILITY_KEY_B64`; the same key
+material must be present after restart. The admission database stores only a
+non-secret fingerprint of those keys and fails closed if the fingerprint is
+missing on a populated database or changes across restart. The SQLite
+database, WAL, and SHM files must be owner-only. Raw invitation values,
+verifier keys, and capability keys must not appear in logs, audit rows, or
+database files.
+
 ## Abuse And Resource Controls
 
 - one invite activates one host; no universal invite or client-embedded key;
