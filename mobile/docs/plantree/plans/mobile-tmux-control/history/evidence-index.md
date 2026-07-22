@@ -2,6 +2,20 @@
 
 Date: 2026-06-29
 
+## 2026-07-22: Public Relay Encrypted Stream Package
+
+Evidence:
+
+- [public-relay-stream-package-20260722.md](public-relay-stream-package-20260722.md)
+
+Result:
+
+- Local protocol checkpoint: encrypted inner request/response and bounded
+  Terminal/notification streams pass Python real-socket and Dart transport
+  tests.
+- File chunking, host activation/bootstrap lifecycle, Android Emulator, and
+  public WSS acceptance remain open and are not claimed.
+
 ## 2026-07-22: Public Relay Package D Local Implementation
 
 Evidence:

@@ -19,6 +19,7 @@ import '../../models/ccb_project_lifecycle.dart';
 import '../../models/ccb_project_view.dart';
 import '../../notifications/task_completion_notifications.dart';
 import '../../notifications/push_notifications.dart';
+import '../../notifications/route_aware_task_completion_notifications.dart';
 import '../../pairing/gateway_pairing.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../repository/gateway_mobile_ccb_repository.dart';
@@ -295,7 +296,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     _taskNotifications = TaskCompletionNotificationController(
       streamClient:
           widget.taskNotificationStreamClient ??
-          HttpGatewayTaskCompletionNotificationStreamClient(),
+          RouteAwareGatewayTaskCompletionNotificationStreamClient(),
       localNotifications:
           widget.taskCompletionLocalNotifications ??
           MethodChannelTaskCompletionLocalNotifications(),

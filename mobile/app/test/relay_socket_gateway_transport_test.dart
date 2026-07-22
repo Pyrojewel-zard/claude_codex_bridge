@@ -46,28 +46,31 @@ void main() {
     },
   );
 
-  test('requires production WSS origin outside explicit loopback test mode', () async {
-    expect(
-      () => RelaySocketGatewayTransport(
-        profile: _profileSync(
-          relayOrigin: Uri.parse('ws://relay.example'),
-          hostFingerprint: 'sha256:host',
+  test(
+    'requires production WSS origin outside explicit loopback test mode',
+    () async {
+      expect(
+        () => RelaySocketGatewayTransport(
+          profile: _profileSync(
+            relayOrigin: Uri.parse('ws://relay.example'),
+            hostFingerprint: 'sha256:host',
+          ),
+          deviceToken: 'device-secret',
         ),
-        deviceToken: 'device-secret',
-      ),
-      throwsArgumentError,
-    );
-    expect(
-      () => RelaySocketGatewayTransport(
-        profile: _profileSync(
-          relayOrigin: Uri.parse('wss://relay.example/v2/phone'),
-          hostFingerprint: 'sha256:host',
+        throwsArgumentError,
+      );
+      expect(
+        () => RelaySocketGatewayTransport(
+          profile: _profileSync(
+            relayOrigin: Uri.parse('wss://relay.example/v2/phone'),
+            hostFingerprint: 'sha256:host',
+          ),
+          deviceToken: 'device-secret',
         ),
-        deviceToken: 'device-secret',
-      ),
-      throwsArgumentError,
-    );
-  });
+        throwsArgumentError,
+      );
+    },
+  );
 
   test('fails closed on host fingerprint mismatch', () async {
     final hostSeed = List<int>.generate(32, (index) => index + 101);
@@ -95,20 +98,139 @@ void main() {
     expect(relay.requests, isEmpty);
   });
 
-  test('route profile stores relay bootstrap separately from pairing identity', () {
-    final profile = _profileSync(
-      relayOrigin: Uri.parse('wss://relay.seemlab.top'),
-      hostFingerprint: 'sha256:host',
-    );
+  test(
+    'route profile stores relay bootstrap separately from pairing identity',
+    () {
+      final profile = _profileSync(
+        relayOrigin: Uri.parse('wss://relay.seemlab.top'),
+        hostFingerprint: 'sha256:host',
+      );
 
-    expect(profile.routeProvider.toPairingJson(), contains('relay_session_id'));
-    expect(
-      RelayPhoneSessionBootstrap.maybeFromJson(
+      expect(
         profile.routeProvider.toPairingJson(),
-      )?.sessionId,
-      'relay-session-demo',
+        contains('relay_session_id'),
+      );
+      expect(
+        RelayPhoneSessionBootstrap.maybeFromJson(
+          profile.routeProvider.toPairingJson(),
+        )?.sessionId,
+        'relay-session-demo',
+      );
+    },
+  );
+
+  test('terminal input and output use one encrypted relay stream', () async {
+    final hostSeed = List<int>.generate(32, (index) => index + 101);
+    final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+    final hostFingerprint = await hostFingerprintForPublicKey(hostPublicKeyB64);
+    final relay = await _RelaySocketHarness.start(
+      hostSeed: hostSeed,
+      hostFingerprint: hostFingerprint,
     );
+    addTearDown(relay.stop);
+    final transport = RelaySocketGatewayTransport(
+      profile: await _profile(
+        relayOrigin: relay.origin,
+        hostFingerprint: hostFingerprint,
+      ),
+      deviceToken: 'device-secret',
+      allowInsecureLoopbackForTests: true,
+    );
+    addTearDown(() => transport.close(force: true));
+    final handle = await transport.openTerminal(
+      GatewayTerminalOpenRequest(
+        target: GatewayTerminalTarget(
+          projectId: 'proj-demo',
+          namespaceEpoch: 7,
+          kind: CcbTerminalTargetKind.agent,
+          agent: 'worker1',
+          window: 'main',
+          paneId: '%7',
+        ),
+      ),
+    );
+    final frames = <GatewayTerminalFrame>[];
+    final outputSeen = Completer<void>();
+    final subscription = transport.terminalFrames(handle).listen((frame) {
+      frames.add(frame);
+      if (frame.type == GatewayTerminalFrameType.output &&
+          !outputSeen.isCompleted) {
+        outputSeen.complete();
+      }
+    });
+    addTearDown(subscription.cancel);
+    while (frames.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+
+    await transport.sendTerminalFrame(
+      handle,
+      GatewayTerminalFrame.input(
+        sequence: 1,
+        bytes: utf8.encode('relay-input'),
+      ),
+    );
+    await outputSeen.future.timeout(const Duration(seconds: 2));
+
+    expect(frames.first.type, GatewayTerminalFrameType.open);
+    expect(frames.last.type, GatewayTerminalFrameType.output);
+    expect(
+      utf8.decode(base64Decode(frames.last.payload['bytes_b64']! as String)),
+      'relay-input',
+    );
+    expect(relay.terminalFrames, [
+      {
+        'type': 'input',
+        'seq': 1,
+        'bytes_b64': base64Encode(utf8.encode('relay-input')),
+      },
+    ]);
   });
+
+  test(
+    'notification SSE events use a cancelable encrypted relay stream',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+      );
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+      var connected = 0;
+
+      final event =
+          await transport
+              .notificationEvents(
+                lastEventId: 'event-before',
+                watchQuery: const {'watch_project_id': 'proj-demo'},
+                onConnected: () => connected += 1,
+              )
+              .first;
+
+      expect(connected, 1);
+      expect(event['id'], 'event-live-1');
+      expect((event['data']! as Map)['kind'], 'task_completed');
+      expect(relay.streamOpens.single['operation'], 'notifications');
+      expect(relay.streamOpens.single['payload'], {
+        'last_event_id': 'event-before',
+        'watch_project_id': 'proj-demo',
+        'device_token': 'device-secret',
+      });
+    },
+  );
 }
 
 class _RelaySocketHarness {
@@ -125,6 +247,8 @@ class _RelaySocketHarness {
   final String hostFingerprint;
   final visibleFrames = <String>[];
   final requests = <Map<String, Object?>>[];
+  final streamOpens = <Map<String, Object?>>[];
+  final terminalFrames = <Map<String, Object?>>[];
 
   static Future<_RelaySocketHarness> start({
     required List<int> hostSeed,
@@ -181,37 +305,10 @@ class _RelaySocketHarness {
     socket.add(jsonEncode(hostHello.toJson()));
 
     var outerSeq = 3;
-    while (await reader.moveNext()) {
-      final frameJson = _jsonMap(reader.current);
-      visibleFrames.add(jsonEncode(frameJson));
-      final frame = RelayFrame.fromJson(frameJson);
-      final envelope = frame.gatewayEnvelope();
-      final plaintext = await hostCrypto.open(
-        RelayV2Envelope.fromJson({
-          ...envelope.toJson(),
-          'direction': RelayCryptoDirection.phoneToHost.wireName,
-        }),
-      );
-      final payload = _jsonMap(utf8.decode(plaintext));
-      requests.add({'operation': envelope.operation, 'payload': payload});
+    Future<void> sendInner(RelayInnerMessage message) async {
       final responseEnvelope = await hostCrypto.seal(
-        operation: '${envelope.operation}.response',
-        plaintext: utf8.encode(
-          jsonEncode({
-            'ok': true,
-            'status': 200,
-            'body': switch (envelope.operation) {
-              'get_project_view' => demoProjectViewFixture,
-              'health' => {
-                'schema_version': 1,
-                'status': 'ok',
-                'server_time': '2026-07-22T00:00:00Z',
-                'capabilities': ['http_json', 'project_view'],
-              },
-              _ => {'schema_version': 1, 'status': 'ok'},
-            },
-          }),
-        ),
+        operation: 'relay.inner.v1',
+        plaintext: message.encode(),
       );
       socket.add(
         jsonEncode(
@@ -231,6 +328,146 @@ class _RelaySocketHarness {
         ),
       );
       outerSeq += 1;
+    }
+
+    while (await reader.moveNext()) {
+      final frameJson = _jsonMap(reader.current);
+      visibleFrames.add(jsonEncode(frameJson));
+      final frame = RelayFrame.fromJson(frameJson);
+      final envelope = frame.gatewayEnvelope();
+      final plaintext = await hostCrypto.open(
+        RelayV2Envelope.fromJson({
+          ...envelope.toJson(),
+          'direction': RelayCryptoDirection.phoneToHost.wireName,
+        }),
+      );
+      expect(envelope.operation, 'relay.inner.v1');
+      final message = RelayInnerMessage.decode(plaintext);
+      switch (message.kind) {
+        case RelayInnerKind.request:
+          final payload = message.payload;
+          requests.add({'operation': message.operation, 'payload': payload});
+          await sendInner(
+            RelayInnerMessage(
+              kind: RelayInnerKind.response,
+              requestId: message.requestId,
+              payload: {
+                'ok': true,
+                'status': 200,
+                'body': switch (message.operation) {
+                  'get_project_view' => demoProjectViewFixture,
+                  'health' => {
+                    'schema_version': 1,
+                    'status': 'ok',
+                    'server_time': '2026-07-22T00:00:00Z',
+                    'capabilities': ['http_json', 'project_view'],
+                  },
+                  'open_terminal' => {
+                    'terminal_id': 'terminal-demo',
+                    'terminal_token': 'terminal-token-demo',
+                    'expires_at': '2026-07-22T01:00:00Z',
+                    'websocket_url':
+                        'wss://loopback.invalid/v1/terminals/terminal-demo',
+                    'target_epoch': 7,
+                    'target_summary': {
+                      'project_id': 'proj-demo',
+                      'agent': 'worker1',
+                      'window': 'main',
+                    },
+                  },
+                  _ => {'schema_version': 1, 'status': 'ok'},
+                },
+              },
+            ),
+          );
+        case RelayInnerKind.streamOpen:
+          streamOpens.add({
+            'stream_id': message.streamId,
+            'operation': message.operation,
+            'payload': message.payload,
+          });
+          await sendInner(
+            RelayInnerMessage.streamWindow(
+              streamId: message.streamId!,
+              creditBytes: relayStreamInitialWindowBytes,
+            ),
+          );
+          if (message.operation == 'terminal') {
+            await sendInner(
+              RelayInnerMessage.streamData(
+                streamId: message.streamId!,
+                payload: const {
+                  'frame': {
+                    'type': 'open',
+                    'terminal_id': 'terminal-demo',
+                    'token': '',
+                    'resume_cursor': 0,
+                    'last_input_seq': 0,
+                  },
+                },
+              ),
+            );
+          } else if (message.operation == 'notifications') {
+            await sendInner(
+              RelayInnerMessage.streamData(
+                streamId: message.streamId!,
+                payload: const {
+                  'event': {
+                    'id': 'event-live-1',
+                    'event': 'task_completed',
+                    'data': {
+                      'id': 'event-live-1',
+                      'kind': 'task_completed',
+                      'project_id': 'proj-demo',
+                      'project_short_name': 'demo',
+                      'agent': 'worker1',
+                      'completed_at': '2026-07-22T00:00:00Z',
+                      'dedupe_key': 'proj-demo:worker1:event-live-1',
+                    },
+                  },
+                },
+              ),
+            );
+          }
+        case RelayInnerKind.streamData:
+          final frame = Map<String, Object?>.from(
+            message.payload['frame']! as Map,
+          );
+          terminalFrames.add(frame);
+          await sendInner(
+            RelayInnerMessage.streamWindow(
+              streamId: message.streamId!,
+              creditBytes: relayInnerPayloadSize(message.payload),
+            ),
+          );
+          if (frame['type'] == 'input') {
+            await sendInner(
+              RelayInnerMessage.streamData(
+                streamId: message.streamId!,
+                payload: {
+                  'frame': {
+                    'type': 'output',
+                    'seq': frame['seq'],
+                    'bytes_b64': frame['bytes_b64'],
+                  },
+                },
+              ),
+            );
+          }
+        case RelayInnerKind.streamCancel:
+          await sendInner(
+            RelayInnerMessage(
+              kind: RelayInnerKind.streamClose,
+              streamId: message.streamId,
+              payload: const {'code': 'stream_not_found'},
+            ),
+          );
+        case RelayInnerKind.streamWindow:
+        case RelayInnerKind.response:
+        case RelayInnerKind.streamClose:
+        case RelayInnerKind.error:
+          break;
+      }
     }
   }
 }
@@ -259,9 +496,7 @@ GatewayHostProfile _profileSync({
       hostFingerprint: hostFingerprint,
       relayBootstrap: RelayPhoneSessionBootstrap(
         sessionId: 'relay-session-demo',
-        clientPrivateKeyB64: _b64(
-          List<int>.generate(32, (index) => index + 1),
-        ),
+        clientPrivateKeyB64: _b64(List<int>.generate(32, (index) => index + 1)),
         phoneNonceB64: _b64(utf8.encode('fresh phone nonce')),
         rendezvousCapability: 'ccb-relay-rv-v1.fake',
       ),

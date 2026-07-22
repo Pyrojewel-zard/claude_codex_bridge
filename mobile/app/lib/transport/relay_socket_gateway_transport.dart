@@ -13,6 +13,7 @@ import 'gateway_transport.dart';
 import 'relay_crypto.dart';
 import 'relay_gateway_transport.dart';
 import 'relay_protocol.dart';
+import 'relay_stream_protocol.dart';
 import 'route_provider.dart';
 
 class RelayGatewayException implements Exception {
@@ -73,9 +74,9 @@ class RelaySocketGatewayTransport implements GatewayTransport {
   final HttpClient _httpClient;
   final Duration _timeout;
   final bool _allowInsecureLoopbackForTests;
-  final _serial = _SerialExecutor();
-
   _RelaySocketSession? _session;
+  Future<_RelaySocketSession>? _connecting;
+  var _nextIdentifier = 1;
   bool _closed = false;
 
   @override
@@ -216,27 +217,51 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     GatewayTerminalHandle handle, {
     int? resumeCursor,
   }) {
-    return Stream.fromFuture(
-      _requestBody('terminal_frames', {
-        'terminal_id': handle.terminalId,
-        'terminal_token': handle.terminalToken,
-        'websocket_url': handle.websocketUrl.toString(),
-        if (resumeCursor != null) 'resume_cursor': resumeCursor,
-      }),
-    ).asyncExpand((body) {
-      final events = body['events'];
-      if (events is! Iterable) {
-        throw const FormatException('relay terminal response missing events');
+    late final StreamController<GatewayTerminalFrame> controller;
+    _RelayClientStream? relayStream;
+    StreamSubscription<Map<String, Object?>>? subscription;
+
+    Future<void> cancel() async {
+      await subscription?.cancel();
+      final stream = relayStream;
+      if (stream != null) {
+        await _cancelStream(stream);
       }
-      return Stream<GatewayTerminalFrame>.fromIterable([
-        for (final event in events)
-          if (event is Map)
-            GatewayTerminalFrame.fromJson({
-              for (final entry in event.entries)
-                entry.key.toString(): entry.value,
-            }),
-      ]);
-    });
+    }
+
+    Future<void> connect() async {
+      try {
+        final stream = await _openStream(
+          operation: 'terminal',
+          payload: {
+            'terminal_id': handle.terminalId,
+            'terminal_token': handle.terminalToken,
+            if (resumeCursor != null) 'resume_cursor': resumeCursor,
+          },
+          terminalId: handle.terminalId,
+        );
+        relayStream = stream;
+        subscription = stream.events.listen(
+          (payload) {
+            final frame = _objectMap(payload['frame'], 'terminal frame');
+            controller.add(GatewayTerminalFrame.fromJson(frame));
+          },
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      } catch (error, stackTrace) {
+        controller.addError(error, stackTrace);
+        await controller.close();
+      }
+    }
+
+    controller = StreamController<GatewayTerminalFrame>(
+      onListen: () => unawaited(connect()),
+      onPause: () => subscription?.pause(),
+      onResume: () => subscription?.resume(),
+      onCancel: cancel,
+    );
+    return controller.stream;
   }
 
   @override
@@ -244,10 +269,12 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     GatewayTerminalHandle handle,
     GatewayTerminalFrame frame,
   ) async {
-    await _requestBody('send_terminal_frame', {
-      'terminal_id': handle.terminalId,
-      'frame': frame.toJson(),
-    });
+    final session = await _ensureSession();
+    final stream = session.terminalStreams[handle.terminalId];
+    if (stream == null || stream.closed) {
+      throw const RelayGatewayException('relay terminal stream is not open');
+    }
+    await _sendStreamData(stream, {'frame': frame.toJson()});
   }
 
   @override
@@ -285,29 +312,55 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     );
   }
 
-  Future<List<Map<String, Object?>>> notificationEvents({
+  Stream<Map<String, Object?>> notificationEvents({
     String? lastEventId,
-    bool once = false,
-    String? projectId,
-    String? agent,
-    int? namespaceEpoch,
-  }) async {
-    final body = await _requestBody('notification_events', {
-      if (_hasText(lastEventId)) 'last_event_id': lastEventId,
-      if (once) 'once': true,
-      if (_hasText(projectId)) 'project_id': projectId,
-      if (_hasText(agent)) 'agent': agent,
-      if (namespaceEpoch != null) 'namespace_epoch': namespaceEpoch,
-    });
-    final events = body['events'];
-    if (events is! Iterable) {
-      throw const FormatException('relay notification response missing events');
+    Map<String, String> watchQuery = const {},
+    void Function()? onConnected,
+  }) {
+    late final StreamController<Map<String, Object?>> controller;
+    _RelayClientStream? relayStream;
+    StreamSubscription<Map<String, Object?>>? subscription;
+
+    Future<void> cancel() async {
+      await subscription?.cancel();
+      final stream = relayStream;
+      if (stream != null) {
+        await _cancelStream(stream);
+      }
     }
-    return [
-      for (final event in events)
-        if (event is Map)
-          {for (final entry in event.entries) entry.key.toString(): entry.value},
-    ];
+
+    Future<void> connect() async {
+      try {
+        final stream = await _openStream(
+          operation: 'notifications',
+          payload: {
+            if (_hasText(lastEventId)) 'last_event_id': lastEventId,
+            ...watchQuery,
+            if (_hasText(_deviceToken)) 'device_token': _deviceToken,
+          },
+          onReady: onConnected,
+        );
+        relayStream = stream;
+        subscription = stream.events.listen(
+          (payload) {
+            controller.add(_objectMap(payload['event'], 'notification event'));
+          },
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      } catch (error, stackTrace) {
+        controller.addError(error, stackTrace);
+        await controller.close();
+      }
+    }
+
+    controller = StreamController<Map<String, Object?>>(
+      onListen: () => unawaited(connect()),
+      onPause: () => subscription?.pause(),
+      onResume: () => subscription?.resume(),
+      onCancel: cancel,
+    );
+    return controller.stream;
   }
 
   Future<Map<String, Object?>> _requestBody(
@@ -321,82 +374,58 @@ class RelaySocketGatewayTransport implements GatewayTransport {
   Future<Map<String, Object?>> _request(
     String operation,
     Map<String, Object?> payload,
-  ) {
-    return _serial.run(() => _doRequest(operation, payload));
-  }
-
-  Future<Map<String, Object?>> _doRequest(
-    String operation,
-    Map<String, Object?> payload,
   ) async {
     if (_closed) {
       throw const RelayGatewayException('relay transport is closed');
     }
-    late final List<int> plaintext;
+    final session = await _ensureSession();
+    final requestId = _identifier('request');
+    final completer = Completer<Map<String, Object?>>();
+    session.pendingRequests[requestId] = completer;
     try {
-      final session = await _ensureSession();
       final requestPayload = {
         ...payload,
         if (_hasText(_deviceToken)) 'device_token': _deviceToken,
       };
-      final envelope = await session.crypto.seal(
-        operation: operation,
-        plaintext: utf8.encode(jsonEncode(requestPayload)),
-      );
-      final frame = RelayFrame.gatewayEnvelope(
-        envelope: RelayGatewayEnvelope(
-          schemaVersion: envelope.schemaVersion,
-          sessionId: envelope.sessionId,
-          sequence: envelope.sequence,
-          operation: envelope.operation,
-          direction: envelope.direction,
-          ciphertextB64: envelope.ciphertextB64,
-          nonceB64: envelope.nonceB64,
-          keyId: envelope.keyId,
+      await _sendInner(
+        session,
+        RelayInnerMessage.request(
+          requestId: requestId,
+          operation: operation,
+          payload: requestPayload,
         ),
-        sequence: session.nextOuterSequence,
       );
-      session.nextOuterSequence += 1;
-      session.socket.add(jsonEncode(frame.toJson()));
-      final responseFrame = await _receiveGatewayEnvelope(session);
-      final responseEnvelope = responseFrame.gatewayEnvelope();
-      plaintext = await session.crypto.open(
-        RelayV2Envelope.fromJson({
-          ...responseEnvelope.toJson(),
-          if (responseEnvelope.direction == null)
-            'direction': RelayCryptoDirection.hostToPhone.wireName,
-        }),
-      );
-    } on RelayCryptoException {
-      await _failClosed();
-      rethrow;
-    } on RelayGatewayException {
-      await _failClosed();
-      rethrow;
-    } on WebSocketException {
-      await _failClosed();
-      rethrow;
+      return await completer.future.timeout(_timeout);
+    } finally {
+      session.pendingRequests.remove(requestId);
     }
-    final decoded = jsonDecode(utf8.decode(plaintext));
-    if (decoded is! Map) {
-      throw const FormatException('relay gateway response is not an object');
-    }
-    final response = {
-      for (final entry in decoded.entries) entry.key.toString(): entry.value,
-    };
-    if (response['ok'] != true) {
-      throw RelayGatewayException(
-        _text(response['error'], fallback: 'relay gateway request failed'),
-        statusCode: _int(response['status']),
-      );
-    }
-    return response;
   }
 
   Future<_RelaySocketSession> _ensureSession() async {
     final existing = _session;
-    if (existing != null && existing.socket.readyState == WebSocket.open) {
+    if (existing != null &&
+        !existing.closed &&
+        existing.socket.readyState == WebSocket.open) {
       return existing;
+    }
+    final connecting = _connecting;
+    if (connecting != null) {
+      return connecting;
+    }
+    final future = _openSession();
+    _connecting = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_connecting, future)) {
+        _connecting = null;
+      }
+    }
+  }
+
+  Future<_RelaySocketSession> _openSession() async {
+    if (_closed) {
+      throw const RelayGatewayException('relay transport is closed');
     }
     final route = profile.routeProvider;
     final bootstrap = route.relayBootstrap;
@@ -431,7 +460,7 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       ),
     );
     final reader = StreamIterator<dynamic>(socket);
-    final hostHello = await _receiveFrame(reader);
+    final hostHello = await _receiveFrame(reader, timeout: _timeout);
     if (hostHello.kind != RelayFrameKind.hostHello) {
       throw const RelayGatewayException('relay host hello was not received');
     }
@@ -478,24 +507,254 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       crypto: schedule.session(role: 'phone'),
     );
     _session = session;
+    session.readTask = _readLoop(session);
     return session;
   }
 
-  Future<RelayFrame> _receiveGatewayEnvelope(_RelaySocketSession session) async {
-    while (session.socket.readyState == WebSocket.open) {
-      final frame = await _receiveFrame(session.reader);
-      if (frame.kind == RelayFrameKind.gatewayEnvelope) {
-        return frame;
+  Future<void> _sendInner(
+    _RelaySocketSession session,
+    RelayInnerMessage message,
+  ) {
+    return session.sendSerial.run(() async {
+      if (session.closed || session.socket.readyState != WebSocket.open) {
+        throw const RelayGatewayException('relay socket disconnected');
       }
-      if (frame.kind == RelayFrameKind.close) {
-        throw const RelayGatewayException('relay session closed');
-      }
-    }
-    throw const RelayGatewayException('relay socket disconnected');
+      final envelope = await session.crypto.seal(
+        operation: 'relay.inner.v1',
+        plaintext: message.encode(),
+      );
+      session.socket.add(
+        jsonEncode(
+          RelayFrame.gatewayEnvelope(
+            envelope: RelayGatewayEnvelope(
+              schemaVersion: envelope.schemaVersion,
+              sessionId: envelope.sessionId,
+              sequence: envelope.sequence,
+              operation: envelope.operation,
+              direction: envelope.direction,
+              ciphertextB64: envelope.ciphertextB64,
+              nonceB64: envelope.nonceB64,
+              keyId: envelope.keyId,
+            ),
+            sequence: session.nextOuterSequence++,
+          ).toJson(),
+        ),
+      );
+    });
   }
 
-  Future<RelayFrame> _receiveFrame(StreamIterator<dynamic> reader) async {
-    if (!await reader.moveNext().timeout(_timeout)) {
+  Future<_RelayClientStream> _openStream({
+    required String operation,
+    required Map<String, Object?> payload,
+    String? terminalId,
+    void Function()? onReady,
+  }) async {
+    final session = await _ensureSession();
+    final streamId = _identifier('stream');
+    late final _RelayClientStream stream;
+    stream = _RelayClientStream(
+      streamId: streamId,
+      operation: operation,
+      terminalId: terminalId,
+      onReady: onReady,
+      sendWindow:
+          (credit) => _sendInner(
+            session,
+            RelayInnerMessage.streamWindow(
+              streamId: streamId,
+              creditBytes: credit,
+            ),
+          ),
+      cancel: () => _cancelStream(stream),
+    );
+    session.streams[streamId] = stream;
+    if (terminalId != null) {
+      session.terminalStreams[terminalId] = stream;
+    }
+    try {
+      await _sendInner(
+        session,
+        RelayInnerMessage.streamOpen(
+          streamId: streamId,
+          operation: operation,
+          payload: payload,
+        ),
+      );
+      return stream;
+    } catch (_) {
+      session.streams.remove(streamId);
+      if (terminalId != null) {
+        session.terminalStreams.remove(terminalId);
+      }
+      await stream.close();
+      rethrow;
+    }
+  }
+
+  Future<void> _sendStreamData(
+    _RelayClientStream stream,
+    Map<String, Object?> payload,
+  ) async {
+    final session = await _ensureSession();
+    if (!identical(session.streams[stream.streamId], stream)) {
+      throw const RelayGatewayException('relay stream is stale');
+    }
+    await stream.sendSerial.run(() async {
+      final size = relayInnerPayloadSize(payload);
+      await stream.takeSendCredit(size, timeout: _timeout);
+      await _sendInner(
+        session,
+        RelayInnerMessage.streamData(
+          streamId: stream.streamId,
+          payload: payload,
+        ),
+      );
+    });
+  }
+
+  Future<void> _cancelStream(_RelayClientStream stream) async {
+    if (stream.closed) {
+      return;
+    }
+    final session = _session;
+    if (session != null &&
+        identical(session.streams[stream.streamId], stream)) {
+      session.streams.remove(stream.streamId);
+      if (stream.terminalId != null) {
+        session.terminalStreams.remove(stream.terminalId);
+      }
+      if (!session.closed) {
+        try {
+          await _sendInner(
+            session,
+            RelayInnerMessage.streamCancel(stream.streamId),
+          );
+        } catch (_) {
+          // Socket teardown below is authoritative when cancellation cannot send.
+        }
+      }
+    }
+    await stream.close();
+  }
+
+  Future<void> _readLoop(_RelaySocketSession session) async {
+    Object? failure;
+    StackTrace? failureStack;
+    try {
+      while (!session.closed && session.socket.readyState == WebSocket.open) {
+        final frame = await _receiveFrame(session.reader);
+        if (frame.kind == RelayFrameKind.close) {
+          throw const RelayGatewayException('relay session closed');
+        }
+        if (frame.kind != RelayFrameKind.gatewayEnvelope) {
+          continue;
+        }
+        final envelope = frame.gatewayEnvelope();
+        if (envelope.operation != 'relay.inner.v1') {
+          throw const RelayGatewayException('relay inner protocol mismatch');
+        }
+        final plaintext = await session.crypto.open(
+          RelayV2Envelope.fromJson({
+            ...envelope.toJson(),
+            if (envelope.direction == null)
+              'direction': RelayCryptoDirection.hostToPhone.wireName,
+          }),
+        );
+        await _dispatchInner(session, RelayInnerMessage.decode(plaintext));
+      }
+    } catch (error, stackTrace) {
+      failure = error;
+      failureStack = stackTrace;
+    } finally {
+      await _discardSession(
+        session,
+        failure ?? const RelayGatewayException('relay socket disconnected'),
+        failureStack,
+      );
+    }
+  }
+
+  Future<void> _dispatchInner(
+    _RelaySocketSession session,
+    RelayInnerMessage message,
+  ) async {
+    final requestId = message.requestId;
+    if (message.kind == RelayInnerKind.response && requestId != null) {
+      final completer = session.pendingRequests.remove(requestId);
+      if (completer != null && !completer.isCompleted) {
+        final response = Map<String, Object?>.from(message.payload);
+        if (response['ok'] != true) {
+          completer.completeError(
+            RelayGatewayException(
+              _text(
+                response['error'],
+                fallback: 'relay gateway request failed',
+              ),
+              statusCode: _int(response['status']),
+            ),
+          );
+        } else {
+          completer.complete(response);
+        }
+      }
+      return;
+    }
+    final streamId = message.streamId;
+    if (message.kind == RelayInnerKind.error) {
+      final error = RelayGatewayException(
+        _text(message.payload['code'], fallback: 'relay request rejected'),
+      );
+      if (requestId != null) {
+        final completer = session.pendingRequests.remove(requestId);
+        if (completer == null) {
+          throw error;
+        }
+        completer.completeError(error);
+      } else if (streamId != null) {
+        final stream = session.streams.remove(streamId);
+        stream?.addError(error);
+        await stream?.close();
+      }
+      return;
+    }
+    if (streamId == null) {
+      throw const RelayGatewayException('relay stream identity missing');
+    }
+    final stream = session.streams[streamId];
+    if (stream == null || stream.closed) {
+      return;
+    }
+    switch (message.kind) {
+      case RelayInnerKind.streamData:
+        await stream.add(message.payload);
+      case RelayInnerKind.streamWindow:
+        stream.addSendCredit(message.creditBytes ?? 0);
+      case RelayInnerKind.streamClose:
+      case RelayInnerKind.streamCancel:
+        session.streams.remove(streamId);
+        if (stream.terminalId != null) {
+          session.terminalStreams.remove(stream.terminalId);
+        }
+        await stream.close();
+      case RelayInnerKind.request:
+      case RelayInnerKind.response:
+      case RelayInnerKind.streamOpen:
+      case RelayInnerKind.error:
+        throw const RelayGatewayException(
+          'relay inner message direction invalid',
+        );
+    }
+  }
+
+  Future<RelayFrame> _receiveFrame(
+    StreamIterator<dynamic> reader, {
+    Duration? timeout,
+  }) async {
+    final moved =
+        timeout == null
+            ? await reader.moveNext()
+            : await reader.moveNext().timeout(timeout);
+    if (!moved) {
       throw const RelayGatewayException('relay socket disconnected');
     }
     final message = reader.current;
@@ -521,21 +780,49 @@ class RelaySocketGatewayTransport implements GatewayTransport {
 
   Future<void> close({bool force = false}) async {
     _closed = true;
-    await _closeSession();
+    final session = _session;
+    if (session != null) {
+      await _discardSession(
+        session,
+        const RelayGatewayException('relay transport is closed'),
+        null,
+      );
+    }
     _httpClient.close(force: force);
   }
 
-  Future<void> _failClosed() async {
-    _closed = true;
-    await _closeSession();
+  String _identifier(String prefix) {
+    final next = _nextIdentifier++;
+    return '$prefix-${DateTime.now().microsecondsSinceEpoch}-$next';
   }
 
-  Future<void> _closeSession() async {
-    final session = _session;
-    _session = null;
-    session?.crypto.close();
-    await session?.reader.cancel();
-    await session?.socket.close();
+  Future<void> _discardSession(
+    _RelaySocketSession session,
+    Object error,
+    StackTrace? stackTrace,
+  ) async {
+    if (session.closed) {
+      return;
+    }
+    session.closed = true;
+    if (identical(_session, session)) {
+      _session = null;
+    }
+    for (final completer in session.pendingRequests.values) {
+      if (!completer.isCompleted) {
+        completer.completeError(error, stackTrace);
+      }
+    }
+    session.pendingRequests.clear();
+    for (final stream in session.streams.values.toList(growable: false)) {
+      stream.addError(error, stackTrace);
+      await stream.close();
+    }
+    session.streams.clear();
+    session.terminalStreams.clear();
+    session.crypto.close();
+    await session.reader.cancel();
+    await session.socket.close();
   }
 }
 
@@ -549,7 +836,132 @@ class _RelaySocketSession {
   final WebSocket socket;
   final StreamIterator<dynamic> reader;
   final RelayCryptoSession crypto;
+  final sendSerial = _SerialExecutor();
+  final pendingRequests = <String, Completer<Map<String, Object?>>>{};
+  final streams = <String, _RelayClientStream>{};
+  final terminalStreams = <String, _RelayClientStream>{};
+  Future<void>? readTask;
   int nextOuterSequence = 2;
+  bool closed = false;
+}
+
+class _RelayClientStream {
+  _RelayClientStream({
+    required this.streamId,
+    required this.operation,
+    required this.sendWindow,
+    required this.cancel,
+    this.terminalId,
+    this.onReady,
+  }) {
+    _controller = StreamController<Map<String, Object?>>(
+      sync: true,
+      onPause: () => _paused = true,
+      onResume: () {
+        _paused = false;
+        _flushPendingWindow();
+      },
+      onCancel: () => cancel(),
+    );
+  }
+
+  final String streamId;
+  final String operation;
+  final String? terminalId;
+  final void Function()? onReady;
+  final Future<void> Function(int credit) sendWindow;
+  final Future<void> Function() cancel;
+  final sendSerial = _SerialExecutor();
+  late final StreamController<Map<String, Object?>> _controller;
+  int _sendCredit = 0;
+  int _pendingWindow = 0;
+  Completer<void>? _creditChanged;
+  bool _paused = false;
+  bool _readyReported = false;
+  bool closed = false;
+
+  Stream<Map<String, Object?>> get events => _controller.stream;
+
+  void addSendCredit(int credit) {
+    if (credit <= 0 || closed) {
+      return;
+    }
+    if (_sendCredit + credit > relayStreamMaxWindowBytes) {
+      addError(const RelayGatewayException('relay stream credit overflow'));
+      unawaited(close());
+      return;
+    }
+    _sendCredit += credit;
+    if (!_readyReported) {
+      _readyReported = true;
+      onReady?.call();
+    }
+    final changed = _creditChanged;
+    _creditChanged = null;
+    if (changed != null && !changed.isCompleted) {
+      changed.complete();
+    }
+  }
+
+  Future<void> takeSendCredit(int bytes, {required Duration timeout}) async {
+    if (bytes <= 0 || bytes > relayStreamMaxMessageBytes) {
+      throw const RelayGatewayException('relay stream payload is too large');
+    }
+    while (!closed && _sendCredit < bytes) {
+      final changed = _creditChanged ??= Completer<void>();
+      await changed.future.timeout(timeout);
+    }
+    if (closed) {
+      throw const RelayGatewayException('relay stream is closed');
+    }
+    _sendCredit -= bytes;
+  }
+
+  Future<void> add(Map<String, Object?> payload) async {
+    if (closed) {
+      return;
+    }
+    final bytes = relayInnerPayloadSize(payload);
+    _controller.add(payload);
+    if (_paused) {
+      _pendingWindow += bytes;
+    } else {
+      await sendWindow(bytes);
+    }
+  }
+
+  void addError(Object error, [StackTrace? stackTrace]) {
+    if (!closed && !_controller.isClosed) {
+      _controller.addError(error, stackTrace);
+    }
+  }
+
+  Future<void> _flushPendingWindow() async {
+    final credit = _pendingWindow;
+    _pendingWindow = 0;
+    if (credit > 0 && !closed) {
+      try {
+        await sendWindow(credit);
+      } catch (error, stackTrace) {
+        addError(error, stackTrace);
+      }
+    }
+  }
+
+  Future<void> close() async {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    final changed = _creditChanged;
+    _creditChanged = null;
+    if (changed != null && !changed.isCompleted) {
+      changed.complete();
+    }
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
+  }
 }
 
 class _SerialExecutor {
@@ -668,7 +1080,9 @@ GatewayTerminalHandle _terminalHandle(Map<String, Object?> json) {
     terminalId: _requiredText(json['terminal_id'], 'terminal_id'),
     terminalToken: _requiredText(json['terminal_token'], 'terminal_token'),
     expiresAt: _requiredDateTime(json['expires_at'], 'expires_at'),
-    websocketUrl: Uri.parse(_requiredText(json['websocket_url'], 'websocket_url')),
+    websocketUrl: Uri.parse(
+      _requiredText(json['websocket_url'], 'websocket_url'),
+    ),
     targetEpoch: _requiredInt(json['target_epoch'], 'target_epoch'),
     targetSummary: GatewayTerminalTargetSummary(
       projectId: _requiredText(

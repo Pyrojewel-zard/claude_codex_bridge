@@ -38,6 +38,11 @@ from mobile_gateway.relay_host_connector import (
     RelayHostConnectorConfig,
 )
 from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
+from mobile_gateway.relay_stream import (
+    RELAY_STREAM_INITIAL_WINDOW_BYTES,
+    RelayInnerMessage,
+    relay_inner_payload_size,
+)
 
 
 def test_relay_host_connector_requires_safe_origins() -> None:
@@ -115,10 +120,12 @@ async def _relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path
                 payload={'request_id': 'req-health-1'},
             )
 
-            assert response['ok'] is True
-            assert response['status'] == 200
-            assert response['body']['status'] == 'ok'
-            assert response['body']['served_by'] == 'loopback-gateway'
+            assert response.kind == 'response'
+            assert response.request_id == 'req-health-1'
+            assert response.payload['ok'] is True
+            assert response.payload['status'] == 200
+            assert response.payload['body']['status'] == 'ok'
+            assert response.payload['body']['served_by'] == 'loopback-gateway'
             assert gateway.requests == [('GET', '/v1/health')]
             assert connector.diagnostics()['requests_proxied'] == 1
     finally:
@@ -170,13 +177,80 @@ async def _relay_host_connector_rejects_unallowlisted_gateway_request(tmp_path: 
                 },
             )
 
-            assert response == {
-                'ok': False,
-                'status': 400,
-                'error': 'relay_operation_not_allowed',
-            }
+            assert response.kind == 'error'
+            assert response.payload == {'code': 'operation_not_allowed'}
             assert gateway.requests == []
             assert connector.diagnostics()['requests_rejected'] == 1
+    finally:
+        connector.stop()
+        await asyncio.wait_for(task, timeout=2)
+        await gateway.stop()
+        await relay.stop()
+
+
+def test_relay_host_connector_demultiplexes_concurrent_requests(tmp_path: Path) -> None:
+    asyncio.run(_relay_host_connector_demultiplexes_concurrent_requests(tmp_path))
+
+
+async def _relay_host_connector_demultiplexes_concurrent_requests(tmp_path: Path) -> None:
+    relay, issued = await _started_relay(tmp_path)
+    gateway = await _started_gateway()
+    connector = RelayHostConnector(
+        RelayHostConnectorConfig(
+            relay_origin=_relay_origin(relay),
+            gateway_origin=gateway.origin,
+            host_id=issued.host_id,
+            host_signing_key=issued.private_key,
+            host_crypto_private_key=key_pair_from_private_bytes(bytes(range(101, 133))),
+            tls_context=_client_ssl(),
+            request_timeout_seconds=1.0,
+        )
+    )
+    task = asyncio.create_task(connector.connect_once())
+    try:
+        await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
+        async with aiohttp.ClientSession(raise_for_status=True) as client:
+            phone = await client.ws_connect(relay.url('/v2/phone'), ssl=_client_ssl())
+            phone_crypto, _ = await _open_phone_session(
+                phone,
+                issued=issued,
+                relay_origin=issued.relay_audience,
+                expected_host_public_key=public_key_b64(connector.config.host_crypto_private_key),
+            )
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=2,
+                message=RelayInnerMessage(
+                    kind='request',
+                    request_id='request-health-slow-1',
+                    operation='health',
+                    payload={},
+                ),
+            )
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=3,
+                message=RelayInnerMessage(
+                    kind='request',
+                    request_id='request-device-fast-1',
+                    operation='device',
+                    payload={'device_token': 'device-token-demo'},
+                ),
+            )
+
+            first = await _receive_phone_inner(phone, phone_crypto)
+            second = await _receive_phone_inner(phone, phone_crypto)
+
+            assert first.request_id == 'request-device-fast-1'
+            assert first.payload['body']['device']['device_id'] == 'device-demo'
+            assert second.request_id == 'request-health-slow-1'
+            assert second.payload['body']['status'] == 'ok'
+            assert set(gateway.requests) == {
+                ('GET', '/v1/devices/me'),
+                ('GET', '/v1/health'),
+            }
     finally:
         connector.stop()
         await asyncio.wait_for(task, timeout=2)
@@ -211,6 +285,222 @@ async def _relay_host_connector_revoked_host_reports_auth_diagnostic(tmp_path: P
         await relay.stop()
 
 
+def test_relay_host_connector_streams_terminal_without_replaying_input(tmp_path: Path) -> None:
+    asyncio.run(_relay_host_connector_streams_terminal_without_replaying_input(tmp_path))
+
+
+async def _relay_host_connector_streams_terminal_without_replaying_input(tmp_path: Path) -> None:
+    relay, issued = await _started_relay(tmp_path)
+    gateway = await _started_gateway()
+    connector = RelayHostConnector(
+        RelayHostConnectorConfig(
+            relay_origin=_relay_origin(relay),
+            gateway_origin=gateway.origin,
+            host_id=issued.host_id,
+            host_signing_key=issued.private_key,
+            host_crypto_private_key=key_pair_from_private_bytes(bytes(range(101, 133))),
+            tls_context=_client_ssl(),
+            request_timeout_seconds=1.0,
+        )
+    )
+    task = asyncio.create_task(connector.connect_once())
+    try:
+        await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
+        async with aiohttp.ClientSession(raise_for_status=True) as client:
+            phone = await client.ws_connect(relay.url('/v2/phone'), ssl=_client_ssl())
+            phone_crypto, _ = await _open_phone_session(
+                phone,
+                issued=issued,
+                relay_origin=issued.relay_audience,
+                expected_host_public_key=public_key_b64(connector.config.host_crypto_private_key),
+            )
+            stream_id = 'terminal-stream-demo-1'
+            opening_payload = {
+                'frame': {
+                    'type': 'open',
+                    'terminal_id': 'term-demo',
+                    'resume_cursor': 0,
+                    'last_input_seq': 0,
+                }
+            }
+            opening_credit = relay_inner_payload_size(opening_payload)
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=2,
+                message=RelayInnerMessage(
+                    kind='stream_open',
+                    stream_id=stream_id,
+                    operation='terminal',
+                    credit_bytes=opening_credit,
+                    payload={
+                        'terminal_id': 'term-demo',
+                        'terminal_token': 'terminal-token-demo',
+                    },
+                ),
+            )
+            opening = await _receive_until_kind(phone, phone_crypto, 'stream_data')
+            assert opening.stream_id == stream_id
+            assert opening.payload['frame']['type'] == 'open'
+            await _receive_until_kind(phone, phone_crypto, 'stream_window')
+
+            input_frame = {
+                'type': 'input',
+                'seq': 1,
+                'data_b64': _b64(b'MOBILE_STREAM_INPUT'),
+            }
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=3,
+                message=RelayInnerMessage(
+                    kind='stream_data',
+                    stream_id=stream_id,
+                    payload={'frame': input_frame},
+                ),
+            )
+            await _wait_for(lambda: gateway.terminal_inputs == [input_frame])
+            output_payload = {
+                'frame': {
+                    'type': 'output',
+                    'seq': 1,
+                    'data_b64': input_frame['data_b64'],
+                }
+            }
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=4,
+                message=RelayInnerMessage(
+                    kind='stream_window',
+                    stream_id=stream_id,
+                    credit_bytes=relay_inner_payload_size(output_payload),
+                    payload={},
+                ),
+            )
+            output = await _receive_until_kind(phone, phone_crypto, 'stream_data')
+            assert output.payload['frame']['type'] == 'output'
+            assert base64.urlsafe_b64decode(
+                str(output.payload['frame']['data_b64']) + '=='
+            ) == b'MOBILE_STREAM_INPUT'
+            resize_frame = {
+                'type': 'resize',
+                'seq': 2,
+                'cols': 100,
+                'rows': 32,
+            }
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=5,
+                message=RelayInnerMessage(
+                    kind='stream_data',
+                    stream_id=stream_id,
+                    payload={'frame': resize_frame},
+                ),
+            )
+            await _wait_for(
+                lambda: gateway.terminal_inputs == [input_frame, resize_frame]
+            )
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=6,
+                message=RelayInnerMessage(
+                    kind='stream_cancel',
+                    stream_id=stream_id,
+                    payload={},
+                ),
+            )
+            await _receive_until_kind(phone, phone_crypto, 'stream_close')
+            assert gateway.terminal_inputs == [input_frame, resize_frame]
+    finally:
+        connector.stop()
+        await asyncio.wait_for(task, timeout=2)
+        await gateway.stop()
+        await relay.stop()
+    _assert_canary_not_persisted(tmp_path, 'MOBILE_STREAM_INPUT')
+
+
+def test_relay_host_connector_notification_stream_resumes_without_duplicates(tmp_path: Path) -> None:
+    asyncio.run(_relay_host_connector_notification_stream_resumes_without_duplicates(tmp_path))
+
+
+async def _relay_host_connector_notification_stream_resumes_without_duplicates(tmp_path: Path) -> None:
+    relay, issued = await _started_relay(tmp_path)
+    gateway = await _started_gateway()
+    connector = RelayHostConnector(
+        RelayHostConnectorConfig(
+            relay_origin=_relay_origin(relay),
+            gateway_origin=gateway.origin,
+            host_id=issued.host_id,
+            host_signing_key=issued.private_key,
+            host_crypto_private_key=key_pair_from_private_bytes(bytes(range(101, 133))),
+            tls_context=_client_ssl(),
+            request_timeout_seconds=1.0,
+        )
+    )
+    task = asyncio.create_task(connector.connect_once())
+    try:
+        await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
+        async with aiohttp.ClientSession(raise_for_status=True) as client:
+            phone = await client.ws_connect(relay.url('/v2/phone'), ssl=_client_ssl())
+            phone_crypto, _ = await _open_phone_session(
+                phone,
+                issued=issued,
+                relay_origin=issued.relay_audience,
+                expected_host_public_key=public_key_b64(connector.config.host_crypto_private_key),
+            )
+            stream_id = 'notification-stream-demo-1'
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=2,
+                message=RelayInnerMessage(
+                    kind='stream_open',
+                    stream_id=stream_id,
+                    operation='notifications',
+                    credit_bytes=RELAY_STREAM_INITIAL_WINDOW_BYTES,
+                    payload={'device_token': 'device-token-demo'},
+                ),
+            )
+            received_ids: list[str] = []
+            while len(received_ids) < 2:
+                message = await _receive_phone_inner(phone, phone_crypto, timeout=3.0)
+                if message.kind != 'stream_data':
+                    continue
+                event = message.payload['event']
+                received_ids.append(str(event['id']))
+                await _send_phone_inner(
+                    phone,
+                    phone_crypto,
+                    outer_seq=2 + len(received_ids),
+                    message=RelayInnerMessage(
+                        kind='stream_window',
+                        stream_id=stream_id,
+                        credit_bytes=relay_inner_payload_size(message.payload),
+                        payload={},
+                    ),
+                )
+            assert received_ids == ['evt-1', 'evt-2']
+            assert gateway.notification_cursors[:2] == [None, 'evt-1']
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=5,
+                message=RelayInnerMessage(
+                    kind='stream_cancel',
+                    stream_id=stream_id,
+                    payload={},
+                ),
+            )
+    finally:
+        connector.stop()
+        await asyncio.wait_for(task, timeout=2)
+        await gateway.stop()
+        await relay.stop()
+
+
 async def _round_trip_gateway_request(
     phone: aiohttp.ClientWebSocketResponse,
     phone_crypto,
@@ -219,8 +509,18 @@ async def _round_trip_gateway_request(
     outer_seq: int,
     operation: str,
     payload: dict[str, object],
-) -> dict[str, object]:
-    envelope = phone_crypto.seal(op=operation, plaintext=json.dumps(payload, sort_keys=True).encode('utf-8'))
+) -> RelayInnerMessage:
+    inner = {
+        'schema_version': 1,
+        'kind': 'request',
+        'request_id': str(payload.pop('request_id', 'request-demo-1')),
+        'operation': operation,
+        'payload': payload,
+    }
+    envelope = phone_crypto.seal(
+        op='relay.inner.v1',
+        plaintext=json.dumps(inner, sort_keys=True, separators=(',', ':')).encode('utf-8'),
+    )
     await phone.send_json(
         {
             'schema_version': 2,
@@ -234,7 +534,51 @@ async def _round_trip_gateway_request(
     assert response_frame['kind'] == 'gateway_envelope'
     response_envelope = RelayV2Envelope.from_json(response_frame['payload']['envelope'])
     plaintext = phone_crypto.open(response_envelope)
-    return json.loads(plaintext.decode('utf-8'))
+    return RelayInnerMessage.from_bytes(plaintext)
+
+
+async def _send_phone_inner(
+    phone: aiohttp.ClientWebSocketResponse,
+    phone_crypto,
+    *,
+    outer_seq: int,
+    message: RelayInnerMessage,
+) -> None:
+    envelope = phone_crypto.seal(op='relay.inner.v1', plaintext=message.to_bytes())
+    await phone.send_json(
+        {
+            'schema_version': 2,
+            'session_id': 'relay-host-connector-session',
+            'seq': outer_seq,
+            'kind': 'gateway_envelope',
+            'payload': {'envelope': envelope.to_json()},
+        }
+    )
+
+
+async def _receive_phone_inner(
+    phone: aiohttp.ClientWebSocketResponse,
+    phone_crypto,
+    *,
+    timeout: float = 2.0,
+) -> RelayInnerMessage:
+    response_frame = await asyncio.wait_for(phone.receive_json(), timeout=timeout)
+    assert response_frame['kind'] == 'gateway_envelope'
+    envelope = RelayV2Envelope.from_json(response_frame['payload']['envelope'])
+    assert envelope.op == 'relay.inner.v1'
+    return RelayInnerMessage.from_bytes(phone_crypto.open(envelope))
+
+
+async def _receive_until_kind(
+    phone: aiohttp.ClientWebSocketResponse,
+    phone_crypto,
+    kind: str,
+) -> RelayInnerMessage:
+    for _ in range(8):
+        message = await _receive_phone_inner(phone, phone_crypto)
+        if message.kind == kind:
+            return message
+    raise AssertionError(f'relay inner message kind not received: {kind}')
 
 
 async def _open_phone_session(
@@ -334,6 +678,8 @@ class _GatewayStub:
     runner: web.AppRunner
     site: web.TCPSite
     requests: list[tuple[str, str]]
+    terminal_inputs: list[dict[str, object]]
+    notification_cursors: list[str | None]
 
     async def stop(self) -> None:
         await self.runner.cleanup()
@@ -341,13 +687,86 @@ class _GatewayStub:
 
 async def _started_gateway() -> _GatewayStub:
     requests: list[tuple[str, str]] = []
+    terminal_inputs: list[dict[str, object]] = []
+    notification_cursors: list[str | None] = []
 
     async def health(request: web.Request) -> web.Response:
+        await asyncio.sleep(0.05)
         requests.append((request.method, request.path))
         return web.json_response({'schema_version': 1, 'status': 'ok', 'served_by': 'loopback-gateway'})
 
+    async def device(request: web.Request) -> web.Response:
+        requests.append((request.method, request.path))
+        assert request.headers['authorization'] == 'Bearer device-token-demo'
+        return web.json_response(
+            {
+                'schema_version': 1,
+                'device': {
+                    'device_id': 'device-demo',
+                    'project_id': 'project-demo',
+                    'route_provider': 'relay',
+                    'scopes': ['view'],
+                },
+            }
+        )
+
+    async def terminal(request: web.Request) -> web.WebSocketResponse:
+        websocket = web.WebSocketResponse(max_msg_size=512 * 1024)
+        await websocket.prepare(request)
+        opening = await websocket.receive_json()
+        assert opening == {
+            'type': 'open',
+            'terminal_id': 'term-demo',
+            'token': 'terminal-token-demo',
+        }
+        await websocket.send_json(
+            {
+                'type': 'open',
+                'terminal_id': 'term-demo',
+                'resume_cursor': 0,
+                'last_input_seq': 0,
+            }
+        )
+        async for incoming in websocket:
+            if incoming.type != aiohttp.WSMsgType.TEXT:
+                continue
+            frame = json.loads(incoming.data)
+            assert isinstance(frame, dict)
+            terminal_inputs.append(frame)
+            if frame.get('type') == 'input':
+                await websocket.send_json(
+                    {
+                        'type': 'output',
+                        'seq': 1,
+                        'data_b64': frame['data_b64'],
+                    }
+                )
+        return websocket
+
+    async def notifications(request: web.Request) -> web.StreamResponse:
+        cursor = request.headers.get('Last-Event-ID')
+        notification_cursors.append(cursor)
+        event_id = 'evt-1' if cursor is None else 'evt-2'
+        response = web.StreamResponse(
+            status=200,
+            headers={'Content-Type': 'text/event-stream'},
+        )
+        await response.prepare(request)
+        first = '{"kind":"task_completed",'
+        second = f'"event_id":"{event_id}"}}'
+        await response.write(f'id: {event_id}\n'.encode())
+        await response.write(b'event: task_completed\n')
+        await response.write(b'retry: 10\n')
+        await response.write(f'data: {first}\n'.encode())
+        await response.write(f'data: {second}\n\n'.encode())
+        await response.write_eof()
+        return response
+
     app = web.Application()
     app.router.add_get('/v1/health', health)
+    app.router.add_get('/v1/devices/me', device)
+    app.router.add_get('/v1/terminals/term-demo', terminal)
+    app.router.add_get('/v1/mobile/notifications', notifications)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
@@ -360,6 +779,8 @@ async def _started_gateway() -> _GatewayStub:
         runner=runner,
         site=site,
         requests=requests,
+        terminal_inputs=terminal_inputs,
+        notification_cursors=notification_cursors,
     )
 
 
@@ -381,6 +802,14 @@ def _client_ssl() -> ssl.SSLContext:
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     return context
+
+
+def _assert_canary_not_persisted(root: Path, canary: str) -> None:
+    needle = canary.encode('utf-8')
+    for path in root.rglob('*'):
+        if not path.is_file():
+            continue
+        assert needle not in path.read_bytes(), f'relay persisted payload canary in {path}'
 
 
 def _write_self_signed_cert(tmp_path: Path) -> tuple[Path, Path]:
