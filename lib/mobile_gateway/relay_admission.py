@@ -306,6 +306,11 @@ class RelayAdmissionStore:
             raise RelayAdmissionError('relay host not found')
         return self._host_row(row)
 
+    def host_public_key_for_rendezvous(self, host_id: str) -> str:
+        row = self._host_record(host_id)
+        self._require_active_host_row(row)
+        return str(row['host_public_key_b64'])
+
     def list_hosts(self) -> list[dict[str, object]]:
         with closing(self._connect()) as conn:
             rows = conn.execute('SELECT * FROM relay_hosts ORDER BY issued_at, host_id').fetchall()

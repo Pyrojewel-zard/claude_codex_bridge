@@ -2,32 +2,45 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import ipaddress
 import json
 import os
 import signal
 import ssl
+import sqlite3
 import time
 from collections import deque
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from aiohttp import WSMsgType, web
 
-from .relay import MobileRelayError, RelayFrame, RelayHandshakeTranscript
+from .relay import MobileRelayError, RelayFrame, RelayHandshakeTranscript, RelayRendezvousCapability
 from .relay_admission import RelayAdmissionError, RelayAdmissionSecrets, RelayAdmissionStore
 from .relay_crypto import RelayDirection, RelayV2Envelope
 
 
 _DEFAULT_LOOPBACK_PORT = 18444
+_DEFAULT_ADMIN_PORT = 18445
 _JSON_SEPARATORS = (',', ':')
+_PUBLIC_ERROR_MESSAGES = {
+    'relay_auth_rejected': 'relay authentication rejected',
+    'relay_frame_rejected': 'relay frame rejected',
+    'relay_rate_limited': 'relay rate limited',
+    'relay_rejected': 'relay request rejected',
+    'relay_unavailable': 'relay unavailable',
+}
 
 
 @dataclass
 class ProductionRelayConfig:
     listen_host: str = '127.0.0.1'
     listen_port: int = _DEFAULT_LOOPBACK_PORT
+    admin_host: str = '127.0.0.1'
+    admin_port: int = _DEFAULT_ADMIN_PORT
     public_origin: str = 'wss://relay.seemlab.top'
     admission_db_path: Path = Path('/var/lib/ccb-mobile-relay/relay-admission.sqlite3')
     state_dir: Path = Path('/var/lib/ccb-mobile-relay')
@@ -35,6 +48,7 @@ class ProductionRelayConfig:
     tls_key_file: Path | None = None
     unsafe_plaintext_for_tests: bool = False
     max_frame_bytes: int = 64 * 1024
+    websocket_max_msg_bytes: int | None = None
     peer_queue_limit: int = 32
     write_timeout: float = 5.0
     handshake_timeout: float = 10.0
@@ -42,12 +56,19 @@ class ProductionRelayConfig:
     heartbeat_interval: float = 20.0
     unauth_rate_limit: int = 30
     unauth_rate_limit_window: float = 60.0
+    trusted_proxy_cidrs: tuple[str, ...] = ('127.0.0.1/32', '::1/128')
 
     def validate(self) -> 'ProductionRelayConfig':
         if self.listen_port < 0 or self.listen_port > 65535:
             raise ValueError('relay listen port is invalid')
+        if self.admin_port < 0 or self.admin_port > 65535:
+            raise ValueError('relay admin port is invalid')
+        if not _is_loopback_host(self.admin_host):
+            raise ValueError('relay admin listener must be loopback-only')
         if self.max_frame_bytes <= 0:
             raise ValueError('relay max frame bytes must be positive')
+        if self.protocol_max_msg_bytes() < self.max_frame_bytes:
+            raise ValueError('relay websocket max message bytes must cover semantic frame limit')
         if self.peer_queue_limit <= 0:
             raise ValueError('relay peer queue limit must be positive')
         if self.write_timeout <= 0 or self.handshake_timeout <= 0 or self.idle_timeout <= 0:
@@ -56,6 +77,7 @@ class ProductionRelayConfig:
             raise ValueError('relay unauthenticated rate limit must be positive')
         if not self.public_origin.startswith('wss://'):
             raise ValueError('relay public origin must be wss://')
+        _parse_trusted_proxy_networks(self.trusted_proxy_cidrs)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_dir.chmod(0o700)
         if self.unsafe_plaintext_for_tests:
@@ -79,19 +101,30 @@ class ProductionRelayConfig:
         context.load_cert_chain(str(self.tls_cert_file), str(self.tls_key_file))
         return context
 
+    def protocol_max_msg_bytes(self) -> int:
+        return int(self.websocket_max_msg_bytes or (self.max_frame_bytes + 4096))
+
+    def rendezvous_replay_db_path(self) -> Path:
+        return self.state_dir / 'relay-rendezvous-replay.sqlite3'
+
     @classmethod
     def from_env(cls) -> 'ProductionRelayConfig':
         listen = os.environ.get('CCB_RELAY_LISTEN', f'127.0.0.1:{_DEFAULT_LOOPBACK_PORT}')
         host, port = _parse_listen(listen)
+        admin_listen = os.environ.get('CCB_RELAY_ADMIN_LISTEN', f'127.0.0.1:{_DEFAULT_ADMIN_PORT}')
+        admin_host, admin_port = _parse_listen(admin_listen)
         return cls(
             listen_host=host,
             listen_port=port,
+            admin_host=admin_host,
+            admin_port=admin_port,
             public_origin=os.environ.get('CCB_RELAY_PUBLIC_ORIGIN', 'wss://relay.seemlab.top'),
             admission_db_path=Path(os.environ.get('CCB_RELAY_ADMISSION_DB', '/var/lib/ccb-mobile-relay/relay-admission.sqlite3')),
             state_dir=Path(os.environ.get('CCB_RELAY_STATE_DIR', '/var/lib/ccb-mobile-relay')),
             tls_cert_file=_optional_path(os.environ.get('CCB_RELAY_TLS_CERT')),
             tls_key_file=_optional_path(os.environ.get('CCB_RELAY_TLS_KEY')),
             max_frame_bytes=int(os.environ.get('CCB_RELAY_MAX_FRAME_BYTES', str(64 * 1024))),
+            websocket_max_msg_bytes=_optional_int(os.environ.get('CCB_RELAY_WEBSOCKET_MAX_MSG_BYTES')),
             peer_queue_limit=int(os.environ.get('CCB_RELAY_PEER_QUEUE_LIMIT', '32')),
             write_timeout=float(os.environ.get('CCB_RELAY_WRITE_TIMEOUT_SECONDS', '5')),
             handshake_timeout=float(os.environ.get('CCB_RELAY_HANDSHAKE_TIMEOUT_SECONDS', '10')),
@@ -99,6 +132,7 @@ class ProductionRelayConfig:
             heartbeat_interval=float(os.environ.get('CCB_RELAY_HEARTBEAT_INTERVAL_SECONDS', '20')),
             unauth_rate_limit=int(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT', '30')),
             unauth_rate_limit_window=float(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT_WINDOW_SECONDS', '60')),
+            trusted_proxy_cidrs=_csv_tuple(os.environ.get('CCB_RELAY_TRUSTED_PROXIES'), default=('127.0.0.1/32', '::1/128')),
             unsafe_plaintext_for_tests=os.environ.get('CCB_RELAY_UNSAFE_PLAINTEXT_FOR_TESTS') == '1',
         )
 
@@ -226,15 +260,62 @@ class _SlidingWindowRateLimiter:
         return True
 
 
+class _RendezvousReplayStore:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._initialized = False
+
+    def claim(self, *, replay_key: str, host_id: str, expires_at: int) -> None:
+        self._ensure_initialized()
+        now = int(time.time())
+        digest = hashlib.sha256(str(replay_key).encode('utf-8')).hexdigest()
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute('DELETE FROM relay_rendezvous_claims WHERE expires_at <= ?', (now,))
+            try:
+                conn.execute(
+                    '''
+                    INSERT INTO relay_rendezvous_claims(claim_hash, host_id, claimed_at, expires_at)
+                    VALUES (?, ?, ?, ?)
+                    ''',
+                    (digest, host_id, now, int(expires_at)),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise MobileRelayError('relay rendezvous capability replay rejected') from exc
+            conn.commit()
+
+    def _ensure_initialized(self) -> None:
+        if self._initialized:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.chmod(0o700)
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS relay_rendezvous_claims(
+                    claim_hash TEXT PRIMARY KEY,
+                    host_id TEXT NOT NULL,
+                    claimed_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL
+                )
+                '''
+            )
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_relay_rendezvous_expires ON relay_rendezvous_claims(expires_at)')
+            conn.commit()
+        self._path.chmod(0o600)
+        self._initialized = True
+
+
 class ProductionRelayService:
     def __init__(self, config: ProductionRelayConfig, *, admission_store: RelayAdmissionStore) -> None:
         self.config = config
         self._store = admission_store
+        self._rendezvous_replays = _RendezvousReplayStore(config.rendezvous_replay_db_path())
         self._metrics = _Metrics()
         self._rate_limiter = _SlidingWindowRateLimiter(
             limit=config.unauth_rate_limit,
             window_seconds=config.unauth_rate_limit_window,
         )
+        self._trusted_proxy_networks = _parse_trusted_proxy_networks(config.trusted_proxy_cidrs)
         self._hosts: dict[str, _PeerEndpoint] = {}
         self._sessions: dict[str, _RelaySessionState] = {}
         self._sessions_by_host: dict[str, set[str]] = {}
@@ -243,6 +324,10 @@ class ProductionRelayService:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._bound_port: int | None = None
+        self._admin_app: web.Application | None = None
+        self._admin_runner: web.AppRunner | None = None
+        self._admin_site: web.TCPSite | None = None
+        self._admin_bound_port: int | None = None
         self._draining = False
 
     @property
@@ -256,12 +341,19 @@ class ProductionRelayService:
         host = '127.0.0.1' if self.config.listen_host in {'0.0.0.0', '::'} else self.config.listen_host
         return f'{scheme}://{host}:{self.port}{path}'
 
+    @property
+    def admin_port(self) -> int:
+        if self._admin_bound_port is None:
+            raise RuntimeError('relay admin service is not started')
+        return self._admin_bound_port
+
+    def admin_url(self, path: str) -> str:
+        host = '127.0.0.1' if self.config.admin_host in {'0.0.0.0', '::', 'localhost'} else self.config.admin_host
+        return f'http://{host}:{self.admin_port}{path}'
+
     async def start(self) -> None:
         self.config.validate()
-        app = web.Application(client_max_size=self.config.max_frame_bytes + 4096)
-        app.router.add_get('/healthz', self._health)
-        app.router.add_get('/readyz', self._ready)
-        app.router.add_get('/metrics', self._metrics_response)
+        app = web.Application(client_max_size=self.config.protocol_max_msg_bytes())
         app.router.add_get('/v2/host', self._host_socket)
         app.router.add_get('/v2/phone', self._phone_socket)
         runner = web.AppRunner(app, access_log=None)
@@ -280,12 +372,34 @@ class ProductionRelayService:
         self._app = app
         self._runner = runner
         self._site = site
+        admin_app = web.Application(client_max_size=4096)
+        admin_app.router.add_get('/healthz', self._health)
+        admin_app.router.add_get('/readyz', self._ready)
+        admin_app.router.add_get('/metrics', self._metrics_response)
+        admin_runner = web.AppRunner(admin_app, access_log=None)
+        await admin_runner.setup()
+        admin_site = web.TCPSite(admin_runner, host=self.config.admin_host, port=self.config.admin_port)
+        await admin_site.start()
+        admin_server = admin_site._server
+        if admin_server is None or not admin_server.sockets:
+            raise RuntimeError('relay admin service did not bind a socket')
+        self._admin_bound_port = int(admin_server.sockets[0].getsockname()[1])
+        self._admin_app = admin_app
+        self._admin_runner = admin_runner
+        self._admin_site = admin_site
 
     async def stop(self) -> None:
         await self.drain()
+        admin_runner = self._admin_runner
+        if admin_runner is not None:
+            await admin_runner.cleanup()
         runner = self._runner
         if runner is not None:
             await runner.cleanup()
+        self._admin_runner = None
+        self._admin_site = None
+        self._admin_app = None
+        self._admin_bound_port = None
         self._runner = None
         self._site = None
         self._app = None
@@ -322,7 +436,8 @@ class ProductionRelayService:
             active_sessions=len(self._sessions),
         )
 
-    async def _health(self, _request: web.Request) -> web.Response:
+    async def _health(self, request: web.Request) -> web.Response:
+        self._reject_non_loopback_admin(request)
         return web.json_response(
             {
                 'status': 'ok',
@@ -331,11 +446,13 @@ class ProductionRelayService:
             }
         )
 
-    async def _ready(self, _request: web.Request) -> web.Response:
+    async def _ready(self, request: web.Request) -> web.Response:
+        self._reject_non_loopback_admin(request)
         status = 503 if self._draining else 200
         return web.json_response({'ready': not self._draining, 'draining': self._draining}, status=status)
 
-    async def _metrics_response(self, _request: web.Request) -> web.Response:
+    async def _metrics_response(self, request: web.Request) -> web.Response:
+        self._reject_non_loopback_admin(request)
         metrics = self.metrics_snapshot()
         lines = [f'ccb_relay_{key} {int(value) if isinstance(value, bool) else value}' for key, value in sorted(metrics.items())]
         return web.Response(text='\n'.join(lines) + '\n', content_type='text/plain')
@@ -343,7 +460,7 @@ class ProductionRelayService:
     async def _host_socket(self, request: web.Request) -> web.StreamResponse:
         self._reject_if_draining()
         self._check_rate_limit(request)
-        ws = web.WebSocketResponse(max_msg_size=0)
+        ws = web.WebSocketResponse(max_msg_size=self.config.protocol_max_msg_bytes())
         await ws.prepare(request)
         endpoint = _PeerEndpoint(
             role='host',
@@ -361,7 +478,7 @@ class ProductionRelayService:
             await endpoint.send_frame(_ack_frame(frame, {'host_id': host_id}))
             await self._host_reader(endpoint)
         except Exception as exc:
-            await self._send_error_and_close(endpoint, 'host-control', _safe_error(exc))
+            await self._send_error_and_close(endpoint, _public_error_code(exc))
         finally:
             if host_id:
                 await self._disconnect_host(host_id)
@@ -371,7 +488,7 @@ class ProductionRelayService:
     async def _phone_socket(self, request: web.Request) -> web.StreamResponse:
         self._reject_if_draining()
         self._check_rate_limit(request)
-        ws = web.WebSocketResponse(max_msg_size=0)
+        ws = web.WebSocketResponse(max_msg_size=self.config.protocol_max_msg_bytes())
         await ws.prepare(request)
         endpoint = _PeerEndpoint(
             role='phone',
@@ -389,7 +506,7 @@ class ProductionRelayService:
             await session.host.send_frame(frame.to_json())
             await self._phone_reader(endpoint, session.session_id)
         except Exception as exc:
-            await self._send_error_and_close(endpoint, session_id or 'phone-control', _safe_error(exc))
+            await self._send_error_and_close(endpoint, _public_error_code(exc))
         finally:
             if session_id:
                 await self._close_session(session_id, reason='phone_disconnected')
@@ -419,12 +536,20 @@ class ProductionRelayService:
     async def _open_phone_session(self, endpoint: _PeerEndpoint, frame: RelayFrame) -> _RelaySessionState:
         if frame.kind != 'client_hello':
             raise MobileRelayError('relay client_hello frame required')
+        rendezvous = self._verify_phone_rendezvous(frame)
         host_id = str(frame.payload['host_id'])
         session_id = frame.session_id
         async with self._lock:
             host = self._hosts.get(host_id)
             if host is None or host.closed:
                 raise MobileRelayError('relay host is not connected')
+            if session_id in self._sessions:
+                raise MobileRelayError('relay session identity already connected')
+        self._rendezvous_replays.claim(
+            replay_key=rendezvous.replay_key(),
+            host_id=host_id,
+            expires_at=rendezvous.expires_at,
+        )
         self._store.reserve_host_session(host_id=host_id, session_id=session_id)
         session = _RelaySessionState(
             session_id=session_id,
@@ -434,13 +559,29 @@ class ProductionRelayService:
             phone=endpoint,
         )
         async with self._lock:
-            if session_id in self._sessions:
-                await self._release_reserved_session(host_id, session_id)
-                raise MobileRelayError('relay session identity already connected')
             self._sessions[session_id] = session
             self._sessions_by_host.setdefault(host_id, set()).add(session_id)
             self._metrics.sessions_opened += 1
         return session
+
+    def _verify_phone_rendezvous(self, frame: RelayFrame) -> RelayRendezvousCapability:
+        payload = frame.payload
+        host_id = str(payload.get('host_id') or '')
+        client_pubkey_b64 = str(payload.get('client_pubkey_b64') or '')
+        phone_nonce_b64 = str(payload.get('phone_nonce_b64') or '')
+        token = str(payload.get('rendezvous_capability') or '')
+        if not token or not phone_nonce_b64:
+            raise MobileRelayError('relay rendezvous capability required')
+        host_public_key_b64 = self._store.host_public_key_for_rendezvous(host_id)
+        return RelayRendezvousCapability.from_token(token).verify(
+            host_public_key_b64=host_public_key_b64,
+            host_id=host_id,
+            session_id=frame.session_id,
+            client_pubkey_b64=client_pubkey_b64,
+            phone_nonce_b64=phone_nonce_b64,
+            audience=self.config.public_origin,
+            now=int(time.time()),
+        )
 
     async def _host_reader(self, endpoint: _PeerEndpoint) -> None:
         while not endpoint.closed and not self._draining:
@@ -550,22 +691,29 @@ class ProductionRelayService:
             raise MobileRelayError('relay peer closed')
         if message.type == WSMsgType.ERROR:
             raise MobileRelayError('relay websocket error')
-        raise MobileRelayError('relay accepts only text JSON frames')
+        raise MobileRelayError('relay frame rejected')
 
-    async def _send_error_and_close(self, endpoint: _PeerEndpoint, session_id: str, reason: str) -> None:
+    async def _send_error_and_close(self, endpoint: _PeerEndpoint, code: str) -> None:
         self._metrics.rejected_frames += 1
         if not endpoint.websocket.closed:
+            public_code = code if code in _PUBLIC_ERROR_MESSAGES else 'relay_rejected'
             error_frame = {
                 'schema_version': 2,
-                'session_id': session_id,
+                'session_id': 'relay-control',
                 'seq': 1,
                 'kind': 'error',
-                'payload': {'reason': reason},
+                'payload': {
+                    'code': public_code,
+                    'message': _PUBLIC_ERROR_MESSAGES[public_code],
+                },
             }
-            await asyncio.wait_for(
-                endpoint.websocket.send_str(_canonical_json(error_frame)),
-                timeout=self.config.write_timeout,
-            )
+            try:
+                await asyncio.wait_for(
+                    endpoint.websocket.send_str(_canonical_json(error_frame)),
+                    timeout=self.config.write_timeout,
+                )
+            except Exception:
+                pass
         await endpoint.close(code=1008, message='relay_error')
 
     async def _close_session(self, session_id: str, *, reason: str) -> None:
@@ -616,13 +764,32 @@ class ProductionRelayService:
 
     def _reject_if_draining(self) -> None:
         if self._draining:
-            raise web.HTTPServiceUnavailable(text='relay draining')
+            raise web.HTTPServiceUnavailable(text=_PUBLIC_ERROR_MESSAGES['relay_unavailable'])
 
     def _check_rate_limit(self, request: web.Request) -> None:
-        peer = request.remote or 'unknown'
+        peer = self._client_rate_limit_key(request)
         if not self._rate_limiter.allow(peer):
             self._metrics.rate_limited += 1
-            raise web.HTTPTooManyRequests(text='relay unauthenticated handshake rate limit exceeded')
+            raise web.HTTPTooManyRequests(text=_PUBLIC_ERROR_MESSAGES['relay_rate_limited'])
+
+    def _client_rate_limit_key(self, request: web.Request) -> str:
+        peer = _parse_ip_address(request.remote or '')
+        if peer is None:
+            return 'unknown'
+        if any(peer in network for network in self._trusted_proxy_networks):
+            header = request.headers.get('X-CCB-Client-IP')
+            if header:
+                client = _strict_single_ip_header(header)
+                forwarded_for = request.headers.get('X-Forwarded-For')
+                if forwarded_for and _strict_single_ip_header(forwarded_for) != client:
+                    raise web.HTTPBadRequest(text=_PUBLIC_ERROR_MESSAGES['relay_rejected'])
+                return str(client)
+        return str(peer)
+
+    def _reject_non_loopback_admin(self, request: web.Request) -> None:
+        peer = _parse_ip_address(request.remote or '')
+        if peer is None or not peer.is_loopback:
+            raise web.HTTPForbidden(text=_PUBLIC_ERROR_MESSAGES['relay_rejected'])
 
     def _note_slow_consumer(self, _endpoint: _PeerEndpoint) -> None:
         self._metrics.slow_consumer_disconnects += 1
@@ -641,12 +808,17 @@ def _ack_frame(frame: RelayFrame, extra: Mapping[str, object] | None = None) -> 
     }
 
 
-def _safe_error(error: BaseException) -> str:
-    text = str(error) or error.__class__.__name__
-    for marker in ('ccb-relay-inv-v2.', 'ccb-relay-cap-v1.'):
-        if marker in text:
-            return 'relay credential rejected'
-    return text[:160]
+def _public_error_code(error: BaseException) -> str:
+    if isinstance(error, RelayAdmissionError):
+        return 'relay_auth_rejected'
+    text = str(error)
+    if 'rendezvous' in text or 'proof' in text or 'host is not active' in text:
+        return 'relay_auth_rejected'
+    if 'too large' in text or 'JSON invalid' in text or 'unknown relay frame kind' in text:
+        return 'relay_frame_rejected'
+    if 'unavailable' in text or 'draining' in text:
+        return 'relay_unavailable'
+    return 'relay_rejected'
 
 
 def _object_map(value: object, name: str) -> dict[str, object]:
@@ -667,9 +839,20 @@ def _parse_listen(value: str) -> tuple[str, int]:
     return host.strip() or '127.0.0.1', int(port_text)
 
 
+def _csv_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    return tuple(item.strip() for item in value.split(',') if item.strip())
+
+
 def _optional_path(value: str | None) -> Path | None:
     text = str(value or '').strip()
     return Path(text).expanduser() if text else None
+
+
+def _optional_int(value: str | None) -> int | None:
+    text = str(value or '').strip()
+    return int(text) if text else None
 
 
 def _is_loopback_host(value: str) -> bool:
@@ -680,6 +863,30 @@ def _is_loopback_host(value: str) -> bool:
         return ipaddress.ip_address(text).is_loopback
     except ValueError:
         return False
+
+
+def _parse_ip_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(str(value or '').strip())
+    except ValueError:
+        return None
+
+
+def _parse_trusted_proxy_networks(values: tuple[str, ...]) -> tuple[ipaddress._BaseNetwork, ...]:
+    networks: list[ipaddress._BaseNetwork] = []
+    for value in values:
+        networks.append(ipaddress.ip_network(value, strict=False))
+    return tuple(networks)
+
+
+def _strict_single_ip_header(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    text = str(value or '').strip()
+    if not text or ',' in text or ' ' in text or '\t' in text:
+        raise web.HTTPBadRequest(text=_PUBLIC_ERROR_MESSAGES['relay_rejected'])
+    parsed = _parse_ip_address(text)
+    if parsed is None:
+        raise web.HTTPBadRequest(text=_PUBLIC_ERROR_MESSAGES['relay_rejected'])
+    return parsed
 
 
 def _require_readable_file(path: Path, label: str) -> None:
@@ -697,6 +904,7 @@ def _require_owner_only_file(path: Path, label: str) -> None:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Run the production CCB Mobile Relay service')
     parser.add_argument('--listen', default=os.environ.get('CCB_RELAY_LISTEN', f'127.0.0.1:{_DEFAULT_LOOPBACK_PORT}'))
+    parser.add_argument('--admin-listen', default=os.environ.get('CCB_RELAY_ADMIN_LISTEN', f'127.0.0.1:{_DEFAULT_ADMIN_PORT}'))
     parser.add_argument('--public-origin', default=os.environ.get('CCB_RELAY_PUBLIC_ORIGIN', 'wss://relay.seemlab.top'))
     parser.add_argument('--db', dest='admission_db_path', default=os.environ.get('CCB_RELAY_ADMISSION_DB', '/var/lib/ccb-mobile-relay/relay-admission.sqlite3'))
     parser.add_argument('--secrets', dest='secrets_path', default=None)
@@ -704,6 +912,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--tls-cert', default=os.environ.get('CCB_RELAY_TLS_CERT'))
     parser.add_argument('--tls-key', default=os.environ.get('CCB_RELAY_TLS_KEY'))
     parser.add_argument('--max-frame-bytes', type=int, default=int(os.environ.get('CCB_RELAY_MAX_FRAME_BYTES', str(64 * 1024))))
+    parser.add_argument('--websocket-max-msg-bytes', type=int, default=_optional_int(os.environ.get('CCB_RELAY_WEBSOCKET_MAX_MSG_BYTES')))
     parser.add_argument('--peer-queue-limit', type=int, default=int(os.environ.get('CCB_RELAY_PEER_QUEUE_LIMIT', '32')))
     parser.add_argument('--write-timeout-seconds', type=float, default=float(os.environ.get('CCB_RELAY_WRITE_TIMEOUT_SECONDS', '5')))
     parser.add_argument('--handshake-timeout-seconds', type=float, default=float(os.environ.get('CCB_RELAY_HANDSHAKE_TIMEOUT_SECONDS', '10')))
@@ -711,6 +920,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--heartbeat-interval-seconds', type=float, default=float(os.environ.get('CCB_RELAY_HEARTBEAT_INTERVAL_SECONDS', '20')))
     parser.add_argument('--unauth-rate-limit', type=int, default=int(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT', '30')))
     parser.add_argument('--unauth-rate-window-seconds', type=float, default=float(os.environ.get('CCB_RELAY_UNAUTH_RATE_LIMIT_WINDOW_SECONDS', '60')))
+    parser.add_argument('--trusted-proxy', action='append', default=None)
     parser.add_argument('--unsafe-plaintext-for-tests', action='store_true')
     return parser
 
@@ -718,9 +928,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     listen_host, listen_port = _parse_listen(str(args.listen))
+    admin_host, admin_port = _parse_listen(str(args.admin_listen))
+    trusted_proxy_cidrs = tuple(args.trusted_proxy or _csv_tuple(os.environ.get('CCB_RELAY_TRUSTED_PROXIES'), default=('127.0.0.1/32', '::1/128')))
     config = ProductionRelayConfig(
         listen_host=listen_host,
         listen_port=listen_port,
+        admin_host=admin_host,
+        admin_port=admin_port,
         public_origin=str(args.public_origin),
         admission_db_path=Path(args.admission_db_path).expanduser(),
         state_dir=Path(args.state_dir).expanduser(),
@@ -728,6 +942,7 @@ def main(argv: list[str] | None = None) -> int:
         tls_key_file=_optional_path(args.tls_key),
         unsafe_plaintext_for_tests=bool(args.unsafe_plaintext_for_tests),
         max_frame_bytes=int(args.max_frame_bytes),
+        websocket_max_msg_bytes=args.websocket_max_msg_bytes,
         peer_queue_limit=int(args.peer_queue_limit),
         write_timeout=float(args.write_timeout_seconds),
         handshake_timeout=float(args.handshake_timeout_seconds),
@@ -735,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
         heartbeat_interval=float(args.heartbeat_interval_seconds),
         unauth_rate_limit=int(args.unauth_rate_limit),
         unauth_rate_limit_window=float(args.unauth_rate_window_seconds),
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
     )
     store = RelayAdmissionStore(
         config.admission_db_path,

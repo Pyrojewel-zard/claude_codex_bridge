@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +24,7 @@ from mobile_gateway.relay_crypto import (
     derive_relay_v2_key_schedule,
     public_key_b64,
 )
+from mobile_gateway.relay import issue_host_rendezvous_capability
 from mobile_gateway.relay_admission import (
     RelayAdmissionSecrets,
     RelayAdmissionStore,
@@ -47,7 +49,7 @@ async def _wss_host_phone_forward_opaque_bidirectional_frames(tmp_path: Path) ->
             assert (await host.receive_json())['kind'] == 'ack'
 
             phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-            client_hello = _client_hello(session_id='relay-session-1', host_id=issued.host_id)
+            client_hello = _client_hello(issued=issued, session_id='relay-session-1', host_id=issued.host_id)
             await phone.send_json(client_hello.to_json())
             assert await host.receive_json() == client_hello.to_json()
 
@@ -106,13 +108,151 @@ async def _fixed_frame_rejection_and_frame_size_limit(tmp_path: Path) -> None:
             await phone.send_json({'schema_version': 2, 'session_id': 's', 'seq': 1, 'kind': 'proxy_connect', 'payload': {}})
             rejected = await phone.receive_json()
             assert rejected['kind'] == 'error'
-            assert 'unknown relay frame kind' in rejected['payload']['reason']
+            assert rejected['payload'] == {'code': 'relay_frame_rejected', 'message': 'relay frame rejected'}
 
             oversized = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
             await oversized.send_str(json.dumps({'padding': 'x' * 1200}))
             rejected = await oversized.receive_json()
             assert rejected['kind'] == 'error'
-            assert 'frame too large' in rejected['payload']['reason']
+            assert rejected['payload'] == {'code': 'relay_frame_rejected', 'message': 'relay frame rejected'}
+    finally:
+        await service.stop()
+
+
+def test_phone_rendezvous_required_before_quota_or_host_forward(tmp_path: Path) -> None:
+    asyncio.run(_phone_rendezvous_required_before_quota_or_host_forward(tmp_path))
+
+
+async def _phone_rendezvous_required_before_quota_or_host_forward(tmp_path: Path) -> None:
+    service, issued = await _started_service(tmp_path, max_sessions=1)
+    canary = 'RENDEZVOUS-CANARY-session-and-kind'
+    try:
+        async with _client_session() as client:
+            host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
+            await host.send_json(_host_register_frame(issued, session_id='host-control').to_json())
+            assert (await host.receive_json())['kind'] == 'ack'
+
+            phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await phone.send_json(
+                {
+                    'schema_version': 2,
+                    'session_id': canary,
+                    'seq': 1,
+                    'kind': 'client_hello',
+                    'payload': {
+                        'host_id': issued.host_id,
+                        'device_id': 'device-public-routing-id',
+                        'client_pubkey_b64': _b64(b'client public key'),
+                        'phone_nonce_b64': _b64(b'fresh phone nonce'),
+                        'supported_versions': [2],
+                    },
+                }
+            )
+            rejected = await phone.receive_json()
+            assert rejected == {
+                'schema_version': 2,
+                'session_id': 'relay-control',
+                'seq': 1,
+                'kind': 'error',
+                'payload': {
+                    'code': 'relay_auth_rejected',
+                    'message': 'relay authentication rejected',
+                },
+            }
+            assert canary not in json.dumps(rejected)
+            assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == 0
+            await _assert_no_host_frame(host)
+            _assert_canary_not_persisted(tmp_path, canary)
+    finally:
+        await service.stop()
+
+
+def test_rendezvous_valid_replay_mismatch_and_expiry(tmp_path: Path) -> None:
+    asyncio.run(_rendezvous_valid_replay_mismatch_and_expiry(tmp_path))
+
+
+async def _rendezvous_valid_replay_mismatch_and_expiry(tmp_path: Path) -> None:
+    service, issued = await _started_service(tmp_path, max_sessions=4)
+    try:
+        async with _client_session() as client:
+            host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
+            await host.send_json(_host_register_frame(issued, session_id='host-control').to_json())
+            assert (await host.receive_json())['kind'] == 'ack'
+
+            valid_hello = _client_hello(issued=issued, session_id='rv-valid', host_id=issued.host_id)
+            phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await phone.send_json(valid_hello.to_json())
+            assert await host.receive_json() == valid_hello.to_json()
+            await phone.close()
+            assert (await host.receive_json())['kind'] == 'close'
+            await _wait_for_active_sessions(issued, 0)
+
+            replay = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await replay.send_json(valid_hello.to_json())
+            assert (await replay.receive_json())['payload']['code'] == 'relay_auth_rejected'
+            assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == 0
+            await _assert_no_host_frame(host)
+
+            token_client_pubkey = _b64(b'token client key')
+            frame_client_pubkey = _b64(b'frame client key')
+            phone_nonce = _b64(b'mismatch phone nonce')
+            mismatch_token = issue_host_rendezvous_capability(
+                issued.private_key,
+                host_id=issued.host_id,
+                session_id='rv-mismatch',
+                client_pubkey_b64=token_client_pubkey,
+                phone_nonce_b64=phone_nonce,
+                audience='wss://relay.seemlab.top',
+                expires_at=int(time.time()) + 30,
+            )
+            mismatch = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await mismatch.send_json(
+                _client_hello(
+                    session_id='rv-mismatch',
+                    host_id=issued.host_id,
+                    client_pubkey_b64=frame_client_pubkey,
+                    phone_nonce_b64=phone_nonce,
+                    rendezvous_capability=mismatch_token,
+                ).to_json()
+            )
+            assert (await mismatch.receive_json())['payload']['code'] == 'relay_auth_rejected'
+
+            wrong_audience = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await wrong_audience.send_json(
+                _client_hello(
+                    issued=issued,
+                    session_id='rv-wrong-audience',
+                    host_id=issued.host_id,
+                    audience='wss://other-relay.invalid',
+                ).to_json()
+            )
+            assert (await wrong_audience.receive_json())['payload']['code'] == 'relay_auth_rejected'
+
+            now = int(time.time())
+            expired_nonce = _b64(b'expired phone nonce')
+            expired_token = issue_host_rendezvous_capability(
+                issued.private_key,
+                host_id=issued.host_id,
+                session_id='rv-expired',
+                client_pubkey_b64=_b64(b'expired client key'),
+                phone_nonce_b64=expired_nonce,
+                audience='wss://relay.seemlab.top',
+                issued_at=now - 60,
+                expires_at=now - 1,
+            )
+            expired = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await expired.send_json(
+                _client_hello(
+                    session_id='rv-expired',
+                    host_id=issued.host_id,
+                    client_pubkey_b64=_b64(b'expired client key'),
+                    phone_nonce_b64=expired_nonce,
+                    rendezvous_capability=expired_token,
+                ).to_json()
+            )
+            assert (await expired.receive_json())['payload']['code'] == 'relay_auth_rejected'
+            assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == 0
+            await _assert_no_host_frame(host)
     finally:
         await service.stop()
 
@@ -128,25 +268,31 @@ async def _host_authentication_revocation_and_quota_release(tmp_path: Path) -> N
             bad_host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
             bad_register = _host_register_frame(issued, session_id='bad-host', signer=generate_host_private_key())
             await bad_host.send_json(bad_register.to_json())
-            assert 'proof rejected' in (await bad_host.receive_json())['payload']['reason']
+            assert (await bad_host.receive_json())['payload'] == {
+                'code': 'relay_auth_rejected',
+                'message': 'relay authentication rejected',
+            }
 
             missing_capability = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
             register_without_forward = _host_register_frame(issued, session_id='missing-forward').to_json()
             register_without_forward['payload']['capabilities'] = ['relay.observe']
             await missing_capability.send_json(register_without_forward)
-            assert 'relay.forward' in (await missing_capability.receive_json())['payload']['reason']
+            assert (await missing_capability.receive_json())['payload']['code'] == 'relay_rejected'
 
             host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
             await host.send_json(_host_register_frame(issued, session_id='host-control').to_json())
             assert (await host.receive_json())['kind'] == 'ack'
 
             phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-            await phone.send_json(_client_hello(session_id='quota-session', host_id=issued.host_id).to_json())
+            await phone.send_json(_client_hello(issued=issued, session_id='quota-session', host_id=issued.host_id).to_json())
             await host.receive_json()
 
             second_phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-            await second_phone.send_json(_client_hello(session_id='quota-session-2', host_id=issued.host_id).to_json())
-            assert 'quota exceeded' in (await second_phone.receive_json())['payload']['reason']
+            await second_phone.send_json(_client_hello(issued=issued, session_id='quota-session-2', host_id=issued.host_id).to_json())
+            assert (await second_phone.receive_json())['payload'] == {
+                'code': 'relay_auth_rejected',
+                'message': 'relay authentication rejected',
+            }
 
             await phone.close()
             await asyncio.sleep(0.05)
@@ -154,8 +300,8 @@ async def _host_authentication_revocation_and_quota_release(tmp_path: Path) -> N
 
             issued.store.revoke_host(issued.host_id, reason='test revoke')
             revoked_phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-            await revoked_phone.send_json(_client_hello(session_id='revoked-session', host_id=issued.host_id).to_json())
-            assert 'not active' in (await revoked_phone.receive_json())['payload']['reason']
+            await revoked_phone.send_json(_client_hello(issued=issued, session_id='revoked-session', host_id=issued.host_id).to_json())
+            assert (await revoked_phone.receive_json())['payload']['code'] == 'relay_auth_rejected'
     finally:
         await service.stop()
 
@@ -183,7 +329,7 @@ async def _heartbeat_and_bounded_peer_queue_backpressure(tmp_path: Path) -> None
             assert (await host.receive_json())['kind'] == 'ack'
 
             phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-            await phone.send_json(_client_hello(session_id='backpressure-session', host_id=issued.host_id).to_json())
+            await phone.send_json(_client_hello(issued=issued, session_id='backpressure-session', host_id=issued.host_id).to_json())
             await host.receive_json()
             service._sessions['backpressure-session'].host.writer_task.cancel()
 
@@ -236,7 +382,10 @@ async def _rate_limit_idle_timeout_restart_and_graceful_drain(tmp_path: Path) ->
             await asyncio.sleep(0.5)
             idle_message = await idle_host.receive()
             if idle_message.type == aiohttp.WSMsgType.TEXT:
-                assert 'idle timeout' in json.loads(idle_message.data)['payload']['reason']
+                assert json.loads(idle_message.data)['payload'] == {
+                    'code': 'relay_rejected',
+                    'message': 'relay request rejected',
+                }
             else:
                 assert idle_host.closed or idle_message.type in {
                     aiohttp.WSMsgType.CLOSE,
@@ -261,7 +410,7 @@ async def _rate_limit_idle_timeout_restart_and_graceful_drain(tmp_path: Path) ->
             assert (await host.receive_json())['kind'] == 'ack'
 
             phone = await client.ws_connect(restarted.url('/v2/phone'), ssl=_client_ssl())
-            await phone.send_json(_client_hello(session_id='drain-session', host_id=issued.host_id).to_json())
+            await phone.send_json(_client_hello(issued=issued, session_id='drain-session', host_id=issued.host_id).to_json())
             await host.receive_json()
             await restarted.drain()
             assert restarted.metrics_snapshot()['draining'] is True
@@ -270,6 +419,142 @@ async def _rate_limit_idle_timeout_restart_and_graceful_drain(tmp_path: Path) ->
             assert excinfo.value.status == 503
     finally:
         await restarted.stop()
+
+
+def test_public_admin_endpoints_absent_and_admin_loopback_only(tmp_path: Path) -> None:
+    asyncio.run(_public_admin_endpoints_absent_and_admin_loopback_only(tmp_path))
+
+
+async def _public_admin_endpoints_absent_and_admin_loopback_only(tmp_path: Path) -> None:
+    service, _issued = await _started_service(tmp_path)
+    try:
+        async with aiohttp.ClientSession(raise_for_status=False) as client:
+            public_metrics = await client.get(_public_http_url(service, '/metrics'), ssl=_client_ssl())
+            assert public_metrics.status == 404
+            public_health = await client.get(_public_http_url(service, '/healthz'), ssl=_client_ssl())
+            assert public_health.status == 404
+            admin_metrics = await client.get(service.admin_url('/metrics'))
+            assert admin_metrics.status == 200
+            assert 'payload_bytes_persisted' in await admin_metrics.text()
+            admin_ready = await client.get(service.admin_url('/readyz'))
+            assert admin_ready.status == 200
+    finally:
+        await service.stop()
+
+
+def test_trusted_proxy_client_ip_rate_limit_and_spoofing(tmp_path: Path) -> None:
+    asyncio.run(_trusted_proxy_client_ip_rate_limit_and_spoofing(tmp_path))
+
+
+async def _trusted_proxy_client_ip_rate_limit_and_spoofing(tmp_path: Path) -> None:
+    service, _issued = await _started_service(tmp_path, unauth_rate_limit=1)
+    try:
+        async with _client_session() as client:
+            first = await client.ws_connect(
+                service.url('/v2/host'),
+                ssl=_client_ssl(),
+                headers={'X-CCB-Client-IP': '203.0.113.10', 'X-Forwarded-For': '203.0.113.10'},
+            )
+            await first.close()
+            with pytest.raises(aiohttp.ClientResponseError) as excinfo:
+                await client.ws_connect(
+                    service.url('/v2/host'),
+                    ssl=_client_ssl(),
+                    headers={'X-CCB-Client-IP': '203.0.113.10', 'X-Forwarded-For': '203.0.113.10'},
+                )
+            assert excinfo.value.status == 429
+
+            other_client_ip = await client.ws_connect(
+                service.url('/v2/host'),
+                ssl=_client_ssl(),
+                headers={'X-CCB-Client-IP': '203.0.113.11', 'X-Forwarded-For': '203.0.113.11'},
+            )
+            await other_client_ip.close()
+
+            with pytest.raises(aiohttp.ClientResponseError) as bad_header:
+                await client.ws_connect(
+                    service.url('/v2/host'),
+                    ssl=_client_ssl(),
+                    headers={'X-CCB-Client-IP': '203.0.113.12, 203.0.113.13'},
+                )
+            assert bad_header.value.status == 400
+    finally:
+        await service.stop()
+
+    untrusted, _issued = await _started_service(
+        tmp_path / 'untrusted',
+        unauth_rate_limit=1,
+        trusted_proxy_cidrs=(),
+    )
+    try:
+        async with _client_session() as client:
+            first = await client.ws_connect(
+                untrusted.url('/v2/host'),
+                ssl=_client_ssl(),
+                headers={'X-CCB-Client-IP': '203.0.113.20'},
+            )
+            await first.close()
+            with pytest.raises(aiohttp.ClientResponseError) as spoofed:
+                await client.ws_connect(
+                    untrusted.url('/v2/host'),
+                    ssl=_client_ssl(),
+                    headers={'X-CCB-Client-IP': '203.0.113.21'},
+                )
+            assert spoofed.value.status == 429
+    finally:
+        await untrusted.stop()
+
+
+def test_protocol_ws_cap_binary_and_canary_redaction(tmp_path: Path) -> None:
+    asyncio.run(_protocol_ws_cap_binary_and_canary_redaction(tmp_path))
+
+
+async def _protocol_ws_cap_binary_and_canary_redaction(tmp_path: Path) -> None:
+    service, _issued = await _started_service(
+        tmp_path,
+        max_frame_bytes=300,
+        websocket_max_msg_bytes=384,
+        unauth_rate_limit=10,
+    )
+    canary = 'PREBUFFER-CANARY-secret-kind-session'
+    try:
+        async with _client_session() as client:
+            semantic = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await semantic.send_json(
+                {
+                    'schema_version': 2,
+                    'session_id': canary,
+                    'seq': 1,
+                    'kind': f'proxy_connect_{canary}',
+                    'payload': {'padding': canary},
+                }
+            )
+            semantic_error = await semantic.receive_json()
+            assert semantic_error['payload'] == {'code': 'relay_frame_rejected', 'message': 'relay frame rejected'}
+            assert canary not in json.dumps(semantic_error)
+
+            binary = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await binary.send_bytes(canary.encode('utf-8'))
+            binary_message = await binary.receive()
+            if binary_message.type == aiohttp.WSMsgType.TEXT:
+                assert canary not in binary_message.data
+                assert json.loads(binary_message.data)['payload']['code'] == 'relay_rejected'
+
+            oversized = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await oversized.send_str(json.dumps({'padding': canary * 80}))
+            oversized_message = await oversized.receive()
+            if oversized_message.type == aiohttp.WSMsgType.TEXT:
+                assert canary not in oversized_message.data
+                assert json.loads(oversized_message.data)['payload']['code'] in {'relay_frame_rejected', 'relay_rejected'}
+            else:
+                assert oversized_message.type in {
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.ERROR,
+                }
+            _assert_canary_not_persisted(tmp_path, canary)
+    finally:
+        await service.stop()
 
 
 def test_tls_is_required_except_explicit_loopback_test_mode(tmp_path: Path) -> None:
@@ -302,6 +587,17 @@ def test_tls_is_required_except_explicit_loopback_test_mode(tmp_path: Path) -> N
             state_dir=tmp_path / 'state',
         ).validate()
 
+    with pytest.raises(ValueError, match='admin listener'):
+        ProductionRelayConfig(
+            listen_host='127.0.0.1',
+            listen_port=0,
+            admin_host='0.0.0.0',
+            tls_cert_file=cert_path,
+            tls_key_file=key_path,
+            admission_db_path=tmp_path / 'relay.sqlite3',
+            state_dir=tmp_path / 'state',
+        ).validate()
+
     with pytest.raises(ValueError, match='loopback'):
         ProductionRelayConfig(
             listen_host='0.0.0.0',
@@ -325,11 +621,14 @@ async def _started_service(
     max_sessions: int = 4,
     max_bytes_per_day: int = 1024 * 1024,
     max_frame_bytes: int = 4096,
+    websocket_max_msg_bytes: int | None = None,
     peer_queue_limit: int = 4,
     idle_timeout: float = 5.0,
     unauth_rate_limit: int = 100,
     unauth_rate_limit_window: float = 60.0,
+    trusted_proxy_cidrs: tuple[str, ...] = ('127.0.0.1/32', '::1/128'),
 ) -> tuple[ProductionRelayService, _IssuedHost]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     cert_path, key_path = _write_self_signed_cert(tmp_path)
     secrets = RelayAdmissionSecrets.generate_for_testing()
     store = RelayAdmissionStore(tmp_path / 'relay.sqlite3', admission_secrets=secrets)
@@ -346,17 +645,21 @@ async def _started_service(
     config = ProductionRelayConfig(
         listen_host='127.0.0.1',
         listen_port=0,
+        admin_host='127.0.0.1',
+        admin_port=0,
         tls_cert_file=cert_path,
         tls_key_file=key_path,
         admission_db_path=tmp_path / 'relay.sqlite3',
         state_dir=tmp_path / 'state',
         max_frame_bytes=max_frame_bytes,
+        websocket_max_msg_bytes=websocket_max_msg_bytes,
         peer_queue_limit=peer_queue_limit,
         write_timeout=1.0,
         idle_timeout=idle_timeout,
         heartbeat_interval=0.1,
         unauth_rate_limit=unauth_rate_limit,
         unauth_rate_limit_window=unauth_rate_limit_window,
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
     )
     service = ProductionRelayService(config, admission_store=store)
     await service.start()
@@ -392,17 +695,44 @@ def _host_register_frame(
     )
 
 
-def _client_hello(*, session_id: str, host_id: str):
+def _client_hello(
+    *,
+    session_id: str,
+    host_id: str,
+    issued: _IssuedHost | None = None,
+    client_pubkey_b64: str | None = None,
+    phone_nonce_b64: str | None = None,
+    rendezvous_capability: str | None = None,
+    expires_at: int | None = None,
+    audience: str = 'wss://relay.seemlab.top',
+):
+    client_pubkey = client_pubkey_b64 or _b64(b'client public key')
+    phone_nonce = phone_nonce_b64 or _b64(f'phone nonce {session_id}'.encode('utf-8'))
+    token = rendezvous_capability
+    if token is None and issued is not None:
+        token = issue_host_rendezvous_capability(
+            issued.private_key,
+            host_id=host_id,
+            session_id=session_id,
+            client_pubkey_b64=client_pubkey,
+            phone_nonce_b64=phone_nonce,
+            audience=audience,
+            expires_at=expires_at or (int(time.time()) + 30),
+        )
+    payload: dict[str, object] = {
+        'host_id': host_id,
+        'device_id': 'device-public-routing-id',
+        'client_pubkey_b64': client_pubkey,
+        'phone_nonce_b64': phone_nonce,
+        'supported_versions': [2],
+    }
+    if token is not None:
+        payload['rendezvous_capability'] = token
     return _RelayFrame(
         session_id=session_id,
         seq=1,
         kind='client_hello',
-        payload={
-            'host_id': host_id,
-            'device_id': 'device-public-routing-id',
-            'client_pubkey_b64': _b64(b'client public key'),
-            'supported_versions': [2],
-        },
+        payload=payload,
     )
 
 
@@ -471,6 +801,23 @@ class _RelayFrame:
             'kind': self.kind,
             'payload': self.payload,
         }
+
+
+async def _assert_no_host_frame(host: aiohttp.ClientWebSocketResponse) -> None:
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(host.receive(), timeout=0.05)
+
+
+async def _wait_for_active_sessions(issued: _IssuedHost, expected: int) -> None:
+    for _ in range(40):
+        if issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == expected:
+            return
+        await asyncio.sleep(0.025)
+    assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == expected
+
+
+def _public_http_url(service: ProductionRelayService, path: str) -> str:
+    return service.url(path).replace('wss://', 'https://').replace('ws://', 'http://')
 
 
 def _client_session() -> aiohttp.ClientSession:

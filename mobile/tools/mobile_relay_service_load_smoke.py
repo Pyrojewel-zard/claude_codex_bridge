@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from mobile_gateway.relay import issue_host_rendezvous_capability
 from mobile_gateway.relay_admission import (
     RelayAdmissionSecrets,
     RelayAdmissionStore,
@@ -96,7 +97,7 @@ async def run_load_smoke(args: argparse.Namespace) -> dict[str, object]:
                 host = hosts[index % len(hosts)]
                 session_id = f'load-session-{index}'
                 phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-                await phone.send_json(_client_hello(session_id, host.host_id, index))
+                await phone.send_json(_client_hello(session_id, host, index, service.config.public_origin))
                 observed_client_hello = await host.ws.receive_json()
                 if observed_client_hello.get('kind') != 'client_hello':
                     raise RuntimeError(f'host did not receive client_hello: {observed_client_hello}')
@@ -193,16 +194,29 @@ def _host_register(host_id: str, private_key: Any, label: str) -> dict[str, obje
     }
 
 
-def _client_hello(session_id: str, host_id: str, index: int) -> dict[str, object]:
+def _client_hello(session_id: str, host: _Host, index: int, audience: str) -> dict[str, object]:
+    client_pubkey_b64 = _b64(f'client-{index}'.encode('utf-8'))
+    phone_nonce_b64 = _b64(f'phone-nonce-{index}'.encode('utf-8'))
+    rendezvous_capability = issue_host_rendezvous_capability(
+        host.private_key,
+        host_id=host.host_id,
+        session_id=session_id,
+        client_pubkey_b64=client_pubkey_b64,
+        phone_nonce_b64=phone_nonce_b64,
+        audience=audience,
+        expires_at=int(time.time()) + 60,
+    )
     return {
         'schema_version': 2,
         'session_id': session_id,
         'seq': 1,
         'kind': 'client_hello',
         'payload': {
-            'host_id': host_id,
+            'host_id': host.host_id,
             'device_id': f'load-phone-{index}',
-            'client_pubkey_b64': _b64(f'client-{index}'.encode('utf-8')),
+            'client_pubkey_b64': client_pubkey_b64,
+            'phone_nonce_b64': phone_nonce_b64,
+            'rendezvous_capability': rendezvous_capability,
             'supported_versions': [2],
         },
     }

@@ -1,19 +1,168 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import secrets
+import time
 from dataclasses import dataclass
 from typing import Mapping
+
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from .relay_crypto import RELAY_PROHIBITED_PLAINTEXT_FIELDS, RELAY_PROTOCOL_VERSION
 
 
 _SCHEMA_VERSION = RELAY_PROTOCOL_VERSION
+RENDEZVOUS_CAPABILITY_PREFIX = 'ccb-relay-rv-v1'
 
 _PROHIBITED_CLEARTEXT_KEYS = set(RELAY_PROHIBITED_PLAINTEXT_FIELDS)
+_JSON_SEPARATORS = (',', ':')
 
 
 class MobileRelayError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class RelayRendezvousCapability:
+    host_id: str
+    session_id: str
+    client_pubkey_b64: str
+    phone_nonce_b64: str
+    audience: str
+    nonce_b64: str
+    issued_at: int
+    expires_at: int
+    signature_b64: str
+    schema_version: int = _SCHEMA_VERSION
+
+    @classmethod
+    def from_token(cls, token: str) -> 'RelayRendezvousCapability':
+        try:
+            prefix, payload_b64, signature_b64 = str(token or '').split('.', 2)
+        except ValueError as exc:
+            raise MobileRelayError('relay rendezvous capability rejected') from exc
+        if prefix != RENDEZVOUS_CAPABILITY_PREFIX:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        try:
+            payload = json.loads(_b64decode(payload_b64).decode('utf-8'))
+        except Exception as exc:
+            raise MobileRelayError('relay rendezvous capability rejected') from exc
+        if not isinstance(payload, Mapping):
+            raise MobileRelayError('relay rendezvous capability rejected')
+        if _required_text(payload.get('typ'), 'rendezvous.typ') != RENDEZVOUS_CAPABILITY_PREFIX:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        return cls(
+            schema_version=_int(payload.get('schema_version'), fallback=0),
+            host_id=_required_text(payload.get('host_id'), 'rendezvous.host_id'),
+            session_id=_required_text(payload.get('session_id'), 'rendezvous.session_id'),
+            client_pubkey_b64=_required_base64_text(payload.get('client_pubkey_b64'), 'rendezvous.client_pubkey_b64'),
+            phone_nonce_b64=_required_base64_text(payload.get('phone_nonce_b64'), 'rendezvous.phone_nonce_b64'),
+            audience=_required_text(payload.get('aud'), 'rendezvous.aud'),
+            nonce_b64=_required_base64_text(payload.get('nonce_b64'), 'rendezvous.nonce_b64'),
+            issued_at=_positive_int(payload.get('iat'), 'rendezvous.iat'),
+            expires_at=_positive_int(payload.get('exp'), 'rendezvous.exp'),
+            signature_b64=_required_base64_text(signature_b64, 'rendezvous.signature_b64'),
+        )._validate()
+
+    def verify(
+        self,
+        *,
+        host_public_key_b64: str,
+        host_id: str,
+        session_id: str,
+        client_pubkey_b64: str,
+        phone_nonce_b64: str,
+        audience: str,
+        now: int | None = None,
+    ) -> 'RelayRendezvousCapability':
+        self._validate()
+        current = int(time.time()) if now is None else int(now)
+        if self.expires_at <= current or self.issued_at > current + 30:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        if self.host_id != host_id or self.session_id != session_id:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        if self.client_pubkey_b64 != client_pubkey_b64 or self.phone_nonce_b64 != phone_nonce_b64:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        if self.audience != audience:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        try:
+            public_key = ed25519.Ed25519PublicKey.from_public_bytes(_b64decode(host_public_key_b64))
+            public_key.verify(_b64decode(self.signature_b64), _rendezvous_signing_payload(self._payload()))
+        except Exception as exc:  # pragma: no cover - backend exception class can vary
+            raise MobileRelayError('relay rendezvous capability rejected') from exc
+        return self
+
+    def replay_key(self) -> str:
+        payload = {
+            'aud': self.audience,
+            'client_pubkey_b64': self.client_pubkey_b64,
+            'host_id': self.host_id,
+            'nonce_b64': self.nonce_b64,
+            'phone_nonce_b64': self.phone_nonce_b64,
+            'session_id': self.session_id,
+        }
+        return hashlib.sha256(_canonical_json(payload).encode('utf-8')).hexdigest()
+
+    def _payload(self) -> dict[str, object]:
+        return {
+            'typ': RENDEZVOUS_CAPABILITY_PREFIX,
+            'schema_version': self.schema_version,
+            'host_id': self.host_id,
+            'session_id': self.session_id,
+            'client_pubkey_b64': self.client_pubkey_b64,
+            'phone_nonce_b64': self.phone_nonce_b64,
+            'aud': self.audience,
+            'nonce_b64': self.nonce_b64,
+            'iat': self.issued_at,
+            'exp': self.expires_at,
+        }
+
+    def _validate(self) -> 'RelayRendezvousCapability':
+        if self.schema_version != _SCHEMA_VERSION:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        if self.expires_at <= self.issued_at:
+            raise MobileRelayError('relay rendezvous capability rejected')
+        _required_text(self.host_id, 'rendezvous.host_id')
+        _required_text(self.session_id, 'rendezvous.session_id')
+        _required_text(self.audience, 'rendezvous.aud')
+        _required_base64_text(self.client_pubkey_b64, 'rendezvous.client_pubkey_b64')
+        _required_base64_text(self.phone_nonce_b64, 'rendezvous.phone_nonce_b64')
+        _required_base64_text(self.nonce_b64, 'rendezvous.nonce_b64')
+        _required_base64_text(self.signature_b64, 'rendezvous.signature_b64')
+        return self
+
+
+def issue_host_rendezvous_capability(
+    private_key: ed25519.Ed25519PrivateKey,
+    *,
+    host_id: str,
+    session_id: str,
+    client_pubkey_b64: str,
+    phone_nonce_b64: str,
+    audience: str,
+    expires_at: int,
+    issued_at: int | None = None,
+    nonce_b64: str | None = None,
+) -> str:
+    payload = {
+        'typ': RENDEZVOUS_CAPABILITY_PREFIX,
+        'schema_version': _SCHEMA_VERSION,
+        'host_id': _required_text(host_id, 'rendezvous.host_id'),
+        'session_id': _required_text(session_id, 'rendezvous.session_id'),
+        'client_pubkey_b64': _required_base64_text(client_pubkey_b64, 'rendezvous.client_pubkey_b64'),
+        'phone_nonce_b64': _required_base64_text(phone_nonce_b64, 'rendezvous.phone_nonce_b64'),
+        'aud': _required_text(audience, 'rendezvous.aud'),
+        'nonce_b64': _required_base64_text(nonce_b64 or _b64(secrets.token_bytes(18)), 'rendezvous.nonce_b64'),
+        'iat': int(time.time()) if issued_at is None else int(issued_at),
+        'exp': _positive_int(expires_at, 'rendezvous.exp'),
+    }
+    if int(payload['exp']) <= int(payload['iat']):
+        raise MobileRelayError('relay rendezvous capability rejected')
+    signature = private_key.sign(_rendezvous_signing_payload(payload))
+    payload_b64 = _b64(_canonical_json(payload).encode('utf-8'))
+    return f'{RENDEZVOUS_CAPABILITY_PREFIX}.{payload_b64}.{_b64(signature)}'
 
 
 @dataclass(frozen=True)
@@ -148,7 +297,8 @@ class RelayFrame:
         elif self.kind == 'ack' and 'ack_seq' in self.payload:
             _positive_int(self.payload.get('ack_seq'), 'ack.ack_seq')
         elif self.kind == 'error':
-            _required_text(self.payload.get('reason'), 'error.reason')
+            _required_text(self.payload.get('code'), 'error.code')
+            _required_text(self.payload.get('message'), 'error.message')
         elif self.kind == 'close' and 'reason' in self.payload:
             _required_text(self.payload.get('reason'), 'close.reason')
 
@@ -431,6 +581,22 @@ def _base64_padding(value: str) -> bytes:
     return (text + '=' * (-len(text) % 4)).encode('ascii')
 
 
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode('ascii').rstrip('=')
+
+
+def _b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(_base64_padding(value))
+
+
+def _canonical_json(value: Mapping[str, object]) -> str:
+    return json.dumps(dict(value), ensure_ascii=True, sort_keys=True, separators=_JSON_SEPARATORS)
+
+
+def _rendezvous_signing_payload(payload: Mapping[str, object]) -> bytes:
+    return b'ccb-relay-rendezvous-v1\n' + _canonical_json(payload).encode('utf-8')
+
+
 def _int(value: object, *, fallback: int) -> int:
     try:
         return int(value)
@@ -474,7 +640,10 @@ __all__ = [
     'LocalRelayServerHarness',
     'MobileGatewayRelayOutboundClient',
     'MobileRelayError',
+    'RENDEZVOUS_CAPABILITY_PREFIX',
     'RelayFrame',
     'RelayHandshakeTranscript',
     'RelayHostRegistration',
+    'RelayRendezvousCapability',
+    'issue_host_rendezvous_capability',
 ]
