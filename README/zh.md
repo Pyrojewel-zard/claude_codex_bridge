@@ -117,6 +117,20 @@ mkdir -p .ccb
 
 点击 CCB sidebar 左上角的 **⚙ 设置** 图标即可打开本地配置控制面；也可以在项目目录运行 `ccb config ui`。
 
+#### 固化本地 Config UI 访问
+
+Config UI 始终只绑定 loopback。若需要固定本地端口和 token，请在 `.ccb/ccb.config` 中配置 token 的**来源**，不要将 token 明文写入该文件：
+
+```toml
+[config_ui]
+port = 43123
+token_env = "CCB_CONFIG_UI_TOKEN"
+# 或使用下面这一项替代 token_env：
+# token_file = ".ccb/config-ui.token"
+```
+
+`--port` 仍可覆盖单次启动端口。`token_file` 必须是项目内相对路径、不能是符号链接，并且在 POSIX 上应仅允许文件所有者读取（`chmod 600 .ccb/config-ui.token`）。未配置 token 来源时，CCB 保持原有的随机 token 与临时端口行为。CLI 只输出 loopback URL 和 token 来源，不会输出 token 值。
+
 <p align="center">
   <img src="../assets/readme_v7/config-control-panel.png" alt="CCB 配置控制面正在编辑默认 demo agent" width="960">
 </p>

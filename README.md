@@ -123,6 +123,20 @@ A blank project starts light: CCB opens one `main` window with a single agent na
 
 Click the **⚙ Settings** icon at the top-left of the CCB sidebar to open the local configuration control panel. You can also run `ccb config ui` from the project directory.
 
+#### Persistent local Config UI access
+
+The Config UI always binds to loopback. To use a stable local port and token, configure a token **source** in `.ccb/ccb.config`; never put a literal token in that file:
+
+```toml
+[config_ui]
+port = 43123
+token_env = "CCB_CONFIG_UI_TOKEN"
+# Or use this instead of token_env:
+# token_file = ".ccb/config-ui.token"
+```
+
+`--port` remains a one-run override. `token_file` must be project-relative, non-symlinked, and owner-only (`chmod 600 .ccb/config-ui.token` on POSIX). Without a token source, CCB keeps the existing random token and ephemeral-port behavior. The CLI prints only the loopback URL and token source, never the token value.
+
 <p align="center">
   <img src="assets/readme_v7/config-control-panel.png" alt="CCB configuration control panel editing the default demo agent" width="960">
 </p>

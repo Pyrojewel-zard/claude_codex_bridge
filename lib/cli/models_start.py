@@ -227,7 +227,7 @@ class ParsedConfigValidateCommand:
 class ParsedConfigUiCommand:
     project: str | None
     no_open: bool = False
-    port: int = 0
+    port: int | None = None
     kind: str = 'config-ui'
 
 
