@@ -6,7 +6,10 @@ import '../repository/gateway_mobile_ccb_repository.dart';
 import '../repository/mobile_ccb_repository.dart';
 import '../transport/gateway_route_diagnostics.dart';
 import '../transport/gateway_terminal_transport.dart';
+import '../transport/gateway_transport.dart';
 import '../transport/http_gateway_transport.dart';
+import '../transport/relay_socket_gateway_transport.dart';
+import '../transport/route_provider.dart';
 import '../transport/terminal_transport.dart';
 
 typedef GatewayPairingClaimAndStore =
@@ -58,10 +61,7 @@ Future<GatewayPairingPayload?> defaultPairingScanner(BuildContext context) {
 
 MobileCcbRepository defaultGatewayRepositoryFactory(GatewayPairedHost host) {
   return GatewayMobileCcbRepository(
-    transport: HttpGatewayTransport(
-      profile: host.profile,
-      deviceToken: host.deviceToken,
-    ),
+    transport: _gatewayTransportFor(host),
   );
 }
 
@@ -69,25 +69,36 @@ TerminalTransport defaultGatewayTerminalTransportFactory(
   GatewayPairedHost host,
 ) {
   return GatewayTerminalTransport(
-    transport: HttpGatewayTransport(
-      profile: host.profile,
-      deviceToken: host.deviceToken,
-    ),
+    transport: _gatewayTransportFor(host),
   );
 }
 
 Future<GatewayRouteDiagnosticReport> defaultGatewayRouteDiagnostics(
   GatewayPairedHost host,
 ) async {
-  final transport = HttpGatewayTransport(
-    profile: host.profile,
-    deviceToken: host.deviceToken,
-  );
+  final transport = _gatewayTransportFor(host);
   try {
     return await GatewayRouteDiagnostics(
       transport: transport,
     ).check(projectId: host.projectId);
   } finally {
-    transport.close(force: true);
+    if (transport is HttpGatewayTransport) {
+      transport.close(force: true);
+    } else if (transport is RelaySocketGatewayTransport) {
+      await transport.close(force: true);
+    }
   }
+}
+
+GatewayTransport _gatewayTransportFor(GatewayPairedHost host) {
+  if (host.profile.routeProvider.kind == RouteProviderKind.relay) {
+    return RelaySocketGatewayTransport(
+      profile: host.profile,
+      deviceToken: host.deviceToken,
+    );
+  }
+  return HttpGatewayTransport(
+    profile: host.profile,
+    deviceToken: host.deviceToken,
+  );
 }

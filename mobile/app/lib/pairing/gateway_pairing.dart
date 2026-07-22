@@ -128,6 +128,7 @@ class GatewayPairedHost {
           _optionalUri(hostProfile['gateway_url']) ?? pairing.gatewayUrl,
       websocketUrl: _optionalUri(hostProfile['websocket_url']),
       hostFingerprint: _optionalText(hostProfile['server_fingerprint']),
+      relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(hostProfile),
       capabilities: _stringSet(hostProfile['capabilities']),
       diagnostics: _stringMap(hostProfile['diagnostics']),
     );
@@ -156,6 +157,7 @@ class GatewayPairedHost {
       gatewayUrl: _requiredUri(profileJson['gateway_url'], 'gateway_url'),
       websocketUrl: _optionalUri(profileJson['websocket_url']),
       hostFingerprint: _optionalText(profileJson['server_fingerprint']),
+      relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(profileJson),
       capabilities: _stringSet(profileJson['capabilities']),
       diagnostics: _stringMap(profileJson['diagnostics']),
     );

@@ -2,6 +2,21 @@
 
 Date: 2026-06-29
 
+## 2026-07-22: Public Relay Package D Local Implementation
+
+Evidence:
+
+- [public-relay-d-package-20260722.md](public-relay-d-package-20260722.md)
+
+Result:
+
+- Local Package D implementation checkpoint only: Python outbound host
+  connector, loopback operation allowlist, v2 E2EE request/response proxy,
+  Flutter socket transport surface, and local docs are present.
+- Python relay connector/service/crypto/admission focused tests passed.
+- Flutter/Dart execution, public Alibaba WSS, and Android public-route
+  acceptance are not claimed.
+
 ## 2026-07-22: Public Relay Package A/B Candidate
 
 Evidence:

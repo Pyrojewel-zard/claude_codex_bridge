@@ -18,6 +18,7 @@ class RelayGatewayEnvelope {
     required this.operation,
     required this.ciphertextB64,
     required this.nonceB64,
+    this.direction,
     this.schemaVersion = relayProtocolVersion,
     this.keyId,
   }) {
@@ -30,6 +31,7 @@ class RelayGatewayEnvelope {
   final String operation;
   final String ciphertextB64;
   final String nonceB64;
+  final RelayCryptoDirection? direction;
   final String? keyId;
 
   factory RelayGatewayEnvelope.fromJson(Map<String, Object?> json) {
@@ -41,6 +43,7 @@ class RelayGatewayEnvelope {
       sessionId: _requiredText(json['session_id'], 'session_id'),
       sequence: _requiredSequence(json['seq'], 'seq'),
       operation: _requiredText(json['op'], 'op'),
+      direction: _optionalRelayDirection(json['direction']),
       ciphertextB64: _requiredBase64Text(
         json['ciphertext_b64'],
         'ciphertext_b64',
@@ -56,6 +59,7 @@ class RelayGatewayEnvelope {
       'schema_version': schemaVersion,
       'session_id': sessionId,
       'seq': sequence,
+      if (direction != null) 'direction': direction!.wireName,
       'op': operation,
       'ciphertext_b64': ciphertextB64,
       'nonce_b64': nonceB64,
@@ -114,6 +118,7 @@ class _RelayV2AeadEnvelopeCodec implements _RelayGatewayEnvelopeCodec {
       sessionId: frame.sessionId,
       sequence: frame.sequence,
       operation: frame.operation,
+      direction: frame.direction,
       ciphertextB64: frame.ciphertextB64,
       nonceB64: frame.nonceB64,
       keyId: frame.keyId,
@@ -426,6 +431,14 @@ String _requiredBase64Text(Object? value, String name) {
 String? _optionalText(Object? value) {
   final text = (value ?? '').toString().trim();
   return text.isEmpty ? null : text;
+}
+
+RelayCryptoDirection? _optionalRelayDirection(Object? value) {
+  final text = _optionalText(value);
+  if (!_hasText(text)) {
+    return null;
+  }
+  return RelayCryptoDirection.fromWireName(text!);
 }
 
 int _int(Object? value, {required int fallback}) {
