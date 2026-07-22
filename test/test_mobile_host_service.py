@@ -755,6 +755,72 @@ def test_mobile_host_serve_removes_current_state_after_server_exits(
     assert not paths.state_path.exists()
 
 
+def test_mobile_host_serve_runs_relay_connector_with_activated_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile-relay'
+    paths = mobile_host_service_paths(state_dir)
+    events: list[str] = []
+    credentials = SimpleNamespace(host_id='host-activated')
+
+    class _Handle:
+        summary = {
+            'host_id': 'host-activated',
+            'listen': '127.0.0.1:8787',
+            'local_gateway_url': 'http://127.0.0.1:8787',
+            'gateway_url': 'http://127.0.0.1:8787',
+            'route_provider': 'relay',
+            'pairing': _pairing_payload(),
+        }
+
+        def serve_forever(self) -> None:
+            state = json.loads(paths.state_path.read_text(encoding='utf-8'))
+            assert state['relay_outbound']['state'] == 'registered'
+            events.append('serve')
+
+        def close(self) -> None:
+            events.append('gateway-stop')
+
+    class _Runtime:
+        def __init__(self, *, credentials, gateway_origin) -> None:
+            assert credentials.host_id == 'host-activated'
+            assert gateway_origin == 'http://127.0.0.1:8787'
+
+        def start(self) -> None:
+            events.append('relay-start')
+
+        def stop(self) -> None:
+            events.append('relay-stop')
+
+        def diagnostics(self) -> dict[str, object]:
+            return {'state': 'registered', 'host_id': 'host-activated'}
+
+    def _prepare(_command, *, host_id, **_kwargs):
+        assert host_id == 'host-activated'
+        return _Handle()
+
+    monkeypatch.setattr(mobile_host, 'load_relay_host_credentials', lambda _path: credentials)
+    monkeypatch.setattr(mobile_host, 'RelayHostConnectorRuntime', _Runtime)
+    monkeypatch.setattr(mobile_host, 'prepare_server_mobile_gateway', _prepare)
+
+    code = run_mobile_host_serve_command(
+        SimpleNamespace(
+            listen='127.0.0.1:8787',
+            public_url=None,
+            route_provider='relay',
+            state_dir=str(state_dir),
+            generation=8,
+            host_id=None,
+        ),
+        script_root=tmp_path / 'source',
+    )
+
+    assert code == 0
+    assert events == ['relay-start', 'serve', 'relay-stop', 'gateway-stop']
+    assert not paths.state_path.exists()
+
+
 def test_mobile_host_serve_reports_state_write_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

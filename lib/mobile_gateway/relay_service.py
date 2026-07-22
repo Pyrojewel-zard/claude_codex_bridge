@@ -148,6 +148,8 @@ class ProductionRelayConfig:
 
 @dataclass
 class _Metrics:
+    activation_attempts: int = 0
+    activation_successes: int = 0
     host_connections: int = 0
     phone_connections: int = 0
     sessions_opened: int = 0
@@ -161,6 +163,8 @@ class _Metrics:
 
     def snapshot(self, *, draining: bool, active_hosts: int, active_sessions: int) -> dict[str, object]:
         return {
+            'activation_attempts': self.activation_attempts,
+            'activation_successes': self.activation_successes,
             'host_connections': self.host_connections,
             'phone_connections': self.phone_connections,
             'sessions_opened': self.sessions_opened,
@@ -423,6 +427,7 @@ class ProductionRelayService:
             self._store.reconcile_active_sessions()
             self._draining = False
             app = web.Application(client_max_size=self.config.protocol_max_msg_bytes())
+            app.router.add_post('/v2/activate', self._activate_host)
             app.router.add_get('/v2/host', self._host_socket)
             app.router.add_get('/v2/phone', self._phone_socket)
             runner = web.AppRunner(app, access_log=None)
@@ -534,6 +539,30 @@ class ProductionRelayService:
         metrics = self.metrics_snapshot()
         lines = [f'ccb_relay_{key} {int(value) if isinstance(value, bool) else value}' for key, value in sorted(metrics.items())]
         return web.Response(text='\n'.join(lines) + '\n', content_type='text/plain')
+
+    async def _activate_host(self, request: web.Request) -> web.Response:
+        self._reject_if_draining()
+        self._check_rate_limit(request)
+        self._metrics.activation_attempts += 1
+        try:
+            payload = await request.json(loads=json.loads)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise web.HTTPBadRequest(text=_PUBLIC_ERROR_MESSAGES['relay_rejected']) from None
+        if not isinstance(payload, Mapping):
+            raise web.HTTPBadRequest(text=_PUBLIC_ERROR_MESSAGES['relay_rejected'])
+        invitation = str(payload.get('invitation') or '').strip()
+        host_public_key_b64 = str(payload.get('host_public_key_b64') or '').strip()
+        if not invitation or not host_public_key_b64:
+            raise web.HTTPBadRequest(text=_PUBLIC_ERROR_MESSAGES['relay_rejected'])
+        try:
+            credential = self._store.claim_invitation(
+                invitation,
+                host_public_key_b64=host_public_key_b64,
+            )
+        except RelayAdmissionError:
+            raise web.HTTPUnauthorized(text=_PUBLIC_ERROR_MESSAGES['relay_auth_rejected']) from None
+        self._metrics.activation_successes += 1
+        return web.json_response(credential.to_json(), status=201)
 
     async def _host_socket(self, request: web.Request) -> web.StreamResponse:
         self._reject_if_draining()

@@ -14,7 +14,7 @@ import aiohttp
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import rsa, x25519
 from cryptography.x509.oid import NameOID
 
 from mobile_gateway.relay_crypto import (
@@ -33,6 +33,132 @@ from mobile_gateway.relay_admission import (
     sign_host_session_proof,
 )
 from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
+from mobile_gateway.relay_host_credentials import (
+    RelayHostCredentials,
+    activate_relay_host,
+    load_relay_host_credentials,
+)
+from mobile_gateway.relay_host_runtime import RelayHostConnectorRuntime
+
+
+def test_public_activation_consumes_invitation_once_without_persisting_secret(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_public_activation_consumes_invitation_once(tmp_path))
+
+
+async def _public_activation_consumes_invitation_once(tmp_path: Path) -> None:
+    service, issued = await _started_service(tmp_path)
+    invitation = issued.store.issue_invitation(ttl_seconds=120)
+    signing_key = generate_host_private_key()
+    raw_invitation = invitation.invitation
+    url = service.url('/v2/activate').replace('wss://', 'https://', 1)
+    try:
+        async with _client_session() as client:
+            response = await client.post(
+                url,
+                ssl=_client_ssl(),
+                json={
+                    'invitation': raw_invitation,
+                    'host_public_key_b64': host_public_key_b64(signing_key),
+                },
+            )
+            assert response.status == 201
+            credential = await response.json()
+            assert credential['type'] == 'ccb_relay_host_credential_v1'
+            assert credential['invitation_id'] == invitation.invite_id
+            assert credential['host_public_key_b64'] == host_public_key_b64(
+                signing_key
+            )
+            assert raw_invitation not in json.dumps(credential, sort_keys=True)
+
+            with pytest.raises(aiohttp.ClientResponseError) as replay_error:
+                await client.post(
+                    url,
+                    ssl=_client_ssl(),
+                    json={
+                        'invitation': raw_invitation,
+                        'host_public_key_b64': host_public_key_b64(signing_key),
+                    },
+                )
+            assert replay_error.value.status == 401
+            assert raw_invitation not in str(replay_error.value)
+
+        assert issued.store.invitation_status(invitation.invite_id)['state'] == 'consumed'
+        assert service.metrics_snapshot()['activation_attempts'] == 2
+        assert service.metrics_snapshot()['activation_successes'] == 1
+        _assert_canary_not_persisted(tmp_path, raw_invitation)
+    finally:
+        await service.stop()
+
+
+def test_host_activation_client_persists_owner_only_bound_keys(tmp_path: Path) -> None:
+    asyncio.run(_host_activation_client_persists_owner_only_bound_keys(tmp_path))
+
+
+async def _host_activation_client_persists_owner_only_bound_keys(
+    tmp_path: Path,
+) -> None:
+    service, issued = await _started_service(tmp_path)
+    invitation = issued.store.issue_invitation(ttl_seconds=120)
+    credential_path = tmp_path / 'client-state' / 'relay-host-credentials.json'
+    try:
+        credentials = await asyncio.to_thread(
+            activate_relay_host,
+            relay_origin=service.url('/').removesuffix('/'),
+            invitation=invitation.invitation,
+            credential_path=credential_path,
+            ssl_context=_client_ssl(),
+        )
+        loaded = load_relay_host_credentials(credential_path)
+
+        assert loaded == credentials
+        assert credential_path.stat().st_mode & 0o777 == 0o600
+        assert credentials.host_id == issued.store.invitation_status(
+            invitation.invite_id
+        )['host_id']
+        assert credentials.host_signing_public_key_b64 == issued.store.host_public_key_for_rendezvous(
+            credentials.host_id
+        )
+        assert invitation.invitation not in credential_path.read_text(encoding='utf-8')
+    finally:
+        await service.stop()
+
+
+def test_host_runtime_registers_real_outbound_connector_and_stops_cleanly(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_host_runtime_registers_and_stops(tmp_path))
+
+
+async def _host_runtime_registers_and_stops(tmp_path: Path) -> None:
+    service, issued = await _started_service(tmp_path)
+    credentials = RelayHostCredentials(
+        relay_origin=service.url('/').removesuffix('/'),
+        host_id=issued.host_id,
+        invitation_id='already-consumed',
+        host_signing_private_key_b64=_raw_private_key_b64(issued.private_key),
+        host_crypto_private_key_b64=_raw_private_key_b64(
+            x25519.X25519PrivateKey.generate()
+        ),
+        activated_at='2026-07-22T00:00:00+00:00',
+    )
+    runtime = RelayHostConnectorRuntime(
+        credentials=credentials,
+        gateway_origin='http://127.0.0.1:9',
+        tls_context=_client_ssl(),
+    )
+    try:
+        runtime.start()
+        for _ in range(80):
+            if service.metrics_snapshot()['active_hosts'] == 1:
+                break
+            await asyncio.sleep(0.05)
+        assert service.metrics_snapshot()['active_hosts'] == 1
+        assert runtime.diagnostics()['state'] == 'registered'
+    finally:
+        await asyncio.to_thread(runtime.stop)
+        await service.stop()
 
 
 def test_wss_host_phone_forward_opaque_bidirectional_frames(tmp_path: Path) -> None:
@@ -969,6 +1095,16 @@ def _assert_canary_not_persisted(root: Path, canary: str) -> None:
 
 def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode('ascii').rstrip('=')
+
+
+def _raw_private_key_b64(key) -> str:
+    return _b64(
+        key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+    )
 
 
 def _b64decode(value: str) -> bytes:

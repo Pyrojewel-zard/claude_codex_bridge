@@ -67,6 +67,10 @@ class ParsedRelayCommand:
     reason: str | None = None
     max_sessions: int = 4
     max_bytes_per_day: int = 104857600
+    relay_origin: str | None = None
+    invitation: str | None = None
+    invitation_file: str | None = None
+    credential_path: str | None = None
     json_output: bool = False
     kind: str = 'relay'
 

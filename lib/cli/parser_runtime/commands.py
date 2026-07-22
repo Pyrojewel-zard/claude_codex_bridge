@@ -201,6 +201,30 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 json_output=bool(namespace.json_output),
             )
     if target == 'host':
+        if action == 'activate':
+            parser = argparse.ArgumentParser(prog='ccb relay host activate', add_help=False)
+            parser.add_argument('--relay-origin', default=None)
+            invitation = parser.add_mutually_exclusive_group()
+            invitation.add_argument('--invitation', default=None)
+            invitation.add_argument('--invitation-file', default=None)
+            parser.add_argument('--credentials', dest='credential_path', default=None)
+            parser.add_argument('--json', dest='json_output', action='store_true')
+            namespace = parse_args(
+                parser,
+                rest,
+                error_message='invalid relay host activate command',
+                error_type=error_type,
+            )
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                relay_origin=_optional_parser_text(namespace.relay_origin),
+                invitation=_optional_parser_text(namespace.invitation),
+                invitation_file=_optional_parser_text(namespace.invitation_file),
+                credential_path=_optional_parser_text(namespace.credential_path),
+                json_output=bool(namespace.json_output),
+            )
         if action == 'status':
             parser = argparse.ArgumentParser(prog='ccb relay host status', add_help=False)
             _add_relay_common_options(parser)
@@ -243,7 +267,9 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 secrets_path=_optional_parser_text(namespace.secrets_path),
                 json_output=bool(namespace.json_output),
             )
-    raise error_type('relay supports invite issue/status/list/revoke and host status/list/revoke')
+    raise error_type(
+        'relay supports invite issue/status/list/revoke and host activate/status/list/revoke'
+    )
 
 
 def parse_frontdesk(

@@ -5,7 +5,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 
+from cli.services import mobile as mobile_service
 from cli.services.mobile import prepare_mobile_gateway
 from mobile_gateway.relay import (
     LocalRelayServerHarness,
@@ -15,9 +18,30 @@ from mobile_gateway.relay import (
     RelayHandshakeTranscript,
     RelayHostRegistration,
 )
+from mobile_gateway.relay_host_credentials import RelayHostCredentials
 
 
-def test_mobile_serve_relay_registers_local_outbound_harness(tmp_path) -> None:
+def test_mobile_serve_relay_requires_activated_production_outbound_credentials(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    credentials = RelayHostCredentials(
+        relay_origin='wss://relay.seemlab.top',
+        host_id='host-activated',
+        invitation_id='invite-used-once',
+        host_signing_private_key_b64=_private_key_b64(
+            ed25519.Ed25519PrivateKey.generate()
+        ),
+        host_crypto_private_key_b64=_private_key_b64(
+            x25519.X25519PrivateKey.generate()
+        ),
+        activated_at='2026-07-22T00:00:00+00:00',
+    )
+    monkeypatch.setattr(
+        mobile_service,
+        '_relay_host_credentials',
+        lambda: credentials,
+    )
     context = SimpleNamespace(
         project=SimpleNamespace(project_id='proj-relay', project_root=tmp_path / 'repo'),
         paths=SimpleNamespace(
@@ -40,10 +64,10 @@ def test_mobile_serve_relay_registers_local_outbound_harness(tmp_path) -> None:
     assert summary['gateway_url'] == 'https://relay.seemlab.top'
     assert summary['pairing']['route_provider'] == 'relay'
     relay_outbound = summary['relay_outbound']
-    assert relay_outbound['status'] == 'registered'
-    assert relay_outbound['mode'] == 'local_harness'
-    assert relay_outbound['host_id'] == 'proj-relay'
-    assert relay_outbound['diagnostics']['state'] == 'registered'
+    assert relay_outbound['status'] == 'configured'
+    assert relay_outbound['mode'] == 'production_outbound_wss'
+    assert relay_outbound['host_id'] == 'host-activated'
+    assert relay_outbound['relay_origin'] == 'wss://relay.seemlab.top'
     outbound_text = json.dumps(relay_outbound)
     assert '127.0.0.1' not in outbound_text
     assert 'gateway_url' not in outbound_text
@@ -338,3 +362,12 @@ def _client_hello() -> RelayFrame:
 
 def _b64(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode('utf-8')).decode('ascii')
+
+
+def _private_key_b64(key) -> str:
+    raw = key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')

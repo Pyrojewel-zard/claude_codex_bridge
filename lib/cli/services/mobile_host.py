@@ -21,6 +21,8 @@ from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
 from cli.services.mobile import prepare_server_mobile_gateway
 from mobile_gateway import MobileGatewayPairingStore, mobile_host_state_dir
+from mobile_gateway.relay_host_credentials import load_relay_host_credentials
+from mobile_gateway.relay_host_runtime import RelayHostConnectorRuntime
 from storage.atomic import atomic_write_json
 
 
@@ -295,18 +297,43 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
     del script_root
     state_dir = Path(args.state_dir).expanduser()
     os.environ['CCB_MOBILE_HOST_STATE_HOME'] = str(state_dir)
+    route_provider = str(args.route_provider or 'tailnet')
+    relay_credentials = None
+    effective_host_id = str(args.host_id or '').strip() or None
+    if route_provider == 'relay':
+        relay_credentials = load_relay_host_credentials(
+            Path(
+                str(os.environ.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
+                or state_dir / 'relay-host-credentials.json'
+            )
+        )
+        if effective_host_id and effective_host_id != relay_credentials.host_id:
+            raise MobileHostServiceError(
+                'mobile relay host id does not match activated relay credentials'
+            )
+        effective_host_id = relay_credentials.host_id
     handle = prepare_server_mobile_gateway(
         SimpleNamespace(
             listen=str(args.listen),
             public_url=str(args.public_url).strip() if args.public_url else None,
-            route_provider=str(args.route_provider or 'tailnet'),
+            route_provider=route_provider,
         ),
-        host_id=str(args.host_id or '').strip() or None,
+        host_id=effective_host_id,
         rotate_pairing=bool(getattr(args, 'rotate_pairing', False)),
     )
     summary = dict(handle.summary)
     paths = mobile_host_service_paths(state_dir)
     generation = int(args.generation)
+    relay_runtime = None
+    if relay_credentials is not None:
+        relay_runtime = RelayHostConnectorRuntime(
+            credentials=relay_credentials,
+            gateway_origin=str(
+                summary.get('local_gateway_url')
+                or _local_gateway_url(str(args.listen))
+            ),
+        )
+        relay_runtime.start()
     try:
         pairing = summary.get('pairing') if isinstance(summary.get('pairing'), dict) else None
         write_mobile_host_service_state(
@@ -322,6 +349,11 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
                 'local_gateway_url': str(summary.get('local_gateway_url') or _local_gateway_url(str(args.listen))),
                 'gateway_url': str(summary.get('gateway_url') or summary.get('local_gateway_url') or ''),
                 'route_provider': str(summary.get('route_provider') or args.route_provider or 'tailnet'),
+                **(
+                    {'relay_outbound': relay_runtime.diagnostics()}
+                    if relay_runtime is not None
+                    else {}
+                ),
                 **({'pairing': dict(pairing)} if pairing is not None else {}),
                 'state_dir': str(paths.state_dir),
                 'started_at': utc_now(),
@@ -331,6 +363,8 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
         )
     except Exception as exc:
         print(f'mobile host service could not write state: {type(exc).__name__}: {exc}', file=sys.stderr)
+        if relay_runtime is not None:
+            relay_runtime.stop()
         handle.close()
         return 1
     try:
@@ -341,6 +375,8 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
             pid=os.getpid(),
             generation=generation,
         )
+        if relay_runtime is not None:
+            relay_runtime.stop()
         handle.close()
     return 0
 

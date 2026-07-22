@@ -206,6 +206,45 @@ def test_relay_operator_cli_json_and_human_outputs_redact_except_issue(tmp_path)
     _assert_secret_not_persisted(db_path, raw_invitation)
 
 
+def test_relay_host_activate_parser_and_render_surface_only_public_metadata() -> None:
+    command = CliParser().parse(
+        [
+            'relay',
+            'host',
+            'activate',
+            '--relay-origin',
+            'wss://relay.example.test',
+            '--invitation-file',
+            '/tmp/relay-invitation',
+            '--credentials',
+            '/tmp/relay-credentials.json',
+            '--json',
+        ]
+    )
+    assert command.target == 'host'
+    assert command.action == 'activate'
+    assert command.relay_origin == 'wss://relay.example.test'
+    assert command.invitation_file == '/tmp/relay-invitation'
+    assert command.credential_path == '/tmp/relay-credentials.json'
+    assert command.json_output is True
+
+    lines = render_relay_operator(
+        {
+            'relay_status': 'host_activated',
+            'relay_origin': 'wss://relay.example.test',
+            'host_id': 'host-1',
+            'invitation_id': 'invite-1',
+            'host_fingerprint': 'sha256:public',
+            'credential_path': '/tmp/relay-credentials.json',
+            'activated_at': '2026-07-22T00:00:00+00:00',
+        }
+    )
+    rendered = '\n'.join(lines)
+    assert 'relay_status: host_activated' in rendered
+    assert 'host_id: host-1' in rendered
+    assert 'db_path:' not in rendered
+
+
 def test_relay_admission_secrets_are_external_and_restart_fail_closed(tmp_path) -> None:
     db_path = tmp_path / 'relay.sqlite3'
     secrets = _admission_secrets()

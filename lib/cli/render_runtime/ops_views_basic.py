@@ -866,10 +866,22 @@ def render_mobile_serve(summary) -> tuple[str, ...]:
 def render_relay_operator(summary) -> tuple[str, ...]:
     payload = summary if isinstance(summary, Mapping) else {}
     status = str(payload.get('relay_status') or 'unknown')
-    lines = [
-        f'relay_status: {status}',
-        f'db_path: {payload.get("db_path", "")}',
-    ]
+    lines = [f'relay_status: {status}']
+    if payload.get('db_path') not in (None, ''):
+        lines.append(f'db_path: {payload.get("db_path", "")}')
+    if status == 'host_activated':
+        lines.extend(
+            f'{key}: {payload.get(key, "")}'
+            for key in (
+                'relay_origin',
+                'host_id',
+                'invitation_id',
+                'host_fingerprint',
+                'credential_path',
+                'activated_at',
+            )
+        )
+        return tuple(lines)
     if status == 'invite_issued':
         lines.extend(
             [

@@ -5,14 +5,18 @@ from pathlib import Path
 
 from mobile_gateway.relay_admission import RelayAdmissionSecrets, RelayAdmissionStore
 
+from .relay_host_activation import relay_host_activate_command
+
 
 def relay_operator_command(context, command) -> dict[str, object]:
+    target = str(getattr(command, 'target', '') or '')
+    action = str(getattr(command, 'action', '') or '')
+    if target == 'host' and action == 'activate':
+        return relay_host_activate_command(context, command)
     store = RelayAdmissionStore(
         _relay_db_path(context, command),
         admission_secrets=RelayAdmissionSecrets.from_operator_config(_relay_secrets_path(command)),
     )
-    target = str(getattr(command, 'target', '') or '')
-    action = str(getattr(command, 'action', '') or '')
     if target == 'invite' and action == 'issue':
         issued = store.issue_invitation(
             ttl_seconds=int(getattr(command, 'ttl_seconds', 0) or 0),
@@ -40,7 +44,9 @@ def relay_operator_command(context, command) -> dict[str, object]:
             reason=getattr(command, 'reason', None),
         )
     else:
-        raise ValueError('relay supports invite issue/status/list/revoke and host status/list/revoke')
+        raise ValueError(
+            'relay supports invite issue/status/list/revoke and host activate/status/list/revoke'
+        )
     payload['db_path'] = _redacted_db_path(_relay_db_path(context, command))
     return payload
 
