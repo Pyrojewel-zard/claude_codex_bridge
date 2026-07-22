@@ -403,7 +403,11 @@ String? _optionalText(Object? value) {
 String _requiredBase64Text(Object? value, String name) {
   final text = _requiredText(value, name);
   try {
-    base64Url.decode(text);
+    // Relay wire values are unpadded base64url to avoid transport-dependent
+    // padding normalization. Dart's decoder expects padding in some builds.
+    base64Url.decode(
+      text.padRight(text.length + ((4 - text.length % 4) % 4), '='),
+    );
   } on FormatException catch (error) {
     throw FormatException('relay field must be base64url: $name', error);
   }

@@ -93,9 +93,7 @@ class RelayPhoneSessionBootstrap {
     );
   }
 
-  static RelayPhoneSessionBootstrap? maybeFromJson(
-    Map<String, Object?> json,
-  ) {
+  static RelayPhoneSessionBootstrap? maybeFromJson(Map<String, Object?> json) {
     try {
       return RelayPhoneSessionBootstrap.fromJson(json);
     } on FormatException catch (error) {
@@ -140,3 +138,11 @@ class GatewayHostProfile {
 }
 
 bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
+
+String? _optionalText(Object? value) {
+  if (value is! String) {
+    return null;
+  }
+  final text = value.trim();
+  return text.isEmpty ? null : text;
+}
