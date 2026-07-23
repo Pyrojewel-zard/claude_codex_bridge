@@ -109,11 +109,16 @@ When `ccb` starts a managed Gemini agent:
   replacement and derives global memory from `$GEMINI_CLI_HOME/.gemini`
 - it must explicitly set the effective `GEMINI_ROOT`
 - it must ensure `GEMINI_ROOT == <gemini_home>/.gemini/tmp`
-- it must route rebuildable npm/XDG tool caches outside `.ccb` to the
-  user-cache-scoped CCB project path
-  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/`, while
-  keeping `HOME`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`, auth, and sessions inside
-  the managed home
+- it must route rebuildable npm/XDG tool caches outside `.ccb` to the single
+  user-scoped path `~/.cache/ccb/provider-cache/gemini/`, while keeping
+  `HOME`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`, auth, and sessions inside the
+  managed home
+- it must not create or depend on the retired project-scoped path
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/`
+- when CCB is invoked from a managed Gemini environment whose
+  `XDG_CACHE_HOME` already points at the user-scoped Gemini cache, cache
+  resolution must recover the original user-cache base and must not recursively
+  create `.../xdg/ccb/provider-cache/gemini`
 - it must create the managed home and managed temp root before launching Gemini
 - it must materialize required Gemini auth/config projections into the managed
   home without treating them as conversation identity

@@ -9,7 +9,7 @@ import sys
 
 from agents.models import RuntimeMode
 from provider_core.source_home import current_provider_source_home
-from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
+from provider_backends.claude.launcher_runtime.legacy_binary_cache import detach_legacy_claude_binary_cache
 from provider_backends.claude.launcher_runtime import materialize_claude_home_config, resolve_claude_home_layout
 from provider_backends.codex.launcher_runtime import resolve_codex_home_layout
 from provider_backends.copilot.home import materialize_copilot_home_config
@@ -221,8 +221,9 @@ def _materialize_provider_home(
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=Path(runtime_dir) / 'claude-memory-projection.json',
         )
-        _route_claude_binary_cache_if_possible(
+        _detach_legacy_claude_binary_cache_if_present(
             layout=layout,
+            spec=spec,
             home_root=home_root,
         )
         _record_claude_binary_cache_drift_if_present(
@@ -340,8 +341,6 @@ def resolve_gemini_home_root(*, layout, agent_name: str, resolved_profile: Resol
 
 def _record_claude_binary_cache_drift_if_present(*, layout, spec, runtime_dir: Path, home_root: Path) -> None:
     versions_dir = Path(home_root) / '.local' / 'share' / 'claude' / 'versions'
-    if _claude_versions_dir_points_to_shared_cache(layout, versions_dir):
-        return
     signature = _claude_versions_cache_signature(versions_dir)
     if signature is None:
         return
@@ -371,12 +370,37 @@ def _record_claude_binary_cache_drift_if_present(*, layout, spec, runtime_dir: P
         return
 
 
-def _route_claude_binary_cache_if_possible(*, layout, home_root: Path) -> None:
+def _detach_legacy_claude_binary_cache_if_present(*, layout, spec, home_root: Path) -> None:
     try:
-        cache_root = layout.ensure_provider_external_cache_dir('claude')
+        result = detach_legacy_claude_binary_cache(
+            home_root,
+            cache_roots=(
+                layout.provider_external_cache_dir('claude'),
+                layout.shared_cache_dir / 'claude',
+            ),
+        )
     except Exception:
         return
-    route_claude_binary_cache(home_root, cache_root, source_home=current_provider_source_home())
+    if result.get('status') != 'ok':
+        return
+    payload = {
+        'record_type': 'agent_event',
+        'event_type': 'claude_binary_cache_detached',
+        'provider': 'claude',
+        'agent_name': spec.name,
+        'status': 'ok',
+        'reason': result.get('reason'),
+        'versions_dir': result.get('versions_dir'),
+        'versions_target': result.get('versions_target'),
+        'created_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+    }
+    try:
+        events_path = layout.agent_events_path(spec.name)
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + '\n')
+    except OSError:
+        return
 
 
 def _claude_versions_cache_signature(versions_dir: Path) -> dict[str, object] | None:
@@ -399,19 +423,6 @@ def _claude_versions_cache_signature(versions_dir: Path) -> dict[str, object] | 
         'versions_dir': str(versions_dir),
         'version_names': version_names,
     }
-
-
-def _claude_versions_dir_points_to_shared_cache(layout, versions_dir: Path) -> bool:
-    try:
-        resolved = Path(versions_dir).resolve()
-        external_versions = layout.provider_external_cache_dir('claude') / 'versions'
-        legacy_shared_versions = layout.provider_shared_cache_dir('claude') / 'versions'
-        return Path(versions_dir).is_symlink() and resolved in {
-            external_versions.resolve(strict=False),
-            legacy_shared_versions.resolve(strict=False),
-        }
-    except Exception:
-        return False
 
 
 def _same_cached_signature(marker_path: Path, signature: dict[str, object]) -> bool:

@@ -68,6 +68,21 @@ ccb update
 
 在 npm 管理的安装中，`ccb update` 只会显示等价的 npm 命令，不会原地修改 npm vendored payload。
 
+CCB 托管的 provider pane 会关闭已知的 provider 原生启动更新提示。更新 CCB
+后，或者 CCB 已经是最新版时，`ccb update` 会统一检查已安装的 provider
+CLI，并只提示一次可安全管理的更新。可使用 `--providers check`、
+`--providers all` 或 `--providers none` 分别执行仅检查、非交互全部更新或
+本次跳过。选择“暂不更新”后，下次 `ccb update` 会再次提示；选择“跳过此
+版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
+provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
+
+版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
+manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
+立即清理，仍在运行或属于其他现存项目的缓存会保留到对应项目下一次成功
+执行 `ccb kill` 后再清理。未知 Provider、损坏的 manifest、外来符号链接、
+session/auth 和用户级 Gemini 缓存都不会被该迁移删除。单次更新可用
+`ccb update --no-cache-cleanup` 跳过。
+
 <details>
 <summary><b>GitHub release 包和源码安装兜底</b></summary>
 

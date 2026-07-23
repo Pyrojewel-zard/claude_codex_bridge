@@ -14,6 +14,7 @@ from cli.context import CliContextBuilder
 from cli.services.kill_runtime.agent_cleanup import collect_candidate_tmux_sockets, prepare_local_shutdown
 from cli.services.kill_runtime.remote import await_remote_shutdown
 import cli.services.daemon as daemon_service
+import cli.services.kill as kill_service
 from cli.services.daemon import CcbdServiceError
 from cli.models import ParsedKillCommand
 from cli.services.daemon import KillSummary, shutdown_daemon
@@ -22,6 +23,82 @@ from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
 from workspace.materializer import WorkspaceMaterializer
 from workspace.planner import WorkspacePlanner
+
+
+def test_post_kill_cleanup_removes_retired_project_provider_cache(monkeypatch) -> None:
+    context = SimpleNamespace(paths=SimpleNamespace())
+    summary = KillSummary(
+        project_id='project-id',
+        state='unmounted',
+        socket_path='/tmp/ccb.sock',
+        forced=False,
+        runtime_actions=('existing-action',),
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'current_project_legacy_provider_cache_present',
+        lambda _paths: True,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'cleanup_current_project_legacy_provider_caches',
+        lambda _context, *, measure_bytes: SimpleNamespace(
+            actions=(
+                SimpleNamespace(kind='legacy_cache_link'),
+                SimpleNamespace(kind='legacy_project_cache'),
+            ),
+            skipped_count=0,
+        ),
+    )
+
+    result = kill_service._cleanup_legacy_provider_cache_after_kill(context, summary)
+
+    assert result.runtime_actions == (
+        'existing-action',
+        'cleanup_legacy_provider_cache:deleted=1',
+    )
+
+
+def test_post_kill_cleanup_failure_is_deferred_non_destructively(monkeypatch) -> None:
+    context = SimpleNamespace(paths=SimpleNamespace())
+    summary = KillSummary(
+        project_id='project-id',
+        state='unmounted',
+        socket_path='/tmp/ccb.sock',
+        forced=False,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'current_project_legacy_provider_cache_present',
+        lambda _paths: True,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'cleanup_current_project_legacy_provider_caches',
+        lambda _context, *, measure_bytes: (_ for _ in ()).throw(RuntimeError('still busy')),
+    )
+
+    result = kill_service._cleanup_legacy_provider_cache_after_kill(context, summary)
+
+    assert result.state == 'unmounted'
+    assert 'cleanup deferred after kill' in result.runtime_warnings[0]
+
+
+def test_post_kill_cleanup_does_not_run_when_shutdown_is_incomplete(monkeypatch) -> None:
+    context = SimpleNamespace(paths=SimpleNamespace())
+    summary = KillSummary(
+        project_id='project-id',
+        state='mounted',
+        socket_path='/tmp/ccb.sock',
+        forced=False,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'current_project_legacy_provider_cache_present',
+        lambda _paths: (_ for _ in ()).throw(AssertionError('must not inspect cache')),
+    )
+
+    assert kill_service._cleanup_legacy_provider_cache_after_kill(context, summary) is summary
 
 
 def _namespace_controller(*, destroyed: bool):

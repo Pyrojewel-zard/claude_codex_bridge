@@ -88,6 +88,7 @@ _CODEX_DEFAULT_INHERITED_COMMAND_HOOK_MARKERS = (
 _CODEX_INHERITED_HOOK_EVENTS_ENV = 'CCB_CODEX_INHERITED_HOOK_EVENTS'
 _CODEX_INHERITED_COMMAND_HOOK_MARKERS_ENV = 'CCB_CODEX_INHERITED_COMMAND_HOOK_MARKERS'
 _CODEX_COMMAND_HOOK_DEFAULT_TIMEOUT_S = 600
+_MANAGED_CODEX_STARTUP_UPDATE_KEY = 'check_for_update_on_startup'
 _TOML_TABLE_HEADER_RE = re.compile(r'^\s*\[{1,2}[^\]]+\]{1,2}\s*(?:#.*)?$')
 
 
@@ -427,11 +428,11 @@ def _write_managed_config_stub(
     workspace_path: Path | None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, object] = {}
+    payload = _disable_interactive_migration_features({})
     _merge_codex_plugin_overrides(payload, profile=profile)
     _merge_codex_mcp_server_overrides(payload, profile=profile)
     _trust_managed_codex_project_paths(payload, project_root=project_root, workspace_path=workspace_path)
-    rendered = _render_toml_document(payload) if payload else '# ccb agent-local codex config\n'
+    rendered = _render_toml_document(payload)
     target.write_text(rendered, encoding='utf-8')
 
 
@@ -459,7 +460,8 @@ def _append_managed_codex_feature_overrides(target: Path) -> None:
         text = target.read_text(encoding='utf-8')
     except Exception:
         return
-    target.write_text(_merge_managed_codex_feature_overrides(text), encoding='utf-8')
+    merged = _merge_managed_codex_startup_update_override(text)
+    target.write_text(_merge_managed_codex_feature_overrides(merged), encoding='utf-8')
 
 
 def _append_managed_codex_project_trust(target: Path, *, project_root: Path | None, workspace_path: Path | None) -> None:
@@ -497,6 +499,25 @@ def _merge_managed_codex_feature_overrides(text: str) -> str:
     section_lines[insert_at:insert_at] = override_lines
     merged_lines = [*lines[: features_index + 1], *section_lines, *lines[section_end:]]
     return '\n'.join(merged_lines).rstrip() + '\n'
+
+
+def _merge_managed_codex_startup_update_override(text: str) -> str:
+    lines = text.splitlines()
+    first_table = next(
+        (index for index, line in enumerate(lines) if _TOML_TABLE_HEADER_RE.match(line)),
+        len(lines),
+    )
+    prefix = [
+        line
+        for line in lines[:first_table]
+        if _toml_key_name(line) != _MANAGED_CODEX_STARTUP_UPDATE_KEY
+    ]
+    insert_at = len(prefix)
+    while insert_at > 0 and not prefix[insert_at - 1].strip():
+        insert_at -= 1
+    prefix[insert_at:insert_at] = [f'{_MANAGED_CODEX_STARTUP_UPDATE_KEY} = false']
+    merged = [*prefix, *lines[first_table:]]
+    return '\n'.join(merged).rstrip() + '\n'
 
 
 def _trust_managed_codex_project_paths(
@@ -617,6 +638,7 @@ def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAut
 
 def _disable_interactive_migration_features(payload: dict[str, object]) -> dict[str, object]:
     sanitized = _clone_mapping(payload)
+    sanitized[_MANAGED_CODEX_STARTUP_UPDATE_KEY] = False
     raw_features = sanitized.get('features')
     features = dict(raw_features) if isinstance(raw_features, dict) else {}
     for feature_name in _MANAGED_CODEX_DISABLED_FEATURES:

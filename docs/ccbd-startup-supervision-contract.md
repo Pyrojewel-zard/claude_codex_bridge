@@ -336,6 +336,28 @@ Managed provider startup mutation rules:
   - `build_session_payload` receives the same final `prepared_state` used by
     command assembly
 - provider bootstrap config needed for managed launches must live under `.ccb/agents/<agent>/provider-state/<provider>/` or an explicit validated provider-profile runtime home
+- managed Codex startup must write `check_for_update_on_startup = false` into
+  the generated agent-local `CODEX_HOME/config.toml`; managed Claude startup
+  must export `DISABLE_AUTOUPDATER=1`; managed Gemini startup must write both
+  `general.enableAutoUpdate = false` and
+  `general.enableAutoUpdateNotification = false` into the generated
+  agent-local `.gemini/settings.json`. Managed Grok receives
+  `GROK_DISABLE_AUTOUPDATER=1`; managed Droid receives
+  `FACTORYD_DISABLE_AUTO_UPDATE=1`; managed AGY receives
+  `AGY_CLI_DISABLE_AUTO_UPDATE=1`. All managed provider processes also
+  receive `NO_UPDATE_NOTIFIER=1` for CLIs using the common Node
+  update-notifier convention. These overrides apply only to CCB-managed
+  provider processes and must not modify the user's provider-global
+  configuration.
+  Provider version checks and upgrades belong to the explicit `ccb update`
+  flow, never to pane startup or job delivery.
+- managed Claude startup must use the user-installed Provider executable and
+  must not create/copy/hash/link a CCB project-scoped binary cache; recognized
+  legacy CCB cache links may be detached during preparation without deleting
+  cache payload
+- managed Gemini startup routes rebuildable npm/XDG cache to one user-scoped
+  `~/.cache/ccb/provider-cache/gemini/` tree and must not create the retired
+  `~/.cache/ccb/projects/<project-id>/provider-cache/gemini/` route
 - managed OpenCode startup writes `.ccb/agents/<agent>/provider-state/opencode/opencode.json` as a generated `OPENCODE_CONFIG` file; it reads and merges project `opencode.json` without modifying that project file, uses project-relative memory instructions through `.ccb/runtime/memory/<agent>.md`, uses project-relative inherited ask skill instructions through `.ccb/runtime/skills/<agent>/opencode/ask.md`, disables OpenCode autoupdate for managed panes so startup and job delivery cannot be blocked by an interactive update prompt, and injects `--continue` only when the effective restore policy is not fresh and the configured command does not already contain an explicit OpenCode session selector
 - managed Kimi startup must not infer conversation authority from work-directory
   recency or inject `--continue`: `.kimi-<agent>-session` owns a native Kimi

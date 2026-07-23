@@ -67,9 +67,27 @@ ccb update
 ```
 
 On an npm-managed install, `ccb update` prints the equivalent npm command and
-does not modify npm's vendored payload in place. To roll back a release-package
-install, use the transactional updater with an older released version, for
-example `ccb update 8.1.3`. CCB rejects a same-version artifact whose build
+does not modify npm's vendored payload in place.
+
+CCB-managed provider panes suppress known provider-native startup update prompts.
+After updating CCB—or immediately when CCB is already current—`ccb update`
+checks installed provider CLIs and offers supported updates once. Use
+`--providers check`, `--providers all`, or `--providers none` for explicit
+report-only, non-interactive update, or skip behavior. Declining prompts again
+on the next `ccb update`; skipping a version hides only that exact version.
+CCB never restarts active provider panes during this flow, so an accepted
+provider update applies when that pane next starts or is explicitly restarted.
+
+After a release change, the newly installed CCB also retires old
+project-scoped Claude/Gemini caches. Manifest-valid caches for deleted projects
+are removed immediately. A stopped current project is cleaned immediately;
+active or other existing projects are preserved and cleaned after their next
+successful `ccb kill`. Unknown providers, malformed manifests, foreign
+symlinks, sessions/auth, and the user-scoped Gemini cache are never removed by
+this migration. Use `ccb update --no-cache-cleanup` to skip it for one update.
+
+To roll back, use the same transactional updater with an older released version,
+for example `ccb update 8.1.3`. CCB rejects a same-version artifact whose build
 identity differs from the installed build, and restores the prior local prefix
 if the update transaction fails. If restoration itself cannot complete, CCB
 retains and reports the external recovery backup path.

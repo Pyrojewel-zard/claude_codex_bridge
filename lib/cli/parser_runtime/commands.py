@@ -888,8 +888,13 @@ def parse_kill(tokens: list[str], *, project: str | None, error_type) -> ParsedK
 
 
 def parse_cleanup(tokens: list[str], *, project: str | None, error_type) -> ParsedCleanupCommand:
-    require_no_extra(tokens, command='cleanup', error_type=error_type)
-    return ParsedCleanupCommand(project=project)
+    parser = argparse.ArgumentParser(prog='ccb cleanup', add_help=False)
+    parser.add_argument('--legacy-provider-caches', action='store_true')
+    namespace = parse_args(parser, tokens, error_message='invalid cleanup command', error_type=error_type)
+    return ParsedCleanupCommand(
+        project=project,
+        legacy_provider_caches=bool(namespace.legacy_provider_caches),
+    )
 
 
 def parse_ps(tokens: list[str], *, project: str | None, error_type) -> ParsedPsCommand:

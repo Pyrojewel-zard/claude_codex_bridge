@@ -371,7 +371,7 @@ def _summary_payload(layout: PathLayout, entries: list[StorageEntry]) -> dict[st
             _accumulate(by_agent[entry.agent], entry.size_bytes)
     shared_cache_reason = _shared_cache_disabled_reason(layout)
     shared_cache_enabled = shared_cache_reason is None
-    return {
+    payload = {
         'schema_version': SCHEMA_VERSION,
         'generated_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'project': str(layout.project_root),
@@ -389,6 +389,8 @@ def _summary_payload(layout: PathLayout, entries: list[StorageEntry]) -> dict[st
         'by_agent': dict(sorted(by_agent.items())),
         'entries': [entry.to_record() for entry in sorted(entries, key=lambda item: item.size_bytes, reverse=True)],
     }
+    payload.update(_provider_cache_boundary_summary(layout))
+    return payload
 
 
 def _compact_summary_payload(
@@ -401,7 +403,7 @@ def _compact_summary_payload(
     shared_cache_reason = _shared_cache_disabled_reason(layout)
     shared_cache_enabled = shared_cache_reason is None
     entries = summary.get('entries') if isinstance(summary.get('entries'), list) else []
-    return {
+    payload = {
         'schema_version': SCHEMA_VERSION,
         'generated_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'project': str(layout.project_root),
@@ -423,6 +425,8 @@ def _compact_summary_payload(
         'summary_mode': 'compact',
         'summary_helper_used': helper_used,
     }
+    payload.update(_provider_cache_boundary_summary(layout))
+    return payload
 
 
 def _truncate_summary_entries(
@@ -453,6 +457,40 @@ def _shared_cache_disabled_reason(layout: PathLayout) -> str | None:
     if placement.filesystem_hint == 'wsl_drvfs' and placement.root_kind != 'relocated':
         return 'wsl_drvfs_requires_runtime_relocation'
     return None
+
+
+def _provider_cache_boundary_summary(layout: PathLayout) -> dict[str, object]:
+    legacy_root = layout.external_provider_cache_root
+    user_root = layout.user_provider_cache_root
+    return {
+        'legacy_provider_cache_root': str(legacy_root),
+        'legacy_provider_cache_present': legacy_root.is_dir() and not legacy_root.is_symlink(),
+        'legacy_provider_cache_bytes': _tree_size_without_following_symlinks(legacy_root),
+        'user_provider_cache_root': str(user_root),
+        'user_provider_cache_present': user_root.is_dir() and not user_root.is_symlink(),
+        'user_provider_cache_bytes': None,
+        'user_provider_cache_size_status': 'not_scanned_shared_scope',
+    }
+
+
+def _tree_size_without_following_symlinks(root: Path) -> int:
+    if not root.exists() and not root.is_symlink():
+        return 0
+    if root.is_symlink() or root.is_file():
+        return _safe_size(root)
+    total = _safe_size(root)
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        safe_dirs: list[str] = []
+        for dirname in dirnames:
+            candidate = current_path / dirname
+            total += _safe_size(candidate)
+            if not candidate.is_symlink():
+                safe_dirs.append(dirname)
+        dirnames[:] = safe_dirs
+        for filename in filenames:
+            total += _safe_size(current_path / filename)
+    return total
 
 
 def _accumulate(bucket: dict[str, int], size: int) -> None:

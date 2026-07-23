@@ -535,49 +535,93 @@ def test_path_layout_exposes_provider_shared_cache_under_runtime_state_root(tmp_
     layout = PathLayout(project_root)
 
     assert layout.shared_cache_dir == layout.runtime_state_root / 'shared-cache'
-    assert layout.provider_shared_cache_dir('claude') == layout.shared_cache_dir / 'claude'
+    assert layout.provider_shared_cache_dir('codex') == layout.shared_cache_dir / 'codex'
 
 
 def test_path_layout_ensures_provider_shared_cache_manifest(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     layout = PathLayout(project_root)
 
-    cache_dir = layout.ensure_provider_shared_cache_dir('claude', created_at='2026-05-11T00:00:00Z')
+    cache_dir = layout.ensure_provider_shared_cache_dir('codex', created_at='2026-05-11T00:00:00Z')
     manifest = json.loads((cache_dir / 'MANIFEST.json').read_text(encoding='utf-8'))
 
-    assert cache_dir == layout.shared_cache_dir / 'claude'
+    assert cache_dir == layout.shared_cache_dir / 'codex'
     assert manifest['record_type'] == 'ccb_shared_cache_manifest'
-    assert manifest['provider'] == 'claude'
+    assert manifest['provider'] == 'codex'
     assert manifest['project_id'] == layout.project_id
     assert manifest['runtime_state_root'] == str(layout.runtime_state_root)
     assert manifest['entries'] == []
 
 
-def test_path_layout_ensures_provider_external_cache_manifest(tmp_path: Path, monkeypatch) -> None:
+def test_path_layout_keeps_legacy_external_cache_read_only(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     xdg_cache = tmp_path / 'xdg-cache'
     monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
     layout = PathLayout(project_root)
 
-    cache_dir = layout.ensure_provider_external_cache_dir('claude', created_at='2026-05-13T00:00:00Z')
-    manifest = json.loads((cache_dir / 'MANIFEST.json').read_text(encoding='utf-8'))
+    cache_dir = layout.provider_external_cache_dir('claude')
 
     assert cache_dir == xdg_cache / 'ccb' / 'projects' / layout.project_id[:16] / 'provider-cache' / 'claude'
-    assert manifest['record_type'] == 'ccb_external_provider_cache_manifest'
-    assert manifest['provider'] == 'claude'
-    assert manifest['project_id'] == layout.project_id
-    assert manifest['project_root'] == str(layout.project_root)
+    assert not cache_dir.exists()
+
+
+def test_path_layout_ensures_user_provider_cache_manifest(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    layout = PathLayout(project_root)
+
+    cache_dir = layout.ensure_provider_user_cache_dir('gemini', created_at='2026-07-23T00:00:00Z')
+    manifest = json.loads((cache_dir / 'MANIFEST.json').read_text(encoding='utf-8'))
+
+    assert cache_dir == xdg_cache / 'ccb' / 'provider-cache' / 'gemini'
+    assert manifest['record_type'] == 'ccb_user_provider_cache_manifest'
+    assert manifest['provider'] == 'gemini'
+    assert manifest['scope'] == 'user'
+    assert manifest['entries'] == []
+    assert not (xdg_cache / 'ccb' / 'projects').exists()
+
+
+def test_storage_summary_reports_legacy_and_user_provider_cache_boundaries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    layout = PathLayout(project_root)
+    _write(layout.provider_external_cache_dir('claude') / 'versions' / '2.1.218', 'legacy')
+    _write(layout.provider_user_cache_dir('gemini') / 'npm' / '_cacache' / 'blob', 'shared')
+
+    payload = summarize_storage(layout)
+
+    assert payload['legacy_provider_cache_root'] == str(layout.external_provider_cache_root)
+    assert payload['legacy_provider_cache_present'] is True
+    assert payload['legacy_provider_cache_bytes'] >= len('legacy')
+    assert payload['user_provider_cache_root'] == str(layout.user_provider_cache_root)
+    assert payload['user_provider_cache_present'] is True
+    assert payload['user_provider_cache_bytes'] is None
+    assert payload['user_provider_cache_size_status'] == 'not_scanned_shared_scope'
 
 
 def test_path_layout_rejects_noncanonical_shared_cache_provider(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo')
 
-    try:
-        layout.provider_shared_cache_dir('Claude Code')
-    except ValueError as exc:
-        assert 'provider must be one of' in str(exc)
-    else:
-        raise AssertionError('expected noncanonical provider to be rejected')
+    for provider in ('Claude Code', 'claude', 'gemini'):
+        try:
+            layout.provider_shared_cache_dir(provider)
+        except ValueError as exc:
+            assert 'provider must be one of' in str(exc)
+        else:
+            raise AssertionError(f'expected {provider} shared cache to be rejected')
+
+    for provider in ('claude', 'codex', 'Gemini CLI'):
+        try:
+            layout.provider_user_cache_dir(provider)
+        except ValueError as exc:
+            assert 'provider must be one of' in str(exc)
+        else:
+            raise AssertionError(f'expected {provider} user cache to be rejected')
 
 
 def test_storage_summary_hides_shared_cache_root_when_drvfs_is_not_relocated(tmp_path: Path) -> None:
@@ -622,7 +666,7 @@ def test_path_layout_refuses_to_create_shared_cache_on_drvfs_without_relocation(
     object.__setattr__(layout, '_state_root', layout.ccb_dir)
 
     try:
-        layout.ensure_provider_shared_cache_dir('claude')
+        layout.ensure_provider_shared_cache_dir('codex')
     except RuntimeError as exc:
         assert 'requires relocated runtime state' in str(exc)
     else:

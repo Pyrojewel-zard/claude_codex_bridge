@@ -270,6 +270,7 @@ def _format_mapping(value: object) -> str:
 
 
 def render_doctor_storage(payload: Mapping[str, object]) -> tuple[str, ...]:
+    user_provider_cache_bytes = payload.get('user_provider_cache_bytes')
     lines = [
         'storage_status: ok',
         f'storage_schema_version: {payload.get("schema_version")}',
@@ -281,6 +282,13 @@ def render_doctor_storage(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'storage_shared_cache_root_usable: {payload.get("shared_cache_root_usable", False)}',
         f'storage_shared_cache_status: {payload.get("shared_cache_status")}',
         f'storage_shared_cache_reason: {payload.get("shared_cache_reason")}',
+        f'storage_legacy_provider_cache_root: {payload.get("legacy_provider_cache_root") or ""}',
+        f'storage_legacy_provider_cache_present: {payload.get("legacy_provider_cache_present", False)}',
+        f'storage_legacy_provider_cache_bytes: {payload.get("legacy_provider_cache_bytes", 0)}',
+        f'storage_user_provider_cache_root: {payload.get("user_provider_cache_root") or ""}',
+        f'storage_user_provider_cache_present: {payload.get("user_provider_cache_present", False)}',
+        f'storage_user_provider_cache_bytes: {user_provider_cache_bytes if user_provider_cache_bytes is not None else ""}',
+        f'storage_user_provider_cache_size_status: {payload.get("user_provider_cache_size_status") or ""}',
         f'storage_total_bytes: {payload.get("total_bytes")}',
         f'storage_total_count: {payload.get("total_count")}',
     ]

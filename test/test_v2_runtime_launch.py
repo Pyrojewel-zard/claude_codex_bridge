@@ -1239,6 +1239,7 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     managed_memory = expected_claude_home / '.claude' / 'CLAUDE.md'
     assert f'workspace_path: {resume_dir.resolve()}' in managed_memory.read_text(encoding='utf-8')
     assert payload['start_cmd'].startswith('unset ANTHROPIC_BASE_URL; ')
+    assert 'export DISABLE_AUTOUPDATER=1' in payload['start_cmd']
     assert f'HOME={shlex.quote(str(expected_claude_home))}' in payload['start_cmd']
     assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(expected_claude_home / ".claude" / "projects"))}' in payload['start_cmd']
     _assert_caller_env_exports(

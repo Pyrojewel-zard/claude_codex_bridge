@@ -203,6 +203,7 @@ class ParsedQuestionCommand:
 @dataclass(frozen=True)
 class ParsedCleanupCommand:
     project: str | None
+    legacy_provider_caches: bool = False
     kind: str = 'cleanup'
 
 

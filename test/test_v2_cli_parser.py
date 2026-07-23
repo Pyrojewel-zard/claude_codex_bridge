@@ -307,6 +307,10 @@ def test_parse_clear_rejects_all_with_agent_names(parser: CliParser) -> None:
 
 def test_parse_cleanup(parser: CliParser) -> None:
     assert parser.parse(['cleanup']) == ParsedCleanupCommand(project=None)
+    assert parser.parse(['cleanup', '--legacy-provider-caches']) == ParsedCleanupCommand(
+        project=None,
+        legacy_provider_caches=True,
+    )
 
 
 def test_parse_removed_attach_command_is_not_active(parser: CliParser) -> None:

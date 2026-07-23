@@ -7,8 +7,10 @@ import shutil
 import time
 
 from cli.services.daemon import inspect_daemon
+from provider_backends.claude.launcher_runtime.legacy_binary_cache import detach_legacy_claude_binary_cache
 from provider_execution.state_store import ExecutionStateStore
 from storage.locks import file_lock
+from .legacy_provider_cache import cleanup_orphaned_legacy_provider_caches
 
 
 _PENDING_JOB_STATUSES = {'accepted', 'queued', 'running'}
@@ -24,11 +26,6 @@ _SAFE_CLAUDE_CACHE_RELS = (
     Path('.claude') / 'telemetry',
     Path('.claude') / 'paste-cache',
     Path('.claude') / 'plugins' / 'marketplaces',
-)
-_GEMINI_SHARED_CACHE_RELS = (
-    Path('npm') / '_cacache',
-    Path('xdg') / 'node-gyp',
-    Path('xdg') / 'vscode-ripgrep',
 )
 _PANE_CRASH_LOG_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 _PANE_CRASH_LOG_MAX_KEEP_PER_RUNTIME = 50
@@ -63,26 +60,77 @@ class CleanupSummary:
 
 
 def cleanup_project_storage(context, command) -> CleanupSummary:
-    del command
     with file_lock(context.paths.ccbd_dir / 'startup.lock'):
         _require_stopped_backend(context)
         _require_no_pending_jobs(context)
         actions: list[CleanupAction] = []
         skipped: list[CleanupSkipped] = []
+        _detach_legacy_claude_cache_links(context.paths, actions=actions)
         _cleanup_claude_version_caches(context.paths, actions=actions, skipped=skipped)
         _cleanup_claude_rebuildable_caches(context.paths, actions=actions, skipped=skipped)
         _cleanup_gemini_rebuildable_caches(context.paths, actions=actions, skipped=skipped)
+        _cleanup_legacy_project_provider_caches(context.paths, actions=actions, skipped=skipped)
+        if bool(getattr(command, 'legacy_provider_caches', False)):
+            _cleanup_orphaned_legacy_provider_caches(context.paths, actions=actions, skipped=skipped)
         _cleanup_pane_crash_logs(context.paths, actions=actions, skipped=skipped)
-        return CleanupSummary(
-            project_root=str(context.project.project_root),
-            project_id=context.project.project_id,
-            status='ok',
-            deleted_bytes=sum(item.bytes_removed for item in actions),
-            deleted_count=len(actions),
-            skipped_count=len(skipped),
-            actions=tuple(actions),
-            skipped=tuple(skipped),
+        return _cleanup_summary(
+            context,
+            actions=actions,
+            skipped=skipped,
         )
+
+
+def cleanup_current_project_legacy_provider_caches(
+    context,
+    *,
+    measure_bytes: bool = False,
+) -> CleanupSummary:
+    """Clean only the stopped current project's retired Provider cache."""
+
+    with file_lock(context.paths.ccbd_dir / 'startup.lock'):
+        _require_stopped_backend(context)
+        _require_no_pending_jobs(context)
+        actions: list[CleanupAction] = []
+        skipped: list[CleanupSkipped] = []
+        _detach_legacy_claude_cache_links(context.paths, actions=actions)
+        _cleanup_legacy_project_provider_caches(
+            context.paths,
+            actions=actions,
+            skipped=skipped,
+            measure_bytes=measure_bytes,
+        )
+        return _cleanup_summary(
+            context,
+            actions=actions,
+            skipped=skipped,
+        )
+
+
+def current_project_legacy_provider_cache_present(layout) -> bool:
+    for root in (layout.external_provider_cache_root, layout.shared_cache_dir):
+        for provider in ('claude', 'gemini'):
+            candidate = root / provider
+            if candidate.exists() or candidate.is_symlink():
+                return True
+    return False
+
+
+def _cleanup_summary(
+    context,
+    *,
+    actions: list[CleanupAction],
+    skipped: list[CleanupSkipped],
+) -> CleanupSummary:
+    return CleanupSummary(
+        project_root=str(context.project.project_root),
+        project_id=context.project.project_id,
+        status='ok',
+        deleted_bytes=sum(item.bytes_removed for item in actions),
+        deleted_count=len(actions),
+        skipped_count=len(skipped),
+        actions=tuple(actions),
+        skipped=tuple(skipped),
+    )
 
 
 def _require_stopped_backend(context) -> None:
@@ -152,37 +200,16 @@ def _pending_job_count_in_file(path: Path) -> int:
 
 def _cleanup_claude_version_caches(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
     agents_dir = layout.agents_dir
-    legacy_shared_versions = layout.shared_cache_dir / 'claude' / 'versions'
-    external_versions = layout.provider_external_cache_dir('claude') / 'versions'
-    legacy_shared_active_names: set[str] = set()
-    external_active_names: set[str] = set()
     if agents_dir.exists():
         for home in sorted(agents_dir.glob('*/provider-state/claude/home')):
             active_name = _current_claude_version_name(home)
             versions_dir = home / '.local' / 'share' / 'claude' / 'versions'
-            if active_name and versions_dir.is_symlink():
-                if _same_path(versions_dir, legacy_shared_versions):
-                    legacy_shared_active_names.add(active_name)
-                if _same_path(versions_dir, external_versions):
-                    external_active_names.add(active_name)
             _cleanup_one_claude_versions_dir(
                 versions_dir,
                 active_version_names={active_name} if active_name else set(),
                 actions=actions,
                 skipped=skipped,
             )
-    _cleanup_shared_claude_versions_dir(
-        legacy_shared_versions,
-        active_version_names=legacy_shared_active_names,
-        actions=actions,
-        skipped=skipped,
-    )
-    _cleanup_shared_claude_versions_dir(
-        external_versions,
-        active_version_names=external_active_names,
-        actions=actions,
-        skipped=skipped,
-    )
 
 
 def _cleanup_one_claude_versions_dir(
@@ -221,34 +248,6 @@ def _cleanup_one_claude_versions_dir(
         active_version_names=active_version_names,
         provider='claude',
         reason='old_claude_version_cache',
-        actions=actions,
-        skipped=skipped,
-    )
-
-
-def _cleanup_shared_claude_versions_dir(
-    versions_dir: Path,
-    *,
-    active_version_names: set[str],
-    actions: list[CleanupAction],
-    skipped: list[CleanupSkipped],
-) -> None:
-    if not versions_dir.exists():
-        return
-    if versions_dir.is_symlink():
-        skipped.append(CleanupSkipped(provider='claude', path=str(versions_dir), reason='shared_versions_dir_is_symlink'))
-        return
-    if not versions_dir.is_dir():
-        return
-    version_paths = _claude_version_paths(versions_dir)
-    if not version_paths:
-        return
-    _prune_claude_versions(
-        versions_dir,
-        version_paths,
-        active_version_names=active_version_names,
-        provider='claude',
-        reason='old_shared_claude_version_cache' if active_version_names else 'unreferenced_shared_claude_version_cache',
         actions=actions,
         skipped=skipped,
     )
@@ -352,13 +351,6 @@ def _safe_mtime(path: Path) -> float:
         return 0.0
 
 
-def _same_path(left: Path, right: Path) -> bool:
-    try:
-        return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
-    except Exception:
-        return False
-
-
 def _cleanup_claude_rebuildable_caches(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
     agents_dir = layout.agents_dir
     if not agents_dir.exists():
@@ -400,42 +392,134 @@ def _cleanup_gemini_rebuildable_caches(layout, *, actions: list[CleanupAction], 
                     actions=actions,
                     skipped=skipped,
                 )
-    _cleanup_gemini_cache_root(
-        layout.shared_cache_dir / 'gemini',
-        safe_rels=_GEMINI_SHARED_CACHE_RELS,
-        actions=actions,
-        skipped=skipped,
-    )
-    _cleanup_gemini_cache_root(
-        layout.provider_external_cache_dir('gemini'),
-        safe_rels=_GEMINI_SHARED_CACHE_RELS,
-        actions=actions,
-        skipped=skipped,
-    )
 
 
-def _cleanup_gemini_cache_root(
-    cache_root: Path,
+def _detach_legacy_claude_cache_links(
+    layout,
     *,
-    safe_rels: tuple[Path, ...],
+    actions: list[CleanupAction],
+) -> None:
+    agents_dir = layout.agents_dir
+    if not agents_dir.exists():
+        return
+    cache_roots = (
+        layout.provider_external_cache_dir('claude'),
+        layout.shared_cache_dir / 'claude',
+    )
+    for home in sorted(agents_dir.glob('*/provider-state/claude/home')):
+        result = detach_legacy_claude_binary_cache(home, cache_roots=cache_roots)
+        if result.get('status') != 'ok':
+            continue
+        actions.append(
+            CleanupAction(
+                provider='claude',
+                kind='legacy_cache_link',
+                path=str(result.get('versions_dir') or ''),
+                bytes_removed=0,
+                reason='legacy_claude_binary_cache_detached',
+            )
+        )
+
+
+def _cleanup_legacy_project_provider_caches(
+    layout,
+    *,
+    actions: list[CleanupAction],
+    skipped: list[CleanupSkipped],
+    measure_bytes: bool = True,
+) -> None:
+    roots = (
+        layout.external_provider_cache_root,
+        layout.shared_cache_dir,
+    )
+    for root in roots:
+        for provider in ('claude', 'gemini'):
+            cache_dir = root / provider
+            if not cache_dir.exists() and not cache_dir.is_symlink():
+                continue
+            if provider == 'claude' and _managed_claude_cache_references(layout, cache_dir):
+                skipped.append(
+                    CleanupSkipped(
+                        provider='claude',
+                        path=str(cache_dir),
+                        reason='legacy_cache_still_referenced',
+                    )
+                )
+                continue
+            _remove_tree(
+                cache_dir,
+                root=root,
+                provider=provider,
+                kind='legacy_project_cache',
+                reason='legacy_project_provider_cache',
+                actions=actions,
+                skipped=skipped,
+                measure_bytes=measure_bytes,
+            )
+        _remove_empty_dirs(root, stop_at=root.parent)
+    _remove_empty_dirs(
+        layout.external_provider_cache_root.parent,
+        stop_at=layout.external_provider_cache_root.parent.parent,
+    )
+
+
+def _cleanup_orphaned_legacy_provider_caches(
+    layout,
+    *,
     actions: list[CleanupAction],
     skipped: list[CleanupSkipped],
 ) -> None:
-    if not cache_root.exists() or cache_root.is_symlink():
-        return
-    for relative in safe_rels:
-        path = cache_root / relative
-        if not path.exists():
-            continue
-        _remove_tree(
-            path,
-            root=cache_root,
-            provider='gemini',
-            kind='tool_cache',
-            reason='rebuildable_gemini_cache',
-            actions=actions,
-            skipped=skipped,
+    projects_root = layout.external_provider_cache_root.parent.parent
+    sweep = cleanup_orphaned_legacy_provider_caches(
+        projects_root,
+        measure_bytes=True,
+    )
+    actions.extend(
+        CleanupAction(
+            provider=item.provider,
+            kind='legacy_project_cache',
+            path=item.path,
+            bytes_removed=item.bytes_removed,
+            reason=item.reason,
         )
+        for item in sweep.removals
+    )
+    skipped.extend(
+        CleanupSkipped(
+            provider=item.provider,
+            path=item.path,
+            reason=item.reason,
+        )
+        for item in sweep.preserved
+    )
+
+
+def _managed_claude_cache_references(layout, cache_root: Path) -> bool:
+    versions_root = cache_root / 'versions'
+    agents_dir = layout.agents_dir
+    if not agents_dir.exists():
+        return False
+    for home in sorted(agents_dir.glob('*/provider-state/claude/home')):
+        versions_dir = home / '.local' / 'share' / 'claude' / 'versions'
+        if not versions_dir.is_symlink():
+            continue
+        try:
+            if versions_dir.resolve(strict=False) == versions_root.resolve(strict=False):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _remove_empty_dirs(path: Path, *, stop_at: Path) -> None:
+    current = path
+    stop = stop_at.resolve(strict=False)
+    while current != stop:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 def _cleanup_pane_crash_logs(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
@@ -486,6 +570,7 @@ def _remove_tree(
     reason: str,
     actions: list[CleanupAction],
     skipped: list[CleanupSkipped],
+    measure_bytes: bool = True,
 ) -> None:
     if path.is_symlink():
         skipped.append(CleanupSkipped(provider=provider, path=str(path), reason='symlink_not_removed'))
@@ -493,13 +578,16 @@ def _remove_tree(
     if not _is_within(path, root):
         skipped.append(CleanupSkipped(provider=provider, path=str(path), reason='path_out_of_bounds'))
         return
-    size = _tree_size(path)
+    size = _tree_size(path) if measure_bytes else 0
     try:
         if path.is_dir():
             shutil.rmtree(path)
         else:
             path.unlink()
     except FileNotFoundError:
+        return
+    except OSError:
+        skipped.append(CleanupSkipped(provider=provider, path=str(path), reason='remove_failed'))
         return
     actions.append(
         CleanupAction(
@@ -538,4 +626,11 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-__all__ = ['CleanupAction', 'CleanupSkipped', 'CleanupSummary', 'cleanup_project_storage']
+__all__ = [
+    'CleanupAction',
+    'CleanupSkipped',
+    'CleanupSummary',
+    'cleanup_current_project_legacy_provider_caches',
+    'cleanup_project_storage',
+    'current_project_legacy_provider_cache_present',
+]

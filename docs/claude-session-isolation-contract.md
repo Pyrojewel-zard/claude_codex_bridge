@@ -155,6 +155,11 @@ When `ccb` starts a managed Claude agent:
 - it must explicitly set the effective `HOME`
 - it must explicitly set the effective `CLAUDE_PROJECTS_ROOT`
 - it must ensure `CLAUDE_PROJECTS_ROOT == <claude_home>/.claude/projects`
+- it must use the user-installed Claude executable, disable Claude self-update
+  in the managed pane, and must not create a project-scoped CCB binary cache
+- it may detach only recognized CCB-owned legacy binary-cache symlinks from the
+  managed home; it must preserve foreign symlinks and defer cache-payload
+  deletion to explicit stopped-project cleanup
 - it must create the managed home, projects root, and session-env root before
   launching Claude
 - it must materialize required Claude auth/config projections into the managed

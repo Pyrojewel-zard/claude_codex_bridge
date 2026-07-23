@@ -24,7 +24,6 @@ from agents.models import (
 from cli.services.role_command_policy import RoleCommandPolicy
 import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
-from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
 from provider_backends.droid.home import materialize_droid_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 from provider_backends.qwen.home import materialize_qwen_home_config
@@ -338,6 +337,7 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
         '\n'.join(
             [
                 'model = "gpt-5.5"',
+                'check_for_update_on_startup = true',
                 '',
                 '[features]',
                 'external_migration = true',
@@ -361,6 +361,8 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+    config = tomllib.loads(config_text)
+    assert config['check_for_update_on_startup'] is False
 
 
 def test_materialize_codex_profile_marks_project_and_workspace_trusted(tmp_path: Path, monkeypatch) -> None:
@@ -673,6 +675,7 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
         '\n'.join(
             [
                 'model = "gpt-5.5"',
+                'check_for_update_on_startup = true',
                 '',
                 '[features]',
                 'external_migration = true',
@@ -700,6 +703,8 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+    config = tomllib.loads(config_text)
+    assert config['check_for_update_on_startup'] is False
     assert '[projects."/tmp/demo"]' in config_text
     assert 'trust_level = "trusted"' in config_text
     assert f'[projects."{project_root.resolve()}"]' in config_text
@@ -2149,141 +2154,6 @@ def test_materialize_claude_profile_keeps_runtime_home_managed_by_agent_state(tm
     )
 
     assert profile.runtime_home is None
-
-
-def test_route_claude_binary_cache_links_empty_versions_dir(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'linked_empty'
-    assert versions.is_symlink()
-    assert versions.resolve() == (shared_cache / 'versions').resolve()
-    assert (versions.parent / 'versions.ccb-projection.json').is_file()
-
-
-def test_route_claude_binary_cache_refuses_conflicting_shared_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    (versions / '2.1.137').mkdir(parents=True, exist_ok=True)
-    (versions / '2.1.137' / 'claude').write_text('local binary\n', encoding='utf-8')
-    shared_version = shared_cache / 'versions' / '2.1.137'
-    shared_version.mkdir(parents=True, exist_ok=True)
-    (shared_version / 'claude').write_text('different shared binary\n', encoding='utf-8')
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    assert result['status'] == 'skipped'
-    assert result['reason'] == 'shared_version_content_conflict'
-    assert versions.is_dir()
-    assert not versions.is_symlink()
-    assert (versions / '2.1.137' / 'claude').read_text(encoding='utf-8') == 'local binary\n'
-    assert (shared_version / 'claude').read_text(encoding='utf-8') == 'different shared binary\n'
-
-
-def test_route_claude_binary_cache_migrates_executable_version_files(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.mkdir(parents=True, exist_ok=True)
-    binary = versions / '2.1.139'
-    binary.write_text('current executable\n', encoding='utf-8')
-    binary.chmod(0o755)
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    shared_binary = shared_cache / 'versions' / '2.1.139'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'migrated'
-    assert result['version_names'] == ('2.1.139',)
-    assert versions.is_symlink()
-    assert versions.resolve() == (shared_cache / 'versions').resolve()
-    assert shared_binary.read_text(encoding='utf-8') == 'current executable\n'
-    assert shared_binary.stat().st_mode & 0o111
-
-
-def test_route_claude_binary_cache_migrates_legacy_shared_symlink(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    legacy_cache = tmp_path / 'legacy-shared-cache' / 'claude'
-    external_cache = tmp_path / 'external-cache' / 'claude'
-    legacy_versions = legacy_cache / 'versions'
-    legacy_binary = legacy_versions / '2.1.139'
-    legacy_binary.parent.mkdir(parents=True, exist_ok=True)
-    legacy_binary.write_text('legacy executable\n', encoding='utf-8')
-    legacy_binary.chmod(0o755)
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(legacy_versions, target_is_directory=True)
-
-    result = route_claude_binary_cache(home, external_cache)
-
-    external_binary = external_cache / 'versions' / '2.1.139'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'migrated_symlink'
-    assert versions.is_symlink()
-    assert versions.resolve() == (external_cache / 'versions').resolve()
-    assert external_binary.read_text(encoding='utf-8') == 'legacy executable\n'
-    assert legacy_binary.exists()
-
-
-def test_route_claude_binary_cache_points_existing_shared_home_to_latest_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    shared_versions = shared_cache / 'versions'
-    old_binary = shared_versions / '2.1.139'
-    new_binary = shared_versions / '2.1.140'
-    old_binary.parent.mkdir(parents=True, exist_ok=True)
-    old_binary.write_text('old executable\n', encoding='utf-8')
-    new_binary.write_text('new executable\n', encoding='utf-8')
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(shared_versions, target_is_directory=True)
-    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (home / '.local' / 'bin' / 'claude').symlink_to(old_binary)
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'already_shared'
-    assert result['active_version_name'] == '2.1.140'
-    assert (home / '.local' / 'bin' / 'claude').resolve() == new_binary.resolve()
-
-
-def test_route_claude_binary_cache_prefers_source_home_active_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    source_home = tmp_path / 'source-home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    shared_versions = shared_cache / 'versions'
-    old_shared = shared_versions / '2.1.139'
-    newer_shared = shared_versions / '2.1.140'
-    source_active = source_home / '.local' / 'share' / 'claude' / 'versions' / '2.1.138'
-    old_shared.parent.mkdir(parents=True, exist_ok=True)
-    old_shared.write_text('old shared executable\n', encoding='utf-8')
-    newer_shared.write_text('newer shared executable\n', encoding='utf-8')
-    source_active.parent.mkdir(parents=True, exist_ok=True)
-    source_active.write_text('source active executable\n', encoding='utf-8')
-    source_active.chmod(0o755)
-    (source_home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (source_home / '.local' / 'bin' / 'claude').symlink_to(source_active)
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(shared_versions, target_is_directory=True)
-    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (home / '.local' / 'bin' / 'claude').symlink_to(newer_shared)
-
-    result = route_claude_binary_cache(home, shared_cache, source_home=source_home)
-
-    copied_active = shared_versions / '2.1.138'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'already_shared'
-    assert result['active_version_name'] == '2.1.138'
-    assert copied_active.read_text(encoding='utf-8') == 'source active executable\n'
-    assert copied_active.stat().st_mode & 0o111
-    assert (home / '.local' / 'bin' / 'claude').resolve() == copied_active.resolve()
 
 
 def test_materialize_claude_home_config_projects_system_settings_into_managed_home(tmp_path: Path) -> None:
@@ -3957,6 +3827,10 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
                     'GOOGLE_GEMINI_BASE_URL': 'https://chatapi.onechats.ai',
                 },
                 'theme': 'Default',
+                'general': {
+                    'enableAutoUpdate': True,
+                    'enableAutoUpdateNotification': True,
+                },
             },
             ensure_ascii=False,
             indent=2,
@@ -3972,6 +3846,25 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
     assert payload['env']['GOOGLE_API_KEY'] == 'system-google-key'
     assert payload['env']['GOOGLE_GEMINI_BASE_URL'] == 'https://chatapi.onechats.ai'
     assert payload['theme'] == 'Default'
+    assert payload['general']['enableAutoUpdate'] is False
+    assert payload['general']['enableAutoUpdateNotification'] is False
+
+
+def test_materialize_gemini_home_config_disables_autoupdate_without_source_settings(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload == {
+        'general': {
+            'enableAutoUpdate': False,
+            'enableAutoUpdateNotification': False,
+        }
+    }
 
 
 def test_materialize_gemini_home_config_projects_dotenv_api_auth_into_managed_home(tmp_path: Path) -> None:
