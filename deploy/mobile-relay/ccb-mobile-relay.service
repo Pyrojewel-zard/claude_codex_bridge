@@ -1,6 +1,6 @@
 [Unit]
 Description=CCB Mobile Production Relay
-Documentation=/opt/ccb-source/mobile/docs/relay/production-relay-package-c.md
+Documentation=file:/opt/ccb-source/mobile/docs/relay/production-relay-package-c.md
 After=network-online.target
 Wants=network-online.target
 
@@ -10,10 +10,13 @@ User=ccb-relay
 Group=ccb-relay
 WorkingDirectory=/opt/ccb-source
 EnvironmentFile=/etc/ccb/mobile-relay.env
-ExecStart=/usr/bin/python3 -m mobile_gateway.relay_service
+ExecStart=/opt/ccb-relay-venv/bin/python -m mobile_gateway.relay_service
 Restart=on-failure
 RestartSec=3
 UMask=0077
+LimitNOFILE=4096
+MemoryMax=1G
+TasksMax=128
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

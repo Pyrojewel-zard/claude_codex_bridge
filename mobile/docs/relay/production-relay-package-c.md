@@ -1,7 +1,7 @@
 # Production Relay Package C
 
-Status: local implementation package. This does not claim Flutter transport,
-host connector, public Alibaba Cloud, or Android public-route acceptance.
+Status: local Packages A-D implementation checkpoint. This does not claim
+public Alibaba Cloud or Android public-route acceptance.
 
 ## Service
 
@@ -23,6 +23,15 @@ Required local files:
 - state directory: `/var/lib/ccb-mobile-relay`, mode 0700;
 - admission secret file: mode 0600, deployment-owned, never committed;
 - TLS key: mode 0600, deployment-owned, never committed.
+
+The reference service uses a dedicated Python virtual environment. Install the
+tested runtime dependencies without modifying the server's system Python:
+
+```bash
+python3 -m venv /opt/ccb-relay-venv
+/opt/ccb-relay-venv/bin/pip install --requirement \
+  /opt/ccb-source/deploy/mobile-relay/requirements.txt
+```
 
 ## Package D Interface
 
@@ -93,16 +102,24 @@ headers and otherwise rate-limits by the direct TCP peer.
 
 ## Install Template
 
-1. Create a dedicated `ccb-relay` user.
-2. Install this source checkout at `/opt/ccb-source`.
+1. Create a dedicated, non-login `ccb-relay` user.
+2. Install the exact tested source checkout at `/opt/ccb-source` and create
+   `/opt/ccb-relay-venv` from `deploy/mobile-relay/requirements.txt`.
 3. Create `/var/lib/ccb-mobile-relay` with owner `ccb-relay:ccb-relay` and mode
    0700.
 4. Create `/etc/ccb/mobile-relay.env` from
-   `deploy/mobile-relay/ccb-mobile-relay.env.example`.
-5. Create `/etc/ccb/mobile-relay-admission-secrets.json` with mode 0600.
+   `deploy/mobile-relay/ccb-mobile-relay.env.example`; keep it root-owned and
+   non-world-readable.
+5. Create `/etc/ccb/mobile-relay-admission-secrets.json` and the loopback TLS
+   key with owner `ccb-relay:ccb-relay` and mode 0600.
 6. Install `deploy/mobile-relay/ccb-mobile-relay.service`.
 7. Optionally place `deploy/mobile-relay/nginx-relay.seemlab.top.conf` after
    reviewing existing nginx/RustDesk/ZeroTier configuration.
+
+The reference limits are a 768 KiB opaque outer frame, a 790528-byte WebSocket
+message ceiling, and eight queued frames per peer. File content still uses
+32 KiB encrypted chunks; the larger outer ceiling exists for bounded project
+view/conversation JSON and must not be reverted to the obsolete 64 KiB value.
 
 ## Rollback
 

@@ -941,6 +941,33 @@ def test_tls_is_required_except_explicit_loopback_test_mode(tmp_path: Path) -> N
         ).validate()
 
 
+def test_relay_deployment_templates_match_tested_runtime_limits() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    deploy_root = project_root / 'deploy' / 'mobile-relay'
+    environment = (deploy_root / 'ccb-mobile-relay.env.example').read_text(
+        encoding='utf-8'
+    )
+    service = (deploy_root / 'ccb-mobile-relay.service').read_text(
+        encoding='utf-8'
+    )
+    nginx = (deploy_root / 'nginx-relay.seemlab.top.conf').read_text(
+        encoding='utf-8'
+    )
+
+    assert 'CCB_RELAY_MAX_FRAME_BYTES=786432' in environment
+    assert 'CCB_RELAY_WEBSOCKET_MAX_MSG_BYTES=790528' in environment
+    assert 'CCB_RELAY_PEER_QUEUE_LIMIT=8' in environment
+    assert (
+        'ExecStart=/opt/ccb-relay-venv/bin/python -m mobile_gateway.relay_service'
+        in service
+    )
+    assert 'Documentation=file:/opt/ccb-source/' in service
+    assert 'proxy_pass https://127.0.0.1:18444;' in nginx
+    assert '$ccb_relay_connection_upgrade' in nginx
+    assert 'ssl_protocols TLSv1.2 TLSv1.3;' in nginx
+    assert '18445' not in nginx.split('server {', 1)[-1]
+
+
 @dataclass
 class _IssuedHost:
     store: RelayAdmissionStore
