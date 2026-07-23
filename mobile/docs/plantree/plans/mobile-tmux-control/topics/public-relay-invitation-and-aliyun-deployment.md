@@ -1,7 +1,7 @@
 # Public Relay Invitation And Alibaba Cloud Deployment
 
-Date: 2026-07-15
-Status: Planning; architecture shaped, production implementation not started
+Date: 2026-07-22
+Status: In progress; local Packages A-D implemented, public deployment unaccepted
 
 ## Purpose
 
@@ -204,6 +204,21 @@ deployment.
 - document incident response, key rotation, database backup, host revocation,
   and complete service shutdown;
 - expand capacity only from observed metrics.
+
+## Current Implementation Checkpoint
+
+Local Packages A-D are implemented on the dedicated Relay branch as of
+2026-07-22. The checkpoint includes one-time host activation, persistent
+payload-free admission metadata, host and phone proof-of-possession,
+single-use QR bootstrap followed by a durable host-signed phone grant,
+AEAD-protected unary and multiplexed stream traffic, Terminal and notification
+streams, bounded file chunks, shared Flutter socket ownership, reconnect, and
+managed outbound host-connector startup.
+
+The current local evidence is recorded in
+[public-relay-stream-package-20260722.md](../history/public-relay-stream-package-20260722.md).
+This does not complete Package E: no public DNS/TLS endpoint, Alibaba Cloud
+service, or no-`adb reverse` Android Emulator acceptance has passed yet.
 
 ## Execution Order And Review Ownership
 

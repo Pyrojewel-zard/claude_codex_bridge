@@ -22,6 +22,7 @@ from mobile_gateway import (
 from mobile_gateway.fcm import build_fcm_sender_from_env, fcm_sender_runtime_options
 from mobile_gateway.relay_host_credentials import (
     RelayHostCredentials,
+    build_relay_pairing_payload,
     load_relay_host_credentials,
 )
 from mobile_gateway.relay_host_runtime import relay_host_runtime_summary
@@ -59,13 +60,20 @@ def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
     server = build_mobile_gateway_server(listen, service)
     host, port = server.server_address[:2]
     local_gateway_url = f'http://{host}:{port}'
-    gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
     route_provider = str(command.route_provider or 'lan')
+    relay_credentials = _relay_host_credentials() if route_provider == 'relay' else None
+    gateway_url = (
+        relay_credentials.relay_http_origin
+        if relay_credentials is not None
+        else _public_gateway_url(command.public_url, fallback=local_gateway_url)
+    )
     pairing = service.ensure_reusable_pairing_payload(
         gateway_url=gateway_url,
         route_provider=route_provider,
     )
-    relay_outbound = _relay_outbound_summary(_relay_host_credentials()) if route_provider == 'relay' else None
+    if relay_credentials is not None:
+        pairing = build_relay_pairing_payload(pairing, credentials=relay_credentials)
+    relay_outbound = _relay_outbound_summary(relay_credentials) if relay_credentials is not None else None
     summary = {
         'mobile_status': 'serving',
         'listen': f'{host}:{port}',
@@ -155,7 +163,11 @@ def prepare_server_mobile_gateway(
     try:
         host, port = server.server_address[:2]
         local_gateway_url = f'http://{host}:{port}'
-        gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
+        gateway_url = (
+            relay_credentials.relay_http_origin
+            if relay_credentials is not None
+            else _public_gateway_url(command.public_url, fallback=local_gateway_url)
+        )
         pairing = (
             service.rotate_reusable_pairing_payload(
                 gateway_url=gateway_url,
@@ -167,6 +179,11 @@ def prepare_server_mobile_gateway(
                 route_provider=route_provider,
             )
         )
+        if relay_credentials is not None:
+            pairing = build_relay_pairing_payload(
+                pairing,
+                credentials=relay_credentials,
+            )
         relay_outbound = (
             _relay_outbound_summary(relay_credentials)
             if relay_credentials is not None

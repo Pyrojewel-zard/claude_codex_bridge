@@ -15,6 +15,8 @@ from .relay_crypto import RELAY_PROHIBITED_PLAINTEXT_FIELDS, RELAY_PROTOCOL_VERS
 
 _SCHEMA_VERSION = RELAY_PROTOCOL_VERSION
 RENDEZVOUS_CAPABILITY_PREFIX = 'ccb-relay-rv-v1'
+ACCESS_GRANT_PREFIX = 'ccb-relay-access-v1'
+PHONE_SESSION_PROOF_PREFIX = 'ccb-relay-phone-proof-v1'
 
 _PROHIBITED_CLEARTEXT_KEYS = set(RELAY_PROHIBITED_PLAINTEXT_FIELDS)
 _JSON_SEPARATORS = (',', ':')
@@ -134,6 +136,230 @@ class RelayRendezvousCapability:
         return self
 
 
+@dataclass(frozen=True)
+class RelayAccessGrant:
+    host_id: str
+    device_id: str
+    phone_auth_pubkey_b64: str
+    audience: str
+    scopes: tuple[str, ...]
+    nonce_b64: str
+    issued_at: int
+    expires_at: int
+    signature_b64: str
+    token: str
+    schema_version: int = _SCHEMA_VERSION
+
+    @classmethod
+    def from_token(cls, token: str) -> 'RelayAccessGrant':
+        payload, signature_b64 = _signed_token_parts(
+            token,
+            prefix=ACCESS_GRANT_PREFIX,
+            rejected='relay access grant rejected',
+        )
+        if _required_text(payload.get('typ'), 'access.typ') != ACCESS_GRANT_PREFIX:
+            raise MobileRelayError('relay access grant rejected')
+        return cls(
+            schema_version=_int(payload.get('schema_version'), fallback=0),
+            host_id=_required_text(payload.get('host_id'), 'access.host_id'),
+            device_id=_required_text(payload.get('device_id'), 'access.device_id'),
+            phone_auth_pubkey_b64=_required_base64_text(
+                payload.get('phone_auth_pubkey_b64'),
+                'access.phone_auth_pubkey_b64',
+            ),
+            audience=_required_text(payload.get('aud'), 'access.aud'),
+            scopes=tuple(sorted(_string_set(payload.get('scopes')))),
+            nonce_b64=_required_base64_text(payload.get('nonce_b64'), 'access.nonce_b64'),
+            issued_at=_positive_int(payload.get('iat'), 'access.iat'),
+            expires_at=_positive_int(payload.get('exp'), 'access.exp'),
+            signature_b64=_required_base64_text(signature_b64, 'access.signature_b64'),
+            token=str(token),
+        )._validate()
+
+    def verify(
+        self,
+        *,
+        host_public_key_b64: str,
+        host_id: str,
+        device_id: str,
+        audience: str,
+        now: int | None = None,
+    ) -> 'RelayAccessGrant':
+        self._validate()
+        current = int(time.time()) if now is None else int(now)
+        if self.expires_at <= current or self.issued_at > current + 30:
+            raise MobileRelayError('relay access grant rejected')
+        if self.host_id != host_id or self.device_id != device_id or self.audience != audience:
+            raise MobileRelayError('relay access grant rejected')
+        try:
+            public_key = ed25519.Ed25519PublicKey.from_public_bytes(_b64decode(host_public_key_b64))
+            public_key.verify(_b64decode(self.signature_b64), _access_grant_signing_payload(self._payload()))
+        except Exception as exc:  # pragma: no cover - backend exception class can vary
+            raise MobileRelayError('relay access grant rejected') from exc
+        return self
+
+    def digest_b64(self) -> str:
+        return _b64(hashlib.sha256(self.token.encode('ascii')).digest())
+
+    def _payload(self) -> dict[str, object]:
+        return {
+            'typ': ACCESS_GRANT_PREFIX,
+            'schema_version': self.schema_version,
+            'host_id': self.host_id,
+            'device_id': self.device_id,
+            'phone_auth_pubkey_b64': self.phone_auth_pubkey_b64,
+            'aud': self.audience,
+            'scopes': list(self.scopes),
+            'nonce_b64': self.nonce_b64,
+            'iat': self.issued_at,
+            'exp': self.expires_at,
+        }
+
+    def _validate(self) -> 'RelayAccessGrant':
+        if self.schema_version != _SCHEMA_VERSION or self.expires_at <= self.issued_at:
+            raise MobileRelayError('relay access grant rejected')
+        _required_text(self.host_id, 'access.host_id')
+        _required_text(self.device_id, 'access.device_id')
+        _required_text(self.audience, 'access.aud')
+        _required_base64_text(self.phone_auth_pubkey_b64, 'access.phone_auth_pubkey_b64')
+        _required_base64_text(self.nonce_b64, 'access.nonce_b64')
+        _required_base64_text(self.signature_b64, 'access.signature_b64')
+        return self
+
+
+@dataclass(frozen=True)
+class RelayPhoneSessionProof:
+    host_id: str
+    device_id: str
+    session_id: str
+    client_pubkey_b64: str
+    phone_nonce_b64: str
+    grant_sha256_b64: str
+    audience: str
+    nonce_b64: str
+    issued_at: int
+    expires_at: int
+    signature_b64: str
+    schema_version: int = _SCHEMA_VERSION
+
+    @classmethod
+    def from_token(cls, token: str) -> 'RelayPhoneSessionProof':
+        payload, signature_b64 = _signed_token_parts(
+            token,
+            prefix=PHONE_SESSION_PROOF_PREFIX,
+            rejected='relay phone session proof rejected',
+        )
+        if _required_text(payload.get('typ'), 'phone_proof.typ') != PHONE_SESSION_PROOF_PREFIX:
+            raise MobileRelayError('relay phone session proof rejected')
+        return cls(
+            schema_version=_int(payload.get('schema_version'), fallback=0),
+            host_id=_required_text(payload.get('host_id'), 'phone_proof.host_id'),
+            device_id=_required_text(payload.get('device_id'), 'phone_proof.device_id'),
+            session_id=_required_text(payload.get('session_id'), 'phone_proof.session_id'),
+            client_pubkey_b64=_required_base64_text(
+                payload.get('client_pubkey_b64'),
+                'phone_proof.client_pubkey_b64',
+            ),
+            phone_nonce_b64=_required_base64_text(
+                payload.get('phone_nonce_b64'),
+                'phone_proof.phone_nonce_b64',
+            ),
+            grant_sha256_b64=_required_base64_text(
+                payload.get('grant_sha256_b64'),
+                'phone_proof.grant_sha256_b64',
+            ),
+            audience=_required_text(payload.get('aud'), 'phone_proof.aud'),
+            nonce_b64=_required_base64_text(payload.get('nonce_b64'), 'phone_proof.nonce_b64'),
+            issued_at=_positive_int(payload.get('iat'), 'phone_proof.iat'),
+            expires_at=_positive_int(payload.get('exp'), 'phone_proof.exp'),
+            signature_b64=_required_base64_text(signature_b64, 'phone_proof.signature_b64'),
+        )._validate()
+
+    def verify(
+        self,
+        *,
+        grant: RelayAccessGrant,
+        host_id: str,
+        device_id: str,
+        session_id: str,
+        client_pubkey_b64: str,
+        phone_nonce_b64: str,
+        audience: str,
+        now: int | None = None,
+    ) -> 'RelayPhoneSessionProof':
+        self._validate()
+        current = int(time.time()) if now is None else int(now)
+        if (
+            self.expires_at <= current
+            or self.issued_at > current + 30
+            or self.expires_at - self.issued_at > 120
+        ):
+            raise MobileRelayError('relay phone session proof rejected')
+        expected = (
+            host_id,
+            device_id,
+            session_id,
+            client_pubkey_b64,
+            phone_nonce_b64,
+            audience,
+            grant.digest_b64(),
+        )
+        observed = (
+            self.host_id,
+            self.device_id,
+            self.session_id,
+            self.client_pubkey_b64,
+            self.phone_nonce_b64,
+            self.audience,
+            self.grant_sha256_b64,
+        )
+        if observed != expected:
+            raise MobileRelayError('relay phone session proof rejected')
+        try:
+            public_key = ed25519.Ed25519PublicKey.from_public_bytes(
+                _b64decode(grant.phone_auth_pubkey_b64)
+            )
+            public_key.verify(
+                _b64decode(self.signature_b64),
+                _phone_session_proof_signing_payload(self._payload()),
+            )
+        except Exception as exc:  # pragma: no cover - backend exception class can vary
+            raise MobileRelayError('relay phone session proof rejected') from exc
+        return self
+
+    def replay_key(self) -> str:
+        return hashlib.sha256(_canonical_json(self._payload()).encode('utf-8')).hexdigest()
+
+    def _payload(self) -> dict[str, object]:
+        return {
+            'typ': PHONE_SESSION_PROOF_PREFIX,
+            'schema_version': self.schema_version,
+            'host_id': self.host_id,
+            'device_id': self.device_id,
+            'session_id': self.session_id,
+            'client_pubkey_b64': self.client_pubkey_b64,
+            'phone_nonce_b64': self.phone_nonce_b64,
+            'grant_sha256_b64': self.grant_sha256_b64,
+            'aud': self.audience,
+            'nonce_b64': self.nonce_b64,
+            'iat': self.issued_at,
+            'exp': self.expires_at,
+        }
+
+    def _validate(self) -> 'RelayPhoneSessionProof':
+        if self.schema_version != _SCHEMA_VERSION or self.expires_at <= self.issued_at:
+            raise MobileRelayError('relay phone session proof rejected')
+        _required_text(self.host_id, 'phone_proof.host_id')
+        _required_text(self.device_id, 'phone_proof.device_id')
+        _required_text(self.session_id, 'phone_proof.session_id')
+        _required_text(self.audience, 'phone_proof.aud')
+        _required_base64_text(self.client_pubkey_b64, 'phone_proof.client_pubkey_b64')
+        _required_base64_text(self.phone_nonce_b64, 'phone_proof.phone_nonce_b64')
+        _required_base64_text(self.grant_sha256_b64, 'phone_proof.grant_sha256_b64')
+        _required_base64_text(self.nonce_b64, 'phone_proof.nonce_b64')
+        _required_base64_text(self.signature_b64, 'phone_proof.signature_b64')
+        return self
+
 def issue_host_rendezvous_capability(
     private_key: ed25519.Ed25519PrivateKey,
     *,
@@ -163,6 +389,82 @@ def issue_host_rendezvous_capability(
     signature = private_key.sign(_rendezvous_signing_payload(payload))
     payload_b64 = _b64(_canonical_json(payload).encode('utf-8'))
     return f'{RENDEZVOUS_CAPABILITY_PREFIX}.{payload_b64}.{_b64(signature)}'
+
+
+def issue_host_access_grant(
+    private_key: ed25519.Ed25519PrivateKey,
+    *,
+    host_id: str,
+    device_id: str,
+    phone_auth_pubkey_b64: str,
+    audience: str,
+    scopes: tuple[str, ...] | list[str] | set[str],
+    expires_at: int,
+    issued_at: int | None = None,
+    nonce_b64: str | None = None,
+) -> str:
+    payload = {
+        'typ': ACCESS_GRANT_PREFIX,
+        'schema_version': _SCHEMA_VERSION,
+        'host_id': _required_text(host_id, 'access.host_id'),
+        'device_id': _required_text(device_id, 'access.device_id'),
+        'phone_auth_pubkey_b64': _required_base64_text(
+            phone_auth_pubkey_b64,
+            'access.phone_auth_pubkey_b64',
+        ),
+        'aud': _required_text(audience, 'access.aud'),
+        'scopes': sorted(_string_set(scopes)),
+        'nonce_b64': _required_base64_text(nonce_b64 or _b64(secrets.token_bytes(18)), 'access.nonce_b64'),
+        'iat': int(time.time()) if issued_at is None else int(issued_at),
+        'exp': _positive_int(expires_at, 'access.exp'),
+    }
+    if int(payload['exp']) <= int(payload['iat']):
+        raise MobileRelayError('relay access grant rejected')
+    signature = private_key.sign(_access_grant_signing_payload(payload))
+    return f'{ACCESS_GRANT_PREFIX}.{_b64(_canonical_json(payload).encode("utf-8"))}.{_b64(signature)}'
+
+
+def issue_phone_session_proof(
+    private_key: ed25519.Ed25519PrivateKey,
+    *,
+    access_grant: str,
+    host_id: str,
+    device_id: str,
+    session_id: str,
+    client_pubkey_b64: str,
+    phone_nonce_b64: str,
+    audience: str,
+    expires_at: int,
+    issued_at: int | None = None,
+    nonce_b64: str | None = None,
+) -> str:
+    payload = {
+        'typ': PHONE_SESSION_PROOF_PREFIX,
+        'schema_version': _SCHEMA_VERSION,
+        'host_id': _required_text(host_id, 'phone_proof.host_id'),
+        'device_id': _required_text(device_id, 'phone_proof.device_id'),
+        'session_id': _required_text(session_id, 'phone_proof.session_id'),
+        'client_pubkey_b64': _required_base64_text(
+            client_pubkey_b64,
+            'phone_proof.client_pubkey_b64',
+        ),
+        'phone_nonce_b64': _required_base64_text(
+            phone_nonce_b64,
+            'phone_proof.phone_nonce_b64',
+        ),
+        'grant_sha256_b64': _b64(hashlib.sha256(str(access_grant).encode('ascii')).digest()),
+        'aud': _required_text(audience, 'phone_proof.aud'),
+        'nonce_b64': _required_base64_text(
+            nonce_b64 or _b64(secrets.token_bytes(18)),
+            'phone_proof.nonce_b64',
+        ),
+        'iat': int(time.time()) if issued_at is None else int(issued_at),
+        'exp': _positive_int(expires_at, 'phone_proof.exp'),
+    }
+    if int(payload['exp']) <= int(payload['iat']) or int(payload['exp']) - int(payload['iat']) > 120:
+        raise MobileRelayError('relay phone session proof rejected')
+    signature = private_key.sign(_phone_session_proof_signing_payload(payload))
+    return f'{PHONE_SESSION_PROOF_PREFIX}.{_b64(_canonical_json(payload).encode("utf-8"))}.{_b64(signature)}'
 
 
 @dataclass(frozen=True)
@@ -597,6 +899,35 @@ def _rendezvous_signing_payload(payload: Mapping[str, object]) -> bytes:
     return b'ccb-relay-rendezvous-v1\n' + _canonical_json(payload).encode('utf-8')
 
 
+def _access_grant_signing_payload(payload: Mapping[str, object]) -> bytes:
+    return b'ccb-relay-access-v1\n' + _canonical_json(payload).encode('utf-8')
+
+
+def _phone_session_proof_signing_payload(payload: Mapping[str, object]) -> bytes:
+    return b'ccb-relay-phone-proof-v1\n' + _canonical_json(payload).encode('utf-8')
+
+
+def _signed_token_parts(
+    token: str,
+    *,
+    prefix: str,
+    rejected: str,
+) -> tuple[dict[str, object], str]:
+    try:
+        observed_prefix, payload_b64, signature_b64 = str(token or '').split('.', 2)
+    except ValueError as exc:
+        raise MobileRelayError(rejected) from exc
+    if observed_prefix != prefix:
+        raise MobileRelayError(rejected)
+    try:
+        payload = json.loads(_b64decode(payload_b64).decode('utf-8'))
+    except Exception as exc:
+        raise MobileRelayError(rejected) from exc
+    if not isinstance(payload, Mapping):
+        raise MobileRelayError(rejected)
+    return ({str(key): value for key, value in payload.items()}, signature_b64)
+
+
 def _int(value: object, *, fallback: int) -> int:
     try:
         return int(value)
@@ -637,13 +968,19 @@ def _string_map(value: object) -> dict[str, str]:
 
 
 __all__ = [
+    'ACCESS_GRANT_PREFIX',
     'LocalRelayServerHarness',
     'MobileGatewayRelayOutboundClient',
     'MobileRelayError',
+    'PHONE_SESSION_PROOF_PREFIX',
     'RENDEZVOUS_CAPABILITY_PREFIX',
+    'RelayAccessGrant',
     'RelayFrame',
     'RelayHandshakeTranscript',
     'RelayHostRegistration',
+    'RelayPhoneSessionProof',
     'RelayRendezvousCapability',
+    'issue_host_access_grant',
     'issue_host_rendezvous_capability',
+    'issue_phone_session_proof',
 ]

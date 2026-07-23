@@ -21,7 +21,10 @@ from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
 from cli.services.mobile import prepare_server_mobile_gateway
 from mobile_gateway import MobileGatewayPairingStore, mobile_host_state_dir
-from mobile_gateway.relay_host_credentials import load_relay_host_credentials
+from mobile_gateway.relay_host_credentials import (
+    build_relay_pairing_payload,
+    load_relay_host_credentials,
+)
 from mobile_gateway.relay_host_runtime import RelayHostConnectorRuntime
 from storage.atomic import atomic_write_json
 
@@ -869,6 +872,15 @@ def _mobile_host_state_with_rotated_pairing(
     refreshed = _rotate_mobile_host_pairing(state, pairing=pairing, store=store)
     if refreshed is None:
         return None
+    if _state_route_provider(state, fallback='') == 'relay':
+        credentials_path = Path(
+            str(os.environ.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
+            or paths.state_dir / 'relay-host-credentials.json'
+        )
+        refreshed = build_relay_pairing_payload(
+            refreshed,
+            credentials=load_relay_host_credentials(credentials_path),
+        )
     updated = dict(state or {})
     updated['pairing'] = refreshed
     updated.pop('pairing_diagnostic', None)

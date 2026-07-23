@@ -14,7 +14,7 @@ import aiohttp
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, x25519
+from cryptography.hazmat.primitives.asymmetric import ed25519, rsa, x25519
 from cryptography.x509.oid import NameOID
 
 from mobile_gateway.relay_crypto import (
@@ -24,7 +24,11 @@ from mobile_gateway.relay_crypto import (
     derive_relay_v2_key_schedule,
     public_key_b64,
 )
-from mobile_gateway.relay import issue_host_rendezvous_capability
+from mobile_gateway.relay import (
+    issue_host_access_grant,
+    issue_host_rendezvous_capability,
+    issue_phone_session_proof,
+)
 from mobile_gateway.relay_admission import (
     RelayAdmissionSecrets,
     RelayAdmissionStore,
@@ -38,7 +42,10 @@ from mobile_gateway.relay_host_credentials import (
     activate_relay_host,
     load_relay_host_credentials,
 )
-from mobile_gateway.relay_host_runtime import RelayHostConnectorRuntime
+from mobile_gateway.relay_host_runtime import (
+    RelayHostConnectorRuntime,
+    RelayHostRuntimeError,
+)
 
 
 def test_public_activation_consumes_invitation_once_without_persisting_secret(
@@ -149,13 +156,44 @@ async def _host_runtime_registers_and_stops(tmp_path: Path) -> None:
         tls_context=_client_ssl(),
     )
     try:
-        runtime.start()
+        await asyncio.to_thread(runtime.start)
         for _ in range(80):
             if service.metrics_snapshot()['active_hosts'] == 1:
                 break
             await asyncio.sleep(0.05)
         assert service.metrics_snapshot()['active_hosts'] == 1
         assert runtime.diagnostics()['state'] == 'registered'
+    finally:
+        await asyncio.to_thread(runtime.stop)
+        await service.stop()
+
+
+def test_host_runtime_fails_startup_for_revoked_credentials(tmp_path: Path) -> None:
+    asyncio.run(_host_runtime_fails_startup_for_revoked_credentials(tmp_path))
+
+
+async def _host_runtime_fails_startup_for_revoked_credentials(tmp_path: Path) -> None:
+    service, issued = await _started_service(tmp_path)
+    issued.store.revoke_host(issued.host_id, reason='test revoked runtime')
+    credentials = RelayHostCredentials(
+        relay_origin=service.url('/').removesuffix('/'),
+        host_id=issued.host_id,
+        invitation_id='already-consumed',
+        host_signing_private_key_b64=_raw_private_key_b64(issued.private_key),
+        host_crypto_private_key_b64=_raw_private_key_b64(
+            x25519.X25519PrivateKey.generate()
+        ),
+        activated_at='2026-07-22T00:00:00+00:00',
+    )
+    runtime = RelayHostConnectorRuntime(
+        credentials=credentials,
+        gateway_origin='http://127.0.0.1:9',
+        tls_context=_client_ssl(),
+    )
+    try:
+        with pytest.raises(RelayHostRuntimeError, match='authentication|failed to start'):
+            await asyncio.to_thread(runtime.start, timeout_seconds=1.0)
+        assert service.metrics_snapshot()['active_hosts'] == 0
     finally:
         await asyncio.to_thread(runtime.stop)
         await service.stop()
@@ -383,6 +421,66 @@ async def _rendezvous_valid_replay_mismatch_and_expiry(tmp_path: Path) -> None:
         await service.stop()
 
 
+def test_durable_phone_grant_allows_fresh_reconnect_and_rejects_proof_replay(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_durable_phone_grant_allows_fresh_reconnect_and_rejects_proof_replay(tmp_path))
+
+
+async def _durable_phone_grant_allows_fresh_reconnect_and_rejects_proof_replay(
+    tmp_path: Path,
+) -> None:
+    service, issued = await _started_service(tmp_path, max_sessions=4)
+    phone_key = ed25519.Ed25519PrivateKey.generate()
+    now = int(time.time())
+    grant = issue_host_access_grant(
+        issued.private_key,
+        host_id=issued.host_id,
+        device_id='device-durable',
+        phone_auth_pubkey_b64=_ed25519_public_b64(phone_key),
+        audience='wss://relay.seemlab.top',
+        scopes=('view', 'notify'),
+        issued_at=now,
+        expires_at=now + 3600,
+    )
+    try:
+        async with _client_session() as client:
+            host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
+            await host.send_json(_host_register_frame(issued, session_id='host-control').to_json())
+            assert (await host.receive_json())['kind'] == 'ack'
+
+            first_hello = _access_client_hello(
+                session_id='access-session-1',
+                host_id=issued.host_id,
+                phone_key=phone_key,
+                access_grant=grant,
+            )
+            first = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await first.send_json(first_hello.to_json())
+            assert await host.receive_json() == first_hello.to_json()
+            await first.close()
+            assert (await host.receive_json())['kind'] == 'close'
+            await _wait_for_active_sessions(issued, 0)
+
+            replay = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await replay.send_json(first_hello.to_json())
+            assert (await replay.receive_json())['payload']['code'] == 'relay_auth_rejected'
+
+            second_hello = _access_client_hello(
+                session_id='access-session-2',
+                host_id=issued.host_id,
+                phone_key=phone_key,
+                access_grant=grant,
+            )
+            second = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await second.send_json(second_hello.to_json())
+            assert await host.receive_json() == second_hello.to_json()
+            await second.close()
+            assert (await host.receive_json())['kind'] == 'close'
+    finally:
+        await service.stop()
+
+
 def test_host_authentication_revocation_and_quota_release(tmp_path: Path) -> None:
     asyncio.run(_host_authentication_revocation_and_quota_release(tmp_path))
 
@@ -413,16 +511,28 @@ async def _host_authentication_revocation_and_quota_release(tmp_path: Path) -> N
             await phone.send_json(_client_hello(issued=issued, session_id='quota-session', host_id=issued.host_id).to_json())
             await host.receive_json()
 
+            second_hello = _client_hello(
+                issued=issued,
+                session_id='quota-session-2',
+                host_id=issued.host_id,
+            )
             second_phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
-            await second_phone.send_json(_client_hello(issued=issued, session_id='quota-session-2', host_id=issued.host_id).to_json())
+            await second_phone.send_json(second_hello.to_json())
             assert (await second_phone.receive_json())['payload'] == {
                 'code': 'relay_auth_rejected',
                 'message': 'relay authentication rejected',
             }
 
             await phone.close()
-            await asyncio.sleep(0.05)
-            assert issued.store.host_status(issued.host_id)['quota_usage']['active_sessions'] == 0
+            assert (await host.receive_json())['kind'] == 'close'
+            await _wait_for_active_sessions(issued, 0)
+
+            retry_phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
+            await retry_phone.send_json(second_hello.to_json())
+            assert await host.receive_json() == second_hello.to_json()
+            await retry_phone.close()
+            assert (await host.receive_json())['kind'] == 'close'
+            await _wait_for_active_sessions(issued, 0)
 
             issued.store.revoke_host(issued.host_id, reason='test revoke')
             revoked_phone = await client.ws_connect(service.url('/v2/phone'), ssl=_client_ssl())
@@ -959,6 +1069,53 @@ def _client_hello(
         seq=1,
         kind='client_hello',
         payload=payload,
+    )
+
+
+def _access_client_hello(
+    *,
+    session_id: str,
+    host_id: str,
+    phone_key: ed25519.Ed25519PrivateKey,
+    access_grant: str,
+):
+    client_pubkey_b64 = _b64(f'fresh client key {session_id}'.encode('utf-8'))
+    phone_nonce_b64 = _b64(f'fresh phone nonce {session_id}'.encode('utf-8'))
+    now = int(time.time())
+    proof = issue_phone_session_proof(
+        phone_key,
+        access_grant=access_grant,
+        host_id=host_id,
+        device_id='device-durable',
+        session_id=session_id,
+        client_pubkey_b64=client_pubkey_b64,
+        phone_nonce_b64=phone_nonce_b64,
+        audience='wss://relay.seemlab.top',
+        issued_at=now,
+        expires_at=now + 60,
+    )
+    return _RelayFrame(
+        session_id=session_id,
+        seq=1,
+        kind='client_hello',
+        payload={
+            'host_id': host_id,
+            'device_id': 'device-durable',
+            'client_pubkey_b64': client_pubkey_b64,
+            'phone_nonce_b64': phone_nonce_b64,
+            'supported_versions': [2],
+            'access_grant': access_grant,
+            'phone_session_proof': proof,
+        },
+    )
+
+
+def _ed25519_public_b64(key: ed25519.Ed25519PrivateKey) -> str:
+    return _b64(
+        key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
     )
 
 

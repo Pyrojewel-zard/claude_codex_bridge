@@ -828,8 +828,11 @@ class RelayAdmissionStore:
 
     def _harden_storage_permissions(self) -> None:
         for path in _sqlite_storage_paths(self.path):
-            if path.exists():
+            try:
                 path.chmod(0o600)
+            except FileNotFoundError:
+                # SQLite may remove WAL/SHM files between discovery and chmod.
+                continue
 
     def _now_s(self) -> int:
         return int(self._now())

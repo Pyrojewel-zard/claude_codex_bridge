@@ -23,6 +23,7 @@ _KINDS = {
     'error',
 }
 _UNARY_OPERATIONS = {
+    'pair_claim',
     'health',
     'device',
     'list_projects',
@@ -34,10 +35,8 @@ _UNARY_OPERATIONS = {
     'submit_agent_message',
     'lifecycle',
     'open_terminal',
-    'upload_file',
-    'download_file',
 }
-_STREAM_OPERATIONS = {'terminal', 'notifications'}
+_STREAM_OPERATIONS = {'terminal', 'notifications', 'file_upload', 'file_download'}
 _SAFE_ERROR_CODES = {
     'bad_request',
     'operation_not_allowed',
@@ -151,6 +150,8 @@ class RelayInnerMessage:
             if self.operation is not None:
                 raise RelayStreamProtocolError('stream_protocol_error')
             _window(self.credit_bytes)
+        elif self.credit_bytes is not None:
+            raise RelayStreamProtocolError('stream_protocol_error')
         elif self.operation is not None:
             raise RelayStreamProtocolError('stream_protocol_error')
         if self.kind == 'error':
@@ -213,6 +214,8 @@ def _optional_identifier(value: object, name: str) -> str | None:
 
 def _positive_int(value: object, name: str) -> int:
     if isinstance(value, bool):
+        raise RelayStreamProtocolError('bad_request')
+    if isinstance(value, float):
         raise RelayStreamProtocolError('bad_request')
     try:
         parsed = int(value)

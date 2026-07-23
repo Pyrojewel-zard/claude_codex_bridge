@@ -64,6 +64,16 @@ def test_relay_inner_protocol_round_trips_fixed_request_and_stream_frames() -> N
         (
             {
                 'schema_version': 1,
+                'kind': 'request',
+                'request_id': 'request-demo-0001',
+                'operation': 'upload_file',
+                'payload': {},
+            },
+            'operation_not_allowed',
+        ),
+        (
+            {
+                'schema_version': 1,
                 'kind': 'stream_open',
                 'stream_id': 'stream-demo-0001',
                 'operation': 'notifications',
@@ -81,6 +91,26 @@ def test_relay_inner_protocol_round_trips_fixed_request_and_stream_frames() -> N
                 'payload': {'code': 'bad_request'},
             },
             'stream_protocol_error',
+        ),
+        (
+            {
+                'schema_version': 1,
+                'kind': 'stream_data',
+                'stream_id': 'stream-demo-0001',
+                'credit_bytes': 1,
+                'payload': {},
+            },
+            'stream_protocol_error',
+        ),
+        (
+            {
+                'schema_version': 1,
+                'kind': 'stream_window',
+                'stream_id': 'stream-demo-0001',
+                'credit_bytes': 1.5,
+                'payload': {},
+            },
+            'bad_request',
         ),
     ],
 )

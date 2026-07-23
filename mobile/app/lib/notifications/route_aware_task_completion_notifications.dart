@@ -1,18 +1,31 @@
-import 'dart:async';
-
+import '../app/app_factories.dart';
 import '../pairing/gateway_pairing.dart';
 import '../transport/relay_socket_gateway_transport.dart';
 import '../transport/route_provider.dart';
 import 'task_completion_notifications.dart';
 
+typedef GatewayTransportForNotificationHost =
+    RelaySocketGatewayTransport Function(GatewayPairedHost host);
+
 class RouteAwareGatewayTaskCompletionNotificationStreamClient
     implements GatewayTaskCompletionNotificationStreamClient {
   RouteAwareGatewayTaskCompletionNotificationStreamClient({
     HttpGatewayTaskCompletionNotificationStreamClient? httpClient,
+    GatewayTransportForNotificationHost? relayTransportForHost,
   }) : _httpClient =
-           httpClient ?? HttpGatewayTaskCompletionNotificationStreamClient();
+           httpClient ?? HttpGatewayTaskCompletionNotificationStreamClient(),
+       _relayTransportForHost =
+           relayTransportForHost ??
+           ((host) {
+             final transport = defaultGatewayTransportFor(host);
+             if (transport is! RelaySocketGatewayTransport) {
+               throw StateError('relay notification route is unavailable');
+             }
+             return transport;
+           });
 
   final HttpGatewayTaskCompletionNotificationStreamClient _httpClient;
+  final GatewayTransportForNotificationHost _relayTransportForHost;
 
   @override
   Stream<TaskCompletionNotificationEvent> subscribe(
@@ -24,60 +37,13 @@ class RouteAwareGatewayTaskCompletionNotificationStreamClient
     if (host.profile.routeProvider.kind != RouteProviderKind.relay) {
       return _httpClient.subscribe(host, lastEventId, watch, onConnected);
     }
-
-    late final StreamController<TaskCompletionNotificationEvent> controller;
-    RelaySocketGatewayTransport? transport;
-    StreamSubscription<TaskCompletionNotificationEvent>? subscription;
-    var canceled = false;
-
-    Future<void> cancel() async {
-      canceled = true;
-      await subscription?.cancel();
-      subscription = null;
-      await transport?.close(force: true);
-      transport = null;
-    }
-
-    Future<void> connect() async {
-      final relay = RelaySocketGatewayTransport(
-        profile: host.profile,
-        deviceToken: host.deviceToken,
-      );
-      transport = relay;
-      try {
-        subscription = relay
-            .notificationEvents(
-              lastEventId: lastEventId,
-              watchQuery: watch?.queryParameters ?? const {},
-              onConnected: onConnected,
-            )
-            .map(_taskCompletionEvent)
-            .listen(
-              controller.add,
-              onError: controller.addError,
-              onDone: () async {
-                await relay.close(force: true);
-                if (!controller.isClosed) {
-                  await controller.close();
-                }
-              },
-            );
-      } catch (error, stackTrace) {
-        await relay.close(force: true);
-        if (!canceled && !controller.isClosed) {
-          controller.addError(error, stackTrace);
-          await controller.close();
-        }
-      }
-    }
-
-    controller = StreamController<TaskCompletionNotificationEvent>(
-      onListen: () => unawaited(connect()),
-      onPause: () => subscription?.pause(),
-      onResume: () => subscription?.resume(),
-      onCancel: cancel,
-    );
-    return controller.stream;
+    return _relayTransportForHost(host)
+        .notificationEvents(
+          lastEventId: lastEventId,
+          watchQuery: watch?.queryParameters ?? const {},
+          onConnected: onConnected,
+        )
+        .map(_taskCompletionEvent);
   }
 
   void close({bool force = false}) => _httpClient.close(force: force);

@@ -49,6 +49,14 @@ void main() {
         ),
         throwsFormatException,
       );
+      expect(
+        () => RelayInnerMessage.request(
+          requestId: 'request-demo-0001',
+          operation: 'upload_file',
+          payload: const {},
+        ),
+        throwsFormatException,
+      );
     },
   );
 
@@ -68,6 +76,15 @@ void main() {
         operation: 'notifications',
         payload: const {},
         creditBytes: relayStreamMaxWindowBytes + 1,
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => RelayInnerMessage(
+        kind: RelayInnerKind.streamData,
+        streamId: 'stream-demo-0001',
+        creditBytes: 1,
+        payload: const {},
       ),
       throwsFormatException,
     );

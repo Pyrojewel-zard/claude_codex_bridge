@@ -1,7 +1,7 @@
 # Public Relay Android Emulator Acceptance
 
-Date: 2026-07-15
-Status: Planning; required public-route gate, no accepted run yet
+Date: 2026-07-22
+Status: In progress; local prerequisites pass, required public-route run not started
 
 ## Purpose
 

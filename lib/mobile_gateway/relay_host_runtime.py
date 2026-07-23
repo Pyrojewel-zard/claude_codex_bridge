@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ssl
 import threading
+import time
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -40,10 +41,25 @@ class RelayHostConnectorRuntime:
         thread.start()
         if not self._started.wait(timeout=max(0.1, timeout_seconds)):
             raise RelayHostRuntimeError('relay host connector thread did not start')
-        if self._failure is not None:
-            raise RelayHostRuntimeError(
-                f'relay host connector failed to start: {self._failure.__class__.__name__}'
-            ) from self._failure
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        while time.monotonic() < deadline:
+            failure = self._failure
+            if failure is not None:
+                raise RelayHostRuntimeError(
+                    f'relay host connector failed to start: {failure.__class__.__name__}'
+                ) from failure
+            connector = self._connector
+            state = str(connector.diagnostics().get('state') or '') if connector else ''
+            if state == 'registered':
+                return
+            if state == 'auth_rejected':
+                raise RelayHostRuntimeError('relay host authentication rejected')
+            thread = self._thread
+            if thread is not None and not thread.is_alive():
+                raise RelayHostRuntimeError('relay host connector exited during startup')
+            time.sleep(0.02)
+        self.stop(timeout_seconds=1.0)
+        raise RelayHostRuntimeError('relay host connector did not register')
 
     def stop(self, *, timeout_seconds: float = 5.0) -> None:
         connector = self._connector

@@ -419,6 +419,7 @@ def test_onboarding_logged_in_starts_managed_mobile_service_when_callback_provid
     payload = json.loads(qr_payloads[0][0])
     assert payload == {
         "claim_endpoint": "https://desktop.tailnet.ts.net:8787/v1/pairing/claim",
+        "expires_at": "2026-07-02T00:10:00Z",
         "gateway_url": "https://desktop.tailnet.ts.net:8787",
         "pairing_code": "stable-code",
         "route_provider": "tailnet",

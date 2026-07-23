@@ -60,8 +60,6 @@ async def run_load_smoke(args: argparse.Namespace) -> dict[str, object]:
             tls_key_file=key_path,
             admission_db_path=workdir / 'relay-admission.sqlite3',
             state_dir=workdir / 'state',
-            max_frame_bytes=64 * 1024,
-            peer_queue_limit=64,
             write_timeout=5,
             idle_timeout=30,
             unauth_rate_limit=max(args.hosts + args.phones + 10, 200),

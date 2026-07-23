@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 import contextlib
 import ipaddress
 import json
@@ -15,7 +16,12 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 
-from .relay import MobileRelayError, RelayFrame, RelayHandshakeTranscript
+from .relay import (
+    MobileRelayError,
+    RelayFrame,
+    RelayHandshakeTranscript,
+    issue_host_access_grant,
+)
 from .relay_admission import sign_host_session_proof
 from .relay_crypto import (
     RELAY_PROTOCOL_VERSION,
@@ -36,12 +42,13 @@ from .relay_stream import (
 )
 
 
-_JSON_RESPONSE_BYTES = 2 * 1024 * 1024
+_JSON_RESPONSE_BYTES = 448 * 1024
 _BINARY_RESPONSE_BYTES = 128 * 1024 * 1024
 _UPLOAD_BYTES = 25 * 1024 * 1024
 _JSON_CONTENT_TYPES = ('application/json', '+json')
 _RELAY_INNER_OPERATION = 'relay.inner.v1'
-_RELAY_OUTER_MAX_MESSAGE_BYTES = RELAY_STREAM_MAX_MESSAGE_BYTES + 32 * 1024
+_RELAY_OUTER_MAX_MESSAGE_BYTES = 768 * 1024 + 4096
+_FILE_STREAM_CHUNK_BYTES = 32 * 1024
 
 
 class RelayHostConnectorError(RuntimeError):
@@ -55,6 +62,7 @@ class RelayHostConnectorConfig:
     host_id: str
     host_signing_key: ed25519.Ed25519PrivateKey
     host_crypto_private_key: x25519.X25519PrivateKey
+    relay_audience: str | None = None
     tls_context: ssl.SSLContext | None = None
     request_timeout_seconds: float = 5.0
     min_reconnect_delay_seconds: float = 0.5
@@ -62,9 +70,16 @@ class RelayHostConnectorConfig:
     stream_write_timeout_seconds: float = 5.0
     max_concurrent_streams: int = 16
     stream_window_bytes: int = RELAY_STREAM_INITIAL_WINDOW_BYTES
+    max_session_identities: int = 4096
+    access_grant_ttl_seconds: int = 90 * 24 * 60 * 60
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'relay_origin', _safe_relay_origin(self.relay_origin))
+        object.__setattr__(
+            self,
+            'relay_audience',
+            _safe_relay_origin(self.relay_audience or self.relay_origin),
+        )
         object.__setattr__(self, 'gateway_origin', _safe_gateway_origin(self.gateway_origin))
         if not str(self.host_id or '').strip():
             raise ValueError('relay host connector requires host_id')
@@ -80,6 +95,10 @@ class RelayHostConnectorConfig:
             raise ValueError('relay host connector stream limit is invalid')
         if self.stream_window_bytes <= 0 or self.stream_window_bytes > RELAY_STREAM_MAX_WINDOW_BYTES:
             raise ValueError('relay host connector stream window is invalid')
+        if self.max_session_identities <= 0 or self.max_session_identities > 65536:
+            raise ValueError('relay host connector session identity limit is invalid')
+        if self.access_grant_ttl_seconds < 300:
+            raise ValueError('relay host connector access grant lifetime is invalid')
 
     @property
     def host_public_key_b64(self) -> str:
@@ -110,6 +129,8 @@ class _RelayHostSession:
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     streams: dict[str, '_RelayHostStream'] = field(default_factory=dict)
     tasks: set[asyncio.Task[object]] = field(default_factory=set)
+    request_ids: set[str] = field(default_factory=set)
+    stream_ids: set[str] = field(default_factory=set)
     closed: bool = False
 
 
@@ -126,6 +147,10 @@ class _RelayHostStream:
     task: asyncio.Task[object] | None = None
     closed: bool = False
     last_event_id: str | None = None
+    recent_event_ids: deque[str] = field(default_factory=lambda: deque(maxlen=1024))
+    recent_event_id_set: set[str] = field(default_factory=set)
+    metadata: dict[str, object] = field(default_factory=dict)
+    upload_buffer: bytearray | None = None
 
 
 class RelayHostConnector:
@@ -164,6 +189,8 @@ class RelayHostConnector:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if self._diagnostics.get('state') == 'auth_rejected':
+                    raise
                 self._set_error('relay_connect_failed', exc)
                 await self._sleep(delay)
                 delay = min(self.config.max_reconnect_delay_seconds, delay * 2)
@@ -194,13 +221,13 @@ class RelayHostConnector:
         if message.type != aiohttp.WSMsgType.TEXT:
             self._diagnostics['state'] = 'auth_rejected'
             self._diagnostics['last_error_code'] = 'relay_auth_rejected'
-            return
+            raise RelayHostConnectorError('relay host authentication rejected')
         raw_frame = _json_object(message.data)
         if raw_frame.get('kind') == 'error':
             code = _error_code(raw_frame)
             self._diagnostics['state'] = 'auth_rejected'
             self._diagnostics['last_error_code'] = code
-            return
+            raise RelayHostConnectorError('relay host authentication rejected')
         frame = RelayFrame.from_json(raw_frame)
         if frame.kind == 'ack':
             self._diagnostics['state'] = 'registered'
@@ -208,6 +235,7 @@ class RelayHostConnector:
             return
         self._diagnostics['state'] = 'auth_rejected'
         self._diagnostics['last_error_code'] = 'relay_auth_rejected'
+        raise RelayHostConnectorError('relay host authentication rejected')
 
     async def _read_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         if self._diagnostics.get('state') == 'auth_rejected':
@@ -294,6 +322,13 @@ class RelayHostConnector:
         message: RelayInnerMessage,
     ) -> None:
         if message.kind == 'request':
+            request_id = str(message.request_id)
+            if (
+                request_id in session.request_ids
+                or len(session.request_ids) >= self.config.max_session_identities
+            ):
+                raise RelayStreamProtocolError('bad_request')
+            session.request_ids.add(request_id)
             self._spawn_session_task(
                 session,
                 self._handle_unary_request(ws, session_id, session, message),
@@ -412,23 +447,54 @@ class RelayHostConnector:
         message: RelayInnerMessage,
     ) -> None:
         stream_id = str(message.stream_id)
-        if stream_id in session.streams:
+        if (
+            stream_id in session.stream_ids
+            or len(session.stream_ids) >= self.config.max_session_identities
+        ):
             await self._send_stream_error(ws, session_id, session, stream_id, 'stream_conflict')
             return
+        session.stream_ids.add(stream_id)
         if len(session.streams) >= self.config.max_concurrent_streams:
             await self._send_stream_error(ws, session_id, session, stream_id, 'stream_limit')
             return
+        operation = str(message.operation)
+        if operation in {'file_upload', 'file_download'} and any(
+            item.operation == operation for item in session.streams.values()
+        ):
+            await self._send_stream_error(ws, session_id, session, stream_id, 'stream_conflict')
+            return
         state = _RelayHostStream(
             stream_id=stream_id,
-            operation=str(message.operation),
+            operation=operation,
             outbound_credit=int(message.credit_bytes or 0),
             inbound_credit=self.config.stream_window_bytes,
         )
         session.streams[stream_id] = state
+        if state.operation == 'notifications' and any(
+            item.operation == 'notifications' and item.stream_id != stream_id
+            for item in session.streams.values()
+        ):
+            session.streams.pop(stream_id, None)
+            await self._send_stream_error(ws, session_id, session, stream_id, 'stream_conflict')
+            return
         if state.operation == 'terminal':
             coroutine = self._run_terminal_stream(ws, session_id, session, state, message.payload)
         elif state.operation == 'notifications':
             coroutine = self._run_notification_stream(ws, session_id, session, state, message.payload)
+        elif state.operation == 'file_download':
+            coroutine = self._run_file_download_stream(
+                ws,
+                session_id,
+                session,
+                state,
+                message.payload,
+            )
+        elif state.operation == 'file_upload':
+            state.metadata = self._file_upload_metadata(message.payload)
+            state.upload_buffer = bytearray()
+            state.ready.set()
+            await self._grant_stream_input(ws, session_id, session, state)
+            return
         else:
             session.streams.pop(stream_id, None)
             await self._send_stream_error(ws, session_id, session, stream_id, 'operation_not_allowed')
@@ -459,6 +525,16 @@ class RelayHostConnector:
             )
             return
         state.inbound_credit -= payload_size
+        if state.operation == 'file_upload':
+            await self._handle_file_upload_data(
+                ws,
+                session_id,
+                session,
+                state,
+                message,
+                payload_size=payload_size,
+            )
+            return
         if state.operation != 'terminal':
             await self._finish_stream(
                 ws,
@@ -517,6 +593,103 @@ class RelayHostConnector:
             state.outbound_credit += credit
             state.credit_changed.notify_all()
 
+    async def _handle_file_upload_data(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        session_id: str,
+        session: _RelayHostSession,
+        state: _RelayHostStream,
+        message: RelayInnerMessage,
+        *,
+        payload_size: int,
+    ) -> None:
+        try:
+            chunk_text = _optional_text(message.payload.get('chunk_b64'))
+            chunk = _b64decode(chunk_text) if chunk_text else b''
+            buffer = state.upload_buffer
+            if buffer is None or len(buffer) + len(chunk) > _UPLOAD_BYTES:
+                raise RelayHostConnectorError('relay upload exceeds size limit')
+            buffer.extend(chunk)
+            state.inbound_credit += payload_size
+            await self._send_inner(
+                ws,
+                session_id,
+                session,
+                RelayInnerMessage(
+                    kind='stream_window',
+                    stream_id=state.stream_id,
+                    credit_bytes=payload_size,
+                    payload={},
+                ),
+            )
+            if message.payload.get('eof') is not True:
+                return
+            metadata = state.metadata
+            headers = {
+                'accept': 'application/json',
+                'content-type': _required_text(metadata.get('mime_type'), 'mime_type'),
+                'X-Ccb-File-Name': quote(
+                    _required_text(metadata.get('file_name'), 'file_name'),
+                    safe='',
+                ),
+            }
+            token = _optional_text(metadata.get('device_token'))
+            if token:
+                headers['authorization'] = f'Bearer {token}'
+            timeout = aiohttp.ClientTimeout(total=self.config.request_timeout_seconds)
+            project = quote(_required_text(metadata.get('project_id'), 'project_id'), safe='')
+            agent = quote(_required_text(metadata.get('agent'), 'agent'), safe='')
+            async with aiohttp.ClientSession(timeout=timeout, raise_for_status=False) as client:
+                async with client.post(
+                    self.config.gateway_url(f'/v1/projects/{project}/agents/{agent}/files'),
+                    data=bytes(buffer),
+                    headers=headers,
+                ) as response:
+                    result = await _response_payload(response, max_bytes=_JSON_RESPONSE_BYTES)
+            await self._send_stream_payload(
+                ws,
+                session_id,
+                session,
+                state,
+                {'result': result},
+            )
+            await self._send_stream_close(
+                ws,
+                session_id,
+                session,
+                state.stream_id,
+                'completed',
+            )
+            await self._finish_stream(
+                ws,
+                session_id,
+                session,
+                state.stream_id,
+                notify=False,
+            )
+        except Exception:
+            await self._finish_stream(
+                ws,
+                session_id,
+                session,
+                state.stream_id,
+                notify=True,
+                code='stream_upstream_error',
+            )
+
+    def _file_upload_metadata(self, payload: Mapping[str, object]) -> dict[str, object]:
+        return {
+            'project_id': _required_text(payload.get('project_id'), 'project_id'),
+            'agent': _required_text(payload.get('agent'), 'agent'),
+            'file_name': _required_text(payload.get('file_name'), 'file_name'),
+            'mime_type': _required_text(payload.get('mime_type'), 'mime_type'),
+            **(
+                {'device_token': token}
+                if (token := _optional_text(payload.get('device_token')))
+                else {}
+            ),
+        }
+
     async def _send_stream_payload(
         self,
         ws: aiohttp.ClientWebSocketResponse,
@@ -565,6 +738,110 @@ class RelayHostConnector:
                 payload={},
             ),
         )
+
+    async def _run_file_download_stream(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        session_id: str,
+        session: _RelayHostSession,
+        state: _RelayHostStream,
+        payload: Mapping[str, object],
+    ) -> None:
+        try:
+            project = quote(_required_text(payload.get('project_id'), 'project_id'), safe='')
+            agent = quote(_required_text(payload.get('agent'), 'agent'), safe='')
+            file_id = quote(_required_text(payload.get('file_id'), 'file_id'), safe='')
+            headers = {'accept': '*/*'}
+            token = _optional_text(payload.get('device_token'))
+            if token:
+                headers['authorization'] = f'Bearer {token}'
+            timeout = aiohttp.ClientTimeout(
+                total=None,
+                sock_connect=self.config.request_timeout_seconds,
+                sock_read=None,
+            )
+            client = aiohttp.ClientSession(timeout=timeout, raise_for_status=False)
+            state.upstream_client = client
+            async with client.get(
+                self.config.gateway_url(
+                    f'/v1/projects/{project}/agents/{agent}/files/{file_id}'
+                ),
+                headers=headers,
+            ) as response:
+                if response.status < 200 or response.status >= 300:
+                    await self._send_stream_payload(
+                        ws,
+                        session_id,
+                        session,
+                        state,
+                        {
+                            'result': {
+                                'ok': False,
+                                'status': int(response.status),
+                                'error': _safe_gateway_error_code(response.status),
+                            }
+                        },
+                    )
+                    await self._send_stream_close(
+                        ws,
+                        session_id,
+                        session,
+                        state.stream_id,
+                        'stream_upstream_error',
+                    )
+                    return
+                total = 0
+                async for chunk in response.content.iter_chunked(_FILE_STREAM_CHUNK_BYTES):
+                    total += len(chunk)
+                    if total > _BINARY_RESPONSE_BYTES:
+                        raise RelayHostConnectorError('relay download exceeds size limit')
+                    await self._send_stream_payload(
+                        ws,
+                        session_id,
+                        session,
+                        state,
+                        {'chunk_b64': _b64(chunk)},
+                    )
+                await self._send_stream_payload(
+                    ws,
+                    session_id,
+                    session,
+                    state,
+                    {
+                        'eof': True,
+                        'content_type': response.headers.get(
+                            'content-type',
+                            'application/octet-stream',
+                        ).split(';', 1)[0],
+                    },
+                )
+            await self._send_stream_close(
+                ws,
+                session_id,
+                session,
+                state.stream_id,
+                'completed',
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not state.closed and not session.closed:
+                with contextlib.suppress(Exception):
+                    await self._send_stream_close(
+                        ws,
+                        session_id,
+                        session,
+                        state.stream_id,
+                        'stream_upstream_error',
+                    )
+        finally:
+            await self._finish_stream(
+                ws,
+                session_id,
+                session,
+                state.stream_id,
+                notify=False,
+            )
 
     async def _run_terminal_stream(
         self,
@@ -643,6 +920,8 @@ class RelayHostConnector:
     ) -> None:
         retry_seconds = 1.0
         state.last_event_id = _optional_text(payload.get('last_event_id'))
+        if state.last_event_id:
+            _remember_event_id(state, state.last_event_id)
         state.ready.set()
         await self._grant_stream_input(ws, session_id, session, state)
         try:
@@ -677,12 +956,19 @@ class RelayHostConnector:
                         async for event in _iter_sse_events(response.content):
                             if state.closed:
                                 break
-                            event_id = _optional_text(event.get('id'))
-                            if event_id:
-                                state.last_event_id = event_id
                             retry_ms = event.get('retry')
                             if isinstance(retry_ms, int):
                                 retry_seconds = min(15.0, max(0.5, retry_ms / 1000.0))
+                            event_id = _optional_text(event.get('id'))
+                            if 'data' not in event:
+                                if event_id:
+                                    state.last_event_id = event_id
+                                continue
+                            if event_id:
+                                if event_id in state.recent_event_id_set:
+                                    continue
+                                _remember_event_id(state, event_id)
+                                state.last_event_id = event_id
                             await self._send_stream_payload(
                                 ws,
                                 session_id,
@@ -821,7 +1107,61 @@ class RelayHostConnector:
                 data=body,
                 headers=headers,
             ) as response:
-                return await _response_payload(response, max_bytes=request.max_response_bytes)
+                result = await _response_payload(response, max_bytes=request.max_response_bytes)
+        if operation == 'pair_claim' and result.get('ok') is True:
+            return self._relay_pairing_response(result, payload)
+        return result
+
+    def _relay_pairing_response(
+        self,
+        result: Mapping[str, object],
+        request_payload: Mapping[str, object],
+    ) -> dict[str, object]:
+        body = _object_map(result.get('body'), 'pair_claim.body')
+        device = _object_map(body.get('device'), 'pair_claim.device')
+        profile = _object_map(body.get('host_profile'), 'pair_claim.host_profile')
+        device_id = _required_text(
+            device.get('device_id') or profile.get('device_id'),
+            'pair_claim.device_id',
+        )
+        phone_auth_pubkey_b64 = _required_text(
+            request_payload.get('phone_auth_pubkey_b64'),
+            'phone_auth_pubkey_b64',
+        )
+        scopes = tuple(sorted(_string_set(profile.get('scopes') or device.get('scopes'))))
+        now = int(time.time())
+        profile.update(
+            {
+                'host_id': self.config.host_id,
+                'device_id': device_id,
+                'route_provider': 'relay',
+                'gateway_url': _relay_http_origin(str(self.config.relay_audience)),
+                'websocket_url': str(self.config.relay_audience),
+                'server_fingerprint': self.config.host_fingerprint,
+                'relay_access_grant': issue_host_access_grant(
+                    self.config.host_signing_key,
+                    host_id=self.config.host_id,
+                    device_id=device_id,
+                    phone_auth_pubkey_b64=phone_auth_pubkey_b64,
+                    audience=str(self.config.relay_audience),
+                    scopes=scopes,
+                    issued_at=now,
+                    expires_at=now + self.config.access_grant_ttl_seconds,
+                ),
+                'capabilities': sorted(
+                    _string_set(profile.get('capabilities'))
+                    | {
+                        'http_json',
+                        'project_view',
+                        'websocket_terminal',
+                        'relay_tunnel',
+                        'relay_reconnect',
+                    }
+                ),
+            }
+        )
+        body['host_profile'] = profile
+        return {**result, 'body': body}
 
     def _host_register_frame(self) -> RelayFrame:
         nonce_b64 = _b64(secrets.token_bytes(24))
@@ -875,9 +1215,14 @@ async def _iter_sse_events(content: aiohttp.StreamReader):
     def flush() -> dict[str, object] | None:
         nonlocal event_id, event_name, retry_ms, data_lines
         if not data_lines:
+            result: dict[str, object] = {}
+            if event_id is not None:
+                result['id'] = event_id
+            if retry_ms is not None:
+                result['retry'] = retry_ms
             event_name = None
             retry_ms = None
-            return None
+            return result or None
         data_text = '\n'.join(data_lines)
         data_lines = []
         try:
@@ -940,6 +1285,16 @@ async def _iter_sse_events(content: aiohttp.StreamReader):
         yield event
 
 
+def _remember_event_id(state: _RelayHostStream, event_id: str) -> None:
+    if event_id in state.recent_event_id_set:
+        return
+    if len(state.recent_event_ids) == state.recent_event_ids.maxlen:
+        removed = state.recent_event_ids.popleft()
+        state.recent_event_id_set.discard(removed)
+    state.recent_event_ids.append(event_id)
+    state.recent_event_id_set.add(event_id)
+
+
 @dataclass(frozen=True)
 class _GatewayRequest:
     method: str
@@ -958,6 +1313,12 @@ class _GatewayRequest:
 
 def _gateway_request(operation: str, payload: Mapping[str, object]) -> _GatewayRequest:
     op = str(operation or '').strip()
+    if op == 'pair_claim':
+        return _json_request(
+            'POST',
+            '/v1/pairing/claim',
+            _only(payload, ('pairing_code', 'device_name', 'device_id')),
+        )
     if op == 'health':
         return _GatewayRequest('GET', '/v1/health', {})
     if op == 'device':
@@ -990,40 +1351,21 @@ def _gateway_request(operation: str, payload: Mapping[str, object]) -> _GatewayR
     if op == 'submit_agent_message':
         project = _segment(payload, 'project_id')
         agent = _segment(payload, 'agent_name')
-        return _json_request('POST', f'/v1/projects/{project}/agents/{agent}/messages', dict(payload))
+        return _json_request(
+            'POST',
+            f'/v1/projects/{project}/agents/{agent}/messages',
+            _without_relay_credentials(payload),
+        )
     if op == 'lifecycle':
         project = _segment(payload, 'project_id')
         return _json_request('POST', f'/v1/projects/{project}/lifecycle', _only(payload, ('project_id', 'action')))
     if op == 'open_terminal':
         target = _object_map(payload.get('target'), 'target')
         project = _segment(target, 'project_id')
-        return _json_request('POST', f'/v1/projects/{project}/terminals', dict(payload))
-    if op == 'upload_file':
-        project = _segment(payload, 'project_id')
-        agent = _segment(payload, 'agent')
-        file_name = _required_text(payload.get('file_name'), 'file_name')
-        body = _b64decode(_required_text(payload.get('body_b64'), 'body_b64'))
-        if len(body) > _UPLOAD_BYTES:
-            raise RelayHostConnectorError('relay upload exceeds size limit')
-        return _GatewayRequest(
+        return _json_request(
             'POST',
-            f'/v1/projects/{project}/agents/{agent}/files',
-            {},
-            {'X-Ccb-File-Name': quote(file_name, safe='')},
-            body=body,
-            content_type=_required_text(payload.get('mime_type'), 'mime_type'),
-            max_response_bytes=_JSON_RESPONSE_BYTES,
-        )
-    if op == 'download_file':
-        project = _segment(payload, 'project_id')
-        agent = _segment(payload, 'agent')
-        file_id = _segment(payload, 'file_id')
-        return _GatewayRequest(
-            'GET',
-            f'/v1/projects/{project}/agents/{agent}/files/{file_id}',
-            {},
-            accept='*/*',
-            max_response_bytes=_BINARY_RESPONSE_BYTES,
+            f'/v1/projects/{project}/terminals',
+            _without_relay_credentials(payload),
         )
     if op == 'notification_events':
         return _GatewayRequest(
@@ -1039,9 +1381,12 @@ def _json_request(method: str, path: str, payload: Mapping[str, object]) -> _Gat
 
 
 async def _response_payload(response: aiohttp.ClientResponse, *, max_bytes: int) -> dict[str, object]:
-    body = await response.content.read(max_bytes + 1)
-    if len(body) > max_bytes:
-        raise RelayHostConnectorError('relay gateway response exceeds size limit')
+    chunks = bytearray()
+    async for chunk in response.content.iter_chunked(min(64 * 1024, max_bytes + 1)):
+        chunks.extend(chunk)
+        if len(chunks) > max_bytes:
+            raise RelayHostConnectorError('relay gateway response exceeds size limit')
+    body = bytes(chunks)
     content_type = response.headers.get('content-type', '')
     if response.status < 200 or response.status >= 300:
         return {
@@ -1101,6 +1446,11 @@ def _safe_relay_origin(value: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, '', '', '', ''))
 
 
+def _relay_http_origin(value: str) -> str:
+    parsed = urlparse(_safe_relay_origin(value))
+    return urlunparse(('https', parsed.netloc, '', '', '', ''))
+
+
 def _safe_gateway_origin(value: str) -> str:
     parsed = urlparse(str(value or '').strip())
     if parsed.scheme not in {'http', 'https'}:
@@ -1139,6 +1489,14 @@ def _only(payload: Mapping[str, object], keys: tuple[str, ...]) -> dict[str, obj
     return {key: payload[key] for key in keys if key in payload and payload[key] is not None}
 
 
+def _without_relay_credentials(payload: Mapping[str, object]) -> dict[str, object]:
+    return {
+        str(key): value
+        for key, value in payload.items()
+        if str(key) != 'device_token'
+    }
+
+
 def _object_map(value: object, name: str) -> dict[str, object]:
     if isinstance(value, Mapping):
         return {str(key): item for key, item in value.items()}
@@ -1175,6 +1533,12 @@ def _required_text(value: object, name: str) -> str:
 def _optional_text(value: object) -> str | None:
     text = str(value or '').strip()
     return text or None
+
+
+def _string_set(value: object) -> set[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return set()
+    return {text for item in value if (text := _optional_text(item))}
 
 
 def _canonical_json(value: Mapping[str, object]) -> str:

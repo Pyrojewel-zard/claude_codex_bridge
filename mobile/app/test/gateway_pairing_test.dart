@@ -216,6 +216,62 @@ void main() {
     });
   });
 
+  test('durable relay profile does not retain one-time QR bootstrap', () {
+    final pairing = GatewayPairingPayload.fromQrText(
+      jsonEncode({
+        'pairing_code': 'one-time-relay-code',
+        'claim_endpoint': 'https://relay.seemlab.top/v1/pairing/claim',
+        'route_provider': 'relay',
+        'gateway_url': 'https://relay.seemlab.top',
+        'host_id': 'rhost-demo',
+        'websocket_url': 'wss://relay.seemlab.top',
+        'server_fingerprint': 'sha256:host-demo',
+        'relay_session_id': 'pair-session-demo',
+        'relay_client_private_key_b64': 'bootstrap-private-key',
+        'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+        'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+        'relay_bootstrap_expires_at': '2026-07-23T00:00:00Z',
+        'relay_bootstrap_single_use': true,
+        'scopes': ['view', 'notify'],
+      }),
+    );
+    final paired = GatewayPairedHost.fromClaimJson(
+      {
+        'device_token': 'device-secret',
+        'device': {'device_id': 'device-demo', 'project_id': 'project-demo'},
+        'host_profile': {
+          'host_id': 'rhost-demo',
+          'device_id': 'device-demo',
+          'project_id': 'project-demo',
+          'route_provider': 'relay',
+          'gateway_url': 'https://relay.seemlab.top',
+          'websocket_url': 'wss://relay.seemlab.top',
+          'server_fingerprint': 'sha256:host-demo',
+          'relay_access_grant': 'ccb-relay-access-v1.payload.signature',
+          'scopes': ['view', 'notify'],
+          'capabilities': ['relay_tunnel', 'relay_reconnect'],
+        },
+      },
+      pairing: pairing,
+      relayPhoneAuthPrivateKeyB64: 'phone-auth-private-key',
+    );
+
+    final secureJson = jsonEncode(paired.toSecureJson());
+    final restored = GatewayPairedHost.fromSecureJson(
+      jsonDecode(secureJson) as Map<String, Object?>,
+    );
+
+    expect(restored.profile.routeProvider.relayAccess, isNotNull);
+    expect(restored.profile.routeProvider.relayBootstrap, isNull);
+    expect(secureJson, contains('ccb-relay-access-v1.payload.signature'));
+    expect(secureJson, contains('phone-auth-private-key'));
+    expect(secureJson, isNot(contains('one-time-relay-code')));
+    expect(secureJson, isNot(contains('pair-session-demo')));
+    expect(secureJson, isNot(contains('bootstrap-private-key')));
+    expect(secureJson, isNot(contains('bootstrap-phone-nonce')));
+    expect(secureJson, isNot(contains('ccb-relay-rv-v1.payload.signature')));
+  });
+
   test('claims relay pairing and stores relay route metadata', () async {
     final secureStore = _MemorySecureStore();
     final store = GatewayHostProfileStore(secureStore: secureStore);

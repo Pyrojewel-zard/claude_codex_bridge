@@ -514,6 +514,22 @@ def _pairing_qr_text(summary: Mapping[str, object]) -> str:
         ),
         "scopes": list(pairing.get("scopes") or []),
     }
+    for key in (
+        "project_id",
+        "host_id",
+        "expires_at",
+        "websocket_url",
+        "server_fingerprint",
+        "relay_session_id",
+        "relay_client_private_key_b64",
+        "relay_phone_nonce_b64",
+        "relay_rendezvous_capability",
+        "relay_bootstrap_expires_at",
+        "relay_bootstrap_single_use",
+    ):
+        value = pairing.get(key)
+        if value is not None and value != "":
+            payload[key] = value
     if (
         not payload["pairing_code"]
         or not payload["claim_endpoint"]

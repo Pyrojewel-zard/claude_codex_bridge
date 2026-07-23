@@ -27,6 +27,12 @@ class GatewayPairingPayload {
     required this.scopes,
     this.projectId,
     this.expiresAt,
+    this.hostId,
+    this.websocketUrl,
+    this.hostFingerprint,
+    this.relayBootstrap,
+    this.relayBootstrapExpiresAt,
+    this.relayBootstrapSingleUse = false,
   });
 
   final String pairingCode;
@@ -36,6 +42,12 @@ class GatewayPairingPayload {
   final Set<String> scopes;
   final String? projectId;
   final DateTime? expiresAt;
+  final String? hostId;
+  final Uri? websocketUrl;
+  final String? hostFingerprint;
+  final RelayPhoneSessionBootstrap? relayBootstrap;
+  final DateTime? relayBootstrapExpiresAt;
+  final bool relayBootstrapSingleUse;
 
   factory GatewayPairingPayload.fromJson(Map<String, Object?> json) {
     return GatewayPairingPayload(
@@ -48,6 +60,14 @@ class GatewayPairingPayload {
       scopes: _stringSet(json['scopes']),
       projectId: _optionalText(json['project_id']),
       expiresAt: _optionalDateTime(json['expires_at']),
+      hostId: _optionalText(json['host_id']),
+      websocketUrl: _optionalUri(json['websocket_url']),
+      hostFingerprint: _optionalText(json['server_fingerprint']),
+      relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(json),
+      relayBootstrapExpiresAt: _optionalDateTime(
+        json['relay_bootstrap_expires_at'],
+      ),
+      relayBootstrapSingleUse: json['relay_bootstrap_single_use'] == true,
     );
   }
 
@@ -74,6 +94,14 @@ class GatewayPairingPayload {
       'scopes': scopes.toList()..sort(),
       if (_hasText(projectId)) 'project_id': projectId,
       if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
+      if (_hasText(hostId)) 'host_id': hostId,
+      if (websocketUrl != null) 'websocket_url': websocketUrl.toString(),
+      if (_hasText(hostFingerprint)) 'server_fingerprint': hostFingerprint,
+      if (relayBootstrap != null) ...relayBootstrap!.toJson(),
+      if (relayBootstrapExpiresAt != null)
+        'relay_bootstrap_expires_at':
+            relayBootstrapExpiresAt!.toUtc().toIso8601String(),
+      if (relayBootstrapSingleUse) 'relay_bootstrap_single_use': true,
     };
   }
 }
@@ -106,6 +134,7 @@ class GatewayPairedHost {
   factory GatewayPairedHost.fromClaimJson(
     Map<String, Object?> json, {
     required GatewayPairingPayload pairing,
+    String? relayPhoneAuthPrivateKeyB64,
   }) {
     final hostProfile = _map(json['host_profile']);
     final device = _map(json['device']);
@@ -119,6 +148,14 @@ class GatewayPairedHost {
         _optionalText(hostProfile['host_id']) ??
         projectId ??
         _requiredText(device['project_id'], 'device.project_id');
+    final claimedAccessGrant = _optionalText(hostProfile['relay_access_grant']);
+    final relayAccess =
+        _hasText(claimedAccessGrant) && _hasText(relayPhoneAuthPrivateKeyB64)
+            ? RelayPhoneAccessCredentials(
+              accessGrant: claimedAccessGrant!,
+              phoneAuthPrivateKeyB64: relayPhoneAuthPrivateKeyB64!,
+            )
+            : RelayPhoneAccessCredentials.maybeFromJson(hostProfile);
     final routeProvider = RouteProvider(
       kind: RouteProviderKind.fromWireName(
         _optionalText(hostProfile['route_provider']) ??
@@ -128,7 +165,11 @@ class GatewayPairedHost {
           _optionalUri(hostProfile['gateway_url']) ?? pairing.gatewayUrl,
       websocketUrl: _optionalUri(hostProfile['websocket_url']),
       hostFingerprint: _optionalText(hostProfile['server_fingerprint']),
-      relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(hostProfile),
+      relayBootstrap:
+          relayAccess == null
+              ? RelayPhoneSessionBootstrap.maybeFromJson(hostProfile)
+              : null,
+      relayAccess: relayAccess,
       capabilities: _stringSet(hostProfile['capabilities']),
       diagnostics: _stringMap(hostProfile['diagnostics']),
     );
@@ -158,6 +199,7 @@ class GatewayPairedHost {
       websocketUrl: _optionalUri(profileJson['websocket_url']),
       hostFingerprint: _optionalText(profileJson['server_fingerprint']),
       relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(profileJson),
+      relayAccess: RelayPhoneAccessCredentials.maybeFromJson(profileJson),
       capabilities: _stringSet(profileJson['capabilities']),
       diagnostics: _stringMap(profileJson['diagnostics']),
     );

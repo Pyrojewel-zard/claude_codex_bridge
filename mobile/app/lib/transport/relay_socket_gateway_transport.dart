@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
 
@@ -30,6 +32,11 @@ class RelayGatewayException implements Exception {
 }
 
 class RelaySocketGatewayTransport implements GatewayTransport {
+  static const _fileChunkBytes = 32 * 1024;
+  static const _maxUploadBytes = 25 * 1024 * 1024;
+  static const _maxDownloadBytes = 128 * 1024 * 1024;
+  static const _fileTransferTimeout = Duration(minutes: 2);
+
   RelaySocketGatewayTransport({
     required this.profile,
     required String deviceToken,
@@ -58,11 +65,12 @@ class RelaySocketGatewayTransport implements GatewayTransport {
         'RelaySocketGatewayTransport requires a host fingerprint',
       );
     }
-    if (profile.routeProvider.relayBootstrap == null) {
+    if (profile.routeProvider.relayBootstrap == null &&
+        profile.routeProvider.relayAccess == null) {
       throw ArgumentError.value(
         null,
-        'profile.routeProvider.relayBootstrap',
-        'RelaySocketGatewayTransport requires relay bootstrap material',
+        'profile.routeProvider',
+        'RelaySocketGatewayTransport requires relay bootstrap or access credentials',
       );
     }
   }
@@ -87,6 +95,20 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       serverTime: _dateTime(body['server_time']),
       capabilities: _stringSet(body['capabilities']),
     );
+  }
+
+  Future<Map<String, Object?>> claimPairing({
+    required String pairingCode,
+    required String deviceName,
+    required String phoneAuthPublicKeyB64,
+    String? deviceId,
+  }) {
+    return _requestBody('pair_claim', {
+      'pairing_code': pairingCode,
+      'device_name': deviceName,
+      'phone_auth_pubkey_b64': phoneAuthPublicKeyB64,
+      if (_hasText(deviceId)) 'device_id': deviceId,
+    });
   }
 
   @override
@@ -285,14 +307,60 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     required String mimeType,
     required List<int> bytes,
   }) async {
-    final body = await _requestBody('upload_file', {
-      'project_id': projectId,
-      'agent': agentName,
-      'file_name': fileName,
-      'mime_type': mimeType,
-      'body_b64': base64UrlEncode(bytes).replaceAll('=', ''),
-    });
-    return GatewayFileUploadResult.fromJson(body);
+    if (bytes.length > _maxUploadBytes) {
+      throw const RelayGatewayException('relay upload exceeds size limit');
+    }
+    final stream = await _openStream(
+      operation: 'file_upload',
+      payload: {
+        'project_id': projectId,
+        'agent': agentName,
+        'file_name': fileName,
+        'mime_type': mimeType,
+        if (_hasText(_deviceToken)) 'device_token': _deviceToken,
+      },
+    );
+    final result = Completer<Map<String, Object?>>();
+    late final StreamSubscription<Map<String, Object?>> subscription;
+    subscription = stream.events.listen(
+      (payload) {
+        final value = payload['result'];
+        if (!result.isCompleted && value is Map) {
+          result.complete({
+            for (final entry in value.entries)
+              entry.key.toString(): entry.value,
+          });
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!result.isCompleted) {
+          result.completeError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        if (!result.isCompleted) {
+          result.completeError(
+            const RelayGatewayException('relay upload ended without result'),
+          );
+        }
+      },
+    );
+    try {
+      for (var offset = 0; offset < bytes.length; offset += _fileChunkBytes) {
+        final end = min(offset + _fileChunkBytes, bytes.length);
+        await _sendStreamData(stream, {
+          'chunk_b64': _b64Encode(bytes.sublist(offset, end)),
+        });
+      }
+      await _sendStreamData(stream, const {'eof': true});
+      final response = await result.future.timeout(_fileTransferTimeout);
+      return GatewayFileUploadResult.fromJson(
+        _relayResultBody(response, operation: 'upload'),
+      );
+    } finally {
+      await subscription.cancel();
+      await _cancelStream(stream);
+    }
   }
 
   @override
@@ -301,15 +369,67 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     required String agentName,
     required String fileId,
   }) async {
-    final response = await _request('download_file', {
-      'project_id': projectId,
-      'agent': agentName,
-      'file_id': fileId,
-    });
-    final bodyB64 = _requiredText(response['body_b64'], 'body_b64');
-    return base64Url.decode(
-      bodyB64.padRight(bodyB64.length + ((4 - bodyB64.length % 4) % 4), '='),
+    final stream = await _openStream(
+      operation: 'file_download',
+      payload: {
+        'project_id': projectId,
+        'agent': agentName,
+        'file_id': fileId,
+        if (_hasText(_deviceToken)) 'device_token': _deviceToken,
+      },
     );
+    final bytes = <int>[];
+    final completed = Completer<void>();
+    late final StreamSubscription<Map<String, Object?>> subscription;
+    subscription = stream.events.listen(
+      (payload) {
+        final result = payload['result'];
+        if (result is Map) {
+          try {
+            _relayResultBody({
+              for (final entry in result.entries)
+                entry.key.toString(): entry.value,
+            }, operation: 'download');
+          } catch (error, stackTrace) {
+            if (!completed.isCompleted) {
+              completed.completeError(error, stackTrace);
+            }
+          }
+          return;
+        }
+        final chunk = _optionalText(payload['chunk_b64']);
+        if (chunk != null) {
+          bytes.addAll(_b64Decode(chunk));
+          if (bytes.length > _maxDownloadBytes && !completed.isCompleted) {
+            completed.completeError(
+              const RelayGatewayException('relay download exceeds size limit'),
+            );
+          }
+        }
+        if (payload['eof'] == true && !completed.isCompleted) {
+          completed.complete();
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!completed.isCompleted) {
+          completed.completeError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        if (!completed.isCompleted) {
+          completed.completeError(
+            const RelayGatewayException('relay download ended before EOF'),
+          );
+        }
+      },
+    );
+    try {
+      await completed.future.timeout(_fileTransferTimeout);
+      return bytes;
+    } finally {
+      await subscription.cancel();
+      await _cancelStream(stream);
+    }
   }
 
   Stream<Map<String, Object?>> notificationEvents({
@@ -428,10 +548,6 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       throw const RelayGatewayException('relay transport is closed');
     }
     final route = profile.routeProvider;
-    final bootstrap = route.relayBootstrap;
-    if (bootstrap == null) {
-      throw const RelayGatewayException('relay bootstrap is missing');
-    }
     final relayOrigin = _validatedRelayOrigin(
       route.websocketUrl,
       allowInsecureLoopbackForTests: _allowInsecureLoopbackForTests,
@@ -440,75 +556,102 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       relayOrigin.resolve('/v2/phone').toString(),
       customClient: _httpClient,
     ).timeout(_timeout);
-    final clientPrivateKeyBytes = _b64Decode(bootstrap.clientPrivateKeyB64);
-    final clientPublicKeyB64 = await _publicKeyB64(clientPrivateKeyBytes);
-    socket.add(
-      jsonEncode(
-        RelayFrame(
-          sessionId: bootstrap.sessionId,
-          sequence: 1,
-          kind: RelayFrameKind.clientHello,
-          payload: {
-            'host_id': profile.hostId,
-            'device_id': profile.deviceId,
-            'client_pubkey_b64': clientPublicKeyB64,
-            'phone_nonce_b64': bootstrap.phoneNonceB64,
-            'supported_versions': [relayProtocolVersion],
-            'rendezvous_capability': bootstrap.rendezvousCapability,
-          },
-        ).toJson(),
-      ),
-    );
-    final reader = StreamIterator<dynamic>(socket);
-    final hostHello = await _receiveFrame(reader, timeout: _timeout);
-    if (hostHello.kind != RelayFrameKind.hostHello) {
-      throw const RelayGatewayException('relay host hello was not received');
-    }
-    RelayHandshakeTranscript.negotiate(
-      clientHello: RelayFrame(
-        sessionId: bootstrap.sessionId,
+    socket.pingInterval = const Duration(seconds: 20);
+    StreamIterator<dynamic>? reader;
+    RelayCryptoSession? crypto;
+    try {
+      final access = route.relayAccess;
+      final bootstrap = route.relayBootstrap;
+      late final String sessionId;
+      late final List<int> clientPrivateKeyBytes;
+      late final String phoneNonceB64;
+      final authorization = <String, Object?>{};
+      if (access != null) {
+        sessionId = 'session-${_b64Encode(_randomBytes(18))}';
+        clientPrivateKeyBytes = _randomBytes(32);
+        phoneNonceB64 = _b64Encode(_randomBytes(24));
+      } else if (bootstrap != null) {
+        sessionId = bootstrap.sessionId;
+        clientPrivateKeyBytes = _b64Decode(bootstrap.clientPrivateKeyB64);
+        phoneNonceB64 = bootstrap.phoneNonceB64;
+        authorization['rendezvous_capability'] = bootstrap.rendezvousCapability;
+      } else {
+        throw const RelayGatewayException(
+          'relay bootstrap or access credentials are missing',
+        );
+      }
+      final clientPublicKeyB64 = await _publicKeyB64(clientPrivateKeyBytes);
+      if (access != null) {
+        authorization['access_grant'] = access.accessGrant;
+        authorization['phone_session_proof'] = await _phoneSessionProof(
+          access: access,
+          relayAudience: relayOrigin.toString(),
+          hostId: profile.hostId,
+          deviceId: profile.deviceId,
+          sessionId: sessionId,
+          clientPublicKeyB64: clientPublicKeyB64,
+          phoneNonceB64: phoneNonceB64,
+        );
+      }
+      final clientHello = RelayFrame(
+        sessionId: sessionId,
         sequence: 1,
         kind: RelayFrameKind.clientHello,
         payload: {
           'host_id': profile.hostId,
           'device_id': profile.deviceId,
           'client_pubkey_b64': clientPublicKeyB64,
-          'phone_nonce_b64': bootstrap.phoneNonceB64,
+          'phone_nonce_b64': phoneNonceB64,
           'supported_versions': [relayProtocolVersion],
-          'rendezvous_capability': bootstrap.rendezvousCapability,
+          ...authorization,
         },
-      ),
-      hostHello: hostHello,
-    );
-    final observedFingerprint = _requiredText(
-      hostHello.payload['server_fingerprint'],
-      'host_hello.server_fingerprint',
-    );
-    if (observedFingerprint != route.hostFingerprint) {
+      );
+      socket.add(jsonEncode(clientHello.toJson()));
+      reader = StreamIterator<dynamic>(socket);
+      final hostHello = await _receiveFrame(reader, timeout: _timeout);
+      if (hostHello.kind != RelayFrameKind.hostHello) {
+        throw const RelayGatewayException('relay host hello was not received');
+      }
+      RelayHandshakeTranscript.negotiate(
+        clientHello: clientHello,
+        hostHello: hostHello,
+      );
+      final observedFingerprint = _requiredText(
+        hostHello.payload['server_fingerprint'],
+        'host_hello.server_fingerprint',
+      );
+      if (observedFingerprint != route.hostFingerprint) {
+        throw const RelayGatewayException('relay host fingerprint mismatch');
+      }
+      final hostPublicKeyB64 = _requiredText(
+        hostHello.payload['host_pubkey_b64'],
+        'host_hello.host_pubkey_b64',
+      );
+      final schedule = await RelayV2KeySchedule.derive(
+        localPrivateKeyBytes: clientPrivateKeyBytes,
+        peerPublicKeyB64: hostPublicKeyB64,
+        role: 'phone',
+        sessionId: sessionId,
+        clientPublicKeyB64: clientPublicKeyB64,
+        hostPublicKeyB64: hostPublicKeyB64,
+        expectedHostFingerprint: route.hostFingerprint!,
+      );
+      crypto = schedule.session(role: 'phone');
+      final session = _RelaySocketSession(
+        socket: socket,
+        reader: reader,
+        crypto: crypto,
+      );
+      crypto = null;
+      _session = session;
+      session.readTask = _readLoop(session);
+      return session;
+    } catch (_) {
+      crypto?.close();
+      await reader?.cancel();
       await socket.close();
-      throw const RelayGatewayException('relay host fingerprint mismatch');
+      rethrow;
     }
-    final hostPublicKeyB64 = _requiredText(
-      hostHello.payload['host_pubkey_b64'],
-      'host_hello.host_pubkey_b64',
-    );
-    final schedule = await RelayV2KeySchedule.derive(
-      localPrivateKeyBytes: clientPrivateKeyBytes,
-      peerPublicKeyB64: hostPublicKeyB64,
-      role: 'phone',
-      sessionId: bootstrap.sessionId,
-      clientPublicKeyB64: clientPublicKeyB64,
-      hostPublicKeyB64: hostPublicKeyB64,
-      expectedHostFingerprint: route.hostFingerprint!,
-    );
-    final session = _RelaySocketSession(
-      socket: socket,
-      reader: reader,
-      crypto: schedule.session(role: 'phone'),
-    );
-    _session = session;
-    session.readTask = _readLoop(session);
-    return session;
   }
 
   Future<void> _sendInner(
@@ -712,6 +855,11 @@ class RelaySocketGatewayTransport implements GatewayTransport {
         completer.completeError(error);
       } else if (streamId != null) {
         final stream = session.streams.remove(streamId);
+        final terminalId = stream?.terminalId;
+        if (terminalId != null &&
+            identical(session.terminalStreams[terminalId], stream)) {
+          session.terminalStreams.remove(terminalId);
+        }
         stream?.addError(error);
         await stream?.close();
       }
@@ -980,6 +1128,70 @@ class _SerialExecutor {
   }
 }
 
+Future<String> _phoneSessionProof({
+  required RelayPhoneAccessCredentials access,
+  required String relayAudience,
+  required String hostId,
+  required String deviceId,
+  required String sessionId,
+  required String clientPublicKeyB64,
+  required String phoneNonceB64,
+}) async {
+  final now = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+  final grantDigest = await Sha256().hash(utf8.encode(access.accessGrant));
+  final payload = <String, Object?>{
+    'typ': 'ccb-relay-phone-proof-v1',
+    'schema_version': relayProtocolVersion,
+    'host_id': hostId,
+    'device_id': deviceId,
+    'session_id': sessionId,
+    'client_pubkey_b64': clientPublicKeyB64,
+    'phone_nonce_b64': phoneNonceB64,
+    'grant_sha256_b64': _b64Encode(grantDigest.bytes),
+    'aud': relayAudience,
+    'nonce_b64': _b64Encode(_randomBytes(18)),
+    'iat': now,
+    'exp': now + 60,
+  };
+  final canonicalPayload = _canonicalJson(payload);
+  final signingBytes = utf8.encode(
+    'ccb-relay-phone-proof-v1\n$canonicalPayload',
+  );
+  final keyPair = await Ed25519().newKeyPairFromSeed(
+    _b64Decode(access.phoneAuthPrivateKeyB64),
+  );
+  final signature = await Ed25519().sign(signingBytes, keyPair: keyPair);
+  return 'ccb-relay-phone-proof-v1.'
+      '${_b64Encode(utf8.encode(canonicalPayload))}.'
+      '${_b64Encode(signature.bytes)}';
+}
+
+String _canonicalJson(Map<String, Object?> value) {
+  Object? sortValue(Object? item) {
+    if (item is Map) {
+      return SplayTreeMap<String, Object?>.from({
+        for (final entry in item.entries)
+          entry.key.toString(): sortValue(entry.value),
+      });
+    }
+    if (item is Iterable) {
+      return [for (final child in item) sortValue(child)];
+    }
+    return item;
+  }
+
+  return jsonEncode(sortValue(value));
+}
+
+List<int> _randomBytes(int length) {
+  final random = Random.secure();
+  return List<int>.generate(length, (_) => random.nextInt(256));
+}
+
+String _b64Encode(List<int> value) {
+  return base64UrlEncode(value).replaceAll('=', '');
+}
+
 Uri _validatedRelayOrigin(
   Uri? uri, {
   required bool allowInsecureLoopbackForTests,
@@ -1061,6 +1273,19 @@ String _requiredText(Object? value, String name) {
     throw FormatException('relay response missing text field: $name');
   }
   return text;
+}
+
+Map<String, Object?> _relayResultBody(
+  Map<String, Object?> result, {
+  required String operation,
+}) {
+  if (result['ok'] != true) {
+    throw RelayGatewayException(
+      _text(result['error'], fallback: 'relay $operation failed'),
+      statusCode: _int(result['status']),
+    );
+  }
+  return _objectMap(result['body'], '$operation body');
 }
 
 bool _hasText(String? value) => value != null && value.trim().isNotEmpty;

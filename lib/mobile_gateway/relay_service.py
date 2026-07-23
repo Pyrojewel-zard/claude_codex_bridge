@@ -19,13 +19,21 @@ from typing import Any, Mapping
 
 from aiohttp import WSMsgType, web
 
-from .relay import MobileRelayError, RelayFrame, RelayHandshakeTranscript, RelayRendezvousCapability
+from .relay import (
+    MobileRelayError,
+    RelayAccessGrant,
+    RelayFrame,
+    RelayHandshakeTranscript,
+    RelayPhoneSessionProof,
+    RelayRendezvousCapability,
+)
 from .relay_admission import RelayAdmissionError, RelayAdmissionSecrets, RelayAdmissionStore
 from .relay_crypto import RelayDirection, RelayV2Envelope
 
 
 _DEFAULT_LOOPBACK_PORT = 18444
 _DEFAULT_ADMIN_PORT = 18445
+_DEFAULT_MAX_FRAME_BYTES = 768 * 1024
 _JSON_SEPARATORS = (',', ':')
 _PUBLIC_ERROR_MESSAGES = {
     'relay_auth_rejected': 'relay authentication rejected',
@@ -48,9 +56,9 @@ class ProductionRelayConfig:
     tls_cert_file: Path | None = None
     tls_key_file: Path | None = None
     unsafe_plaintext_for_tests: bool = False
-    max_frame_bytes: int = 64 * 1024
+    max_frame_bytes: int = _DEFAULT_MAX_FRAME_BYTES
     websocket_max_msg_bytes: int | None = None
-    peer_queue_limit: int = 32
+    peer_queue_limit: int = 8
     write_timeout: float = 5.0
     handshake_timeout: float = 10.0
     idle_timeout: float = 60.0
@@ -131,9 +139,11 @@ class ProductionRelayConfig:
             state_dir=Path(os.environ.get('CCB_RELAY_STATE_DIR', '/var/lib/ccb-mobile-relay')),
             tls_cert_file=_optional_path(os.environ.get('CCB_RELAY_TLS_CERT')),
             tls_key_file=_optional_path(os.environ.get('CCB_RELAY_TLS_KEY')),
-            max_frame_bytes=int(os.environ.get('CCB_RELAY_MAX_FRAME_BYTES', str(64 * 1024))),
+            max_frame_bytes=int(
+                os.environ.get('CCB_RELAY_MAX_FRAME_BYTES', str(_DEFAULT_MAX_FRAME_BYTES))
+            ),
             websocket_max_msg_bytes=_optional_int(os.environ.get('CCB_RELAY_WEBSOCKET_MAX_MSG_BYTES')),
-            peer_queue_limit=int(os.environ.get('CCB_RELAY_PEER_QUEUE_LIMIT', '32')),
+            peer_queue_limit=int(os.environ.get('CCB_RELAY_PEER_QUEUE_LIMIT', '8')),
             write_timeout=float(os.environ.get('CCB_RELAY_WRITE_TIMEOUT_SECONDS', '5')),
             handshake_timeout=float(os.environ.get('CCB_RELAY_HANDSHAKE_TIMEOUT_SECONDS', '10')),
             idle_timeout=float(os.environ.get('CCB_RELAY_IDLE_TIMEOUT_SECONDS', '60')),
@@ -655,7 +665,7 @@ class ProductionRelayService:
     async def _open_phone_session(self, endpoint: _PeerEndpoint, frame: RelayFrame) -> _RelaySessionState:
         if frame.kind != 'client_hello':
             raise MobileRelayError('relay client_hello frame required')
-        rendezvous = self._verify_phone_rendezvous(frame)
+        authorization = self._verify_phone_authorization(frame)
         host_id = str(frame.payload['host_id'])
         session_id = frame.session_id
         async with self._lock:
@@ -664,34 +674,76 @@ class ProductionRelayService:
                 raise MobileRelayError('relay host is not connected')
             if session_id in self._sessions:
                 raise MobileRelayError('relay session identity already connected')
-        self._rendezvous_replays.claim(
-            replay_key=rendezvous.replay_key(),
+        reservation = self._store.reserve_host_session(
             host_id=host_id,
-            expires_at=rendezvous.expires_at,
-        )
-        self._store.reserve_host_session(host_id=host_id, session_id=session_id)
-        session = _RelaySessionState(
             session_id=session_id,
-            host_id=host_id,
-            client_hello=frame,
-            host=host,
-            phone=endpoint,
         )
-        async with self._lock:
-            self._sessions[session_id] = session
-            self._sessions_by_host.setdefault(host_id, set()).add(session_id)
-            self._metrics.sessions_opened += 1
-        return session
+        if reservation.get('idempotent') is True:
+            raise MobileRelayError('relay session identity already connected')
+        committed = False
+        try:
+            self._rendezvous_replays.claim(
+                replay_key=authorization.replay_key(),
+                host_id=host_id,
+                expires_at=authorization.expires_at,
+            )
+            session = _RelaySessionState(
+                session_id=session_id,
+                host_id=host_id,
+                client_hello=frame,
+                host=host,
+                phone=endpoint,
+            )
+            async with self._lock:
+                current_host = self._hosts.get(host_id)
+                if current_host is not host or host.closed:
+                    raise MobileRelayError('relay host is not connected')
+                if session_id in self._sessions:
+                    raise MobileRelayError('relay session identity already connected')
+                self._sessions[session_id] = session
+                self._sessions_by_host.setdefault(host_id, set()).add(session_id)
+                self._metrics.sessions_opened += 1
+                committed = True
+            return session
+        finally:
+            if not committed:
+                await self._release_reserved_session(host_id, session_id)
 
-    def _verify_phone_rendezvous(self, frame: RelayFrame) -> RelayRendezvousCapability:
+    def _verify_phone_authorization(
+        self,
+        frame: RelayFrame,
+    ) -> RelayRendezvousCapability | RelayPhoneSessionProof:
         payload = frame.payload
         host_id = str(payload.get('host_id') or '')
+        device_id = str(payload.get('device_id') or '')
         client_pubkey_b64 = str(payload.get('client_pubkey_b64') or '')
         phone_nonce_b64 = str(payload.get('phone_nonce_b64') or '')
+        access_token = str(payload.get('access_grant') or '')
+        proof_token = str(payload.get('phone_session_proof') or '')
+        host_public_key_b64 = self._store.host_public_key_for_rendezvous(host_id)
+        if access_token or proof_token:
+            if not access_token or not proof_token or not phone_nonce_b64:
+                raise MobileRelayError('relay phone session proof required')
+            grant = RelayAccessGrant.from_token(access_token).verify(
+                host_public_key_b64=host_public_key_b64,
+                host_id=host_id,
+                device_id=device_id,
+                audience=self.config.public_origin,
+                now=int(time.time()),
+            )
+            return RelayPhoneSessionProof.from_token(proof_token).verify(
+                grant=grant,
+                host_id=host_id,
+                device_id=device_id,
+                session_id=frame.session_id,
+                client_pubkey_b64=client_pubkey_b64,
+                phone_nonce_b64=phone_nonce_b64,
+                audience=self.config.public_origin,
+                now=int(time.time()),
+            )
         token = str(payload.get('rendezvous_capability') or '')
         if not token or not phone_nonce_b64:
             raise MobileRelayError('relay rendezvous capability required')
-        host_public_key_b64 = self._store.host_public_key_for_rendezvous(host_id)
         return RelayRendezvousCapability.from_token(token).verify(
             host_public_key_b64=host_public_key_b64,
             host_id=host_id,
@@ -1030,9 +1082,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--state-dir', default=os.environ.get('CCB_RELAY_STATE_DIR', '/var/lib/ccb-mobile-relay'))
     parser.add_argument('--tls-cert', default=os.environ.get('CCB_RELAY_TLS_CERT'))
     parser.add_argument('--tls-key', default=os.environ.get('CCB_RELAY_TLS_KEY'))
-    parser.add_argument('--max-frame-bytes', type=int, default=int(os.environ.get('CCB_RELAY_MAX_FRAME_BYTES', str(64 * 1024))))
+    parser.add_argument(
+        '--max-frame-bytes',
+        type=int,
+        default=int(
+            os.environ.get('CCB_RELAY_MAX_FRAME_BYTES', str(_DEFAULT_MAX_FRAME_BYTES))
+        ),
+    )
     parser.add_argument('--websocket-max-msg-bytes', type=int, default=_optional_int(os.environ.get('CCB_RELAY_WEBSOCKET_MAX_MSG_BYTES')))
-    parser.add_argument('--peer-queue-limit', type=int, default=int(os.environ.get('CCB_RELAY_PEER_QUEUE_LIMIT', '32')))
+    parser.add_argument(
+        '--peer-queue-limit',
+        type=int,
+        default=int(os.environ.get('CCB_RELAY_PEER_QUEUE_LIMIT', '8')),
+    )
     parser.add_argument('--write-timeout-seconds', type=float, default=float(os.environ.get('CCB_RELAY_WRITE_TIMEOUT_SECONDS', '5')))
     parser.add_argument('--handshake-timeout-seconds', type=float, default=float(os.environ.get('CCB_RELAY_HANDSHAKE_TIMEOUT_SECONDS', '10')))
     parser.add_argument('--idle-timeout-seconds', type=float, default=float(os.environ.get('CCB_RELAY_IDLE_TIMEOUT_SECONDS', '60')))

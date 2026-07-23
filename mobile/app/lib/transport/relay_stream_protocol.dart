@@ -180,6 +180,8 @@ class RelayInnerMessage {
         throw const FormatException('relay stream window is invalid');
       }
       _window(creditBytes);
+    } else if (creditBytes != null) {
+      throw const FormatException('relay inner credit is invalid');
     } else if (kind != RelayInnerKind.request && operation != null) {
       throw const FormatException('relay inner operation is invalid');
     }
@@ -191,6 +193,7 @@ int relayInnerPayloadSize(Map<String, Object?> payload) {
 }
 
 const _unaryOperations = {
+  'pair_claim',
   'health',
   'device',
   'list_projects',
@@ -202,11 +205,14 @@ const _unaryOperations = {
   'submit_agent_message',
   'lifecycle',
   'open_terminal',
-  'upload_file',
-  'download_file',
 };
 
-const _streamOperations = {'terminal', 'notifications'};
+const _streamOperations = {
+  'terminal',
+  'notifications',
+  'file_upload',
+  'file_download',
+};
 final _identifierPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$');
 
 String _identifier(String? value, String name) {

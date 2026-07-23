@@ -26,6 +26,7 @@ class RouteProvider {
     this.websocketUrl,
     this.hostFingerprint,
     this.relayBootstrap,
+    this.relayAccess,
     this.capabilities = const {},
     this.diagnostics = const {},
   });
@@ -35,6 +36,7 @@ class RouteProvider {
   final Uri? websocketUrl;
   final String? hostFingerprint;
   final RelayPhoneSessionBootstrap? relayBootstrap;
+  final RelayPhoneAccessCredentials? relayAccess;
   final Set<String> capabilities;
   final Map<String, String> diagnostics;
 
@@ -45,8 +47,54 @@ class RouteProvider {
       if (websocketUrl != null) 'websocket_url': websocketUrl.toString(),
       if (_hasText(hostFingerprint)) 'server_fingerprint': hostFingerprint,
       if (relayBootstrap != null) ...relayBootstrap!.toJson(),
+      if (relayAccess != null) ...relayAccess!.toJson(),
       'capabilities': capabilities.toList()..sort(),
       if (diagnostics.isNotEmpty) 'diagnostics': Map.of(diagnostics),
+    };
+  }
+}
+
+class RelayPhoneAccessCredentials {
+  const RelayPhoneAccessCredentials({
+    required this.accessGrant,
+    required this.phoneAuthPrivateKeyB64,
+  });
+
+  final String accessGrant;
+  final String phoneAuthPrivateKeyB64;
+
+  factory RelayPhoneAccessCredentials.fromJson(Map<String, Object?> json) {
+    final accessGrant = _optionalText(json['relay_access_grant']);
+    final phoneAuthPrivateKeyB64 = _optionalText(
+      json['relay_phone_auth_private_key_b64'],
+    );
+    if (!_hasText(accessGrant) && !_hasText(phoneAuthPrivateKeyB64)) {
+      throw const FormatException('relay access credentials are absent');
+    }
+    if (!_hasText(accessGrant) || !_hasText(phoneAuthPrivateKeyB64)) {
+      throw const FormatException('relay access credentials are incomplete');
+    }
+    return RelayPhoneAccessCredentials(
+      accessGrant: accessGrant!,
+      phoneAuthPrivateKeyB64: phoneAuthPrivateKeyB64!,
+    );
+  }
+
+  static RelayPhoneAccessCredentials? maybeFromJson(Map<String, Object?> json) {
+    try {
+      return RelayPhoneAccessCredentials.fromJson(json);
+    } on FormatException catch (error) {
+      if (error.message == 'relay access credentials are absent') {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'relay_access_grant': accessGrant,
+      'relay_phone_auth_private_key_b64': phoneAuthPrivateKeyB64,
     };
   }
 }

@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import secrets
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +21,7 @@ from storage.atomic import atomic_write_json
 
 from .relay_admission import generate_host_private_key, host_public_key_b64
 from .relay_crypto import host_fingerprint_for_public_key, public_key_b64
+from .relay import issue_host_rendezvous_capability
 
 
 RELAY_HOST_CREDENTIALS_RECORD_TYPE = 'ccb_relay_host_credentials'
@@ -61,6 +64,10 @@ class RelayHostCredentials:
     @property
     def host_fingerprint(self) -> str:
         return host_fingerprint_for_public_key(self.host_crypto_public_key_b64)
+
+    @property
+    def relay_http_origin(self) -> str:
+        return _relay_http_origin(self.relay_origin)
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -209,10 +216,58 @@ def load_relay_host_credentials(path: Path) -> RelayHostCredentials:
     return RelayHostCredentials.from_json(payload)
 
 
+def build_relay_pairing_payload(
+    pairing: Mapping[str, object],
+    *,
+    credentials: RelayHostCredentials,
+    lifetime_seconds: int = 10 * 60,
+) -> dict[str, object]:
+    if lifetime_seconds < 60 or lifetime_seconds > 60 * 60:
+        raise RelayHostCredentialsError('relay pairing bootstrap lifetime is invalid')
+    client_key = x25519.X25519PrivateKey.generate()
+    session_id = f'pair-{secrets.token_urlsafe(18)}'
+    phone_nonce_b64 = _b64(secrets.token_bytes(24))
+    now = int(time.time())
+    relay_http_origin = _relay_http_origin(credentials.relay_origin)
+    client_public_key_b64 = public_key_b64(client_key)
+    return {
+        **{str(key): value for key, value in pairing.items()},
+        'host_id': credentials.host_id,
+        'route_provider': 'relay',
+        'gateway_url': relay_http_origin,
+        'claim_endpoint': f'{relay_http_origin}/v1/pairing/claim',
+        'websocket_url': credentials.relay_origin,
+        'server_fingerprint': credentials.host_fingerprint,
+        'relay_session_id': session_id,
+        'relay_client_private_key_b64': _private_key_b64(client_key),
+        'relay_phone_nonce_b64': phone_nonce_b64,
+        'relay_rendezvous_capability': issue_host_rendezvous_capability(
+            credentials.host_signing_key,
+            host_id=credentials.host_id,
+            session_id=session_id,
+            client_pubkey_b64=client_public_key_b64,
+            phone_nonce_b64=phone_nonce_b64,
+            audience=credentials.relay_origin,
+            issued_at=now,
+            expires_at=now + lifetime_seconds,
+        ),
+        'relay_bootstrap_expires_at': datetime.fromtimestamp(
+            now + lifetime_seconds,
+            tz=timezone.utc,
+        ).isoformat(),
+        'relay_bootstrap_single_use': True,
+    }
+
+
 def _activation_url(relay_origin: str) -> str:
     parsed = urlparse(relay_origin)
     scheme = 'https' if parsed.scheme == 'wss' else 'http'
     return urlunparse((scheme, parsed.netloc, '/v2/activate', '', '', ''))
+
+
+def _relay_http_origin(relay_origin: str) -> str:
+    parsed = urlparse(_validated_relay_origin(relay_origin))
+    return urlunparse(('https', parsed.netloc, '', '', '', ''))
 
 
 def _validated_relay_origin(
@@ -246,6 +301,10 @@ def _private_key_b64(
     return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
 
 
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode('ascii').rstrip('=')
+
+
 def _decode_raw_key(value: str, label: str) -> bytes:
     text = _required_text(value, label)
     try:
@@ -270,5 +329,6 @@ __all__ = [
     'RelayHostCredentials',
     'RelayHostCredentialsError',
     'activate_relay_host',
+    'build_relay_pairing_payload',
     'load_relay_host_credentials',
 ]
