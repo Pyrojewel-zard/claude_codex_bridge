@@ -6,7 +6,7 @@
 **Koordiniere Codex, Claude, Gemini und andere CLI-Agenten in sichtbaren, steuerbaren Workflows, die du direkt uebernehmen kannst**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ Dieser Befehl fuehrt durch Installation und Konfiguration.
 <details>
 <summary><b>Mobile-App-Details, Sicherheitsgrenze und Source</b></summary>
 
-CCB 8.3.0 enthaelt den Flutter-Quellcode von CCB Mobile in [`mobile/`](../mobile/) und veroeffentlicht das Android APK ueber GitHub Releases:
+CCB 8.3.1 enthaelt den Flutter-Quellcode von CCB Mobile in [`mobile/`](../mobile/) und veroeffentlicht das Android APK ueber GitHub Releases:
 
-- [CCB Mobile v8.3.0 APK herunterladen](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.0/ccb-mobile-v8.3.0.apk)
+- [CCB Mobile v8.3.1 APK herunterladen](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - App-Source: [`mobile/app`](../mobile/app)
 - Server-gateway-Source: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,17 @@ Danke an [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fue
 ## Release Notes
 
 <details open>
+<summary><b>v8.3.1</b> - Einheitliche Provider-Updates, sichere Cache-Ablösung und persistenter Config-UI-Zugriff</summary>
+
+- Buendelt unterstuetzte Provider-Upgrades in `ccb update`, einschliesslich exakter Versionspruefung, Ablehnen und versionsgenauem Ueberspringen, ohne aktive Panes neu zu starten.
+- Ersetzt projektbezogene Claude-/Gemini-Software-Caches und bereinigt nur eindeutig CCB-eigene Altlasten; aktive Projekte, Sessions und Auth-Daten bleiben erhalten.
+- Ermoeglicht einen festen Loopback-Port und eine geschuetzte Token-Quelle fuer die Config UI, ohne Token-Werte auszugeben.
+- Erhaelt Shutdown-Finalizer waehrend des Serverstopps und nutzt im Rich Mode ein kompaktes Yazi-Layout mit zwei Spalten.
+- Synchronisiert CLI, npm, Linux, macOS, Android und alle Release-Artefakte auf 8.3.1.
+
+</details>
+
+<details>
 <summary><b>v8.3.0</b> - Exakte Provider-Turns, Job-Integritaet und projektgebundenes Mobile-Terminal</summary>
 
 - Bindet Kimi, Claude und Qoder an ihre nativen Turn-, Aktivierungs-, Session- und Completion-Vertraege.

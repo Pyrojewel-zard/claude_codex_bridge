@@ -6,7 +6,7 @@
 **Codex, Claude, Gemini 등 CLI Agent를 보이고 제어 가능하며 직접 이어받을 수 있는 워크플로로 조율**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 세부 정보, 안전 경계, 소스</b></summary>
 
-CCB 8.3.0은 Flutter CCB Mobile 소스를 [`mobile/`](../mobile/)에 포함하며 Android APK를 GitHub Releases로 배포합니다.
+CCB 8.3.1은 Flutter CCB Mobile 소스를 [`mobile/`](../mobile/)에 포함하며 Android APK를 GitHub Releases로 배포합니다.
 
-- [CCB Mobile v8.3.0 APK 다운로드](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.0/ccb-mobile-v8.3.0.apk)
+- [CCB Mobile v8.3.1 APK 다운로드](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - 앱 소스: [`mobile/app`](../mobile/app)
 - 서버 gateway 소스: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,17 @@ sidebar 아이디어와 영감을 준 [tmux-agent-sidebar](https://github.com/hi
 ## 릴리스 노트
 
 <details open>
+<summary><b>v8.3.1</b> - Provider 업데이트 통합, 안전한 캐시 폐기, 지속 가능한 Config UI 접근</summary>
+
+- 지원되는 Provider 업그레이드를 `ccb update`로 통합하고 정확한 버전 확인, 거절, 버전별 건너뛰기를 제공합니다. 활성 pane은 자동으로 재시작하지 않습니다.
+- 프로젝트별 Claude/Gemini 소프트웨어 캐시를 폐기하고 소유권이 검증된 레거시 데이터만 정리합니다. 활성 프로젝트, session, 인증 데이터는 보존합니다.
+- token 값을 노출하지 않으면서 Config UI의 고정 loopback 포트와 보호된 token 소스를 설정할 수 있습니다.
+- 서버가 중지되는 동안 shutdown finalizer를 유지하고 Rich mode의 Yazi를 간결한 2열 레이아웃으로 변경했습니다.
+- CLI, npm, Linux, macOS, Android와 모든 릴리스 산출물을 8.3.1로 동기화했습니다.
+
+</details>
+
+<details>
 <summary><b>v8.3.0</b> - 정확한 provider turn, job 무결성, 프로젝트 내부 Mobile 터미널</summary>
 
 - Kimi, Claude, Qoder 실행을 각각의 네이티브 turn, activation, session, completion 계약에 바인딩했습니다.

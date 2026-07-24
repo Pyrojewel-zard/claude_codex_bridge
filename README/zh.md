@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.3.0 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.3.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.3.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.0/ccb-mobile-v8.3.0.apk)
+- [下载 CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -297,6 +297,18 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.3.1</b> - 统一 Provider 更新、安全回收缓存与持久化 Config UI 访问</summary>
+
+- 将受支持的 Provider 升级统一到 `ccb update`，提供准确版本检查、暂不更新和精确版本跳过，并且不会自动重启运行中的 pane。
+- 废弃项目级 Claude/Gemini 软件缓存，改用用户安装的 Claude 可执行文件和一份用户级 Gemini 缓存。
+- 增加有边界的更新后与关闭后清理，保留运行中的项目、未知内容、session、认证数据和用户自有缓存。
+- 支持固化 Config UI 的 loopback 端口与受保护的 token 来源，同时不暴露 token 值。
+- 在服务停止阶段继续可靠执行 shutdown finalizer，并让 sidebar 发布校验和生成兼容不同主机。
+- 将 Rich 模式切换为紧凑的 Yazi 双栏布局，并把所有发布面同步到 8.3.1。
+
+</details>
+
+<details>
 <summary><b>v8.3.0</b> - 精确 Provider 回合、作业完整性与项目内 Mobile 终端</summary>
 
 - 将 Kimi、Claude 和 Qoder 执行绑定到各自原生的回合、激活、会话和完成协议。

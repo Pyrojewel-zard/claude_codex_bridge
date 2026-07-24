@@ -6,7 +6,7 @@
 **Coordene Codex, Claude, Gemini e outros agentes CLI em fluxos visíveis e controláveis que você pode assumir diretamente**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ Esse comando orienta a instalação e a configuração.
 <details>
 <summary><b>Detalhes do Mobile App, limite de segurança e fonte</b></summary>
 
-O CCB 8.3.0 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
+O CCB 8.3.1 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
 
-- [Baixar CCB Mobile v8.3.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.0/ccb-mobile-v8.3.0.apk)
+- [Baixar CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - Fonte do app: [`mobile/app`](../mobile/app)
 - Fonte do gateway servidor: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,17 @@ Obrigado ao [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 
 ## Notas de versão
 
 <details open>
+<summary><b>v8.3.1</b> - Atualizações de providers unificadas, retirada segura de caches e acesso persistente à Config UI</summary>
+
+- Centraliza upgrades de providers suportados em `ccb update`, com verificação exata, recusa e salto por versão, sem reiniciar panes ativos.
+- Retira caches de software Claude/Gemini por projeto e limpa apenas dados legados com propriedade comprovada; projetos ativos, sessões e autenticação são preservados.
+- Permite uma porta loopback estável e uma fonte de token protegida para a Config UI sem exibir o valor do token.
+- Preserva finalizadores de shutdown durante a parada do servidor e adota um layout Yazi compacto de duas colunas no Rich mode.
+- Sincroniza CLI, npm, Linux, macOS, Android e todos os artefatos de release com 8.3.1.
+
+</details>
+
+<details>
 <summary><b>v8.3.0</b> - Turnos exatos dos providers, integridade dos jobs e terminal Mobile dentro do projeto</summary>
 
 - Vincula Kimi, Claude e Qoder aos contratos nativos de turno, ativação, sessão e conclusão.

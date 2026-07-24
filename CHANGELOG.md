@@ -1,5 +1,45 @@
 # Changelog
 
+## v8.3.1 (2026-07-24)
+
+### Unified Provider Updates
+
+- **Provider Upgrades Are Managed By `ccb update`**: managed panes suppress
+  supported provider-native startup prompts, while `ccb update` detects the
+  executable owner, compares exact versions, and offers update, decline, or
+  version-scoped skip choices without restarting active panes.
+- **Non-Interactive Policy Is Explicit**: `--providers check`,
+  `--providers all`, and `--providers none` provide report-only, supported
+  bulk-update, and skip behavior for automation and controlled deployments.
+
+### Provider Storage And Cleanup
+
+- **Project Provider Caches Are Retired**: Claude uses the user-installed
+  executable and Gemini uses one user-scoped rebuildable cache instead of
+  copying provider software into every CCB project.
+- **Legacy Cleanup Is Bounded And Automatic**: post-update and successful
+  project shutdown clean only ownership-verified legacy Claude/Gemini cache
+  payloads. Active projects, malformed manifests, foreign links, sessions,
+  authentication data, and user-scoped caches are preserved; one update can
+  opt out with `--no-cache-cleanup`.
+
+### Configuration, Lifecycle, And Rich Mode
+
+- **Config UI Access Can Be Persistent**: projects can configure a stable
+  loopback port and a token source through `token_env` or a protected
+  project-relative `token_file`, while the CLI avoids printing token values.
+- **Shutdown Finalizers Stay Reliable**: accepted shutdown work keeps its
+  completion path while the server is stopping, preventing cleanup callbacks
+  from being abandoned.
+- **Yazi Uses A Compact Two-Column Layout**: Rich mode removes the redundant
+  preview column and allocates more width to the file list and active preview.
+
+### Release Surface
+
+- **Packaging Is Portable And Synchronized**: sidebar checksum generation works
+  across supported hosts, and CLI, npm, Linux, macOS, and Android versions,
+  assets, links, and workflow defaults target 8.3.1.
+
 ## v8.3.0 (2026-07-22)
 
 ### Managed Provider Reliability

@@ -6,7 +6,7 @@
 **نسّق Codex وClaude وGemini وغيرهم من وكلاء CLI ضمن سير عمل مرئي وقابل للتحكم والتدخل المباشر**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>تفاصيل Mobile App وحدود الأمان والمصدر</b></summary>
 
-يتضمن CCB 8.3.0 مصدر Flutter الخاص بـ CCB Mobile داخل [`mobile/`](../mobile/) وينشر Android APK عبر GitHub Releases:
+يتضمن CCB 8.3.1 مصدر Flutter الخاص بـ CCB Mobile داخل [`mobile/`](../mobile/) وينشر Android APK عبر GitHub Releases:
 
-- [تنزيل CCB Mobile v8.3.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.0/ccb-mobile-v8.3.0.apk)
+- [تنزيل CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - مصدر التطبيق: [`mobile/app`](../mobile/app)
 - مصدر gateway الخادم: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,17 @@ ccb update rich
 ## ملاحظات الإصدار
 
 <details open>
+<summary><b>v8.3.1</b> - تحديثات Provider موحدة وتنظيف آمن للذاكرة المؤقتة ووصول ثابت إلى Config UI</summary>
+
+- يوحّد ترقيات Provider المدعومة داخل `ccb update` مع فحص الإصدار وخيارات الرفض أو تخطي الإصدار المحدد، من دون إعادة تشغيل panes النشطة.
+- يلغي ذاكرات Claude وGemini المؤقتة الخاصة بكل مشروع ويضيف تنظيفاً محدوداً يحافظ على المشاريع النشطة وبيانات الجلسات والمصادقة.
+- يضيف منفذ loopback ثابتاً ومصدر token محمياً لـ Config UI من دون إظهار قيمة token.
+- يحافظ على shutdown finalizers أثناء توقف الخادم ويستخدم تخطيط Yazi مدمجاً بعمودين في Rich mode.
+- يزامن CLI وnpm وLinux وmacOS وAndroid وجميع أصول الإصدار مع 8.3.1.
+
+</details>
+
+<details>
 <summary><b>v8.3.0</b> - دورات provider دقيقة وسلامة jobs وMobile terminal داخل المشروع</summary>
 
 - يربط Kimi وClaude وQoder بعقود turn وactivation وsession وcompletion الأصلية لكل منها.
