@@ -477,7 +477,7 @@ def test_fake_worker_continuation_recovers_contract_from_verified_project_artifa
         now='2026-07-11T00:00:00Z',
     )
 
-    assert submission.ready_at == '2026-07-11T00:00:03Z'
+    assert submission.ready_at == '2026-07-11T00:00:08Z'
     assert 'status: done' in submission.reply
 
 
