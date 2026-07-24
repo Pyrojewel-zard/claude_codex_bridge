@@ -663,6 +663,7 @@ def test_config_ui_browser_open_prefers_macos_open_over_linux_opener(monkeypatch
     monkeypatch.delenv('WSL_DISTRO_NAME', raising=False)
     monkeypatch.delenv('WSL_INTEROP', raising=False)
     monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(config_ui_module, '_is_wsl_environment', lambda: False)
     monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         config_ui_module.shutil,

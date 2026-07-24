@@ -3073,7 +3073,7 @@ def test_full_cold_constructor_rejects_attachable_namespace_and_active_runtime_r
         return runner.CommandResult(command, 0, "claimed stopped", "", False)
 
     residue = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
+        [sys.executable, "-c", "import time; time.sleep(120)"],
         cwd=options.project_root,
     )
     try:
