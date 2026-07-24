@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import sqlite3
 import subprocess
+from types import SimpleNamespace
 import pytest
 try:  # pragma: no cover - version shim
     import tomllib
@@ -39,6 +40,8 @@ from provider_backends.grok import home as grok_home
 from provider_backends.mimo import launcher as mimo_launcher
 from provider_backends.opencode import launcher as opencode_launcher
 from provider_backends.agy import launcher as agy_launcher
+from provider_backends.native_cli_support import NativeCliExecutionRequest
+from provider_backends.qoderclicn.execution import _build_command as build_qoderclicn_command
 from provider_backends.runtime_restore import ProviderRestoreTarget
 from provider_backends.codex.launcher_runtime.command import prepare_codex_home_overrides as prepare_codex_home_overrides_for_test
 from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
@@ -2137,13 +2140,19 @@ def test_native_cli_launcher_builds_provider_state_payload(
             str(plan.workspace_path),
             '--demo',
         ]
-    elif provider in {'qoder', 'qoderclicn'}:
+    elif provider == 'qoderclicn':
         assert visible_parts == [
             default_executable,
             '--config-dir',
-            str(state_dir / 'data'),
+            str(state_dir / 'home'),
             '--demo',
         ]
+        assert payload['qoderclicn_config_dir'] == str(state_dir / 'home')
+        assert payload['qoderclicn_auto_permission_enabled'] is False
+        assert payload['qoderclicn_headless_permission_mode'] == 'dont_ask'
+        settings = json.loads((state_dir / 'home' / 'settings.json').read_text(encoding='utf-8'))
+        assert settings['general']['enableAutoUpdate'] is False
+        assert settings['general']['enableAutoUpdateNotification'] is False
     else:
         assert visible_parts == [default_executable, '--demo']
 
@@ -2200,6 +2209,132 @@ def test_qoder_launcher_respects_explicit_config_and_permission_options(
     assert payload['qoder_config_dir'] == str(plan.workspace_path / 'custom-qoder')
     assert payload['qoder_auto_permission_enabled'] is True
     assert payload['qoder_headless_permission_mode'] == 'plan'
+
+
+def test_qoderclicn_launcher_uses_one_managed_root_and_merges_update_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv('QODERCLICN_START_CMD', raising=False)
+    project_root = tmp_path / 'repo-qoderclicn-managed-root'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoderclicn1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec('qoderclicn1', provider='qoderclicn', startup_args=('--demo',))
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoderclicn1', 'qoderclicn')
+    state_dir = ctx.paths.agent_provider_state_dir('qoderclicn1', 'qoderclicn')
+    config_dir = state_dir / 'home'
+    config_dir.mkdir(parents=True)
+    (config_dir / 'settings.json').write_text(
+        json.dumps({'theme': 'dark', 'general': {'locale': 'zh-CN'}}),
+        encoding='utf-8',
+    )
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoderclicn']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoderclicn-managed',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoderclicn1',
+        start_cmd,
+        'sess-qoderclicn-managed',
+        prepared,
+    )
+    request = NativeCliExecutionRequest(
+        provider='qoderclicn',
+        job=SimpleNamespace(job_id='job_qoderclicn_launcher'),
+        work_dir=plan.workspace_path,
+        session_data=payload,
+        prompt='test prompt',
+        request_anchor='anchor',
+    )
+    headless = build_qoderclicn_command(request)
+    visible = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+    settings = json.loads((config_dir / 'settings.json').read_text(encoding='utf-8'))
+
+    assert visible[visible.index('--config-dir') + 1] == str(config_dir)
+    assert visible[visible.index('--permission-mode') + 1] == 'auto'
+    assert headless[headless.index('--config-dir') + 1] == str(config_dir)
+    assert headless[headless.index('--permission-mode') + 1] == 'auto'
+    assert payload['qoderclicn_config_dir'] == str(config_dir)
+    assert settings['theme'] == 'dark'
+    assert settings['general']['locale'] == 'zh-CN'
+    assert settings['general']['enableAutoUpdate'] is False
+    assert settings['general']['enableAutoUpdateNotification'] is False
+
+
+def test_qoderclicn_launcher_does_not_duplicate_explicit_config_or_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv('QODERCLICN_START_CMD', 'qoderclicn --permission-mode plan')
+    project_root = tmp_path / 'repo-qoderclicn-explicit-options'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoderclicn1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec(
+        'qoderclicn1',
+        provider='qoderclicn',
+        startup_args=('--config-dir', 'custom-qoderclicn', '--demo'),
+    )
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoderclicn1', 'qoderclicn')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoderclicn']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoderclicn-explicit',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoderclicn1',
+        start_cmd,
+        'sess-qoderclicn-explicit',
+        prepared,
+    )
+    parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert parts.count('--config-dir') == 1
+    assert parts.count('--permission-mode') == 1
+    assert parts[parts.index('--permission-mode') + 1] == 'plan'
+    assert payload['qoderclicn_config_dir'] == str(
+        plan.workspace_path / 'custom-qoderclicn'
+    )
+    assert payload['qoderclicn_headless_permission_mode'] == 'plan'
+    assert not (plan.workspace_path / 'custom-qoderclicn' / 'settings.json').exists()
 
 
 def test_grok_launcher_fullscreen_startup_arg_overrides_default_minimal(

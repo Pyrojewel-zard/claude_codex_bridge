@@ -1429,7 +1429,7 @@ def _handle_native_cli_run(provider: str, argv: list[str], delay_s: float) -> in
             flush=True,
         )
         return 0
-    if provider == "qoder":
+    if provider in {"qoder", "qoderclicn"}:
         session_id = f"11111111-1111-5111-8111-{abs(hash(req_id)) % 10**12:012d}"
         print(
             json.dumps(

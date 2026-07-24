@@ -244,6 +244,33 @@ CCB direction:
   [Quick Start](https://docs.qoder.com/en/cli/quick-start), and
   [Permissions](https://docs.qoder.com/en/cli/permissions).
 
+## Qoder CLI CN
+
+- Official npm package: `@qodercn-ai/qoderclicn`; isolated install and runtime
+  probes on 2026-07-24 used version `1.1.3`, binary `qoderclicn`, Node `>=20`.
+- The native command contract matches Qoder's documented print surface:
+  `-p` / `--print`, `-w <workspace>`, `--output-format stream-json`,
+  `--config-dir <root>`, `--permission-mode <mode>`, and `--session-id <uuid>`.
+  A raw CCB id such as `job_qoderclicn_*` exits `42` with
+  `Invalid session ID. Must be a valid UUID`, so CCB derives a deterministic
+  provider-scoped UUIDv5.
+- A credential-free `1.1.3` probe emitted an assistant envelope with
+  `error=authentication_failed`, followed by `result.is_error=true`. Assistant
+  text is non-terminal; only a successful result envelope with a normal stop
+  reason completes. A clean process exit without that result fails closed.
+- Visible and headless commands share the agent-local `qoderclicn_home` /
+  `qoderclicn_config_dir`. Explicit config and permission flags from
+  `QODERCLICN_START_CMD` or startup args remain authoritative and are not
+  duplicated. Auto permission maps to `auto`; normal headless execution uses
+  `dont_ask`.
+- Qoder CN defaults to update checks. CCB merges
+  `general.enableAutoUpdate=false` and
+  `general.enableAutoUpdateNotification=false` into the agent-local
+  `settings.json`, preserving unrelated settings and leaving the user's global
+  `~/.qoder-cn/settings.json` untouched. Official references:
+  [CLI arguments and permissions](https://docs.qoder.cn/cli/using-the-cli) and
+  [installation and updates](https://docs.qoder.cn/cli/qoder-cli-cn-get-started-quickly).
+
 ## GitHub Copilot CLI
 
 Observed upstream/local lab:

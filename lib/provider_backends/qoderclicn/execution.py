@@ -5,9 +5,14 @@ from pathlib import Path
 from provider_backends.native_cli_support import (
     NativeCliExecutionConfig,
     NativeCliExecutionRequest,
+    NativeCliObservation,
     NativeCliSubprocessAdapter,
 )
-from provider_core.runtime_shared import provider_start_parts
+from provider_backends.qoder.execution import (
+    _build_qoder_command,
+    _observe_qoder_output,
+    _qoder_session_id_for_job,
+)
 
 
 def build_execution_adapter() -> NativeCliSubprocessAdapter:
@@ -16,7 +21,7 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             provider="qoderclicn",
             session_filename=".qoderclicn-session",
             command_builder=_build_command,
-            env_builder=_build_env,
+            observer=observe_qoderclicn_output,
             output_kind="jsonl",
             mode="qoderclicn_run",
             start_failed_reason="qoderclicn_run_start_failed",
@@ -25,40 +30,28 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             run_error_reason="qoderclicn_run_error",
             complete_reason="qoderclicn_run_stop",
             process_exit_complete_reason="qoderclicn_run_exit",
+            missing_terminal_reason="qoderclicn_native_terminal_missing",
             timeout_reason="qoderclicn_run_timeout",
+            terminal_on_process_exit=False,
         )
     )
 
 
 def _build_command(request: NativeCliExecutionRequest) -> list[str]:
-    config_dir = _state_path(request, "qoderclicn_data_dir", fallback="data")
-    config_dir.mkdir(parents=True, exist_ok=True)
-    return [
-        *provider_start_parts("qoderclicn"),
-        "--print",
-        "--output-format",
-        "stream-json",
-        "--config-dir",
-        str(config_dir),
-        "--session-id",
-        request.job.job_id,
-        request.prompt,
-    ]
+    return _build_qoder_command(request, provider="qoderclicn")
 
 
-def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
-    del request
-    return {}
+def observe_qoderclicn_output(path: Path) -> NativeCliObservation:
+    return _observe_qoder_output(
+        path,
+        result_error="qoderclicn_result_error",
+        require_explicit_success=True,
+        require_stop_reason=True,
+    )
 
 
-def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:
-    raw = str(request.session_data.get(key) or "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    state_dir = Path(
-        str(request.session_data.get("qoderclicn_state_dir") or request.work_dir / ".ccb" / "qoderclicn")
-    ).expanduser()
-    return state_dir / fallback
+def _qoderclicn_session_id_for_job(job_id: str) -> str:
+    return _qoder_session_id_for_job(job_id, provider="qoderclicn")
 
 
-__all__ = ["build_execution_adapter"]
+__all__ = ["build_execution_adapter", "observe_qoderclicn_output"]

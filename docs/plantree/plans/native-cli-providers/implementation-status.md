@@ -327,6 +327,26 @@ Evidence:
   returned `v8.2.1`, and `doctor` completed with the repair worktree recorded as
   `install_path`/source authority.
 
+## 2026-07-24 Qoder CLI CN Contract Landing
+
+- Added provider key `qoderclicn` for `@qodercn-ai/qoderclicn@1.1.3`, binary
+  `qoderclicn`, with Node `>=20`.
+- Reused the corrected Qoder command and stream contracts: agent-local config,
+  explicit workspace and permission mode, print-mode stream JSON, and a
+  deterministic UUIDv5 instead of the rejected raw CCB job id.
+- Added a Qoder CN observer with provider-specific terminal reasons. Native
+  completion requires `result.is_error=false` and a normal stop reason;
+  assistant text does not terminalize, auth failures fail, and exit zero without
+  a result reports `qoderclicn_native_terminal_missing`.
+- Unified visible and headless `qoderclicn_config_dir` state, preserved explicit
+  command/startup config and permission options, and mapped automatic permission
+  to `auto` with `dont_ask` as the normal headless default.
+- Agent-local `settings.json` now preserves existing keys while disabling both
+  `general.enableAutoUpdate` and `general.enableAutoUpdateNotification`. The
+  user-global `~/.qoder-cn/settings.json` is outside CCB's write boundary.
+- Classified Qoder CN `.auth/` state as secret and added focused command,
+  observer, launcher, registry, runtime, and storage regression coverage.
+
 Historical first-slice verification:
 
 - `node --version` returned `v22.20.0`.

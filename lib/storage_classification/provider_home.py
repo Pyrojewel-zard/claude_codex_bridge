@@ -102,7 +102,7 @@ def classify_provider_home(
             size,
             provider=provider,
             agent=agent,
-            reason='qoder_auth_state',
+            reason=f'{provider}_auth_state',
             root_kind=root_kind,
         )
     if provider in _NATIVE_CLI_PROVIDERS:
