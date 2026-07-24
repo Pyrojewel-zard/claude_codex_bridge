@@ -1409,6 +1409,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       _gatewayConnectionState = GatewayInvalidationConnectionState.connected;
       _gatewayReconnectRetryIn = null;
     });
+    _requestBackgroundConnectionReconcile();
     _connectionSupervisor.start(
       profile: profile,
       probe:
@@ -2137,8 +2138,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       widget.backgroundConnectionPreferenceLoaded &&
       widget.backgroundConnectionEnabled &&
       _mode == AppRuntimeMode.pairedGateway &&
-      _selectedProfile != null &&
-      _gatewayProfileActivationSucceeded;
+      _selectedProfile != null;
 
   Future<void> _refreshBackgroundConnectionSystemStatus() async {
     final generation = ++_backgroundConnectionSystemStatusGeneration;

@@ -21,6 +21,7 @@ class ProjectHomePairingFormController {
   final TextEditingController deviceNameController;
   final ValueNotifier<RouteProviderKind> _routeKindNotifier;
   RouteProviderKind _routeKind;
+  GatewayPairingPayload? _scannedPairing;
 
   RouteProviderKind get routeKind => _routeKind;
 
@@ -35,12 +36,14 @@ class ProjectHomePairingFormController {
   ProjectHomePairingRequest buildRequest({
     GatewayPairingPayload? pairingOverride,
   }) {
+    final preservedPairing =
+        pairingOverride ?? _matchingScannedPairingForCurrentFields();
     return buildProjectHomePairingRequest(
       gatewayUrlText: gatewayUrlController.text,
       pairingCodeText: pairingCodeController.text,
       deviceNameText: deviceNameController.text,
       routeKind: _routeKind,
-      pairingOverride: pairingOverride,
+      pairingOverride: preservedPairing,
     );
   }
 
@@ -48,18 +51,32 @@ class ProjectHomePairingFormController {
     gatewayUrlController.text = pairing.gatewayUrl.toString();
     pairingCodeController.text = pairing.pairingCode;
     setRouteKind(pairing.routeProvider);
+    _scannedPairing = pairing;
   }
 
   void applyGatewayActivation({
     required String gatewayUrlText,
     required RouteProviderKind routeKind,
   }) {
+    _scannedPairing = null;
     gatewayUrlController.text = gatewayUrlText;
     setRouteKind(routeKind);
   }
 
   void clearPairingCode() {
+    _scannedPairing = null;
     pairingCodeController.clear();
+  }
+
+  GatewayPairingPayload? _matchingScannedPairingForCurrentFields() {
+    final pairing = _scannedPairing;
+    if (pairing == null ||
+        gatewayUrlController.text.trim() != pairing.gatewayUrl.toString() ||
+        pairingCodeController.text.trim() != pairing.pairingCode ||
+        _routeKind != pairing.routeProvider) {
+      return null;
+    }
+    return pairing;
   }
 
   void dispose() {

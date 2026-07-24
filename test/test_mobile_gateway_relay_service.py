@@ -966,6 +966,7 @@ def test_relay_deployment_templates_match_tested_runtime_limits() -> None:
     )
     assert 'Documentation=file:/opt/ccb-source/' in service
     assert 'proxy_pass https://127.0.0.1:18444;' in nginx
+    assert 'proxy_ssl_protocols TLSv1.3;' in nginx
     assert '$ccb_relay_connection_upgrade' in nginx
     assert 'ssl_protocols TLSv1.2 TLSv1.3;' in nginx
     assert '18445' not in nginx.split('server {', 1)[-1]

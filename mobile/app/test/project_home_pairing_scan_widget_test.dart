@@ -187,6 +187,48 @@ void main() {
       expect(find.text('Gateway paired'), findsOneWidget);
     });
 
+    testWidgets('failed relay scan claim retries with complete QR payload', (
+      tester,
+    ) async {
+      final qrPairing = _relayQrPairing();
+      final seenPairings = <GatewayPairingPayload>[];
+
+      await _pumpProjectHome(
+        tester,
+        pairingScanner: (context) async => qrPairing,
+        pairingClaimAndStore: ({
+          required pairing,
+          required deviceName,
+          required store,
+          deviceId,
+        }) async {
+          seenPairings.add(pairing);
+          if (seenPairings.length == 1) {
+            throw StateError('temporary relay failure');
+          }
+          final paired = _pairedHost(pairing);
+          await store.save(paired);
+          return paired;
+        },
+      );
+      await _openPairingPanel(tester);
+
+      _scanButton(tester).onPressed!();
+      await tester.pumpAndSettle();
+
+      expect(seenPairings, hasLength(1));
+      expect(find.text('Bad state: temporary relay failure'), findsOneWidget);
+
+      _claimButton(tester).onPressed!();
+      await tester.pumpAndSettle();
+
+      expect(seenPairings, hasLength(2));
+      expect(seenPairings[0], same(qrPairing));
+      expect(seenPairings[1], same(qrPairing));
+      expect(seenPairings[1].relayBootstrap?.sessionId, 'relay-session');
+      expect(find.text('Gateway paired'), findsOneWidget);
+    });
+
     testWidgets('claiming scan path does not call scanner', (tester) async {
       final pendingClaim = Completer<GatewayPairedHost>();
       var scanCalls = 0;
@@ -247,6 +289,26 @@ void main() {
       pendingClaim.complete(_pairedHost(_qrPairing()));
       await tester.pumpAndSettle();
     });
+  });
+}
+
+GatewayPairingPayload _relayQrPairing() {
+  return GatewayPairingPayload.fromJson({
+    'pairing_code': 'relay-code',
+    'claim_endpoint': 'https://relay.example.com/v1/pairing/claim',
+    'route_provider': 'relay',
+    'gateway_url': 'https://relay.example.com',
+    'scopes': ['view', 'notify'],
+    'project_id': 'host-relay',
+    'host_id': 'host-relay',
+    'websocket_url': 'wss://relay.example.com',
+    'server_fingerprint': 'sha256:relay-host',
+    'relay_session_id': 'relay-session',
+    'relay_client_private_key_b64': 'bootstrap-private-key',
+    'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+    'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+    'relay_bootstrap_expires_at': '2026-07-25T00:00:00Z',
+    'relay_bootstrap_single_use': true,
   });
 }
 

@@ -42,10 +42,14 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     required String deviceToken,
     HttpClient? httpClient,
     Duration timeout = const Duration(seconds: 8),
+    Duration projectListWarmupRetryDelay = const Duration(milliseconds: 200),
+    int projectListWarmupMaxAttempts = 16,
     bool allowInsecureLoopbackForTests = false,
   }) : _deviceToken = deviceToken,
        _httpClient = httpClient ?? HttpClient(),
        _timeout = timeout,
+       _projectListWarmupRetryDelay = projectListWarmupRetryDelay,
+       _projectListWarmupMaxAttempts = projectListWarmupMaxAttempts,
        _allowInsecureLoopbackForTests = allowInsecureLoopbackForTests {
     if (profile.routeProvider.kind != RouteProviderKind.relay) {
       throw ArgumentError.value(
@@ -81,6 +85,8 @@ class RelaySocketGatewayTransport implements GatewayTransport {
   final String _deviceToken;
   final HttpClient _httpClient;
   final Duration _timeout;
+  final Duration _projectListWarmupRetryDelay;
+  final int _projectListWarmupMaxAttempts;
   final bool _allowInsecureLoopbackForTests;
   _RelaySocketSession? _session;
   Future<_RelaySocketSession>? _connecting;
@@ -119,18 +125,29 @@ class RelaySocketGatewayTransport implements GatewayTransport {
 
   @override
   Future<List<CcbProject>> listProjects() async {
-    final body = await _requestBody('list_projects', const {});
-    final projects = body['projects'];
-    if (projects is! Iterable) {
-      throw const FormatException('relay projects response missing projects');
+    final attempts =
+        _projectListWarmupMaxAttempts < 1 ? 1 : _projectListWarmupMaxAttempts;
+    for (var attempt = 0; attempt < attempts; attempt += 1) {
+      final body = await _requestBody('list_projects', const {});
+      final projects = body['projects'];
+      if (projects is! Iterable) {
+        throw const FormatException('relay projects response missing projects');
+      }
+      final parsed = [
+        for (final item in projects)
+          if (item is Map)
+            CcbProject.fromJson({
+              for (final entry in item.entries)
+                entry.key.toString(): entry.value,
+            }),
+      ];
+      final warming = body['health_warming'] == true;
+      if (!warming || attempt == attempts - 1) {
+        return parsed;
+      }
+      await Future<void>.delayed(_projectListWarmupRetryDelay);
     }
-    return [
-      for (final item in projects)
-        if (item is Map)
-          CcbProject.fromJson({
-            for (final entry in item.entries) entry.key.toString(): entry.value,
-          }),
-    ];
+    return const <CcbProject>[];
   }
 
   @override

@@ -82,6 +82,103 @@ def test_relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path) 
     asyncio.run(_relay_host_connector_proxies_encrypted_gateway_request(tmp_path))
 
 
+def test_relay_host_connector_opens_terminal_with_top_level_project_id(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _relay_host_connector_opens_terminal_with_top_level_project_id(tmp_path)
+    )
+
+
+async def _relay_host_connector_opens_terminal_with_top_level_project_id(
+    tmp_path: Path,
+) -> None:
+    relay, issued = await _started_relay(tmp_path)
+    gateway = await _started_gateway()
+    connector = RelayHostConnector(
+        RelayHostConnectorConfig(
+            relay_origin=_relay_origin(relay),
+            gateway_origin=gateway.origin,
+            host_id=issued.host_id,
+            host_signing_key=issued.private_key,
+            host_crypto_private_key=key_pair_from_private_bytes(
+                bytes(range(101, 133))
+            ),
+            tls_context=_client_ssl(),
+            request_timeout_seconds=1.0,
+        )
+    )
+    task = asyncio.create_task(connector.connect_once())
+    try:
+        await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
+        async with aiohttp.ClientSession(raise_for_status=True) as client:
+            phone = await client.ws_connect(
+                relay.url('/v2/phone'),
+                ssl=_client_ssl(),
+            )
+            phone_crypto, _ = await _open_phone_session(
+                phone,
+                issued=issued,
+                relay_origin=issued.relay_audience,
+                expected_host_public_key=public_key_b64(
+                    connector.config.host_crypto_private_key
+                ),
+            )
+            response = await _round_trip_gateway_request(
+                phone,
+                phone_crypto,
+                session_id='relay-host-connector-session',
+                outer_seq=2,
+                operation='open_terminal',
+                payload={
+                    'request_id': 'request-open-terminal-1',
+                    'schema_version': 1,
+                    'project_id': 'project-demo',
+                    'namespace_epoch': 7,
+                    'target': {
+                        'kind': 'agent',
+                        'agent': 'worker1',
+                    },
+                    'geometry': {
+                        'columns': 80,
+                        'rows': 24,
+                        'pixel_width': 0,
+                        'pixel_height': 0,
+                    },
+                    'device_token': 'device-token-demo',
+                },
+            )
+
+            assert response.payload['ok'] is True, response.payload
+            assert response.payload['status'] == 201
+            assert response.payload['body']['terminal_id'] == 'term-demo'
+            assert gateway.requests == [
+                ('POST', '/v1/projects/project-demo/terminals')
+            ]
+            assert gateway.request_bodies == [
+                {
+                    'schema_version': 1,
+                    'project_id': 'project-demo',
+                    'namespace_epoch': 7,
+                    'target': {
+                        'kind': 'agent',
+                        'agent': 'worker1',
+                    },
+                    'geometry': {
+                        'columns': 80,
+                        'rows': 24,
+                        'pixel_width': 0,
+                        'pixel_height': 0,
+                    },
+                }
+            ]
+    finally:
+        connector.stop()
+        await asyncio.gather(task, return_exceptions=True)
+        await gateway.stop()
+        await relay.stop()
+
+
 def test_relay_host_connector_forwards_project_view_larger_than_legacy_frame_limit(
     tmp_path: Path,
 ) -> None:
@@ -1056,6 +1153,21 @@ async def _relay_host_connector_notification_stream_resumes_without_duplicates(t
             request_timeout_seconds=1.0,
         )
     )
+    cursor_before_delivery: list[str | None] = []
+    send_stream_payload = connector._send_stream_payload
+
+    async def track_cursor_before_delivery(
+        ws,
+        session_id,
+        session,
+        state,
+        payload,
+    ) -> None:
+        if 'event' in payload:
+            cursor_before_delivery.append(state.last_event_id)
+        await send_stream_payload(ws, session_id, session, state, payload)
+
+    connector._send_stream_payload = track_cursor_before_delivery
     task = asyncio.create_task(connector.connect_once())
     try:
         await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
@@ -1100,6 +1212,7 @@ async def _relay_host_connector_notification_stream_resumes_without_duplicates(t
                 )
             assert received_ids == ['evt-1', 'evt-2']
             assert gateway.notification_cursors[:3] == [None, 'evt-1', 'evt-1']
+            assert cursor_before_delivery == [None, 'evt-1']
             await _send_phone_inner(
                 phone,
                 phone_crypto,
@@ -1379,6 +1492,28 @@ async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
             status=201,
         )
 
+    async def open_terminal(request: web.Request) -> web.Response:
+        requests.append((request.method, request.path))
+        assert request.headers['authorization'] == 'Bearer device-token-demo'
+        body = await request.json()
+        assert isinstance(body, dict)
+        request_bodies.append({str(key): value for key, value in body.items()})
+        return web.json_response(
+            {
+                'terminal_id': 'term-demo',
+                'terminal_token': 'terminal-token-demo',
+                'expires_at': '2026-07-24T01:00:00Z',
+                'websocket_url': 'ws://loopback.invalid/v1/terminals/term-demo',
+                'target_epoch': 7,
+                'target_summary': {
+                    'project_id': 'project-demo',
+                    'agent': 'worker1',
+                    'window': 'main',
+                },
+            },
+            status=201,
+        )
+
     async def terminal(request: web.Request) -> web.WebSocketResponse:
         requests.append((request.method, request.path))
         websocket = web.WebSocketResponse(max_msg_size=512 * 1024)
@@ -1466,6 +1601,10 @@ async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
         submit_message,
     )
     app.router.add_get('/v1/projects/project-demo/view', project_view)
+    app.router.add_post(
+        '/v1/projects/project-demo/terminals',
+        open_terminal,
+    )
     app.router.add_get('/v1/terminals/term-demo', terminal)
     app.router.add_get('/v1/mobile/notifications', notifications)
     app.router.add_post(

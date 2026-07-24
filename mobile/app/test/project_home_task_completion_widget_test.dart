@@ -209,6 +209,48 @@ void main() {
   );
 
   testWidgets(
+    'opt-in background connection starts while the paired route reconnects',
+    (tester) async {
+      final backgroundConnection = _RecordingBackgroundConnectionPlatform();
+      final profileStore = await _profileStoreWith([
+        _pairedHost(scopes: const {'view', 'focus', 'notify'}),
+      ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: FakeMobileCcbRepository.demo(),
+            profileStore: profileStore,
+            autoActivateStoredProfile: true,
+            backgroundConnectionEnabled: true,
+            backgroundConnectionPlatform: backgroundConnection,
+            gatewayRepositoryFactory:
+                (_) => _UnavailableProjectListRepository(),
+            gatewayTerminalTransportFactory:
+                (_) => RecordingTerminalTransport(),
+            taskNotificationStreamClient:
+                _LifecycleTaskCompletionStreamClient(),
+            taskCompletionLocalNotifications:
+                _FakeTaskCompletionLocalNotifications(),
+            taskCompletionSeenStore: TaskCompletionSeenDedupeStore(
+              secureStore: MemorySecureStore(),
+            ),
+            taskCompletionUnreadStore: TaskCompletionUnreadStore(
+              secureStore: MemorySecureStore(),
+            ),
+            invalidationCursorStore: _cursorStore(),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(backgroundConnection.startCalls, 1);
+      expect(backgroundConnection.running, isTrue);
+    },
+  );
+
+  testWidgets(
     'notification stream retry does not reflow or disable the active chat',
     (tester) async {
       final streamClient = _FakeTaskCompletionStreamClient();
@@ -779,6 +821,15 @@ class _RecordingBackgroundConnectionPlatform
 
   @override
   Future<bool> openSystemSettings() async => true;
+}
+
+class _UnavailableProjectListRepository extends RecordingGatewayRepository {
+  @override
+  Future<List<CcbProject>> listProjects() {
+    return Future<List<CcbProject>>.error(
+      TimeoutException('paired route is reconnecting'),
+    );
+  }
 }
 
 class _ImmediateCancelStream extends Stream<TaskCompletionNotificationEvent> {

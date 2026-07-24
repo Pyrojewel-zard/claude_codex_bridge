@@ -967,8 +967,6 @@ class RelayHostConnector:
                             if event_id:
                                 if event_id in state.recent_event_id_set:
                                     continue
-                                _remember_event_id(state, event_id)
-                                state.last_event_id = event_id
                             await self._send_stream_payload(
                                 ws,
                                 session_id,
@@ -976,6 +974,9 @@ class RelayHostConnector:
                                 state,
                                 {'event': event},
                             )
+                            if event_id:
+                                _remember_event_id(state, event_id)
+                                state.last_event_id = event_id
                 finally:
                     if state.upstream_client is client:
                         state.upstream_client = None
@@ -1360,8 +1361,8 @@ def _gateway_request(operation: str, payload: Mapping[str, object]) -> _GatewayR
         project = _segment(payload, 'project_id')
         return _json_request('POST', f'/v1/projects/{project}/lifecycle', _only(payload, ('project_id', 'action')))
     if op == 'open_terminal':
-        target = _object_map(payload.get('target'), 'target')
-        project = _segment(target, 'project_id')
+        _object_map(payload.get('target'), 'target')
+        project = _segment(payload, 'project_id')
         return _json_request(
             'POST',
             f'/v1/projects/{project}/terminals',

@@ -144,6 +144,38 @@ void main() {
     expect(changes, [RouteProviderKind.cloudflareTunnel]);
   });
 
+  test('scanned relay payload survives a claim retry', () {
+    final controller = ProjectHomePairingFormController();
+    addTearDown(controller.dispose);
+    final payload = _relayPairingPayload();
+
+    controller.applyScannedPairing(payload);
+
+    final request = controller.buildRequest();
+
+    expect(request.pairing, same(payload));
+    expect(request.pairing.hostId, 'host-relay');
+    expect(request.pairing.relayBootstrap?.sessionId, 'relay-session');
+    expect(
+      request.pairing.relayBootstrap?.rendezvousCapability,
+      'ccb-relay-rv-v1.payload.signature',
+    );
+  });
+
+  test('editing a scanned relay identity discards its one-time bootstrap', () {
+    final controller = ProjectHomePairingFormController();
+    addTearDown(controller.dispose);
+    final payload = _relayPairingPayload();
+    controller.applyScannedPairing(payload);
+
+    controller.pairingCodeController.text = 'replacement-code';
+    final request = controller.buildRequest();
+
+    expect(request.pairing, isNot(same(payload)));
+    expect(request.pairing.pairingCode, 'replacement-code');
+    expect(request.pairing.relayBootstrap, isNull);
+  });
+
   test('activation applies URL and route without clearing code or device', () {
     final controller = ProjectHomePairingFormController();
     addTearDown(controller.dispose);
@@ -194,4 +226,24 @@ GatewayPairingPayload _pairingPayload({
     gatewayUrl: url,
     scopes: const {'view', 'focus'},
   );
+}
+
+GatewayPairingPayload _relayPairingPayload() {
+  return GatewayPairingPayload.fromJson({
+    'pairing_code': 'relay-code',
+    'claim_endpoint': 'https://relay.example.com/v1/pairing/claim',
+    'route_provider': 'relay',
+    'gateway_url': 'https://relay.example.com',
+    'scopes': ['view', 'notify'],
+    'project_id': 'host-relay',
+    'host_id': 'host-relay',
+    'websocket_url': 'wss://relay.example.com',
+    'server_fingerprint': 'sha256:relay-host',
+    'relay_session_id': 'relay-session',
+    'relay_client_private_key_b64': 'bootstrap-private-key',
+    'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+    'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+    'relay_bootstrap_expires_at': '2026-07-25T00:00:00Z',
+    'relay_bootstrap_single_use': true,
+  });
 }

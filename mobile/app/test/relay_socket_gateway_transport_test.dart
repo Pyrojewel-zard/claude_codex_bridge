@@ -74,6 +74,62 @@ void main() {
     },
   );
 
+  test(
+    'waits for server-wide project health warmup before returning',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+      );
+      relay.projectListBodies.addAll([
+        {
+          'schema_version': 1,
+          'projects': <Object?>[],
+          'health_warming': true,
+          'health_unknown_project_count': 1,
+        },
+        {
+          'schema_version': 1,
+          'projects': [
+            {
+              'id': 'proj-live',
+              'display_name': 'live',
+              'health': 'healthy',
+              'capabilities': ['http_json', 'project_view'],
+            },
+          ],
+          'health_warming': false,
+          'health_unknown_project_count': 0,
+        },
+      ]);
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        projectListWarmupRetryDelay: Duration.zero,
+        projectListWarmupMaxAttempts: 3,
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+
+      final projects = await transport.listProjects();
+
+      expect(projects.map((project) => project.id), ['proj-live']);
+      expect(relay.requests.map((request) => request['operation']), [
+        'list_projects',
+        'list_projects',
+      ]);
+    },
+  );
+
   test('fails closed on host fingerprint mismatch', () async {
     final hostSeed = List<int>.generate(32, (index) => index + 101);
     final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
@@ -520,6 +576,7 @@ class _RelaySocketHarness {
   final terminalFrames = <Map<String, Object?>>[];
   final clientHellos = <RelayFrame>[];
   final uploadedFiles = <String, List<int>>{};
+  final projectListBodies = <Map<String, Object?>>[];
   final _streamOperations = <String, String>{};
   final _uploadBuffers = <String, BytesBuilder>{};
 
@@ -638,6 +695,14 @@ class _RelaySocketHarness {
                     'server_time': '2026-07-22T00:00:00Z',
                     'capabilities': ['http_json', 'project_view'],
                   },
+                  'list_projects' =>
+                    projectListBodies.isEmpty
+                        ? {
+                          'schema_version': 1,
+                          'projects': <Object?>[],
+                          'health_warming': false,
+                        }
+                        : projectListBodies.removeAt(0),
                   'open_terminal' => {
                     'terminal_id': 'terminal-demo',
                     'terminal_token': 'terminal-token-demo',
