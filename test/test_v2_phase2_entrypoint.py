@@ -112,6 +112,24 @@ def _wait_for_ccbd_execution_summary(
     raise AssertionError(f'expected execution summary; last stdout={last.stdout!r} stderr={last.stderr!r}')
 
 
+def _wait_for_ccbd_lines(
+    cwd: Path,
+    expected: tuple[str, ...],
+    *,
+    timeout: float = 5.0,
+) -> subprocess.CompletedProcess[str]:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = _run_ccb(['ping', 'ccbd'], cwd=cwd)
+        if last.returncode == 0 and all(line in last.stdout for line in expected):
+            return last
+        time.sleep(0.1)
+    raise AssertionError(
+        f'expected ccbd lines {expected!r}; last stdout={last.stdout!r} stderr={last.stderr!r}'
+    )
+
+
 def _wait_for_doctor_line(cwd: Path, expected: str, *, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
     deadline = time.time() + timeout
     last = None
@@ -1945,7 +1963,10 @@ def test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart(tmp_pat
     os.kill(stale_pid, signal.SIGTERM)
     _wait_for_pid_exit(stale_pid)
 
-    ping = _run_ccb(['ping', 'ccbd'], cwd=project_root)
+    ping = _wait_for_ccbd_lines(
+        project_root,
+        ('last_restore_results_text: demo/fake:restored(provider_resumed)',),
+    )
     assert ping.returncode == 0, ping.stderr
     assert 'mount_state: mounted' in ping.stdout
     assert 'health: healthy' in ping.stdout
