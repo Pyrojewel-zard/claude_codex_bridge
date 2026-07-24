@@ -19,6 +19,7 @@ def test_execution_registry_can_build_core_only_registry() -> None:
         'mimo',
         'qwen',
         'qoder',
+        'qoderclicn',
         'cursor',
         'copilot',
         'crush',
@@ -39,6 +40,7 @@ def test_execution_registry_can_build_core_only_registry() -> None:
     assert registry.get('mimo') is None
     assert registry.get('qwen') is None
     assert registry.get('qoder') is None
+    assert registry.get('qoderclicn') is None
     assert registry.get('cursor') is None
     assert registry.get('copilot') is None
     assert registry.get('crush') is None

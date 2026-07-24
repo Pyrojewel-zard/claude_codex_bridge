@@ -41,13 +41,21 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
 
 
 def _build_command(request: NativeCliExecutionRequest) -> list[str]:
-    base = provider_start_parts("qoder")
+    return _build_qoder_command(request, provider="qoder")
+
+
+def _build_qoder_command(
+    request: NativeCliExecutionRequest,
+    *,
+    provider: str,
+) -> list[str]:
+    base = provider_start_parts(provider)
     command = [*base]
     if not _has_option(base, "--config-dir"):
-        command.extend(["--config-dir", str(_qoder_config_dir(request))])
+        command.extend(["--config-dir", str(_qoder_config_dir(request, provider=provider))])
     if not any(_has_option(base, option) for option in _PERMISSION_OPTIONS):
         permission_mode = str(
-            request.session_data.get("qoder_headless_permission_mode") or "dont_ask"
+            request.session_data.get(f"{provider}_headless_permission_mode") or "dont_ask"
         ).strip()
         if permission_mode not in {
             "accept_edits",
@@ -67,17 +75,21 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
             "--output-format",
             "stream-json",
             "--session-id",
-            _qoder_session_id_for_job(request.job.job_id),
+            _qoder_session_id_for_job(request.job.job_id, provider=provider),
             request.prompt,
         ]
     )
     return command
 
 
-def _qoder_config_dir(request: NativeCliExecutionRequest) -> Path:
+def _qoder_config_dir(
+    request: NativeCliExecutionRequest,
+    *,
+    provider: str = "qoder",
+) -> Path:
     raw = str(
-        request.session_data.get("qoder_config_dir")
-        or request.session_data.get("qoder_home")
+        request.session_data.get(f"{provider}_config_dir")
+        or request.session_data.get(f"{provider}_home")
         or ""
     ).strip()
     if raw:
@@ -85,8 +97,8 @@ def _qoder_config_dir(request: NativeCliExecutionRequest) -> Path:
     else:
         state_dir = Path(
             str(
-                request.session_data.get("qoder_state_dir")
-                or request.work_dir / ".ccb" / "qoder"
+                request.session_data.get(f"{provider}_state_dir")
+                or request.work_dir / ".ccb" / provider
             )
         ).expanduser()
         path = state_dir / "home"
@@ -94,11 +106,26 @@ def _qoder_config_dir(request: NativeCliExecutionRequest) -> Path:
     return path
 
 
-def _qoder_session_id_for_job(job_id: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ccb:qoder:{job_id}"))
+def _qoder_session_id_for_job(job_id: str, *, provider: str = "qoder") -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ccb:{provider}:{job_id}"))
 
 
 def observe_qoder_output(path: Path) -> NativeCliObservation:
+    return _observe_qoder_output(
+        path,
+        result_error="qoder_result_error",
+        assistant_error_terminal=True,
+    )
+
+
+def _observe_qoder_output(
+    path: Path,
+    *,
+    result_error: str,
+    assistant_error_terminal: bool = False,
+    require_explicit_success: bool = False,
+    require_stop_reason: bool = False,
+) -> NativeCliObservation:
     if not path or not path.is_file():
         return NativeCliObservation()
     try:
@@ -112,6 +139,7 @@ def observe_qoder_output(path: Path) -> NativeCliObservation:
     finish_reason = ""
     turn_ref: str | None = None
     error = ""
+    assistant_error = ""
     intermediate = False
 
     for line in lines:
@@ -131,7 +159,11 @@ def observe_qoder_output(path: Path) -> NativeCliObservation:
             event_error = _text_value(event.get("error"))
             text = _message_text(event.get("message"))
             if event_error:
-                error = text or event_error
+                assistant_error = text or event_error
+                if assistant_error_terminal:
+                    error = assistant_error
+                elif text:
+                    assistant_text = text
                 continue
             if text:
                 assistant_text = text
@@ -143,15 +175,28 @@ def observe_qoder_output(path: Path) -> NativeCliObservation:
         native_reason = _text_value(event.get("stop_reason")) or _text_value(
             event.get("subtype")
         )
-        if bool(event.get("is_error")):
-            error = _text_value(event.get("result")) or native_reason or "qoder_result_error"
+        is_error = event.get("is_error")
+        if bool(is_error):
+            error = (
+                _text_value(event.get("result"))
+                or assistant_error
+                or native_reason
+                or result_error
+            )
+            result_text = ""
+            assistant_text = ""
+            continue
+        if require_explicit_success and is_error is not False:
+            finish_reason = "missing_result_status"
             continue
         result_text = _text_value(event.get("result"))
         normalized_reason = native_reason.strip().lower().replace("-", "_")
         finish_reason = (
             "completed" if normalized_reason in _NORMAL_STOP_REASONS else normalized_reason
         )
-        if not finish_reason:
+        if not finish_reason and require_stop_reason:
+            finish_reason = "missing_stop_reason"
+        elif not finish_reason:
             finish_reason = "completed"
 
     return NativeCliObservation(

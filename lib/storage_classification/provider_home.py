@@ -21,7 +21,7 @@ _CODEX_PROJECTED_NAMES = {'config.toml'}
 _OPENCODE_PROJECTED_NAMES = {'opencode.json'}
 _MIMO_PROJECTED_NAMES = {'mimocode.json'}
 _COPILOT_PROJECTION_MARKER_NAME = '.ccb-installed-plugins-projection.json'
-_NATIVE_CLI_PROVIDERS = {'qwen', 'qoder', 'cursor', 'copilot', 'crush', 'grok', 'kiro', 'pi', 'omp', 'zai'}
+_NATIVE_CLI_PROVIDERS = {'qwen', 'qoder', 'qoderclicn', 'cursor', 'copilot', 'crush', 'grok', 'kiro', 'pi', 'omp', 'zai'}
 _NATIVE_CLI_PROJECTED_ROOTS = {'inherited-skills', 'role-skills', 'overlay-skills'}
 _NATIVE_CLI_CACHE_ROOTS = {'.cache', '.npm', '.tmp', 'cache', 'node_modules', 'tmp'}
 _NATIVE_CLI_SESSION_ROOTS = {
@@ -94,7 +94,7 @@ def classify_provider_home(
         return _classify_droid_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
     if provider == 'copilot':
         return _classify_copilot_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
-    if provider == 'qoder' and remainder[0] == '.auth':
+    if provider in {'qoder', 'qoderclicn'} and remainder[0] == '.auth':
         return _entry(
             path,
             relative_path,
@@ -102,7 +102,7 @@ def classify_provider_home(
             size,
             provider=provider,
             agent=agent,
-            reason='qoder_auth_state',
+            reason=f'{provider}_auth_state',
             root_kind=root_kind,
         )
     if provider in _NATIVE_CLI_PROVIDERS:

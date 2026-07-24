@@ -16,7 +16,9 @@ Date: 2026-06-13
   session ownership and capability-confirmed exact selection rather than
   workdir-global `--continue`. Qoder's merged provider registration is now
   corrected to use documented print/config arguments, UUID session identity,
-  agent-local config state, and provider-specific stream terminalization.
+  agent-local config state, and provider-specific stream terminalization. Qoder
+  CLI CN is registered separately as `qoderclicn` and reuses that corrected
+  contract for `@qodercn-ai/qoderclicn` rather than the retired generic adapter.
 - Last verified: focused native completion tests, provider catalog tests,
   Kimi/OpenCode skill projection tests, and a real MiMo CCB ask passed after
   switching CCB MiMo execution to `mimo run --pure --format json`; full
@@ -25,6 +27,12 @@ Date: 2026-06-13
   help/version and credential-free stream output plus focused launcher,
   execution, catalog, registry, and storage tests. Authenticated completion
   remains a release-qualification gate rather than an inferred pass.
+- Qoder CN verification on 2026-07-24 used isolated
+  `@qodercn-ai/qoderclicn@1.1.3` (binary `qoderclicn`, Node `>=20`). The raw
+  `job_qoderclicn_*` session id was rejected with exit `42`; UUIDv5 reached the
+  native stream, whose unauthenticated assistant error plus
+  `result.is_error=true` confirmed the CN-specific fail-closed observer. Managed
+  panes share one agent-local config root and disable both update switches.
 - Next target: review and release readiness for the next native CLI provider
   wave after source-runtime and real CLI version smoke passed for Qwen Code,
   Cursor Agent, GitHub Copilot CLI, Charm Crush, Kiro CLI, and Pi. Talk1's
