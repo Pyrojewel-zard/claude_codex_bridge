@@ -312,6 +312,7 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 - Retired project-scoped Claude/Gemini software caches in favor of the user-installed Claude executable and one user-scoped Gemini cache.
 - Added bounded post-update and post-shutdown cleanup that preserves active projects, unknown content, sessions, authentication data, and user-owned caches.
 - Added persistent Config UI loopback port and protected token-source settings without exposing token values.
+- Added native Qoder CLI CN support with isolated config/session state and corrected Qoder `--print` / `--config-dir` execution.
 - Preserved shutdown finalizers while the server is stopping and made sidebar release checksum generation portable.
 - Switched Rich mode to a compact two-column Yazi layout and synchronized all release surfaces to 8.3.1.
 

@@ -25,6 +25,14 @@
 
 ### Configuration, Lifecycle, And Rich Mode
 
+- **Qoder CLI CN Is A Native Provider**: the official
+  `@qodercn-ai/qoderclicn` distribution is registered as `qoderclicn`, with
+  isolated visible/headless config and session state, UUID session ids,
+  permission mapping, native stream-result completion, and managed suppression
+  of provider-owned update prompts.
+- **Qoder Uses Its Documented Headless Contract**: Qoder and Qoder CLI CN use
+  native `--print`, workspace, and `--config-dir` arguments instead of the
+  retired generic bare-mode assumptions.
 - **Config UI Access Can Be Persistent**: projects can configure a stable
   loopback port and a token source through `token_env` or a protected
   project-relative `token_file`, while the CLI avoids printing token values.

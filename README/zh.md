@@ -303,6 +303,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 废弃项目级 Claude/Gemini 软件缓存，改用用户安装的 Claude 可执行文件和一份用户级 Gemini 缓存。
 - 增加有边界的更新后与关闭后清理，保留运行中的项目、未知内容、session、认证数据和用户自有缓存。
 - 支持固化 Config UI 的 loopback 端口与受保护的 token 来源，同时不暴露 token 值。
+- 新增原生 Qoder CLI CN 支持，隔离配置与 session 状态，并修正 Qoder 的 `--print` / `--config-dir` 执行协议。
 - 在服务停止阶段继续可靠执行 shutdown finalizer，并让 sidebar 发布校验和生成兼容不同主机。
 - 将 Rich 模式切换为紧凑的 Yazi 双栏布局，并把所有发布面同步到 8.3.1。
 
