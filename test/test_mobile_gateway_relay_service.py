@@ -953,6 +953,9 @@ def test_relay_deployment_templates_match_tested_runtime_limits() -> None:
     nginx = (deploy_root / 'nginx-relay.seemlab.top.conf').read_text(
         encoding='utf-8'
     )
+    bootstrap = (deploy_root / 'nginx-relay-acme-bootstrap.conf').read_text(
+        encoding='utf-8'
+    )
 
     assert 'CCB_RELAY_MAX_FRAME_BYTES=786432' in environment
     assert 'CCB_RELAY_WEBSOCKET_MAX_MSG_BYTES=790528' in environment
@@ -966,6 +969,10 @@ def test_relay_deployment_templates_match_tested_runtime_limits() -> None:
     assert '$ccb_relay_connection_upgrade' in nginx
     assert 'ssl_protocols TLSv1.2 TLSv1.3;' in nginx
     assert '18445' not in nginx.split('server {', 1)[-1]
+    assert 'listen 80;' in bootstrap
+    assert 'listen 443' not in bootstrap
+    assert '/var/www/ccb-mobile-relay-acme' in bootstrap
+    assert '18444' not in bootstrap
 
 
 @dataclass

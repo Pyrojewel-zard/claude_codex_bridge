@@ -113,8 +113,24 @@ headers and otherwise rate-limits by the direct TCP peer.
 5. Create `/etc/ccb/mobile-relay-admission-secrets.json` and the loopback TLS
    key with owner `ccb-relay:ccb-relay` and mode 0600.
 6. Install `deploy/mobile-relay/ccb-mobile-relay.service`.
-7. Optionally place `deploy/mobile-relay/nginx-relay.seemlab.top.conf` after
-   reviewing existing nginx/RustDesk/ZeroTier configuration.
+7. Create `/var/www/ccb-mobile-relay-acme`, install
+   `deploy/mobile-relay/nginx-relay-acme-bootstrap.conf`, and run `nginx -t`
+   before reloading nginx.
+8. Issue the first public certificate with the webroot authenticator:
+
+   ```bash
+   certbot certonly --webroot \
+     --webroot-path /var/www/ccb-mobile-relay-acme \
+     --domain relay.seemlab.top
+   ```
+
+9. Replace the bootstrap site with
+   `deploy/mobile-relay/nginx-relay.seemlab.top.conf`, then run `nginx -t`
+   again before reloading. The final site retains the same ACME webroot for
+   unattended renewal.
+
+Review existing nginx/RustDesk/ZeroTier configuration before enabling either
+nginx site. The relay upstream and admin listeners remain loopback-only.
 
 The reference limits are a 768 KiB opaque outer frame, a 790528-byte WebSocket
 message ceiling, and eight queued frames per peer. File content still uses
