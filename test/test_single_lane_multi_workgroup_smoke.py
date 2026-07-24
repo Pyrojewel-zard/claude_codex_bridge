@@ -307,7 +307,7 @@ def test_fake_scheduler_worker_writes_only_node_bound_allowed_path(tmp_path: Pat
     assert (workspace / 'g5_outputs/node-002.txt').is_file()
     assert not (workspace / 'g5_outputs/node-001.txt').exists()
     assert 'changed_files: g5_outputs/node-002.txt' in submission.reply
-    assert submission.ready_at == '2026-07-11T00:00:03Z'
+    assert submission.ready_at == '2026-07-11T00:00:08Z'
 
 
 @pytest.mark.parametrize(

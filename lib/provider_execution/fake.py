@@ -37,7 +37,9 @@ from .fake_runtime import (
 )
 
 
-G5_EXTERNAL_CHAIN_WINDOW_SECONDS = 3.0
+# Keep source/fake Workers active beyond the bounded external chain retry
+# window plus multi-node submission overhead on loaded cross-platform runners.
+G5_EXTERNAL_CHAIN_WINDOW_SECONDS = 8.0
 
 
 class FakeProviderAdapter:
