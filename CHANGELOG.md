@@ -31,6 +31,10 @@
 - **Shutdown Finalizers Stay Reliable**: accepted shutdown work keeps its
   completion path while the server is stopping, preventing cleanup callbacks
   from being abandoned.
+- **Kill Tolerates The Expected Socket-Close Race**: if the keeper closes ccbd
+  immediately after shutdown intent is recorded, the CLI continues bounded
+  local authority cleanup instead of surfacing a transient missing-socket
+  error.
 - **WSL Process Audits Degrade Safely**: live processes remain visible when WSL
   does not expose per-process procfs I/O counters; the audit reports partial I/O
   capability instead of misclassifying those processes as vanished.

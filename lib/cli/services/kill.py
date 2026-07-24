@@ -4,7 +4,7 @@ from dataclasses import replace
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.system import utc_now
-from ccbd.socket_client import CcbdClient
+from ccbd.socket_client import CcbdClient, CcbdClientError
 from cli.context import CliContext
 from cli.services.kill_runtime.agent_cleanup import (
     extra_agent_dir_names as _extra_agent_dir_names_impl,
@@ -190,6 +190,7 @@ def _request_remote_stop(context: CliContext, *, force: bool) -> KillSummary | N
         summary_from_stop_all_payload_fn=_summary_from_stop_all_payload,
         stop_all_timeout_s=_STOP_ALL_TIMEOUT_S,
         service_error_cls=CcbdServiceError,
+        client_error_cls=CcbdClientError,
     )
 
 
