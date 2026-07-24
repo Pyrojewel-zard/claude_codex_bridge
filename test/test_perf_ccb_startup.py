@@ -17,6 +17,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "dev_tools" / "perf_ccb_startup.py"
+pytestmark = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="startup performance harness requires the Linux procfs sampler",
+)
 AGENT_TIMING_KEYS = {
     "prepare_launch_context",
     "build_start_cmd",

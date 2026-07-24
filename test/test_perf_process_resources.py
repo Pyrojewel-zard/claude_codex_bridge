@@ -881,6 +881,10 @@ def test_profiled_command_aggregate_failure_closes_stable_io_tracker(
     assert trackers[0].was_closed is True
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "pread"),
+    reason="profiled command I/O assertions require Linux procfs stable handles",
+)
 def test_profiled_command_never_persists_argv_cwd_or_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
