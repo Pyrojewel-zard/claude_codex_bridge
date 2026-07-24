@@ -39,7 +39,8 @@ class MobileGatewayServeHandle:
 
 
 def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
-    listen = parse_listen_address(command.listen)
+    route_provider = str(command.route_provider or 'lan').strip().lower() or 'lan'
+    listen = parse_listen_address(command.listen, allow_lan=route_provider == 'lan')
     push_sender, push_diagnostic, push_options = _push_sender_setup()
     service = MobileGatewayService(
         project_id=context.project.project_id,
@@ -55,7 +56,6 @@ def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
     host, port = server.server_address[:2]
     local_gateway_url = f'http://{host}:{port}'
     gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
-    route_provider = str(command.route_provider or 'lan')
     pairing = service.ensure_reusable_pairing_payload(
         gateway_url=gateway_url,
         route_provider=route_provider,
@@ -107,7 +107,8 @@ def prepare_server_mobile_gateway(
     rotate_pairing: bool = False,
 ) -> MobileGatewayServeHandle:
     registry = project_registry or _running_server_project_registry()
-    listen = parse_listen_address(command.listen)
+    route_provider = str(command.route_provider or 'lan').strip().lower() or 'lan'
+    listen = parse_listen_address(command.listen, allow_lan=route_provider == 'lan')
     resolved_host_id = str(host_id or '').strip() or _server_host_id()
     state_dir = mobile_host_state_dir()
     default_project = registry.default_project
@@ -142,7 +143,6 @@ def prepare_server_mobile_gateway(
         host, port = server.server_address[:2]
         local_gateway_url = f'http://{host}:{port}'
         gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
-        route_provider = str(command.route_provider or 'lan')
         pairing = (
             service.rotate_reusable_pairing_payload(
                 gateway_url=gateway_url,

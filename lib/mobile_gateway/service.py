@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 import mimetypes
 from pathlib import Path
@@ -2124,7 +2125,7 @@ class MobileGatewayService:
         return 'unsupported_terminal_frame'
 
 
-def parse_listen_address(value: str | None) -> ListenAddress:
+def parse_listen_address(value: str | None, *, allow_lan: bool = False) -> ListenAddress:
     text = str(value or '').strip()
     if not text:
         return ListenAddress()
@@ -2140,7 +2141,12 @@ def parse_listen_address(value: str | None) -> ListenAddress:
     if port < 0 or port > 65535:
         raise ValueError('listen port must be between 0 and 65535')
     if not _is_loopback_host(host):
-        raise ValueError('mobile gateway only supports loopback listen addresses')
+        if not allow_lan:
+            raise ValueError('mobile gateway only supports loopback listen addresses for this route provider')
+        if not _is_private_lan_host(host):
+            raise ValueError(
+                'LAN mobile gateway listen address must be a specific private or link-local IP address'
+            )
     return ListenAddress(host=host, port=port)
 
 
@@ -2632,6 +2638,19 @@ def _project_health_refresh_failed(payload: dict[str, object]) -> bool:
 def _is_loopback_host(host: str) -> bool:
     normalized = host.strip().lower()
     return normalized in {'localhost', '127.0.0.1', '::1'}
+
+
+def _is_private_lan_host(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    return bool(
+        (address.is_private or address.is_link_local)
+        and not address.is_unspecified
+        and not address.is_multicast
+        and not address.is_reserved
+    )
 
 
 def _utc_now() -> str:

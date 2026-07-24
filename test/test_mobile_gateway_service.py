@@ -400,12 +400,27 @@ def _server_registry_service(
     )
 
 
-def test_parse_listen_accepts_loopback_only() -> None:
+def test_parse_listen_defaults_to_loopback_only() -> None:
     assert parse_listen_address(None).text == '127.0.0.1:8787'
     assert parse_listen_address('127.0.0.1:0').text == '127.0.0.1:0'
     assert parse_listen_address('localhost:8787').text == 'localhost:8787'
     with pytest.raises(ValueError, match='loopback'):
-        parse_listen_address('0.0.0.0:8787')
+        parse_listen_address('192.168.31.155:8787')
+
+
+def test_parse_listen_accepts_specific_private_ip_for_lan() -> None:
+    assert (
+        parse_listen_address('192.168.31.155:8787', allow_lan=True).text
+        == '192.168.31.155:8787'
+    )
+    assert parse_listen_address('10.0.0.7:0', allow_lan=True).text == '10.0.0.7:0'
+    assert parse_listen_address('169.254.10.2:8787', allow_lan=True).text == '169.254.10.2:8787'
+
+
+@pytest.mark.parametrize('host', ('0.0.0.0', '8.8.8.8', 'mobile.example.com'))
+def test_parse_listen_rejects_non_specific_or_non_private_lan_host(host: str) -> None:
+    with pytest.raises(ValueError, match='specific private or link-local'):
+        parse_listen_address(f'{host}:8787', allow_lan=True)
 
 
 def test_health_and_projects_use_ccbd_without_exposing_tmux_socket() -> None:
