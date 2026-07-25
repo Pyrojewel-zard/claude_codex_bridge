@@ -662,7 +662,15 @@ def _build_management_parser() -> argparse.ArgumentParser:
     update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or optional bundle 'rich'/'mobile'")
     update_parser.add_argument("--listen", default=None)
     update_parser.add_argument("--public-url", default=None)
-    update_parser.add_argument("--route-provider", default=None, choices=("lan", "tailnet", "cloudflare_tunnel", "relay"))
+    update_parser.add_argument(
+        "--route-provider",
+        default=None,
+        choices=("lan", "tailnet", "cloudflare_tunnel", "relay"),
+        help=(
+            "mobile route; omit in an interactive terminal to choose Tailscale, "
+            "LAN, official Relay, or self-hosted Relay"
+        ),
+    )
     update_parser.add_argument(
         "--providers",
         choices=("prompt", "check", "all", "none"),

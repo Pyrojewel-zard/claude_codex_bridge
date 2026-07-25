@@ -20,7 +20,11 @@ from urllib.request import urlopen
 from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
 from cli.services.mobile import prepare_server_mobile_gateway
-from mobile_gateway import MobileGatewayPairingStore, mobile_host_state_dir
+from mobile_gateway import (
+    MobileGatewayPairingStore,
+    mobile_host_state_dir,
+    parse_listen_address,
+)
 from mobile_gateway.relay_host_credentials import (
     build_relay_pairing_payload,
     load_relay_host_credentials,
@@ -117,6 +121,18 @@ def start_or_replace_mobile_host_service(
     lock_wait_timeout_s: float = MOBILE_HOST_LOCK_WAIT_TIMEOUT_S,
     rotate_pairing: bool = False,
 ) -> MobileHostServiceResult:
+    try:
+        parsed_listen = parse_listen_address(
+            listen,
+            allow_lan=str(route_provider or '').strip().lower() == 'lan',
+        )
+    except ValueError as exc:
+        raise MobileHostServiceError(str(exc)) from exc
+    if parsed_listen.port <= 0:
+        raise MobileHostServiceError(
+            'mobile gateway listen port must be between 1 and 65535'
+        )
+    listen = parsed_listen.text
     paths = mobile_host_service_paths(state_dir)
     lock_fd = _acquire_mobile_host_lock(
         paths.lock_path,
@@ -426,9 +442,15 @@ def remove_mobile_host_service_state(path: Path) -> None:
 
 
 def detect_loopback_port_owner(listen: str) -> PortOwner | None:
-    host, port = _split_listen(listen)
-    if host not in {'127.0.0.1', 'localhost', '::1'}:
-        raise MobileHostServiceError('mobile gateway only supports loopback listen addresses')
+    try:
+        parsed = parse_listen_address(listen, allow_lan=True)
+    except ValueError as exc:
+        raise MobileHostServiceError(str(exc)) from exc
+    host, port = parsed.host, parsed.port
+    if port <= 0:
+        raise MobileHostServiceError(
+            'mobile gateway listen port must be between 1 and 65535'
+        )
     owner = _detect_loopback_port_owner_ss(host=host, port=port)
     if owner is not None:
         return owner

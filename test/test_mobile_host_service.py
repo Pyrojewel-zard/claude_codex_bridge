@@ -696,6 +696,36 @@ def test_detect_loopback_port_owner_uses_lsof_when_ss_is_missing(monkeypatch: py
     assert owner == PortOwner(pid=444, command='python gateway.py')
 
 
+def test_detect_loopback_port_owner_accepts_specific_private_lan_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def _detect(*, host: str, port: int):
+        calls.append((host, port))
+        return PortOwner(pid=445, command='python lan-gateway.py')
+
+    monkeypatch.setattr(mobile_host, '_detect_loopback_port_owner_ss', _detect)
+
+    owner = detect_loopback_port_owner('192.168.31.155:8787')
+
+    assert owner == PortOwner(pid=445, command='python lan-gateway.py')
+    assert calls == [('192.168.31.155', 8787)]
+
+
+def test_mobile_host_service_rejects_private_listen_for_non_lan_route(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(MobileHostServiceError, match='loopback'):
+        start_or_replace_mobile_host_service(
+            script_root=tmp_path / 'source',
+            listen='192.168.31.155:8787',
+            public_url='https://desktop.tailnet.ts.net:8787',
+            route_provider='tailnet',
+            state_dir=tmp_path / 'mobile',
+        )
+
+
 def test_detect_loopback_port_owner_reports_unknown_when_tools_are_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

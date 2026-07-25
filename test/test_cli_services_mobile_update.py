@@ -149,6 +149,164 @@ def test_build_tailnet_commands_reject_public_listen() -> None:
         )
 
 
+def test_suggest_lan_listen_uses_specific_private_route_address() -> None:
+    class _Socket:
+        def connect(self, _target) -> None:
+            return None
+
+        def getsockname(self):
+            return ("192.168.31.155", 44000)
+
+        def close(self) -> None:
+            return None
+
+    assert mobile_update.suggest_lan_listen_address(
+        socket_factory=lambda *_args: _Socket(),
+        getaddrinfo_fn=lambda *_args, **_kwargs: (),
+        run_fn=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            (), 1, stdout="", stderr=""
+        ),
+    ) == "192.168.31.155:8787"
+
+
+def test_suggest_lan_listen_rejects_loopback_and_uses_hostname_candidate() -> None:
+    class _Socket:
+        def connect(self, _target) -> None:
+            return None
+
+        def getsockname(self):
+            return ("127.0.0.1", 44000)
+
+        def close(self) -> None:
+            return None
+
+    records = ((None, None, None, None, ("10.10.0.8", 0)),)
+    assert mobile_update.suggest_lan_listen_address(
+        socket_factory=lambda *_args: _Socket(),
+        hostname_fn=lambda: "desktop",
+        getaddrinfo_fn=lambda *_args, **_kwargs: records,
+        run_fn=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            (), 1, stdout="", stderr=""
+        ),
+    ) == "10.10.0.8:8787"
+
+
+def test_suggest_lan_listen_prefers_physical_interface_over_vpn_route() -> None:
+    class _Socket:
+        def connect(self, _target) -> None:
+            return None
+
+        def getsockname(self):
+            return ("198.18.0.1", 44000)
+
+        def close(self) -> None:
+            return None
+
+    ip_output = "\n".join(
+        (
+            "2: enp4s0    inet 192.168.1.4/24 brd 192.168.1.255 scope global",
+            "5: tailscale0    inet 100.107.184.75/32 scope global",
+            "6: tun0    inet 10.8.0.1/24 scope global",
+            "9: Mihomo    inet 198.18.0.1/30 scope global",
+        )
+    )
+    assert mobile_update.suggest_lan_listen_address(
+        socket_factory=lambda *_args: _Socket(),
+        getaddrinfo_fn=lambda *_args, **_kwargs: (),
+        run_fn=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            (), 0, stdout=ip_output, stderr=""
+        ),
+        system_fn=lambda: "Linux",
+    ) == "192.168.1.4:8787"
+
+
+def test_suggest_lan_listen_rejects_known_virtual_interface_fallbacks() -> None:
+    class _Socket:
+        def connect(self, _target) -> None:
+            return None
+
+        def getsockname(self):
+            return ("10.8.0.1", 44000)
+
+        def close(self) -> None:
+            return None
+
+    assert (
+        mobile_update.suggest_lan_listen_address(
+            socket_factory=lambda *_args: _Socket(),
+            hostname_fn=lambda: "desktop",
+            getaddrinfo_fn=lambda *_args, **_kwargs: (
+                (None, None, None, None, ("10.8.0.1", 0)),
+            ),
+            run_fn=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                (),
+                0,
+                stdout="6: tun0    inet 10.8.0.1/24 scope global",
+                stderr="",
+            ),
+            system_fn=lambda: "Linux",
+        )
+        is None
+    )
+
+
+def test_lan_onboarding_prints_qr_and_same_network_guidance(monkeypatch) -> None:
+    output: list[str] = []
+    qr_payloads: list[str] = []
+    monkeypatch.setattr(
+        mobile_update,
+        "render_terminal_qr",
+        lambda payload, **_kwargs: qr_payloads.append(payload) or ("QR",),
+    )
+    code = mobile_update.run_mobile_lan_onboarding(
+        listen="192.168.31.155:8787",
+        start_service_fn=lambda: {
+            "route_provider": "lan",
+            "listen": "192.168.31.155:8787",
+            "gateway_url": "http://192.168.31.155:8787",
+            "pairing": {
+                "pairing_code": "pair-code",
+                "claim_endpoint": "http://192.168.31.155:8787/v1/pairing/claim",
+                "gateway_url": "http://192.168.31.155:8787",
+                "route_provider": "lan",
+                "scopes": ["view"],
+            },
+        },
+        print_fn=output.append,
+        qr_ansi=False,
+    )
+
+    text = "\n".join(output)
+    assert code == 0
+    assert json.loads(qr_payloads[0])["route_provider"] == "lan"
+    assert "same trusted local network" in text
+    assert "Do not expose this listener to the public Internet" in text
+    assert "Manual Pairing" in text
+
+
+@pytest.mark.parametrize(
+    "listen",
+    ("127.0.0.1:8787", "0.0.0.0:8787", "8.8.8.8:8787", "bad"),
+)
+def test_lan_onboarding_rejects_unreachable_or_unsafe_listen(listen: str) -> None:
+    calls = 0
+
+    def _start():
+        nonlocal calls
+        calls += 1
+        return {}
+
+    output: list[str] = []
+    code = mobile_update.run_mobile_lan_onboarding(
+        listen=listen,
+        start_service_fn=_start,
+        print_fn=output.append,
+    )
+
+    assert code == 1
+    assert calls == 0
+
+
 def test_onboarding_not_installed_prints_install_and_phone_steps() -> None:
     output: list[str] = []
     install_calls = 0

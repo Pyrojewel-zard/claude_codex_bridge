@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import json
 import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import webbrowser
@@ -14,6 +16,7 @@ from types import SimpleNamespace
 
 from cli.services.mobile import prepare_server_mobile_gateway
 from cli.services.terminal_qr import render_terminal_qr
+from mobile_gateway import parse_listen_address
 
 
 TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download"
@@ -65,6 +68,7 @@ def run_mobile_update_onboarding(
     print_fn: Callable[[str], None] = print,
     serve_forever: bool = True,
     qr_ansi: bool | None = None,
+    listen: str = DEFAULT_MOBILE_GATEWAY_LISTEN,
 ) -> int:
     detect_tailscale_fn = detect_tailscale_fn or detect_tailscale
     install_tailscale_fn = install_tailscale_fn or install_tailscale
@@ -115,7 +119,7 @@ def run_mobile_update_onboarding(
         return 0
 
     print_fn("Tailscale: logged in")
-    commands = build_tailnet_onboarding_commands(status=status)
+    commands = build_tailnet_onboarding_commands(status=status, listen=listen)
     if start_service_fn is not None:
         print_fn("")
         print_fn("Starting or refreshing the loopback-only CCB Mobile gateway:")
@@ -275,6 +279,307 @@ def run_mobile_relay_onboarding(
     print_fn("Relay pairing requires the complete QR because it includes the host fingerprint and single-use bootstrap.")
     print_fn("If scanning fails, run this command again to rotate the QR.")
     return 0
+
+
+def run_mobile_lan_onboarding(
+    *,
+    start_service_fn: Callable[[], Mapping[str, object]],
+    listen: str,
+    environ: Mapping[str, str] | None = None,
+    print_fn: Callable[[str], None] = print,
+    qr_ansi: bool | None = None,
+) -> int:
+    try:
+        parsed = parse_listen_address(listen, allow_lan=True)
+    except ValueError as exc:
+        print_fn(f"Invalid LAN listen address: {exc}")
+        return 1
+    if parsed.host.strip().lower() in {"127.0.0.1", "localhost", "::1"}:
+        print_fn(
+            "LAN setup requires a specific private interface address, "
+            "not a loopback address."
+        )
+        return 1
+    return _run_mobile_direct_route_onboarding(
+        route_provider="lan",
+        title="CCB Mobile local network setup",
+        security_text=(
+            "Security: direct HTTP on a trusted local network. "
+            "Do not expose this listener to the public Internet."
+        ),
+        phone_steps=(
+            "Connect the phone and computer to the same trusted local network.",
+            "Open CCB Mobile and tap Scan computer QR.",
+            "Scan the complete LAN QR below.",
+        ),
+        start_service_fn=start_service_fn,
+        environ=environ,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+    )
+
+
+def run_mobile_cloudflare_onboarding(
+    *,
+    start_service_fn: Callable[[], Mapping[str, object]],
+    environ: Mapping[str, str] | None = None,
+    print_fn: Callable[[str], None] = print,
+    qr_ansi: bool | None = None,
+) -> int:
+    return _run_mobile_direct_route_onboarding(
+        route_provider="cloudflare_tunnel",
+        title="CCB Mobile Cloudflare Tunnel setup",
+        security_text=(
+            "Security: advanced route. Configure an authenticated HTTPS/WebSocket "
+            "tunnel to the loopback-only gateway before pairing."
+        ),
+        phone_steps=(
+            "Confirm the named Cloudflare Tunnel is running.",
+            "Open CCB Mobile and tap Scan computer QR.",
+            "Scan the complete tunnel QR below.",
+        ),
+        start_service_fn=start_service_fn,
+        environ=environ,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+    )
+
+
+def _run_mobile_direct_route_onboarding(
+    *,
+    route_provider: str,
+    title: str,
+    security_text: str,
+    phone_steps: Sequence[str],
+    start_service_fn: Callable[[], Mapping[str, object]],
+    environ: Mapping[str, str] | None,
+    print_fn: Callable[[str], None],
+    qr_ansi: bool | None,
+) -> int:
+    env = os.environ if environ is None else environ
+    print_fn(title)
+    print_fn(security_text)
+    print_fn("")
+    print_fn("Starting or refreshing the server-wide CCB Mobile gateway:")
+    try:
+        service = start_service_fn()
+        if not isinstance(service, Mapping):
+            raise TypeError("mobile service starter must return a mapping")
+        if str(service.get("route_provider") or "") != route_provider:
+            raise ValueError(
+                f"mobile service did not start in {route_provider} mode"
+            )
+        _print_mobile_service_summary(print_fn, service)
+        qr_payload = _pairing_qr_text(service)
+    except Exception as exc:
+        print_fn(f"❌ CCB Mobile gateway update failed: {type(exc).__name__}: {exc}")
+        return 1
+    print_fn("")
+    print_fn("On your phone:")
+    for index, step in enumerate(phone_steps, start=1):
+        print_fn(f"   {index}. {step}")
+    app_download_url = (
+        _clean_text(env.get(CCB_MOBILE_APP_DOWNLOAD_URL_ENV))
+        or DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL
+    )
+    print_fn(f"   APK: {app_download_url}")
+    print_fn("")
+    print_fn("Scan this QR in CCB Mobile:")
+    use_ansi = (
+        (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
+    )
+    for line in render_terminal_qr(
+        qr_payload,
+        ansi=use_ansi,
+        quiet_zone=2,
+        compact=True,
+    ):
+        print_fn(line)
+    print_fn("")
+    _print_pairing_fallback(service, print_fn=print_fn)
+    return 0
+
+
+def suggest_lan_listen_address(
+    *,
+    port: int = 8787,
+    socket_factory: Callable[..., socket.socket] = socket.socket,
+    hostname_fn: Callable[[], str] = socket.gethostname,
+    getaddrinfo_fn: Callable[..., Sequence[tuple[object, ...]]] = socket.getaddrinfo,
+    run_fn: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
+    system_fn: Callable[[], str] = platform.system,
+) -> str | None:
+    candidates = _lan_interface_ipv4_candidates(
+        run_fn=run_fn,
+        system_name=system_fn(),
+    )
+    known_interfaces: dict[str, list[str]] = {}
+    for interface, address in candidates:
+        known_interfaces.setdefault(address.strip(), []).append(interface)
+    route_socket = None
+    try:
+        route_socket = socket_factory(socket.AF_INET, socket.SOCK_DGRAM)
+        route_socket.connect(("192.0.2.1", 9))
+        candidates.append(("", str(route_socket.getsockname()[0] or "")))
+    except OSError:
+        pass
+    finally:
+        if route_socket is not None:
+            try:
+                route_socket.close()
+            except OSError:
+                pass
+    try:
+        records = getaddrinfo_fn(
+            hostname_fn(),
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError:
+        records = ()
+    for record in records:
+        try:
+            candidates.append(("", str(record[4][0])))
+        except (IndexError, TypeError):
+            continue
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda item: _lan_candidate_rank(
+            interface=item[1][0],
+            address=item[1][1],
+            original_index=item[0],
+        ),
+    )
+    for _index, (_interface, candidate) in ranked:
+        text = candidate.strip()
+        if not text or not _is_preferred_lan_address(text):
+            continue
+        if _interface and _is_virtual_network_interface(_interface):
+            continue
+        interfaces = known_interfaces.get(text, ())
+        if (
+            not _interface
+            and interfaces
+            and all(_is_virtual_network_interface(name) for name in interfaces)
+        ):
+            continue
+        try:
+            parsed = parse_listen_address(f"{text}:{port}", allow_lan=True)
+        except ValueError:
+            continue
+        if parsed.host.strip().lower() in {"127.0.0.1", "localhost", "::1"}:
+            continue
+        return parsed.text
+    return None
+
+
+def _lan_interface_ipv4_candidates(
+    *,
+    run_fn: Callable[..., subprocess.CompletedProcess[object]],
+    system_name: str,
+) -> list[tuple[str, str]]:
+    if system_name == "Linux":
+        command = ("ip", "-o", "-4", "addr", "show", "scope", "global")
+    elif system_name == "Darwin":
+        command = ("ifconfig",)
+    else:
+        return []
+    try:
+        result = run_fn(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    text = str(result.stdout or "")
+    if system_name == "Linux":
+        candidates: list[tuple[str, str]] = []
+        for line in text.splitlines():
+            match = re.search(
+                r"^\d+:\s+([^\s:]+)(?:@[^\s]+)?\s+inet\s+([0-9.]+)/\d+",
+                line.strip(),
+            )
+            if match:
+                candidates.append((match.group(1), match.group(2)))
+        return candidates
+    candidates = []
+    interface = ""
+    for line in text.splitlines():
+        if line and not line[0].isspace() and ":" in line:
+            interface = line.split(":", 1)[0].strip()
+            continue
+        match = re.match(r"\s*inet\s+([0-9.]+)\s", line)
+        if match:
+            candidates.append((interface, match.group(1)))
+    return candidates
+
+
+def _lan_candidate_rank(
+    *,
+    interface: str,
+    address: str,
+    original_index: int,
+) -> tuple[int, int, int]:
+    virtual = _is_virtual_network_interface(interface)
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return (3, 3, original_index)
+    if parsed in ipaddress.ip_network("192.168.0.0/16"):
+        range_rank = 0
+    elif parsed in ipaddress.ip_network("172.16.0.0/12"):
+        range_rank = 1
+    elif parsed in ipaddress.ip_network("10.0.0.0/8"):
+        range_rank = 2
+    else:
+        range_rank = 3
+    return (1 if virtual else 0, range_rank, original_index)
+
+
+def _is_virtual_network_interface(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    return normalized.startswith(
+        (
+            "br-",
+            "docker",
+            "ham",
+            "mihomo",
+            "tailscale",
+            "tap",
+            "tun",
+            "utun",
+            "veth",
+            "virbr",
+            "vmnet",
+            "wg",
+            "zt",
+            "zerotier",
+        )
+    )
+
+
+def _is_preferred_lan_address(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return bool(
+        address.version == 4
+        and (
+            address in ipaddress.ip_network("10.0.0.0/8")
+            or address in ipaddress.ip_network("172.16.0.0/12")
+            or address in ipaddress.ip_network("192.168.0.0/16")
+            or address.is_link_local
+        )
+        and not address.is_loopback
+        and not address.is_unspecified
+        and not address.is_multicast
+    )
 
 
 def detect_tailscale(
@@ -795,6 +1100,9 @@ __all__ = [
     "build_tailnet_onboarding_commands",
     "detect_tailscale",
     "install_tailscale",
+    "run_mobile_cloudflare_onboarding",
+    "run_mobile_lan_onboarding",
     "run_mobile_relay_onboarding",
     "run_mobile_update_onboarding",
+    "suggest_lan_listen_address",
 ]

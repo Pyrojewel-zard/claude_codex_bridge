@@ -66,9 +66,18 @@ def _invitation(command) -> str:
 
 
 def _credential_path(command) -> Path:
+    return relay_host_credential_path(command)
+
+
+def relay_host_credential_path(command, *, environ=None) -> Path:
+    env = os.environ if environ is None else environ
     explicit = str(getattr(command, 'credential_path', '') or '').strip()
-    configured = str(os.environ.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
+    configured = str(env.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
     return Path(explicit or configured or (mobile_host_state_dir() / 'relay-host-credentials.json')).expanduser()
 
 
-__all__ = ['relay_host_activate_command', 'resolve_relay_host_target']
+__all__ = [
+    'relay_host_activate_command',
+    'relay_host_credential_path',
+    'resolve_relay_host_target',
+]
