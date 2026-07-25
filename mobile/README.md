@@ -18,6 +18,16 @@ CCB Mobile v8.3.1 is published as an Android APK:
 - Server setup entrypoint: `ccb update mobile`
 - App source: [`app/`](app/)
 
+### Android app updates
+
+The Android app checks the latest GitHub release after startup and also exposes
+a manual **Check for updates** action in the connection settings. When GitHub
+is unreachable, release metadata and APK downloads fall back to `gh-proxy.com`,
+`ghfast.top`, and `ghproxy.net`, in that order. The downloaded APK must match
+the size and SHA-256 digest in the release manifest before Android's installer
+is opened. Android still requires the user to approve the signed APK update;
+the app does not perform silent installation.
+
 The app is designed for real server-side CCB projects, not a demo-only flow.
 It connects to the server-wide mobile gateway, lists mounted CCB projects,
 renders agent transcripts, sends pane-native text input, opens terminal views,
