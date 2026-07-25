@@ -20,6 +20,7 @@ from .dispatcher_runtime import (
     terminate_nonterminal_jobs,
     tick_jobs,
 )
+from .dispatcher_runtime.active_followups import replay_accepted_followups, request_active_followup
 from .dispatcher_runtime.facade import DispatcherFacadeMixin
 from .dispatcher_runtime.facade_state import DispatcherRuntimeState, DispatcherRuntimeStateMixin
 from ccbd.api_models import (
@@ -34,6 +35,7 @@ from ccbd.system import utc_now
 from completion.models import CompletionDecision
 from completion.tracker import CompletionTrackerService
 from jobs.store import JobEventStore, JobStore, SubmissionStore
+from ccbd.active_followups import ActiveFollowupStore
 from message_bureau import MessageBureauControlService, MessageBureauFacade
 from provider_core.catalog import ProviderCatalog, build_default_provider_catalog
 from storage.paths import PathLayout
@@ -73,6 +75,7 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
         provider_catalog: ProviderCatalog | None = None,
         job_store: JobStore | None = None,
         event_store: JobEventStore | None = None,
+        active_followup_store: ActiveFollowupStore | None = None,
         submission_store: SubmissionStore | None = None,
         message_bureau: MessageBureauFacade | None = None,
         message_bureau_control: MessageBureauControlService | None = None,
@@ -94,6 +97,7 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
             completion_tracker=completion_tracker,
             job_store=job_store or JobStore(layout),
             event_store=event_store or JobEventStore(layout),
+            active_followup_store=active_followup_store or ActiveFollowupStore(layout),
             submission_store=submission_store or SubmissionStore(layout),
             message_bureau=message_bureau or MessageBureauFacade(layout, config=config, clock=clock),
             message_bureau_control=message_bureau_control or MessageBureauControlService(layout, config, clock=clock),
@@ -131,6 +135,9 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
     def cancel(self, job_id: str, *, record_reply: bool = True) -> CancelReceipt:
         return cancel_job(self, job_id, record_reply=record_reply)
 
+    def followup(self, job_id: str, message: str) -> dict[str, object]:
+        return request_active_followup(self, job_id, message)
+
     def _cancel_with_decision(
         self,
         current: JobRecord,
@@ -158,7 +165,9 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
         return poll_completion_updates(self)
 
     def restore_running_jobs(self) -> tuple[JobRecord, ...]:
-        return restore_running_jobs(self)
+        restored = restore_running_jobs(self)
+        replay_accepted_followups(self)
+        return restored
 
     def terminate_nonterminal_jobs(self, *, shutdown_reason: str, forced: bool) -> tuple[JobRecord, ...]:
         return terminate_nonterminal_jobs(self, shutdown_reason=shutdown_reason, forced=forced)

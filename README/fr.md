@@ -6,7 +6,7 @@
 **Coordonne Codex, Claude, Gemini et d'autres agents CLI dans des workflows visibles, contrôlables et reprenables directement**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -54,17 +54,19 @@
 
 ## Comment installer
 
-Installez ou mettez à jour avec npm :
+Installez ou mettez à jour une installation gérée par npm avec npm :
 
 ```bash
-npm install -g @seemseam/ccb
+npm install -g @seemseam/ccb@latest
 ```
 
-Après l'installation, utilisez l'updater intégré de CCB :
+Pour une installation GitHub release ou source, utilisez l'updater transactionnel de CCB :
 
 ```bash
 ccb update
 ```
+
+Dans une installation gérée par npm, `ccb update` affiche la commande npm équivalente sans modifier le payload embarqué.
 
 <details>
 <summary><b>Paquets GitHub release et installation source en secours</b></summary>
@@ -180,9 +182,9 @@ Cette commande guide l'installation et la configuration.
 <details>
 <summary><b>Détails de l'app mobile, frontière de sécurité et source</b></summary>
 
-CCB 8.2.1 inclut le code source Flutter de CCB Mobile dans [`mobile/`](../mobile/) et publie l'APK Android via GitHub Releases :
+CCB 8.3.1 inclut le code source Flutter de CCB Mobile dans [`mobile/`](../mobile/) et publie l'APK Android via GitHub Releases :
 
-- [Télécharger l'APK CCB Mobile v8.2.1](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [Télécharger l'APK CCB Mobile v8.3.1](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - Source de l'app : [`mobile/app`](../mobile/app)
 - Source du gateway serveur : [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -261,6 +263,28 @@ Merci à [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) pou
 ## Notes de version
 
 <details open>
+<summary><b>v8.3.1</b> - Mises à jour provider unifiées, retrait sûr des caches et accès Config UI persistant</summary>
+
+- Centralise les mises à niveau provider prises en charge dans `ccb update`, avec vérification exacte, refus et saut limité à une version, sans redémarrer les panes actifs.
+- Retire les caches logiciels Claude/Gemini par projet et ne nettoie que les données historiques dont CCB peut prouver la propriété ; projets actifs, sessions et authentification sont préservés.
+- Autorise un port loopback stable et une source de token protégée pour Config UI sans afficher la valeur du token.
+- Préserve les finalizers de shutdown pendant l'arrêt du serveur et adopte une vue Yazi compacte à deux colonnes en Rich mode.
+- Synchronise CLI, npm, Linux, macOS, Android et tous les artefacts de release avec 8.3.1.
+
+</details>
+
+<details>
+<summary><b>v8.3.0</b> - Tours provider exacts, intégrité des jobs et terminal Mobile lié au projet</summary>
+
+- Lie Kimi, Claude et Qoder à leurs contrats natifs de tour, d'activation, de session et d'achèvement.
+- Ajoute les follow-ups du job actif exact, les phases d'exécution corrélées, le diagnostic des inbounds orphelins et l'annulation terminale.
+- Hérite des extensions provider et des plugins Copilot avec une protection explicite de l'ownership des assets projetés.
+- Délègue les mises à niveau gérées par npm à npm et retire prudemment les worktrees ne contenant que des marqueurs.
+- Maintient le chat et le terminal Mobile dans le workspace du projet sélectionné et synchronise toutes les surfaces de release avec 8.3.0.
+
+</details>
+
+<details>
 <summary><b>v8.2.1</b> - Démarrage déterministe, récupération d'authentification explicite et connexion Android en arrière-plan</summary>
 
 - Ajoute des barrières de génération de démarrage, une preuve de disponibilité bornée et des diagnostics chronologiques.

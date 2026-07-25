@@ -1,6 +1,6 @@
 # Native CLI Providers Implementation Status
 
-Date: 2026-06-13
+Date: 2026-07-21
 
 ## Current Phase
 
@@ -21,6 +21,14 @@ is explicitly Kimi-only: it does not change default provider behavior for Codex,
 Claude, Gemini, OpenCode, DeepSeek, MiMo, AGY, or next-wave native CLI
 providers. Topic:
 [topics/kimi-receipt-and-diagnostics-hardening.md](topics/kimi-receipt-and-diagnostics-hardening.md).
+
+Kimi exact-session restart hardening has also landed in the active source
+candidate. First launch remains fresh. The completion reader binds a native
+session to the per-agent CCB record only after observing that agent's exact
+request anchor; manual/dead-pane restart then capability-checks and selects
+only that id through a persisted command-template insertion point. Invalid or
+unsupported bindings fail fresh without deleting provider state. This remains
+separate from in-flight job resume support.
 
 AGY delivery stability hardening has landed in source after a real
 `main -> frontend_engineer:agy` empty-reply investigation. AGY now defers prompt
@@ -47,6 +55,13 @@ Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
 
 ## Last Landed
 
+- Kimi exact-session restart now binds native identity only from an observed
+  per-agent request anchor, persists one restart-command insertion point, and
+  fails fresh when binding or capability validation fails. Real Kimi 1.47.0
+  same-workdir agents resumed distinct native UUIDs and returned only their
+  own hidden prior tokens after CCB-controlled restart. Focused/integration
+  gates passed `45`, `120`, and `193` tests; the full Python remainder passed
+  `5455` tests with `2` skips and `2` explicit baseline deselections.
 - Fixed Issue #255 without changing the shared native CLI launcher: Grok
   selects a prebuilt fullscreen launch configuration only when its explicit
   startup arguments contain `--fullscreen`.
@@ -157,9 +172,16 @@ Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
 ## Blocked By
 
 None for design. Real provider API execution may require user-owned
-Kimi/DeepSeek/MiMo/Qwen/Copilot/Cursor/Kiro/Crush/Pi/Z.ai credentials; CCB integration
+Kimi/DeepSeek/MiMo/Qwen/Qoder/Copilot/Cursor/Kiro/Crush/Pi/Z.ai credentials; CCB integration
 can still be validated with provider command templates, installed CLI
 help/version checks, and source-backed parser tests.
+
+Qoder `1.1.2` help/version and a credential-free real stream probe passed on
+2026-07-22. The probe confirmed UUID-only `--session-id`, documented `-p`,
+`--output-format stream-json`, `-w`, `--config-dir`, permission modes, and the
+missing-login error envelope. CCB now parses that envelope fail-closed and
+keeps visible/headless config state under the same agent-local root. A real
+authenticated answer is not claimed.
 
 Kimi hardening source work is unblocked. Remaining Kimi prompt-mode and auth
 diagnostic ideas stay deferred/open until real usage needs them.
@@ -264,6 +286,66 @@ Kimi hardening focused verification:
 - `PYTHONPATH=lib python -m py_compile` for touched Kimi, artifact, trace, and
   catalog modules: passed.
 - `git diff --check`: passed.
+
+## 2026-07-22 Kimi And Qoder Corrective Verification
+
+Issue/PR review found two provider-contract gaps and closed them on the unified
+repair branch:
+
+- Kimi native observation now binds only the current leading request header,
+  ignores thinking text, accepts only explicit successful terminal states, and
+  supports both legacy `.kimi/sessions/.../wire.jsonl` and current
+  `.kimi-code/sessions/wd_<name>_<hash>/<session>/agents/<agent>/wire.jsonl`
+  layouts. Exact session roots are launcher-recorded and fail fresh on drift.
+- Qoder now uses the real `qodercli` headless surface: `-p`, `-w`,
+  `--config-dir`, `--output-format stream-json`, a deterministic UUID session
+  id, and an explicit permission mode. Completion requires the native result
+  envelope; auth/error results and zero exit without terminal evidence fail
+  closed.
+- The optional execution-registry expectation now includes `qoder`; the
+  duplicate `grok` expectation was removed.
+
+Evidence:
+
+- Kimi focused suites: `202 passed`.
+- Qoder focused suites: `183 passed`.
+- Official `@qoder-ai/qodercli@1.1.2` was installed in an isolated external
+  probe. Its real help and credential-free stream confirmed UUID-only session
+  ids, the documented headless flags, `system/init`, assistant error, and
+  `result is_error=true`. The CCB-generated command reached that native result
+  and failed closed as `Not logged in` without reading credentials.
+- Final cross-feature affected-suite run after all four repairs:
+  `418 passed in 81.18s`.
+- Full repository run before correcting the registry expectation:
+  `5595 passed, 2 skipped, 2 failed in 1026.68s`; the deterministic failure was
+  the stale Qoder expected set and is fixed. Its registry follow-up is
+  `20 passed`. The other failure was an unrelated ccbd heartbeat test timing
+  race under full-suite load; the exact test passed once immediately and then
+  10 consecutive isolated repeats.
+- From `/home/bfly/yunwei/test_ccb2`, the repair worktree's `ccb_test
+  --diagnose` reported `allowed_source_test_project: yes`; `--print-version`
+  returned `v8.2.1`, and `doctor` completed with the repair worktree recorded as
+  `install_path`/source authority.
+
+## 2026-07-24 Qoder CLI CN Contract Landing
+
+- Added provider key `qoderclicn` for `@qodercn-ai/qoderclicn@1.1.3`, binary
+  `qoderclicn`, with Node `>=20`.
+- Reused the corrected Qoder command and stream contracts: agent-local config,
+  explicit workspace and permission mode, print-mode stream JSON, and a
+  deterministic UUIDv5 instead of the rejected raw CCB job id.
+- Added a Qoder CN observer with provider-specific terminal reasons. Native
+  completion requires `result.is_error=false` and a normal stop reason;
+  assistant text does not terminalize, auth failures fail, and exit zero without
+  a result reports `qoderclicn_native_terminal_missing`.
+- Unified visible and headless `qoderclicn_config_dir` state, preserved explicit
+  command/startup config and permission options, and mapped automatic permission
+  to `auto` with `dont_ask` as the normal headless default.
+- Agent-local `settings.json` now preserves existing keys while disabling both
+  `general.enableAutoUpdate` and `general.enableAutoUpdateNotification`. The
+  user-global `~/.qoder-cn/settings.json` is outside CCB's write boundary.
+- Classified Qoder CN `.auth/` state as secret and added focused command,
+  observer, launcher, registry, runtime, and storage regression coverage.
 
 Historical first-slice verification:
 

@@ -11,10 +11,11 @@ from project.resolver import ProjectContext
 from storage.paths import PathLayout
 
 from .git_worktree import (
+    WorkspaceBindingAuthority,
     branch_is_merged_into_head,
     delete_branch,
     is_registered_worktree,
-    remove_registered_worktree,
+    remove_clean_registered_worktree,
     workspace_is_dirty,
 )
 from .planner import WorkspacePlanner
@@ -226,11 +227,12 @@ def _inspect_worktree(
     plan = WorkspacePlanner().plan(spec, project_ctx)
     branch_name = plan.branch_name
     merged = branch_is_merged_into_head(project_root, branch_name) if branch_name else None
+    binding_authority = _workspace_binding_authority(plan)
     return WorktreeAlert(
         agent_name=spec.name,
         branch_name=branch_name,
         workspace_path=str(plan.workspace_path),
-        dirty=workspace_is_dirty(plan.workspace_path),
+        dirty=workspace_is_dirty(plan.workspace_path, binding_authority=binding_authority),
         merged=merged,
         registered=is_registered_worktree(project_root, plan.workspace_path),
         exists=plan.workspace_path.exists(),
@@ -275,9 +277,13 @@ def _retire_worktree_spec(
 ) -> WorkspaceRetirement:
     plan = WorkspacePlanner().plan(spec, project_ctx)
     if remove_workspace and plan.workspace_scope != 'external':
-        removed = remove_registered_worktree(project_root, plan.workspace_path)
+        removed = remove_clean_registered_worktree(
+            project_root,
+            plan.workspace_path,
+            binding_authority=_workspace_binding_authority(plan),
+        )
         if not removed and _path_within(plan.workspace_path, paths.workspaces_dir) and plan.workspace_path.exists():
-            shutil.rmtree(plan.workspace_path)
+            raise RuntimeError(f'refusing to recursively remove unregistered workspace path: {plan.workspace_path}')
         if plan.branch_name:
             delete_branch(project_root, plan.branch_name)
     if remove_agent_state:
@@ -298,6 +304,18 @@ def _remove_agent_state(paths: PathLayout, agent_name: str) -> None:
             continue
         if target.is_dir():
             shutil.rmtree(target)
+
+
+def _workspace_binding_authority(plan) -> WorkspaceBindingAuthority:
+    if not plan.branch_name:
+        raise RuntimeError(f'managed git worktree is missing branch authority: {plan.workspace_path}')
+    return WorkspaceBindingAuthority(
+        target_project=plan.project_root,
+        project_id=plan.project_id,
+        workspace_path=plan.workspace_path,
+        branch_name=plan.branch_name,
+        agent_name=None if plan.workspace_scope == 'group' else plan.agent_name,
+    )
 
 
 def _load_persisted_specs(paths: PathLayout) -> dict[str, AgentSpec]:

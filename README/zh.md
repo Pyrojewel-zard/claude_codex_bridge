@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -54,17 +54,34 @@
 
 ## 如何安装
 
-推荐使用 npm 安装或更新：
+通过 npm 管理的 CCB 应继续使用 npm 安装或更新：
 
 ```bash
-npm install -g @seemseam/ccb
+npm install -g @seemseam/ccb@latest
 ```
 
-安装完成后，后续更新直接使用 CCB 自带 updater：
+通过 GitHub release 包或源码安装时，使用 CCB 自带的事务 updater：
 
 ```bash
 ccb update
 ```
+
+在 npm 管理的安装中，`ccb update` 只会显示等价的 npm 命令，不会原地修改 npm vendored payload。
+
+CCB 托管的 provider pane 会关闭已知的 provider 原生启动更新提示。更新 CCB
+后，或者 CCB 已经是最新版时，`ccb update` 会统一检查已安装的 provider
+CLI，并只提示一次可安全管理的更新。可使用 `--providers check`、
+`--providers all` 或 `--providers none` 分别执行仅检查、非交互全部更新或
+本次跳过。选择“暂不更新”后，下次 `ccb update` 会再次提示；选择“跳过此
+版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
+provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
+
+版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
+manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
+立即清理，仍在运行或属于其他现存项目的缓存会保留到对应项目下一次成功
+执行 `ccb kill` 后再清理。未知 Provider、损坏的 manifest、外来符号链接、
+session/auth 和用户级 Gemini 缓存都不会被该迁移删除。单次更新可用
+`ccb update --no-cache-cleanup` 跳过。
 
 <details>
 <summary><b>GitHub release 包和源码安装兜底</b></summary>
@@ -114,6 +131,20 @@ mkdir -p .ccb
 空白项目现在会轻量启动：CCB 只打开一个 `main` window，并根据本机实际可用的 CLI（依次优先 Codex、Claude、Gemini，再到其他 provider）创建一个名为 `demo` 的 agent，不再默认挂载多 Agent 团队。
 
 点击 CCB sidebar 左上角的 **⚙ 设置** 图标即可打开本地配置控制面；也可以在项目目录运行 `ccb config ui`。
+
+#### 固化本地 Config UI 访问
+
+Config UI 始终只绑定 loopback。若需要固定本地端口和 token，请在 `.ccb/ccb.config` 中配置 token 的**来源**，不要将 token 明文写入该文件：
+
+```toml
+[config_ui]
+port = 43123
+token_env = "CCB_CONFIG_UI_TOKEN"
+# 或使用下面这一项替代 token_env：
+# token_file = ".ccb/config-ui.token"
+```
+
+`--port` 仍可覆盖单次启动端口。`token_file` 必须是项目内相对路径、不能是符号链接，并且在 POSIX 上应仅允许文件所有者读取（`chmod 600 .ccb/config-ui.token`）。未配置 token 来源时，CCB 保持原有的随机 token 与临时端口行为。CLI 只输出 loopback URL 和 token 来源，不会输出 token 值。
 
 <p align="center">
   <img src="../assets/readme_v7/config-control-panel.png" alt="CCB 配置控制面正在编辑默认 demo agent" width="960">
@@ -180,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.2.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.3.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.2.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [下载 CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -266,6 +297,31 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.3.1</b> - 统一 Provider 更新、安全回收缓存与持久化 Config UI 访问</summary>
+
+- 将受支持的 Provider 升级统一到 `ccb update`，提供准确版本检查、暂不更新和精确版本跳过，并且不会自动重启运行中的 pane。
+- 废弃项目级 Claude/Gemini 软件缓存，改用用户安装的 Claude 可执行文件和一份用户级 Gemini 缓存。
+- 增加有边界的更新后与关闭后清理，保留运行中的项目、未知内容、session、认证数据和用户自有缓存。
+- 支持固化 Config UI 的 loopback 端口与受保护的 token 来源，同时不暴露 token 值。
+- 新增原生 Qoder CLI CN 支持，隔离配置与 session 状态，并修正 Qoder 的 `--print` / `--config-dir` 执行协议。
+- 在服务停止阶段继续可靠执行 shutdown finalizer，并让 sidebar 发布校验和生成兼容不同主机。
+- 将 Rich 模式切换为紧凑的 Yazi 双栏布局，并把所有发布面同步到 8.3.1。
+
+</details>
+
+<details>
+<summary><b>v8.3.0</b> - 精确 Provider 回合、作业完整性与项目内 Mobile 终端</summary>
+
+- 将 Kimi、Claude 和 Qoder 执行绑定到各自原生的回合、激活、会话和完成协议。
+- 增加精确 active job follow-up、关联执行阶段、孤立 inbound 诊断和终态取消结果。
+- 以明确的投影资源所有权保护继承 Provider 扩展与 Copilot 插件。
+- 将 npm 管理安装的升级交还 npm，并保守回收仅含标记的 worktree。
+- 让 Mobile 的聊天和终端模式留在所选项目工作区，并将所有发布面统一到 8.3.0。
+- 修复 WSL 与 macOS 上 sidebar 设置按钮无响应的问题：优先使用原生浏览器打开方式、刷新桌面会话环境，并在自动打开失败时明确提示手动打开。
+
+</details>
+
+<details>
 <summary><b>v8.2.1</b> - 确定性启动、可操作的认证恢复与 Android 后台连接</summary>
 
 - 增加端到端启动代际栅栏、有限就绪证明，以及启动操作量和时间线诊断。

@@ -23,11 +23,16 @@ def route_projected_tree(
     source = Path(source).expanduser()
     target = Path(target).expanduser()
     marker = marker_path or _default_marker_path(target)
+    marker_present = marker.exists() or marker.is_symlink()
+    marker_owned = _marker_matches(marker, label=label, source=None)
+
+    if marker_present and not marker_owned:
+        return False
 
     if not enabled or not source.is_dir():
-        _remove_projected_target(target, marker, allow_unmarked_replace=allow_unmarked_replace)
+        _remove_projected_target(target, marker, label=label)
         return False
-    if _same_path(source, target):
+    if _same_path(source, target) and not target.is_symlink():
         return True
     target.parent.mkdir(parents=True, exist_ok=True)
     if _projection_points_to(target, source):
@@ -36,8 +41,8 @@ def route_projected_tree(
         if not _can_replace_projected_target(
             target,
             marker,
+            label=label,
             allow_unmarked_replace=allow_unmarked_replace,
-            replacement_source=source,
         ):
             return False
         _remove_path(target)
@@ -169,13 +174,12 @@ def remove_projected_path(
     marker_path: Path | None = None,
     allow_unmarked_replace: bool = False,
 ) -> None:
+    del allow_unmarked_replace
     target = Path(target).expanduser()
     marker = marker_path or _default_marker_path(target)
     if not _marker_matches(marker, label=label, source=source):
-        if allow_unmarked_replace and target.is_symlink():
-            _remove_path(target)
         return
-    _remove_projected_target(target, marker, allow_unmarked_replace=allow_unmarked_replace)
+    _remove_projected_target(target, marker, label=label)
 
 
 def projected_path_is_owned(
@@ -262,8 +266,8 @@ def tree_metadata_fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _remove_projected_target(target: Path, marker: Path, *, allow_unmarked_replace: bool) -> None:
-    if _can_replace_projected_target(target, marker, allow_unmarked_replace=allow_unmarked_replace):
+def _remove_projected_target(target: Path, marker: Path, *, label: str) -> None:
+    if _marker_matches(marker, label=label, source=None):
         _remove_path(target)
         marker.unlink(missing_ok=True)
 
@@ -284,20 +288,15 @@ def _can_replace_projected_target(
     target: Path,
     marker: Path,
     *,
+    label: str,
     allow_unmarked_replace: bool,
-    replacement_source: Path | None = None,
 ) -> bool:
-    if marker.is_file():
+    del allow_unmarked_replace
+    if _marker_matches(marker, label=label, source=None):
         return True
-    if not target.exists():
-        return True
-    if target.is_symlink():
-        return allow_unmarked_replace
-    if allow_unmarked_replace:
-        return True
-    if replacement_source is not None and target.is_dir() and replacement_source.is_dir():
-        return tree_content_fingerprint(target) == tree_content_fingerprint(replacement_source)
-    return allow_unmarked_replace
+    if marker.exists() or marker.is_symlink():
+        return False
+    return not target.exists() and not target.is_symlink()
 
 
 def _tree_has_required_entries(source: Path, candidate: Path) -> bool:
@@ -323,17 +322,26 @@ def _default_marker_path(target: Path) -> Path:
 
 
 def _marker_matches(marker: Path, *, label: str, source: Path | None) -> bool:
+    if marker.is_symlink() or not marker.is_file():
+        return False
     payload = _read_projection_marker(marker)
+    if payload.get('schema_version') != 1:
+        return False
     if payload.get('record_type') != 'ccb_projected_asset':
         return False
     if str(payload.get('label') or '') != label:
         return False
+    marker_source = str(payload.get('source') or '').strip()
+    if not marker_source:
+        return False
+    if str(payload.get('mode') or '') not in {'symlink', 'copy', 'copy-seed'}:
+        return False
     if source is None:
         return True
     try:
-        return Path(str(payload.get('source') or '')).expanduser().resolve() == Path(source).expanduser().resolve()
+        return Path(marker_source).expanduser().resolve() == Path(source).expanduser().resolve()
     except Exception:
-        return str(payload.get('source') or '') == str(source)
+        return marker_source == str(source)
 
 
 def _read_projection_marker(path: Path) -> dict[str, object]:

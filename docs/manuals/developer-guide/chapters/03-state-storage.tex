@@ -19,6 +19,12 @@ provider runtime 证据 & provider state、session file、pane id、pid & 说明
 
 这种分类在通信章节尤其重要。一个 job 终止并不等于用户已经看到 reply；reply record 创建也不等于 caller 已经 ack；mailbox head 有 reply 也不等于 provider 仍在运行。
 
+\section{projected asset 所有权}
+
+\src{lib/provider_core/projected_assets.py} 只能在有效 CCB marker 证明所有权后替换或清理 provider home 中的 projected tree。marker 必须是本地普通文件，并同时包含 schema version 1、\src{ccb_projected_asset} record type、与 consumer 完全一致的 label、非空 source 和受支持的 mode。缺失、损坏、错误 label 或 symlink marker 都不构成所有权。
+
+未标记目录即使与 source 内容完全相同也必须保留。唯一允许的 markerless migration 是：现有 symlink 已经精确解析到本次 source；此时只在旁边原子写 marker，不替换 symlink。继承关闭或 source 消失时，同样只能删除 marker 已验证的目标。兼容参数 \src{allow_unmarked_replace} 不再授予破坏权限。
+
 \section{配置加载结果}
 
 \src{lib/agents/config_loader_runtime/common.py} 定义 \src{ConfigLoadResult}，其中包含配置对象、来源路径、来源类型和是否使用默认值。来源类型有三种：
@@ -34,6 +40,14 @@ provider runtime 证据 & provider state、session file、pane id、pid & 说明
 \section{dispatcher 存储}
 
 dispatcher 记录 job 的生命周期。一次提交会生成 \src{JobRecord} 和 \src{JobEvent}。job store 用于 \cmd{get}、\cmd{watch}、completion polling、cancel、retry 和 trace 的 job summary。dispatcher state 同时保留每个 target slot 的 queue 和 active job。
+
+exact active-job follow-up 使用独立的 append-only
+\src{.ccb/ccbd/active-followups.jsonl}。同一个 \src{followup_id} 的最新记录定义
+其 \src{accepted}、\src{injected}、\src{rejected}、\src{too_late} 或
+\src{terminal} 状态；\src{accepted} 是可在 daemon restart 后按 FIFO 重放的
+durable outbox。它不创建 \src{JobRecord}、message-bureau attempt 或 mailbox
+event。operator output 和 trace 不回显 correction message，但持久记录保留消息
+以完成崩溃窗口重放。
 
 需要注意的是，dispatcher state 是执行队列，不等同于 mailbox queue。dispatcher queue 关心某个 agent 何时可以启动下一个 job；mailbox queue 关心 inbound event、reply head、ack 和用户可见通信顺序。
 

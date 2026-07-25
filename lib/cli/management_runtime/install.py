@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +14,63 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+
+
+NPM_PACKAGE_NAME = "@seemseam/ccb"
+
+
+@dataclass(frozen=True)
+class NpmInstallProvenance:
+    package_root: Path
+    package_name: str
+    package_version: str
+
+
+def npm_install_provenance(
+    *,
+    script_root: Path,
+    env: Mapping[str, str] | None = None,
+) -> NpmInstallProvenance | None:
+    """Return runner-attested npm ownership for the current vendored payload.
+
+    The npm wrapper is the only component allowed to claim this provenance.  We
+    validate its package manifest and require the executing release to live
+    below that package's ``.ccb-release`` directory so a stale or inherited
+    environment marker cannot redirect update ownership for another install.
+    """
+
+    values = env if env is not None else os.environ
+    if str(values.get("CCB_INSTALL_KIND") or "").strip() != "npm":
+        return None
+    package_name = str(values.get("CCB_NPM_PACKAGE_NAME") or "").strip()
+    package_version = str(values.get("CCB_NPM_PACKAGE_VERSION") or "").strip()
+    package_root_text = str(values.get("CCB_NPM_PACKAGE_ROOT") or "").strip()
+    if package_name != NPM_PACKAGE_NAME or not package_version or not package_root_text:
+        return None
+    package_root = Path(package_root_text).expanduser().resolve(strict=False)
+    payload_root = (package_root / ".ccb-release").resolve(strict=False)
+    executing_root = Path(script_root).expanduser().resolve(strict=False)
+    if not _is_within_directory(payload_root, executing_root):
+        return None
+    manifest_path = package_root / "package.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if manifest.get("name") != package_name or str(manifest.get("version") or "").strip() != package_version:
+        return None
+    return NpmInstallProvenance(
+        package_root=package_root,
+        package_name=package_name,
+        package_version=package_version,
+    )
+
+
+def npm_update_command(target_version: str | None = None) -> str:
+    target = str(target_version or "latest").strip().lstrip("v") or "latest"
+    if target != "latest" and re.fullmatch(r"\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?", target) is None:
+        target = "latest"
+    return f"npm install -g {NPM_PACKAGE_NAME}@{target}"
 
 
 def _is_within_directory(root: Path, candidate: Path) -> bool:

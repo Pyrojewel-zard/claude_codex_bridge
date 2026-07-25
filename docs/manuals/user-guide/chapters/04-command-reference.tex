@@ -88,12 +88,13 @@ ccb ack <agent_name> [inbound_event_id]
 
 ack 只确认 inbox head。它支持 task reply，或者已经 terminal 的 task request。如果指定的 event 不是 head，会被拒绝。已经安排 automatic reply delivery 的 reply 也不能手动 ack。
 
-\section{retry、resubmit、cancel}
+\section{followup、retry、resubmit、cancel}
 
 \begin{longtable}{p{0.28\linewidth}p{0.62\linewidth}}
 \toprule
 命令 & 作用 \\
 \midrule
+\cmd{ccb followup <active_job_id> --message <correction>} & 仅在 provider 能证明 exact active turn 时，把 correction 注入指定 running job；只有 \src{injected} 成功。 \\
 \cmd{ccb retry <job_id|attempt_id>} & 在原 message lineage 下追加 retry attempt。要求目标 attempt 已 terminal、不是 completed、且是最新 attempt。 \\
 \cmd{ccb resubmit <message_id>} & 从旧 message 创建新的 message/submission/jobs。 \\
 \cmd{ccb cancel <job_id>} & 取消 queued 或 active job，并写入 cancelled terminal state。 \\
@@ -103,6 +104,7 @@ ack 只确认 inbox head。它支持 task reply，或者已经 terminal 的 task
 简单判断：
 
 \begin{itemize}
+  \item 修正仍在运行且 provider 支持 exact active-turn injection 的任务，使用 \cmd{followup}；\src{accepted} 表示 durable pending，\src{rejected}、\src{too_late}、\src{terminal} 都不是成功，只有 \src{injected} 成功。
   \item provider/API 临时失败，优先 \cmd{retry}。
   \item 想重新发整条请求，使用 \cmd{resubmit}。
   \item 任务不应继续，使用 \cmd{cancel}。
@@ -129,7 +131,7 @@ timeout 必须是正数，quorum 必须是正整数。
 \cmd{ccb clear [agent...]} & 向 provider pane 发送 native \cmd{/clear}；不删除 \src{.ccb} 状态、workspace、auth、session 或日志；\cmd{all} 不能和具体 agent 混用。 \\
 \cmd{ccb restart <agent>} & 通过 ccbd 重启单个 agent；busy、queued、reply delivery 或 callback continuation 状态会被拒绝；不支持 \cmd{all}。 \\
 \cmd{ccb reload [--dry-run]} & 重新加载项目配置；dry-run 只预检。 \\
-\cmd{ccb cleanup} & 清理运行残留。 \\
+\cmd{ccb cleanup [--legacy-provider-caches]} & 清理当前停止项目的安全可重建缓存；显式选项额外清理 manifest 校验通过且项目根目录已不存在的旧 Provider 项目缓存。 \\
 \cmd{ccb kill [-f|--force]} & 停止 backend 和 configured agents。 \\
 \bottomrule
 \end{longtable}
@@ -176,13 +178,27 @@ timeout 必须是正数，quorum 必须是正整数。
 命令 & 作用 \\
 \midrule
 \cmd{ccb version} & 版本。 \\
-\cmd{ccb update} & 更新。 \\
+\cmd{ccb update} & 更新 CCB，并在交互终端统一检查已安装 provider CLI。 \\
+\cmd{ccb update --providers check} & 仅报告 provider 可用更新。 \\
+\cmd{ccb update --providers all} & 非交互更新所有可安全管理的已安装 provider。 \\
+\cmd{ccb update --providers none} & 本次不检查 provider 更新。 \\
+\cmd{ccb update --no-cache-cleanup} & 本次更新跳过旧项目级 Provider 缓存迁移。 \\
 \cmd{ccb uninstall} & 卸载。 \\
 \cmd{ccb reinstall} & 重装。 \\
 \cmd{ccb droid setup-delegation} & 配置 Droid delegation tools。 \\
 \cmd{ccb droid test-delegation} & 检查 Droid delegation tools。 \\
 \bottomrule
 \end{longtable}
+
+交互式 \cmd{ccb update} 只在发现可安全管理的 provider 新版本时提示。
+“暂不更新”会在下次执行时再次提示；“跳过此版本”只静默当前准确版本，
+更高版本仍会重新提示。Provider 更新不会自动重启正在运行的 pane，新版本
+会在下次启动或显式重启后生效。
+
+安装新版本后，新 CCB 会自动清理 manifest 校验通过且项目已删除的旧
+Claude/Gemini 项目缓存。当前项目已经停止时会立即清理；活跃项目及其他
+现存项目保留到各自下一次成功执行 \cmd{ccb kill}。未知 Provider、损坏
+manifest、符号链接、session/auth 和用户级 Gemini 缓存不会被删除。
 
 \section{已移除命令}
 

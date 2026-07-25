@@ -21,12 +21,14 @@ from agents.models import (
     SkillOverlaySpec,
     WorkspaceMode,
 )
+from cli.services.role_command_policy import RoleCommandPolicy
 import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
-from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
 from provider_backends.droid.home import materialize_droid_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+from provider_backends.qwen.home import materialize_qwen_home_config
 import provider_core.projected_assets as projected_assets
+import provider_core.projected_settings as projected_settings
 import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
 from provider_profiles import materialize_provider_profile, validate_provider_runtime_home_uniqueness
@@ -119,6 +121,71 @@ def _write_codex_plugin_source(
     (plugin_root / 'plugins' / plugin_name / 'skills' / plugin_name / 'SKILL.md').write_text(
         skill_body,
         encoding='utf-8',
+    )
+
+
+def _write_droid_plugin_source(home: Path) -> None:
+    plugin_root = home / 'plugins'
+    marketplace_root = plugin_root / 'marketplaces' / 'test-marketplace'
+    cache_root = plugin_root / 'cache' / 'test-marketplace' / 'test-plugin' / '1.0.0'
+    (marketplace_root / '.factory-plugin').mkdir(parents=True, exist_ok=True)
+    (cache_root / '.factory-plugin').mkdir(parents=True, exist_ok=True)
+    (marketplace_root / '.factory-plugin' / 'marketplace.json').write_text(
+        json.dumps({'name': 'test-marketplace', 'plugins': []}),
+        encoding='utf-8',
+    )
+    (cache_root / '.factory-plugin' / 'plugin.json').write_text(
+        json.dumps({'name': 'test-plugin', 'version': '1.0.0'}),
+        encoding='utf-8',
+    )
+    (plugin_root / 'known_marketplaces.json').write_text(
+        json.dumps(
+            {
+                'test-marketplace': {
+                    'source': {'source': 'directory', 'path': str(marketplace_root)},
+                    'installLocation': str(marketplace_root),
+                }
+            }
+        ),
+        encoding='utf-8',
+    )
+    (plugin_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'schemaVersion': 1,
+                'plugins': {
+                    'test-plugin@test-marketplace': [
+                        {
+                            'scope': 'user',
+                            'installPath': str(cache_root),
+                            'version': '1.0.0',
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+    (home / 'settings.json').write_text(
+        json.dumps({'enabledPlugins': {'test-plugin@test-marketplace': True}}),
+        encoding='utf-8',
+    )
+
+
+def _hard_role_policy(tmp_path: Path) -> RoleCommandPolicy:
+    return RoleCommandPolicy(
+        role_id='test.hard',
+        path=tmp_path / 'command-surface.toml',
+        mode='deny_all_except',
+        enforcement='required',
+        if_unsupported='fail_mount',
+        generic_shell=False,
+        generic_ccb=False,
+        supported_providers=('claude',),
+        provider_tools=(),
+        allowed_effects=(),
+        forbidden_effects=(),
+        allowed=(),
     )
 
 
@@ -281,6 +348,7 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
         '\n'.join(
             [
                 'model = "gpt-5.5"',
+                'check_for_update_on_startup = true',
                 '',
                 '[features]',
                 'external_migration = true',
@@ -304,6 +372,8 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+    config = tomllib.loads(config_text)
+    assert config['check_for_update_on_startup'] is False
 
 
 def test_materialize_codex_profile_marks_project_and_workspace_trusted(tmp_path: Path, monkeypatch) -> None:
@@ -616,6 +686,7 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
         '\n'.join(
             [
                 'model = "gpt-5.5"',
+                'check_for_update_on_startup = true',
                 '',
                 '[features]',
                 'external_migration = true',
@@ -643,6 +714,8 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+    config = tomllib.loads(config_text)
+    assert config['check_for_update_on_startup'] is False
     assert '[projects."/tmp/demo"]' in config_text
     assert 'trust_level = "trusted"' in config_text
     assert f'[projects."{project_root.resolve()}"]' in config_text
@@ -1708,6 +1781,249 @@ def test_seed_projected_tree_rolls_back_when_marker_update_fails(
     assert (target / 'state.json').read_text(encoding='utf-8') == '{"version":1}\n'
 
 
+def test_project_json_mapping_fields_tracks_only_owned_entries(tmp_path: Path) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    target.write_text(
+        json.dumps({'theme': 'dark', 'enabledPlugins': {'local-plugin': True}}),
+        encoding='utf-8',
+    )
+
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins'] == {'local-plugin': True, 'source-plugin': True}
+
+    source.unlink()
+    preserved_text = target.read_text(encoding='utf-8')
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == preserved_text
+    assert marker.is_file()
+
+    source.write_text('{malformed', encoding='utf-8')
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == preserved_text
+    assert marker.is_file()
+
+    source.write_text(
+        json.dumps({'enabledPlugins': {'source-plugin': False, 'second-source-plugin': True}}),
+        encoding='utf-8',
+    )
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins']['source-plugin'] is False
+    payload['enabledPlugins']['source-plugin'] = True
+    target.write_text(json.dumps(payload), encoding='utf-8')
+
+    source.write_text(
+        json.dumps({'enabledPlugins': {'source-plugin': True, 'second-source-plugin': False}}),
+        encoding='utf-8',
+    )
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins'] == {
+        'local-plugin': True,
+        'source-plugin': True,
+        'second-source-plugin': False,
+    }
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        enabled=False,
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['theme'] == 'dark'
+    assert payload['enabledPlugins'] == {'local-plugin': True, 'source-plugin': True}
+    assert not marker.exists()
+
+
+def test_project_json_mapping_fields_preserves_deleted_owned_null_entry(tmp_path: Path) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': None}}), encoding='utf-8')
+
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    payload['enabledPlugins'].pop('source-plugin')
+    target.write_text(json.dumps(payload), encoding='utf-8')
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert json.loads(target.read_text(encoding='utf-8')) == {}
+    assert not marker.exists()
+
+
+def test_project_json_mapping_fields_rolls_back_when_marker_write_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    original = '{"theme":"dark"}\n'
+    target.write_text(original, encoding='utf-8')
+    real_atomic_write = projected_settings.atomic_write_text
+
+    def fail_marker(path: Path, text: str, *, encoding: str = 'utf-8') -> None:
+        if Path(path) == marker:
+            raise OSError('marker write failed')
+        real_atomic_write(path, text, encoding=encoding)
+
+    monkeypatch.setattr(projected_settings, 'atomic_write_text', fail_marker)
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == original
+    assert not marker.exists()
+
+
+def test_project_json_mapping_fields_restores_existing_marker_after_failed_update(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    original_target = target.read_text(encoding='utf-8')
+    original_marker = marker.read_text(encoding='utf-8')
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': False}}), encoding='utf-8')
+    real_atomic_write = projected_settings.atomic_write_text
+
+    def fail_after_marker_write(path: Path, text: str, *, encoding: str = 'utf-8') -> None:
+        real_atomic_write(path, text, encoding=encoding)
+        if Path(path) == marker:
+            raise OSError('marker update failed after write')
+
+    monkeypatch.setattr(projected_settings, 'atomic_write_text', fail_after_marker_write)
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == original_target
+    assert marker.read_text(encoding='utf-8') == original_marker
+
+
+def test_project_json_mapping_fields_preserves_foreign_marker_and_target(tmp_path: Path) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    original = '{"enabledPlugins":{"local-plugin":true}}\n'
+    target.write_text(original, encoding='utf-8')
+    marker.write_text(
+        json.dumps({'record_type': 'user-owned', 'label': 'test-plugin-settings'}),
+        encoding='utf-8',
+    )
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == original
+    assert json.loads(marker.read_text(encoding='utf-8'))['record_type'] == 'user-owned'
+
+
+def test_rebase_json_path_fields_rolls_back_all_files_after_write_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_root = tmp_path / 'source-plugins'
+    target_root = tmp_path / 'target-plugins'
+    first = target_root / 'installed_plugins.json'
+    second = target_root / 'known_marketplaces.json'
+    first.parent.mkdir(parents=True)
+    original_first = json.dumps({'installPath': str(source_root / 'cache' / 'plugin')})
+    original_second = json.dumps({'installLocation': str(source_root / 'marketplaces' / 'market')})
+    first.write_text(original_first, encoding='utf-8')
+    second.write_text(original_second, encoding='utf-8')
+    real_atomic_write = projected_settings.atomic_write_text
+
+    def fail_after_second_write(path: Path, text: str, *, encoding: str = 'utf-8') -> None:
+        real_atomic_write(path, text, encoding=encoding)
+        if Path(path) == second:
+            raise OSError('second registry write failed')
+
+    monkeypatch.setattr(projected_settings, 'atomic_write_text', fail_after_second_write)
+
+    assert not projected_settings.rebase_json_path_fields(
+        (first, second),
+        source_root=source_root,
+        target_root=target_root,
+        fields=('installPath', 'installLocation'),
+    )
+    assert first.read_text(encoding='utf-8') == original_first
+    assert second.read_text(encoding='utf-8') == original_second
+
+
 def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marker(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-codex-home'
@@ -1853,141 +2169,6 @@ def test_materialize_claude_profile_keeps_runtime_home_managed_by_agent_state(tm
     )
 
     assert profile.runtime_home is None
-
-
-def test_route_claude_binary_cache_links_empty_versions_dir(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'linked_empty'
-    assert versions.is_symlink()
-    assert versions.resolve() == (shared_cache / 'versions').resolve()
-    assert (versions.parent / 'versions.ccb-projection.json').is_file()
-
-
-def test_route_claude_binary_cache_refuses_conflicting_shared_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    (versions / '2.1.137').mkdir(parents=True, exist_ok=True)
-    (versions / '2.1.137' / 'claude').write_text('local binary\n', encoding='utf-8')
-    shared_version = shared_cache / 'versions' / '2.1.137'
-    shared_version.mkdir(parents=True, exist_ok=True)
-    (shared_version / 'claude').write_text('different shared binary\n', encoding='utf-8')
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    assert result['status'] == 'skipped'
-    assert result['reason'] == 'shared_version_content_conflict'
-    assert versions.is_dir()
-    assert not versions.is_symlink()
-    assert (versions / '2.1.137' / 'claude').read_text(encoding='utf-8') == 'local binary\n'
-    assert (shared_version / 'claude').read_text(encoding='utf-8') == 'different shared binary\n'
-
-
-def test_route_claude_binary_cache_migrates_executable_version_files(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.mkdir(parents=True, exist_ok=True)
-    binary = versions / '2.1.139'
-    binary.write_text('current executable\n', encoding='utf-8')
-    binary.chmod(0o755)
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    shared_binary = shared_cache / 'versions' / '2.1.139'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'migrated'
-    assert result['version_names'] == ('2.1.139',)
-    assert versions.is_symlink()
-    assert versions.resolve() == (shared_cache / 'versions').resolve()
-    assert shared_binary.read_text(encoding='utf-8') == 'current executable\n'
-    assert shared_binary.stat().st_mode & 0o111
-
-
-def test_route_claude_binary_cache_migrates_legacy_shared_symlink(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    legacy_cache = tmp_path / 'legacy-shared-cache' / 'claude'
-    external_cache = tmp_path / 'external-cache' / 'claude'
-    legacy_versions = legacy_cache / 'versions'
-    legacy_binary = legacy_versions / '2.1.139'
-    legacy_binary.parent.mkdir(parents=True, exist_ok=True)
-    legacy_binary.write_text('legacy executable\n', encoding='utf-8')
-    legacy_binary.chmod(0o755)
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(legacy_versions, target_is_directory=True)
-
-    result = route_claude_binary_cache(home, external_cache)
-
-    external_binary = external_cache / 'versions' / '2.1.139'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'migrated_symlink'
-    assert versions.is_symlink()
-    assert versions.resolve() == (external_cache / 'versions').resolve()
-    assert external_binary.read_text(encoding='utf-8') == 'legacy executable\n'
-    assert legacy_binary.exists()
-
-
-def test_route_claude_binary_cache_points_existing_shared_home_to_latest_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    shared_versions = shared_cache / 'versions'
-    old_binary = shared_versions / '2.1.139'
-    new_binary = shared_versions / '2.1.140'
-    old_binary.parent.mkdir(parents=True, exist_ok=True)
-    old_binary.write_text('old executable\n', encoding='utf-8')
-    new_binary.write_text('new executable\n', encoding='utf-8')
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(shared_versions, target_is_directory=True)
-    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (home / '.local' / 'bin' / 'claude').symlink_to(old_binary)
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'already_shared'
-    assert result['active_version_name'] == '2.1.140'
-    assert (home / '.local' / 'bin' / 'claude').resolve() == new_binary.resolve()
-
-
-def test_route_claude_binary_cache_prefers_source_home_active_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    source_home = tmp_path / 'source-home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    shared_versions = shared_cache / 'versions'
-    old_shared = shared_versions / '2.1.139'
-    newer_shared = shared_versions / '2.1.140'
-    source_active = source_home / '.local' / 'share' / 'claude' / 'versions' / '2.1.138'
-    old_shared.parent.mkdir(parents=True, exist_ok=True)
-    old_shared.write_text('old shared executable\n', encoding='utf-8')
-    newer_shared.write_text('newer shared executable\n', encoding='utf-8')
-    source_active.parent.mkdir(parents=True, exist_ok=True)
-    source_active.write_text('source active executable\n', encoding='utf-8')
-    source_active.chmod(0o755)
-    (source_home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (source_home / '.local' / 'bin' / 'claude').symlink_to(source_active)
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(shared_versions, target_is_directory=True)
-    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (home / '.local' / 'bin' / 'claude').symlink_to(newer_shared)
-
-    result = route_claude_binary_cache(home, shared_cache, source_home=source_home)
-
-    copied_active = shared_versions / '2.1.138'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'already_shared'
-    assert result['active_version_name'] == '2.1.138'
-    assert copied_active.read_text(encoding='utf-8') == 'source active executable\n'
-    assert copied_active.stat().st_mode & 0o111
-    assert (home / '.local' / 'bin' / 'claude').resolve() == copied_active.resolve()
 
 
 def test_materialize_claude_home_config_projects_system_settings_into_managed_home(tmp_path: Path) -> None:
@@ -2821,6 +3002,34 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
 
 
+def test_materialize_claude_home_config_preserves_unmarked_skills_and_commands(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    target_claude_dir = target_home / '.claude'
+    (source_claude_dir / 'skills' / 'source-skill').mkdir(parents=True)
+    (source_claude_dir / 'commands').mkdir(parents=True)
+    (source_claude_dir / 'skills' / 'source-skill' / 'SKILL.md').write_text('source\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'source.md').write_text('source\n', encoding='utf-8')
+    (target_claude_dir / 'skills' / 'user-skill').mkdir(parents=True)
+    (target_claude_dir / 'commands').mkdir(parents=True)
+    (target_claude_dir / 'skills' / 'user-skill' / 'SKILL.md').write_text('user\n', encoding='utf-8')
+    (target_claude_dir / 'commands' / 'user.md').write_text('user\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (layout.claude_dir / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
+    assert (layout.claude_dir / 'commands' / 'user.md').read_text(encoding='utf-8') == 'user\n'
+    assert not (layout.claude_dir / 'skills' / 'source-skill').exists()
+    assert not (layout.claude_dir / 'commands' / 'source.md').exists()
+    assert not (layout.claude_dir / 'skills.ccb-projection.json').exists()
+    assert not (layout.claude_dir / 'commands.ccb-projection.json').exists()
+
+
 def test_materialize_claude_home_config_merges_profile_mcp_server_overrides(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
@@ -2943,6 +3152,203 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     assert (target_home / 'sessions').is_dir()
     assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
     assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_droid_home_config_preserves_unmarked_inherited_skills(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    target_home = tmp_path / 'managed-factory-home'
+    (source_home / 'skills' / 'source-skill').mkdir(parents=True)
+    (source_home / 'skills' / 'source-skill' / 'SKILL.md').write_text('source\n', encoding='utf-8')
+    (target_home / 'skills' / 'user-skill').mkdir(parents=True)
+    (target_home / 'skills' / 'user-skill' / 'SKILL.md').write_text('user\n', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    assert (target_home / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
+    assert not (target_home / 'skills' / 'source-skill').exists()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_droid_home_config_seeds_agent_local_plugins_and_rebases_registry_paths(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    first_home = tmp_path / 'managed-factory-home-1'
+    second_home = tmp_path / 'managed-factory-home-2'
+    _write_droid_plugin_source(source_home)
+    first_settings = first_home / 'settings.json'
+    first_settings.parent.mkdir(parents=True)
+    first_settings.write_text(
+        json.dumps({'theme': 'dark', 'enabledPlugins': {'local-plugin': True}}),
+        encoding='utf-8',
+    )
+
+    materialize_droid_home_config(first_home, source_home=source_home)
+    materialize_droid_home_config(second_home, source_home=source_home)
+
+    for target_home in (first_home, second_home):
+        target_plugins = target_home / 'plugins'
+        assert target_plugins.is_dir()
+        assert not target_plugins.is_symlink()
+        installed = json.loads((target_plugins / 'installed_plugins.json').read_text(encoding='utf-8'))
+        install_path = installed['plugins']['test-plugin@test-marketplace'][0]['installPath']
+        assert install_path == str(
+            target_plugins / 'cache' / 'test-marketplace' / 'test-plugin' / '1.0.0'
+        )
+        marketplaces = json.loads(
+            (target_plugins / 'known_marketplaces.json').read_text(encoding='utf-8')
+        )
+        assert marketplaces['test-marketplace']['installLocation'] == str(
+            target_plugins / 'marketplaces' / 'test-marketplace'
+        )
+        settings = json.loads((target_home / 'settings.json').read_text(encoding='utf-8'))
+        assert settings['enabledPlugins']['test-plugin@test-marketplace'] is True
+
+    first_registry = first_home / 'plugins' / 'installed_plugins.json'
+    first_registry.write_text('{"agent":"one"}\n', encoding='utf-8')
+    assert 'agent' not in json.loads(
+        (second_home / 'plugins' / 'installed_plugins.json').read_text(encoding='utf-8')
+    )
+    source_installed = json.loads(
+        (source_home / 'plugins' / 'installed_plugins.json').read_text(encoding='utf-8')
+    )
+    assert source_installed['plugins']['test-plugin@test-marketplace'][0]['installPath'].startswith(
+        str(source_home)
+    )
+
+    materialize_droid_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    assert not (second_home / 'plugins').exists()
+    second_settings = json.loads((second_home / 'settings.json').read_text(encoding='utf-8'))
+    assert 'test-plugin@test-marketplace' not in second_settings.get('enabledPlugins', {})
+
+    materialize_droid_home_config(
+        first_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    disabled_settings = json.loads(first_settings.read_text(encoding='utf-8'))
+    assert disabled_settings['theme'] == 'dark'
+    assert disabled_settings['enabledPlugins'] == {'local-plugin': True}
+
+
+def test_materialize_droid_home_config_removes_owned_projection_for_malformed_registry(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    target_home = tmp_path / 'managed-factory-home'
+    _write_droid_plugin_source(source_home)
+    materialize_droid_home_config(target_home, source_home=source_home)
+    source_registry = source_home / 'plugins' / 'installed_plugins.json'
+    source_registry.write_text('{malformed', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    assert not (target_home / 'plugins').exists()
+    assert not (target_home / 'plugins.ccb-projection.json').exists()
+    assert json.loads((target_home / 'settings.json').read_text(encoding='utf-8')) == {}
+    assert source_registry.read_text(encoding='utf-8') == '{malformed'
+
+
+def test_materialize_gemini_home_config_seeds_isolated_extensions(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    source_extension = source_home / '.gemini' / 'extensions' / 'test-extension'
+    source_extension.mkdir(parents=True)
+    (source_extension / 'gemini-extension.json').write_text('{"name":"test-extension"}\n', encoding='utf-8')
+    first_home = tmp_path / 'managed-home-1'
+    second_home = tmp_path / 'managed-home-2'
+
+    first = materialize_gemini_home_config(first_home, source_home=source_home)
+    second = materialize_gemini_home_config(second_home, source_home=source_home)
+
+    first_extensions = first.gemini_dir / 'extensions'
+    second_extensions = second.gemini_dir / 'extensions'
+    assert first_extensions.is_dir() and not first_extensions.is_symlink()
+    assert second_extensions.is_dir() and not second_extensions.is_symlink()
+    (first_extensions / 'test-extension' / 'agent-local.json').write_text('{}\n', encoding='utf-8')
+    assert not (second_extensions / 'test-extension' / 'agent-local.json').exists()
+    assert not (source_extension / 'agent-local.json').exists()
+
+    materialize_gemini_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    assert not second_extensions.exists()
+
+
+def test_materialize_qwen_home_config_seeds_isolated_extensions(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-qwen-home'
+    source_extension = source_home / 'extensions' / 'test-extension'
+    source_extension.mkdir(parents=True)
+    (source_extension / 'qwen-extension.json').write_text('{"name":"test-extension"}\n', encoding='utf-8')
+    first_home = tmp_path / 'managed-qwen-home-1'
+    second_home = tmp_path / 'managed-qwen-home-2'
+
+    materialize_qwen_home_config(first_home, source_home=source_home)
+    materialize_qwen_home_config(second_home, source_home=source_home)
+
+    first_extensions = first_home / 'extensions'
+    second_extensions = second_home / 'extensions'
+    assert first_extensions.is_dir() and not first_extensions.is_symlink()
+    assert second_extensions.is_dir() and not second_extensions.is_symlink()
+    (first_extensions / 'test-extension' / 'agent-local.json').write_text('{}\n', encoding='utf-8')
+    assert not (second_extensions / 'test-extension' / 'agent-local.json').exists()
+    assert not (source_extension / 'agent-local.json').exists()
+
+    materialize_qwen_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    assert not second_extensions.exists()
+
+
+def test_provider_extension_projections_remove_owned_state_for_hard_role_policy(
+    tmp_path: Path,
+) -> None:
+    policy = _hard_role_policy(tmp_path)
+
+    droid_source = tmp_path / 'system-factory-home'
+    droid_target = tmp_path / 'managed-factory-home'
+    _write_droid_plugin_source(droid_source)
+    materialize_droid_home_config(droid_target, source_home=droid_source)
+    materialize_droid_home_config(
+        droid_target,
+        source_home=droid_source,
+        command_policy=policy,
+    )
+    assert not (droid_target / 'plugins').exists()
+    assert json.loads((droid_target / 'settings.json').read_text(encoding='utf-8')) == {}
+
+    gemini_source = tmp_path / 'system-gemini-home'
+    gemini_extension = gemini_source / '.gemini' / 'extensions' / 'test-extension'
+    gemini_extension.mkdir(parents=True)
+    (gemini_extension / 'gemini-extension.json').write_text('{}\n', encoding='utf-8')
+    gemini_target = tmp_path / 'managed-gemini-home'
+    materialize_gemini_home_config(gemini_target, source_home=gemini_source)
+    gemini_layout = materialize_gemini_home_config(
+        gemini_target,
+        source_home=gemini_source,
+        command_policy=policy,
+    )
+    assert not (gemini_layout.gemini_dir / 'extensions').exists()
+
+    qwen_source = tmp_path / 'system-qwen-home'
+    qwen_extension = qwen_source / 'extensions' / 'test-extension'
+    qwen_extension.mkdir(parents=True)
+    (qwen_extension / 'qwen-extension.json').write_text('{}\n', encoding='utf-8')
+    qwen_target = tmp_path / 'managed-qwen-home'
+    materialize_qwen_home_config(qwen_target, source_home=qwen_source)
+    materialize_qwen_home_config(
+        qwen_target,
+        source_home=qwen_source,
+        command_policy=policy,
+    )
+    assert not (qwen_target / 'extensions').exists()
 
 
 def test_materialize_codex_home_config_writes_project_memory_bundle(tmp_path: Path) -> None:
@@ -3436,6 +3842,10 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
                     'GOOGLE_GEMINI_BASE_URL': 'https://chatapi.onechats.ai',
                 },
                 'theme': 'Default',
+                'general': {
+                    'enableAutoUpdate': True,
+                    'enableAutoUpdateNotification': True,
+                },
             },
             ensure_ascii=False,
             indent=2,
@@ -3451,6 +3861,25 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
     assert payload['env']['GOOGLE_API_KEY'] == 'system-google-key'
     assert payload['env']['GOOGLE_GEMINI_BASE_URL'] == 'https://chatapi.onechats.ai'
     assert payload['theme'] == 'Default'
+    assert payload['general']['enableAutoUpdate'] is False
+    assert payload['general']['enableAutoUpdateNotification'] is False
+
+
+def test_materialize_gemini_home_config_disables_autoupdate_without_source_settings(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload == {
+        'general': {
+            'enableAutoUpdate': False,
+            'enableAutoUpdateNotification': False,
+        }
+    }
 
 
 def test_materialize_gemini_home_config_projects_dotenv_api_auth_into_managed_home(tmp_path: Path) -> None:

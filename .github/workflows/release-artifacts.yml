@@ -6,7 +6,7 @@ on:
       tag:
         description: "Release tag to build and upload"
         required: true
-        default: "v8.2.1"
+        default: "v8.3.1"
   push:
     tags:
       - "v*"
@@ -258,30 +258,10 @@ jobs:
           test -f "ccb-mobile-${TAG_NAME}.json"
           sha256sum ccb-*.tar.gz ccb-mobile-*.apk ccb-mobile-*.json | sort -k2 > SHA256SUMS
           sha256sum -c SHA256SUMS
-          notes_file="$(mktemp)"
-          python - "$TAG_NAME" > "$notes_file" <<'PY'
-          from pathlib import Path
-          import os
-          import sys
-
-          tag = sys.argv[1]
-          changelog = Path(os.environ["GITHUB_WORKSPACE"]) / "CHANGELOG.md"
-          lines = changelog.read_text(encoding="utf-8").splitlines()
-          capture = False
-          body: list[str] = []
-          for line in lines:
-              if line.startswith(f"## {tag}"):
-                  capture = True
-                  continue
-              if capture and line.startswith("## "):
-                  break
-              if capture:
-                  body.append(line)
-          text = "\n".join(body).strip()
-          if not text:
-              raise SystemExit(f"release notes missing for {tag}")
-          print(text)
-          PY
+          notes_file="$GITHUB_WORKSPACE/docs/releases/${TAG_NAME}.md"
+          test -s "$notes_file"
+          grep -Fx '## English' "$notes_file"
+          grep -Fx '## 中文' "$notes_file"
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
@@ -290,6 +270,8 @@ jobs:
           else
             gh release create "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --fail-on-no-commits \
               --title "$TAG_NAME" \
               --notes-file "$notes_file"
           fi

@@ -172,6 +172,30 @@ pub struct ReloadDrainView {
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+pub struct ActiveInboundDiagnostic {
+    #[serde(default)]
+    pub condition_kind: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub job_id: String,
+    #[serde(default)]
+    pub attempt_id: String,
+    #[serde(default)]
+    pub inbound_event_id: String,
+    #[serde(default)]
+    pub lease_state: String,
+    #[serde(default)]
+    pub observed_for_s: Option<f64>,
+    #[serde(default)]
+    pub required_observation_s: Option<f64>,
+    #[serde(default)]
+    pub recommended_action: String,
+    #[serde(default)]
+    pub automatic_action: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 pub struct CommsItem {
     pub id: String,
     #[serde(default)]
@@ -186,6 +210,12 @@ pub struct CommsItem {
     pub business_status: String,
     #[serde(default)]
     pub status_label: String,
+    #[serde(default)]
+    pub execution_phase: String,
+    #[serde(default)]
+    pub execution_phase_reason: Option<String>,
+    #[serde(default)]
+    pub active_inbound_diagnostic: Option<ActiveInboundDiagnostic>,
     #[serde(default)]
     pub body_preview: String,
     #[serde(default)]
@@ -335,6 +365,20 @@ mod tests {
               "status": "running",
               "business_status": "replying",
               "status_label": "work",
+              "execution_phase": "executing",
+              "execution_phase_reason": "provider_active",
+              "active_inbound_diagnostic": {
+                "condition_kind": "orphaned_active_inbound",
+                "reason": "provider_idle_without_terminal",
+                "job_id": "job1",
+                "attempt_id": "att1",
+                "inbound_event_id": "iev1",
+                "lease_state": "acquired",
+                "observed_for_s": 30.0,
+                "required_observation_s": 30.0,
+                "recommended_action": "explicit_comms_recover",
+                "automatic_action": "none"
+              },
               "body_preview": "work",
               "recoverable": true,
               "recover_target": {"job_id": "job1", "reply_delivery_job_id": null},
@@ -370,6 +414,18 @@ mod tests {
             vec!["C-b d detach"]
         );
         assert_eq!(response.view.comms[0].status_label, "work");
+        assert_eq!(response.view.comms[0].execution_phase, "executing");
+        assert_eq!(
+            response.view.comms[0].execution_phase_reason.as_deref(),
+            Some("provider_active")
+        );
+        let diagnostic = response.view.comms[0]
+            .active_inbound_diagnostic
+            .as_ref()
+            .expect("active inbound diagnostic");
+        assert_eq!(diagnostic.condition_kind, "orphaned_active_inbound");
+        assert_eq!(diagnostic.inbound_event_id, "iev1");
+        assert_eq!(diagnostic.automatic_action, "none");
         assert_eq!(response.view.comms[0].body_preview, "work");
         assert!(response.view.comms[0].recoverable);
         assert!(response.view.agents[0].dispatch_blocked_by_reload_drain);

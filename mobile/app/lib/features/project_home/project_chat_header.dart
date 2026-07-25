@@ -10,6 +10,8 @@ class ProjectChatHeader extends StatelessWidget {
     required this.onOpenTerminal,
     required this.onOpenConnectionDetails,
     this.onRefreshConversation,
+    this.onShowChat,
+    this.terminalMode = false,
     super.key,
   });
 
@@ -17,7 +19,9 @@ class ProjectChatHeader extends StatelessWidget {
   final VoidCallback? onBack;
   final VoidCallback? onRefreshConversation;
   final VoidCallback? onOpenTerminal;
+  final VoidCallback? onShowChat;
   final VoidCallback onOpenConnectionDetails;
+  final bool terminalMode;
 
   @override
   Widget build(BuildContext context) {
@@ -57,10 +61,17 @@ class ProjectChatHeader extends StatelessWidget {
                 icon: const Icon(Icons.refresh),
               ),
             IconButton(
-              key: const ValueKey('open-agent-terminal-button'),
-              tooltip: strings.openTerminal,
-              onPressed: onOpenTerminal,
-              icon: const Icon(Icons.terminal),
+              key: ValueKey(
+                terminalMode
+                    ? 'return-to-agent-chat-button'
+                    : 'open-agent-terminal-button',
+              ),
+              tooltip:
+                  terminalMode ? strings.returnToChat : strings.openTerminal,
+              onPressed: terminalMode ? onShowChat : onOpenTerminal,
+              icon: Icon(
+                terminalMode ? Icons.chat_bubble_outline : Icons.terminal,
+              ),
             ),
             IconButton(
               key: const ValueKey('connection-details-action'),

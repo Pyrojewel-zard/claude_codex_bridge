@@ -14,6 +14,9 @@ actions that the user did not request.
 - [roadmap.md](roadmap.md): current implementation state and remaining gates.
 - [decisions/001-explicit-path-and-group.md](decisions/001-explicit-path-and-group.md):
   decision record for `workspace_path` and `workspace_group`.
+- [decisions/002-owned-binding-retirement.md](decisions/002-owned-binding-retirement.md):
+  narrow dirty-state exemption and non-force retirement for owned worktree
+  bindings.
 
 ## Scope
 
@@ -24,6 +27,8 @@ In scope:
 - Multiple agents sharing the same cwd by explicit configuration.
 - Preserving agent-scoped provider homes, sessions, memory, runtime state, and
   queues even when cwd is shared.
+- Safely retiring removed or renamed managed worktrees without treating CCB's
+  own validated binding as user work.
 
 Out of scope:
 

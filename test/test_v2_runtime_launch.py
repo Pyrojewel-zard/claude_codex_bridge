@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import sqlite3
 import subprocess
+from types import SimpleNamespace
 import pytest
 try:  # pragma: no cover - version shim
     import tomllib
@@ -39,8 +40,11 @@ from provider_backends.grok import home as grok_home
 from provider_backends.mimo import launcher as mimo_launcher
 from provider_backends.opencode import launcher as opencode_launcher
 from provider_backends.agy import launcher as agy_launcher
+from provider_backends.native_cli_support import NativeCliExecutionRequest
+from provider_backends.qoderclicn.execution import _build_command as build_qoderclicn_command
 from provider_backends.runtime_restore import ProviderRestoreTarget
 from provider_backends.codex.launcher_runtime.command import prepare_codex_home_overrides as prepare_codex_home_overrides_for_test
+from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
 from provider_core.registry import build_default_runtime_launcher_map
 import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles import load_resolved_provider_profile
@@ -308,6 +312,23 @@ def test_claude_home_overrides_share_plugin_seed_but_isolate_writable_caches(tmp
     seed_root = source_home / '.claude' / 'plugins'
     seed_root.mkdir(parents=True)
     (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'version': 2,
+                'plugins': {
+                    'fixture@marketplace': [
+                        {
+                            'scope': 'user',
+                            'installPath': str(seed_root / 'cache' / 'fixture'),
+                            'version': '1.0.0',
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
     (seed_root / 'cache').mkdir()
 
     first = prepare_claude_home_overrides_for_test(
@@ -332,13 +353,45 @@ def test_claude_home_overrides_share_plugin_seed_but_isolate_writable_caches(tmp
     assert not first_plugin_root.is_symlink()
     assert not second_plugin_root.is_symlink()
     assert first_plugin_root != second_plugin_root
-    (first_plugin_root / 'cache').mkdir()
+    first_registry = json.loads(
+        (first_plugin_root / 'installed_plugins.json').read_text(encoding='utf-8')
+    )
+    assert first_registry['plugins']['fixture@marketplace'][0]['installPath'] == str(
+        first_plugin_root / 'cache' / 'fixture'
+    )
+    source_registry = json.loads((seed_root / 'installed_plugins.json').read_text(encoding='utf-8'))
+    assert source_registry['plugins']['fixture@marketplace'][0]['installPath'] == str(
+        seed_root / 'cache' / 'fixture'
+    )
+    assert (second_plugin_root / 'known_marketplaces.json').is_file()
     (first_plugin_root / 'cache' / 'agent1-runtime.json').write_text('{}\n', encoding='utf-8')
     assert not (seed_root / 'cache' / 'agent1-runtime.json').exists()
     assert not (second_plugin_root / 'cache' / 'agent1-runtime.json').exists()
 
 
-def test_claude_home_overrides_ignore_non_seed_plugin_metadata(tmp_path: Path) -> None:
+def test_claude_home_overrides_preserve_existing_writable_plugin_cache(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    seed_root.mkdir(parents=True)
+    (seed_root / 'known_marketplaces.json').write_text('{"source": true}\n', encoding='utf-8')
+    runtime_dir = tmp_path / 'runtime'
+    plugin_root = runtime_dir / 'claude-home' / '.claude' / 'plugins'
+    plugin_root.mkdir(parents=True)
+    local_registry = plugin_root / 'known_marketplaces.json'
+    local_registry.write_text('{"local": true}\n', encoding='utf-8')
+
+    overrides = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+
+    assert Path(overrides['CLAUDE_CODE_PLUGIN_CACHE_DIR']) == plugin_root
+    assert local_registry.read_text(encoding='utf-8') == '{"local": true}\n'
+
+
+def test_claude_home_overrides_use_empty_seed_for_non_seed_plugin_metadata(tmp_path: Path) -> None:
     source_home = tmp_path / 'source-home'
     plugin_root = source_home / '.claude' / 'plugins'
     plugin_root.mkdir(parents=True)
@@ -351,9 +404,60 @@ def test_claude_home_overrides_ignore_non_seed_plugin_metadata(tmp_path: Path) -
         refresh_home=False,
     )
 
-    assert 'CLAUDE_CODE_PLUGIN_SEED_DIR' not in overrides
-    assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR' not in overrides
-    assert not (tmp_path / 'runtime' / 'claude-home' / '.claude' / 'plugins').exists()
+    empty_seed = Path(overrides['CLAUDE_CODE_PLUGIN_SEED_DIR'])
+    plugin_root = Path(overrides['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    assert empty_seed.is_dir()
+    assert not any(empty_seed.iterdir())
+    assert empty_seed != source_home / '.claude' / 'plugins'
+    assert plugin_root.name == 'ccb-empty-plugins'
+    assert (plugin_root / 'cache').is_dir()
+
+
+def test_claude_home_overrides_bootstrap_when_source_seed_appears_later(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    runtime_dir = tmp_path / 'runtime'
+
+    initial = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    assert Path(initial['CLAUDE_CODE_PLUGIN_CACHE_DIR']).name == 'ccb-empty-plugins'
+    legacy_normal_root = runtime_dir / 'claude-home' / '.claude' / 'plugins'
+    (legacy_normal_root / 'cache').mkdir(parents=True)
+
+    seed_root = source_home / '.claude' / 'plugins'
+    source_cache = seed_root / 'cache' / 'fixture'
+    source_cache.mkdir(parents=True)
+    (source_cache / 'plugin.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'version': 2,
+                'plugins': {
+                    'fixture@marketplace': [
+                        {'scope': 'user', 'installPath': str(source_cache), 'version': '1.0.0'}
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    updated = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    plugin_root = Path(updated['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    registry = json.loads((plugin_root / 'installed_plugins.json').read_text(encoding='utf-8'))
+    assert plugin_root.name == 'plugins'
+    assert registry['plugins']['fixture@marketplace'][0]['installPath'] == str(
+        plugin_root / 'cache' / 'fixture'
+    )
 
 
 def test_claude_home_overrides_respect_config_inheritance_and_hard_role_policy(tmp_path: Path) -> None:
@@ -361,6 +465,17 @@ def test_claude_home_overrides_respect_config_inheritance_and_hard_role_policy(t
     plugin_root = source_home / '.claude' / 'plugins'
     plugin_root.mkdir(parents=True)
     (plugin_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (source_home / '.claude' / 'settings.json').write_text(
+        json.dumps(
+            {
+                'enabledPlugins': {'source-plugin@marketplace': True},
+                'extraKnownMarketplaces': {
+                    'marketplace': {'source': {'source': 'github', 'repo': 'demo/plugins'}},
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
     no_config_profile = ResolvedProviderProfile(
         provider='claude',
         agent_name='agent1',
@@ -396,8 +511,27 @@ def test_claude_home_overrides_respect_config_inheritance_and_hard_role_policy(t
     )
 
     for overrides in (inheritance_disabled, role_restricted):
-        assert 'CLAUDE_CODE_PLUGIN_SEED_DIR' not in overrides
-        assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR' not in overrides
+        seed_root = Path(overrides['CLAUDE_CODE_PLUGIN_SEED_DIR'])
+        plugin_root = Path(overrides['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+        assert seed_root.is_dir()
+        assert not any(seed_root.iterdir())
+        assert seed_root != source_home / '.claude' / 'plugins'
+        assert plugin_root.name == 'ccb-restricted-plugins'
+        assert (plugin_root / 'cache').is_dir()
+
+    for target_home, profile, command_policy in (
+        (tmp_path / 'managed-no-config', no_config_profile, None),
+        (tmp_path / 'managed-hard-role', None, hard_policy),
+    ):
+        layout = claude_home_runtime.materialize_claude_home_config(
+            target_home,
+            profile=profile,
+            source_home=source_home,
+            command_policy=command_policy,
+        )
+        settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+        assert 'enabledPlugins' not in settings
+        assert 'extraKnownMarketplaces' not in settings
 
 
 def _write_codex_plugin_source(
@@ -885,7 +1019,7 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
     assert payload['codex_session_root'] == str(existing_root)
     assert payload['codex_session_id'] == 'existing-session-id'
     assert payload['codex_session_path'] == str(existing_log)
-    assert payload['codex_start_cmd'].endswith('resume existing-session-id')
+    assert extract_resume_session_id(payload['codex_start_cmd']) == 'existing-session-id'
 
 
 def test_binding_runtime_alive_uses_tmux_socket_and_active_pane(monkeypatch) -> None:
@@ -987,10 +1121,10 @@ def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypa
     assert result.launched is True
     assert result.binding is not None
     assert result.binding.runtime_ref == 'tmux:%52'
-    assert str(tmux_state['cmd']).endswith('resume agent1-session-id')
+    assert extract_resume_session_id(tmux_state['cmd']) == 'agent1-session-id'
     assert 'agent2-session-id' not in str(tmux_state['cmd'])
     payload = json.loads((project_root / '.ccb' / '.codex-agent1-session').read_text(encoding='utf-8'))
-    assert payload['codex_start_cmd'].endswith('resume agent1-session-id')
+    assert extract_resume_session_id(payload['codex_start_cmd']) == 'agent1-session-id'
 
 
 def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_path: Path) -> None:
@@ -1119,6 +1253,7 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     managed_memory = expected_claude_home / '.claude' / 'CLAUDE.md'
     assert f'workspace_path: {resume_dir.resolve()}' in managed_memory.read_text(encoding='utf-8')
     assert payload['start_cmd'].startswith('unset ANTHROPIC_BASE_URL; ')
+    assert 'export DISABLE_AUTOUPDATER=1' in payload['start_cmd']
     assert f'HOME={shlex.quote(str(expected_claude_home))}' in payload['start_cmd']
     assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(expected_claude_home / ".claude" / "projects"))}' in payload['start_cmd']
     _assert_caller_env_exports(
@@ -1844,6 +1979,8 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv('CODEX_START_CMD', '/tmp/stub-codex --profile test')
     monkeypatch.setenv('AGY_START_CMD', '/tmp/stub-agy --profile test')
     monkeypatch.setenv('QWEN_START_CMD', '/tmp/stub-qwen --profile test')
+    monkeypatch.setenv('QODER_START_CMD', '/tmp/stub-qoder --profile test')
+    monkeypatch.setenv('QODERCLICN_START_CMD', '/tmp/stub-qoderclicn --profile test')
     monkeypatch.setenv('CURSOR_START_CMD', '/tmp/stub-cursor --profile test')
     monkeypatch.setenv('COPILOT_START_CMD', '/tmp/stub-copilot --profile test')
     monkeypatch.setenv('CRUSH_START_CMD', '/tmp/stub-crush --profile test')
@@ -1857,6 +1994,8 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     assert runtime_launch._provider_start_parts('codex') == ['/tmp/stub-codex', '--profile', 'test']
     assert runtime_launch._provider_start_parts('agy') == ['/tmp/stub-agy', '--profile', 'test']
     assert runtime_launch._provider_start_parts('qwen') == ['/tmp/stub-qwen', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('qoder') == ['/tmp/stub-qoder', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('qoderclicn') == ['/tmp/stub-qoderclicn', '--profile', 'test']
     assert runtime_launch._provider_start_parts('cursor') == ['/tmp/stub-cursor', '--profile', 'test']
     assert runtime_launch._provider_start_parts('copilot') == ['/tmp/stub-copilot', '--profile', 'test']
     assert runtime_launch._provider_start_parts('crush') == ['/tmp/stub-crush', '--profile', 'test']
@@ -1879,6 +2018,8 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     monkeypatch.delenv('KIMI_START_CMD', raising=False)
     monkeypatch.delenv('DEEPSEEK_START_CMD', raising=False)
     monkeypatch.delenv('QWEN_START_CMD', raising=False)
+    monkeypatch.delenv('QODER_START_CMD', raising=False)
+    monkeypatch.delenv('QODERCLICN_START_CMD', raising=False)
     monkeypatch.delenv('CURSOR_START_CMD', raising=False)
     monkeypatch.delenv('COPILOT_START_CMD', raising=False)
     monkeypatch.delenv('CRUSH_START_CMD', raising=False)
@@ -1894,6 +2035,8 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     assert runtime_launch._provider_start_parts('kimi') == ['kimi']
     assert runtime_launch._provider_start_parts('deepseek') == ['deepcode']
     assert runtime_launch._provider_start_parts('qwen') == ['qwen']
+    assert runtime_launch._provider_start_parts('qoder') == ['qodercli']
+    assert runtime_launch._provider_start_parts('qoderclicn') == ['qoderclicn']
     assert runtime_launch._provider_start_parts('cursor') == ['agent']
     assert runtime_launch._provider_start_parts('copilot') == ['copilot']
     assert runtime_launch._provider_start_parts('crush') == ['crush']
@@ -1907,6 +2050,8 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     ('provider', 'default_executable', 'home_env'),
     [
         ('qwen', 'qwen', 'QWEN_HOME'),
+        ('qoder', 'qodercli', None),
+        ('qoderclicn', 'qoderclicn', None),
         ('cursor', 'agent', 'HOME'),
         ('copilot', 'copilot', 'COPILOT_HOME'),
         ('crush', 'crush', None),
@@ -1957,10 +2102,23 @@ def test_native_cli_launcher_builds_provider_state_payload(
     assert payload[f'{provider}_session_id'] == 'sess-native'
     if home_env:
         assert f'{home_env}={shlex.quote(str(state_dir / "home"))}' in start_cmd
+    if provider == 'copilot':
+        assert f'COPILOT_CACHE_HOME={shlex.quote(str(state_dir / "data" / "cache"))}' in start_cmd
     visible_cmd = start_cmd.rsplit('; ', 1)[-1]
     visible_parts = shlex.split(visible_cmd)
     if provider == 'crush':
         assert visible_parts == [default_executable, '--data-dir', str(state_dir / 'data'), '--demo']
+    elif provider == 'qoder':
+        assert visible_parts == [
+            default_executable,
+            '--config-dir',
+            str(state_dir / 'home'),
+            '--demo',
+        ]
+        assert payload['qoder_config_dir'] == str(state_dir / 'home')
+        assert payload['qoder_auto_permission_enabled'] is False
+        assert payload['qoder_headless_permission_mode'] == 'dont_ask'
+        assert 'QODER_HOME=' not in start_cmd
     elif provider == 'grok':
         assert visible_parts == [
             default_executable,
@@ -1993,8 +2151,201 @@ def test_native_cli_launcher_builds_provider_state_payload(
             str(plan.workspace_path),
             '--demo',
         ]
+    elif provider == 'qoderclicn':
+        assert visible_parts == [
+            default_executable,
+            '--config-dir',
+            str(state_dir / 'home'),
+            '--demo',
+        ]
+        assert payload['qoderclicn_config_dir'] == str(state_dir / 'home')
+        assert payload['qoderclicn_auto_permission_enabled'] is False
+        assert payload['qoderclicn_headless_permission_mode'] == 'dont_ask'
+        settings = json.loads((state_dir / 'home' / 'settings.json').read_text(encoding='utf-8'))
+        assert settings['general']['enableAutoUpdate'] is False
+        assert settings['general']['enableAutoUpdateNotification'] is False
     else:
         assert visible_parts == [default_executable, '--demo']
+
+
+def test_qoder_launcher_respects_explicit_config_and_permission_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv('QODER_START_CMD', raising=False)
+    project_root = tmp_path / 'repo-qoder-explicit-options'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoder1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec(
+        'qoder1',
+        provider='qoder',
+        startup_args=('--config-dir', 'custom-qoder', '--permission-mode', 'plan'),
+    )
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoder1', 'qoder')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoder']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoder-explicit',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoder1',
+        start_cmd,
+        'sess-qoder-explicit',
+        prepared,
+    )
+    parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert parts.count('--config-dir') == 1
+    assert parts.count('--permission-mode') == 1
+    assert parts[parts.index('--permission-mode') + 1] == 'plan'
+    assert payload['qoder_config_dir'] == str(plan.workspace_path / 'custom-qoder')
+    assert payload['qoder_auto_permission_enabled'] is True
+    assert payload['qoder_headless_permission_mode'] == 'plan'
+
+
+def test_qoderclicn_launcher_uses_one_managed_root_and_merges_update_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv('QODERCLICN_START_CMD', raising=False)
+    project_root = tmp_path / 'repo-qoderclicn-managed-root'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoderclicn1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec('qoderclicn1', provider='qoderclicn', startup_args=('--demo',))
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoderclicn1', 'qoderclicn')
+    state_dir = ctx.paths.agent_provider_state_dir('qoderclicn1', 'qoderclicn')
+    config_dir = state_dir / 'home'
+    config_dir.mkdir(parents=True)
+    (config_dir / 'settings.json').write_text(
+        json.dumps({'theme': 'dark', 'general': {'locale': 'zh-CN'}}),
+        encoding='utf-8',
+    )
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoderclicn']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoderclicn-managed',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoderclicn1',
+        start_cmd,
+        'sess-qoderclicn-managed',
+        prepared,
+    )
+    request = NativeCliExecutionRequest(
+        provider='qoderclicn',
+        job=SimpleNamespace(job_id='job_qoderclicn_launcher'),
+        work_dir=plan.workspace_path,
+        session_data=payload,
+        prompt='test prompt',
+        request_anchor='anchor',
+    )
+    headless = build_qoderclicn_command(request)
+    visible = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+    settings = json.loads((config_dir / 'settings.json').read_text(encoding='utf-8'))
+
+    assert visible[visible.index('--config-dir') + 1] == str(config_dir)
+    assert visible[visible.index('--permission-mode') + 1] == 'auto'
+    assert headless[headless.index('--config-dir') + 1] == str(config_dir)
+    assert headless[headless.index('--permission-mode') + 1] == 'auto'
+    assert payload['qoderclicn_config_dir'] == str(config_dir)
+    assert settings['theme'] == 'dark'
+    assert settings['general']['locale'] == 'zh-CN'
+    assert settings['general']['enableAutoUpdate'] is False
+    assert settings['general']['enableAutoUpdateNotification'] is False
+
+
+def test_qoderclicn_launcher_does_not_duplicate_explicit_config_or_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv('QODERCLICN_START_CMD', 'qoderclicn --permission-mode plan')
+    project_root = tmp_path / 'repo-qoderclicn-explicit-options'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoderclicn1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec(
+        'qoderclicn1',
+        provider='qoderclicn',
+        startup_args=('--config-dir', 'custom-qoderclicn', '--demo'),
+    )
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoderclicn1', 'qoderclicn')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoderclicn']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoderclicn-explicit',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoderclicn1',
+        start_cmd,
+        'sess-qoderclicn-explicit',
+        prepared,
+    )
+    parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert parts.count('--config-dir') == 1
+    assert parts.count('--permission-mode') == 1
+    assert parts[parts.index('--permission-mode') + 1] == 'plan'
+    assert payload['qoderclicn_config_dir'] == str(
+        plan.workspace_path / 'custom-qoderclicn'
+    )
+    assert payload['qoderclicn_headless_permission_mode'] == 'plan'
+    assert not (plan.workspace_path / 'custom-qoderclicn' / 'settings.json').exists()
 
 
 def test_grok_launcher_fullscreen_startup_arg_overrides_default_minimal(
@@ -2465,7 +2816,7 @@ def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeyp
 
     cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-restore', prepared_state=prepared)
 
-    assert cmd.endswith('resume agent1-session-id')
+    assert extract_resume_session_id(cmd) == 'agent1-session-id'
     assert 'agent2-session-id' not in cmd
 
 
@@ -2533,7 +2884,7 @@ def test_codex_launcher_build_start_cmd_respects_agent_restore_fresh(monkeypatch
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-fresh')
 
-    assert ' resume ' not in f' {cmd} '
+    assert extract_resume_session_id(cmd) is None
 
 
 def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_session_file(tmp_path: Path) -> None:
@@ -2559,7 +2910,7 @@ def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_sessi
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-restore')
 
-    assert cmd.endswith('resume codex-session-id')
+    assert extract_resume_session_id(cmd) == 'codex-session-id'
 
 
 def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_proxy(monkeypatch, tmp_path: Path) -> None:
@@ -2651,6 +3002,59 @@ def test_claude_launcher_exports_plugin_seed_before_process_start(monkeypatch, t
     assert f'CLAUDE_CODE_PLUGIN_CACHE_DIR={shlex.quote(str(expected_plugin_root))}' in start_cmd
     assert expected_plugin_root.is_dir()
     assert start_cmd.index('CLAUDE_CODE_PLUGIN_SEED_DIR=') < start_cmd.rindex('; claude ')
+
+
+def test_claude_launcher_hard_role_overrides_source_and_ambient_plugin_seed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    source_seed = source_home / '.claude' / 'plugins'
+    source_seed.mkdir(parents=True)
+    (source_seed / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    hard_policy = RoleCommandPolicy(
+        role_id='test.hard',
+        path=tmp_path / 'command-surface.toml',
+        mode='deny_all_except',
+        enforcement='required',
+        if_unsupported='fail_mount',
+        generic_shell=False,
+        generic_ccb=False,
+        supported_providers=('claude',),
+        provider_tools=(),
+        allowed_effects=(),
+        forbidden_effects=(),
+        allowed=(),
+    )
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+    monkeypatch.setenv('CLAUDE_CODE_PLUGIN_SEED_DIR', str(tmp_path / 'ambient-seed'))
+    monkeypatch.setattr(claude_home_runtime, 'current_provider_source_home', lambda: source_home)
+    monkeypatch.setattr(claude_launcher, 'ensure_role_command_policy_supported', lambda **kwargs: hard_policy)
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-hard-role',
+        prepared_state=_claude_prepared_state(runtime_dir),
+    )
+
+    managed_claude = runtime_dir / 'claude-home' / '.claude'
+    empty_seed = managed_claude / 'ccb-empty-plugin-seed'
+    restricted_plugins = managed_claude / 'ccb-restricted-plugins'
+    assert f'CLAUDE_CODE_PLUGIN_SEED_DIR={shlex.quote(str(empty_seed))}' in start_cmd
+    assert f'CLAUDE_CODE_PLUGIN_CACHE_DIR={shlex.quote(str(restricted_plugins))}' in start_cmd
+    assert str(source_seed) not in start_cmd
+    assert str(tmp_path / 'ambient-seed') not in start_cmd
 
 
 def test_claude_launcher_provider_command_template_wraps_command_after_env_prefix(
@@ -2831,6 +3235,16 @@ def test_claude_cli_capability_probe_does_not_reuse_prior_help_output(monkeypatc
 
     assert '--settings' in claude_launcher._claude_help_text(('claude',))
     assert '--permission-mode' in claude_launcher._claude_help_text(('claude',))
+
+
+def test_claude_cli_capability_probe_reads_flags_after_pipe_truncation_boundary(monkeypatch) -> None:
+    def write_long_help(args, **kwargs):
+        kwargs['stdout'].write(f'{"x" * 8192}\n--setting-sources <sources>\n')
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(claude_launcher.subprocess, 'run', write_long_help)
+
+    assert claude_launcher.claude_cli_supports_flag(['claude'], '--setting-sources') is True
 
 
 def test_claude_launcher_skips_unsupported_optional_flags(monkeypatch, tmp_path: Path) -> None:
@@ -3349,7 +3763,7 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-memory-change')
 
-    assert cmd.endswith('resume legacy-session-id')
+    assert extract_resume_session_id(cmd) == 'legacy-session-id'
     data = json.loads(session_file.read_text(encoding='utf-8'))
     assert data['codex_session_id'] == 'legacy-session-id'
     assert data['codex_session_path'] == str(old_log)

@@ -14,6 +14,7 @@ from .execution_runtime import poll_submission as _poll_submission
 from .execution_runtime import resume_submission as _resume_submission
 from .execution_runtime import start_active_submission as _start_active_submission
 from .session import load_project_session
+from provider_execution.followups import unsupported_active_followup_capability
 
 
 class ClaudeProviderAdapter:
@@ -53,6 +54,11 @@ class ClaudeProviderAdapter:
             'raw_buffer': submission.runtime_state.get('raw_buffer'),
             'session_path': submission.runtime_state.get('session_path'),
             'last_assistant_uuid': submission.runtime_state.get('last_assistant_uuid'),
+            'prompt_enqueued': submission.runtime_state.get('prompt_enqueued'),
+            'queue_dequeue_observed': submission.runtime_state.get('queue_dequeue_observed'),
+            'prompt_activated': submission.runtime_state.get('prompt_activated'),
+            'prompt_enqueue_uuid': submission.runtime_state.get('prompt_enqueue_uuid'),
+            'prompt_activation_uuid': submission.runtime_state.get('prompt_activation_uuid'),
             'completion_dir': submission.runtime_state.get('completion_dir'),
             'prompt_text': submission.runtime_state.get('prompt_text'),
             'prompt_sent': submission.runtime_state.get('prompt_sent'),
@@ -82,6 +88,13 @@ class ClaudeProviderAdapter:
             load_session_fn=_load_session,
             backend_for_session_fn=get_backend_for_session,
             reader_factory=_reader_factory,
+        )
+
+    def active_followup_capability(self, submission):
+        del submission
+        return unsupported_active_followup_capability(
+            'claude_tui_missing_atomic_active_turn_precondition',
+            mechanism='claude_queued_command_post_dispatch_only',
         )
 
 

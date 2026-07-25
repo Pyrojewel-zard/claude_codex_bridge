@@ -17,6 +17,7 @@ class CcbProjectView {
     required this.activePaneId,
     required this.windows,
     required this.agents,
+    this.comms = const [],
     required this.contentItems,
     required this.notifications,
     required this.terminalHistories,
@@ -30,6 +31,7 @@ class CcbProjectView {
   final String? activePaneId;
   final List<CcbWindow> windows;
   final List<CcbAgent> agents;
+  final List<CcbCommsItem> comms;
   final List<CcbContentItem> contentItems;
   final List<CcbNotification> notifications;
   final Map<String, ReadableTerminalHistory> terminalHistories;
@@ -55,6 +57,10 @@ class CcbProjectView {
           CcbWindow.fromJson(item),
       ],
       agents: agents,
+      comms: [
+        for (final item in _mapList(source['comms']))
+          CcbCommsItem.fromJson(item),
+      ],
       contentItems: contentItems,
       notifications: _notifications(
         projectId: project.id,
@@ -141,6 +147,40 @@ class CcbProjectView {
       tmuxSocketPath: tmuxSocketPath,
       tmuxSessionName: tmuxSessionName,
       scopes: scopes,
+    );
+  }
+}
+
+class CcbCommsItem {
+  const CcbCommsItem({
+    required this.id,
+    required this.status,
+    required this.businessStatus,
+    required this.statusLabel,
+    this.executionPhase,
+    this.executionPhaseReason,
+  });
+
+  final String id;
+  final String status;
+  final String businessStatus;
+  final String statusLabel;
+  final String? executionPhase;
+  final String? executionPhaseReason;
+
+  String get displayPhase =>
+      executionPhase ??
+      _firstText(<String?>[statusLabel, businessStatus, status]) ??
+      'unknown';
+
+  factory CcbCommsItem.fromJson(Map<String, Object?> json) {
+    return CcbCommsItem(
+      id: _text(json['id'], fallback: 'comms-item'),
+      status: _text(json['status']),
+      businessStatus: _text(json['business_status']),
+      statusLabel: _text(json['status_label']),
+      executionPhase: _optionalText(json['execution_phase']),
+      executionPhaseReason: _optionalText(json['execution_phase_reason']),
     );
   }
 }
@@ -334,6 +374,14 @@ String? _optionalText(Object? value) {
 }
 
 int? _optionalInt(Object? value) => int.tryParse((value ?? '').toString());
+
+String? _firstText(Iterable<String?> values) {
+  for (final value in values) {
+    final text = (value ?? '').trim();
+    if (text.isNotEmpty) return text;
+  }
+  return null;
+}
 
 String _text(Object? value, {String fallback = ''}) {
   final text = (value ?? '').toString().trim();

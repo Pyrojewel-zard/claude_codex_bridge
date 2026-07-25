@@ -46,8 +46,14 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
 
 def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     copilot_home = _state_path(request, "copilot_home", fallback="home")
+    copilot_data = _state_path(request, "copilot_data_dir", fallback="data")
+    copilot_cache = copilot_data / 'cache'
     copilot_home.mkdir(parents=True, exist_ok=True)
-    return {"COPILOT_HOME": str(copilot_home)}
+    copilot_cache.mkdir(parents=True, exist_ok=True)
+    return {
+        "COPILOT_HOME": str(copilot_home),
+        "COPILOT_CACHE_HOME": str(copilot_cache),
+    }
 
 
 def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:

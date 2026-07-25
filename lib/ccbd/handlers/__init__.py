@@ -5,6 +5,7 @@ from .attach import build_attach_handler
 from .cancel import build_cancel_handler
 from .comms_recover import build_comms_recover_handler
 from .get import build_get_handler
+from .followup import build_followup_handler
 from .inbox import build_inbox_handler
 from .mailbox_head import build_mailbox_head_handler
 from .ping import build_ping_handler
@@ -34,6 +35,7 @@ __all__ = [
     'build_cancel_handler',
     'build_comms_recover_handler',
     'build_get_handler',
+    'build_followup_handler',
     'build_inbox_handler',
     'build_mailbox_head_handler',
     'build_ping_handler',

@@ -5,6 +5,7 @@ from .fault_views import render_fault_arm, render_fault_clear, render_fault_list
 from .job_views import (
     render_ask,
     render_cancel,
+    render_followup,
     render_resubmit,
     render_retry,
     render_wait,
@@ -40,6 +41,7 @@ __all__ = [
     'render_agent_lifecycle',
     'render_ask',
     'render_cancel',
+    'render_followup',
     'render_clear',
     'render_cleanup',
     'render_config_validate',

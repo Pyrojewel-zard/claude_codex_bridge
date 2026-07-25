@@ -13,7 +13,12 @@ from provider_core.memory_projection import (
     record_memory_projection_event,
     text_file_sha256,
 )
-from provider_core.projected_assets import route_projected_tree
+from provider_core.projected_assets import (
+    remove_projected_path,
+    route_projected_tree,
+    seed_projected_tree,
+)
+from provider_core.projected_settings import rebase_json_path_fields
 from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
 from rolepacks.projection import project_role_skills_to_home
@@ -62,6 +67,12 @@ _CLAUDE_COMMANDS_PROJECTION_LABEL = 'claude-inherited-commands'
 _CLAUDE_AGENTS_PROJECTION_LABEL = 'claude-inherited-agents'
 _CLAUDE_PLUGIN_SEED_ENV = 'CLAUDE_CODE_PLUGIN_SEED_DIR'
 _CLAUDE_PLUGIN_CACHE_ENV = 'CLAUDE_CODE_PLUGIN_CACHE_DIR'
+_CLAUDE_PLUGIN_SETTINGS_KEYS = ('enabledPlugins', 'extraKnownMarketplaces')
+_CLAUDE_PLUGIN_BOOTSTRAP_LABEL = 'claude-plugin-cache-bootstrap'
+_CLAUDE_RESTRICTED_PLUGIN_ROOT = 'ccb-restricted-plugins'
+_CLAUDE_EMPTY_PLUGIN_SEED = 'ccb-empty-plugin-seed'
+_CLAUDE_EMPTY_PLUGIN_ROOT = 'ccb-empty-plugins'
+_CLAUDE_PLUGIN_PATH_KEYS = ('installLocation', 'installPath')
 
 
 def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
@@ -151,23 +162,62 @@ def _claude_plugin_environment(
     profile,
     command_policy,
 ) -> dict[str, str]:
-    if (
-        not _inherits_config(profile)
-        or role_command_policy_disables_inherited_assets(command_policy)
-    ):
-        return {}
-    seed_root = Path(source_home).expanduser() / '.claude' / 'plugins'
-    if not _usable_claude_plugin_seed(seed_root):
-        return {}
-    plugin_root = target_layout.claude_dir / 'plugins'
+    inherited_plugins_enabled = (
+        _inherits_config(profile)
+        and not role_command_policy_disables_inherited_assets(command_policy)
+    )
+    source_seed_root = Path(source_home).expanduser() / '.claude' / 'plugins'
+    empty_seed_root = target_layout.claude_dir / _CLAUDE_EMPTY_PLUGIN_SEED
+    source_seed_usable = inherited_plugins_enabled and _usable_claude_plugin_seed(source_seed_root)
+    seed_root = source_seed_root if source_seed_usable else empty_seed_root
+    normal_plugin_root = target_layout.claude_dir / 'plugins'
+    if not inherited_plugins_enabled:
+        plugin_root = target_layout.claude_dir / _CLAUDE_RESTRICTED_PLUGIN_ROOT
+    elif source_seed_usable or normal_plugin_root.exists() or normal_plugin_root.is_symlink():
+        plugin_root = normal_plugin_root
+    else:
+        plugin_root = target_layout.claude_dir / _CLAUDE_EMPTY_PLUGIN_ROOT
     try:
+        if source_seed_usable and _claude_plugin_root_is_bootstrap_safe(plugin_root):
+            if plugin_root.exists():
+                shutil.rmtree(plugin_root)
+            seeded = seed_projected_tree(
+                source_seed_root,
+                plugin_root,
+                label=_CLAUDE_PLUGIN_BOOTSTRAP_LABEL,
+            )
+            if seeded and not rebase_json_path_fields(
+                (
+                    plugin_root / 'installed_plugins.json',
+                    plugin_root / 'known_marketplaces.json',
+                ),
+                source_root=source_seed_root,
+                target_root=plugin_root,
+                fields=_CLAUDE_PLUGIN_PATH_KEYS,
+            ):
+                remove_projected_path(plugin_root, label=_CLAUDE_PLUGIN_BOOTSTRAP_LABEL)
         plugin_root.mkdir(parents=True, exist_ok=True)
+        (plugin_root / 'cache').mkdir(parents=True, exist_ok=True)
+        empty_seed_root.mkdir(parents=True, exist_ok=True)
     except Exception:
         return {}
     return {
         _CLAUDE_PLUGIN_SEED_ENV: str(seed_root),
         _CLAUDE_PLUGIN_CACHE_ENV: str(plugin_root),
     }
+
+
+def _claude_plugin_root_is_bootstrap_safe(plugin_root: Path) -> bool:
+    if plugin_root.is_symlink():
+        return False
+    if not plugin_root.exists():
+        return True
+    if not plugin_root.is_dir():
+        return False
+    try:
+        return not any(entry.is_symlink() or not entry.is_dir() for entry in plugin_root.rglob('*'))
+    except Exception:
+        return False
 
 
 def _usable_claude_plugin_seed(seed_root: Path) -> bool:
@@ -970,6 +1020,13 @@ def _merge_settings_payload(
         allowlist = list(claude_permission_allowlist(command_policy))
         merged['permissions'] = {'allow': allowlist, 'deny': []}
 
+    if (
+        not _inherits_config(profile)
+        or role_command_policy_disables_inherited_assets(command_policy)
+    ):
+        for key in _CLAUDE_PLUGIN_SETTINGS_KEYS:
+            merged.pop(key, None)
+
     # Claude Code 1.0.43 still iterates the legacy top-level allowedTools
     # array even when the newer permissions.* schema is present.
     if not isinstance(merged.get('allowedTools'), list):
@@ -1304,7 +1361,7 @@ def _sync_tree(source: Path, target: Path) -> None:
 
 
 def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
-    route_projected_tree(source, target, enabled=enabled, label=label, allow_unmarked_replace=True)
+    route_projected_tree(source, target, enabled=enabled, label=label)
 
 
 # Injectable CCB skills that must always be present in the source home's

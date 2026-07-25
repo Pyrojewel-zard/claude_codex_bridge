@@ -31,7 +31,9 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
             lines.append(
                 'queue_agent: '
                 f'name={agent["agent_name"]} runtime_state={agent.get("runtime_state")} '
-                f'runtime_health={agent.get("runtime_health")} state={agent["mailbox_state"]} '
+                f'runtime_health={agent.get("runtime_health")} '
+                f'phase={agent.get("execution_phase") or agent.get("mailbox_state")} '
+                f'mailbox_state={agent["mailbox_state"]} '
                 f'depth={agent["queue_depth"]} pending_replies={agent["pending_reply_count"]} '
                 f'summary_status={agent.get("summary_status")}'
             )
@@ -43,6 +45,8 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
             f'agent_name: {agent.get("agent_name")}',
             f'mailbox_id: {agent.get("mailbox_id")}',
             f'summary_status: {agent.get("summary_status")}',
+            f'execution_phase: {agent.get("execution_phase") or agent.get("mailbox_state")}',
+            f'execution_phase_reason: {agent.get("execution_phase_reason")}',
             f'mailbox_state: {agent.get("mailbox_state")}',
             f'runtime_state: {agent.get("runtime_state")}',
             f'runtime_health: {agent.get("runtime_health")}',

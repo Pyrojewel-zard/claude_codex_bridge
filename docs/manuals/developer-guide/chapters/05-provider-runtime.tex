@@ -30,6 +30,8 @@ pane-backed 不是把 tmux pane 当权威。它只是执行通道。权威状态
 
 Codex 的 session isolation contract 尤其重要。Codex 可以有 inherited plugin assets、projected managed home 和 plugin-cache refresh。相关行为由 \src{docs/codex-session-isolation-contract.md} 与 \src{docs/codex-plugin-projection-plan.md} 约束。
 
+Copilot 的 \src{config.json} 同时包含 installed-plugin 元数据和认证/应用状态，因此不能整文件从用户 home 复制。managed Copilot 只投影通过校验的 \src{installedPlugins} 条目及其对应本地插件树，并把 \src{cache_path} 重写到 agent-scoped \src{COPILOT_HOME}；settings、permissions、sessions、plugin data、MCP secret 与 OAuth 状态都保留在各自所有权边界内。交互和 headless 路径还必须把 \src{COPILOT_CACHE_HOME} 指向 agent-local provider data cache。
+
 \section{completion tracker}
 
 provider 输出并不直接等于 CCB reply。provider execution service 产生 completion updates，dispatcher polling service 把这些 updates 写入 completion item events，再交给 completion tracker 判断：

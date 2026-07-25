@@ -1,0 +1,5 @@
+{
+  "name": "ccb-fixture-plugin",
+  "version": "1.0.0",
+  "description": "Offline fixture for managed Claude plugin inheritance"
+}

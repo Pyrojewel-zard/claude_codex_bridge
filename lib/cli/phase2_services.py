@@ -7,6 +7,7 @@ from cli.render import (
     render_agent_lifecycle,
     render_ask,
     render_cancel,
+    render_followup,
     render_clear,
     render_cleanup,
     render_config_validate,
@@ -46,6 +47,7 @@ from cli.services.ack import ack_reply
 from cli.services.agent_lifecycle import agent_lifecycle
 from cli.services.ask import exit_code_for_ask_status, submit_ask, watch_ask_job, write_ask_output
 from cli.services.cancel import cancel_job
+from cli.services.followup import active_job_followup
 from cli.services.clear import clear_agent_context
 from cli.services.cleanup import cleanup_project_storage
 from cli.services.config_ui import open_config_ui_url, prepare_config_ui
@@ -88,6 +90,7 @@ def build_phase2_dispatch_services(**overrides):
         agent_logs=agent_logs,
         arm_fault_rule=arm_fault_rule,
         cancel_job=cancel_job,
+        active_job_followup=active_job_followup,
         clear_agent_context=clear_agent_context,
         cleanup_project_storage=cleanup_project_storage,
         open_config_ui_url=open_config_ui_url,
@@ -125,6 +128,7 @@ def build_phase2_dispatch_services(**overrides):
         render_agent_lifecycle=render_agent_lifecycle,
         render_ask=render_ask,
         render_cancel=render_cancel,
+        render_followup=render_followup,
         render_clear=render_clear,
         render_cleanup=render_cleanup,
         render_config_validate=render_config_validate,

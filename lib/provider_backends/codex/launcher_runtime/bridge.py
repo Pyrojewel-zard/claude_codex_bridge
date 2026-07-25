@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -29,6 +30,8 @@ def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str, prepared_state: dict[
     env['CODEX_INPUT_FIFO'] = str(artifacts.input_fifo)
     env['CODEX_OUTPUT_FIFO'] = str(artifacts.output_fifo)
     env['CODEX_TMUX_LOG'] = str(artifacts.bridge_log)
+    for key in (prepared_state or {}).get('codex_app_server_unset_env', ()):
+        env.pop(str(key), None)
     env.update(bridge_runtime_env(runtime_dir, prepared_state=prepared_state))
     existing_pythonpath = env.get('PYTHONPATH', '')
     lib_root = str(Path(__file__).resolve().parents[3])
@@ -45,7 +48,6 @@ def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str, prepared_state: dict[
 
 
 def bridge_runtime_env(runtime_dir: Path, *, prepared_state: dict[str, object] | None = None) -> dict[str, str]:
-    del prepared_state
     env: dict[str, str] = {}
     session_file = session_file_for_runtime_dir(runtime_dir)
     if session_file is not None:
@@ -58,6 +60,14 @@ def bridge_runtime_env(runtime_dir: Path, *, prepared_state: dict[str, object] |
             refresh_home=False,
         )
     )
+    state = prepared_state or {}
+    if bool(state.get('codex_app_server_enabled')):
+        env.update({str(key): str(value) for key, value in dict(state.get('codex_app_server_env') or {}).items()})
+        env['CCB_CODEX_APP_SERVER_COMMAND_JSON'] = json.dumps(
+            list(state.get('codex_app_server_command') or ()),
+            ensure_ascii=False,
+        )
+        env['CCB_CODEX_APP_SERVER_SOCKET'] = str(state.get('codex_app_server_socket') or '')
     return env
 
 

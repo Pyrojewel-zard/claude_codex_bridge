@@ -1,5 +1,108 @@
 # Changelog
 
+## v8.3.1 (2026-07-24)
+
+### Unified Provider Updates
+
+- **Provider Upgrades Are Managed By `ccb update`**: managed panes suppress
+  supported provider-native startup prompts, while `ccb update` detects the
+  executable owner, compares exact versions, and offers update, decline, or
+  version-scoped skip choices without restarting active panes.
+- **Non-Interactive Policy Is Explicit**: `--providers check`,
+  `--providers all`, and `--providers none` provide report-only, supported
+  bulk-update, and skip behavior for automation and controlled deployments.
+
+### Provider Storage And Cleanup
+
+- **Project Provider Caches Are Retired**: Claude uses the user-installed
+  executable and Gemini uses one user-scoped rebuildable cache instead of
+  copying provider software into every CCB project.
+- **Legacy Cleanup Is Bounded And Automatic**: post-update and successful
+  project shutdown clean only ownership-verified legacy Claude/Gemini cache
+  payloads. Active projects, malformed manifests, foreign links, sessions,
+  authentication data, and user-scoped caches are preserved; one update can
+  opt out with `--no-cache-cleanup`.
+
+### Configuration, Lifecycle, And Rich Mode
+
+- **Qoder CLI CN Is A Native Provider**: the official
+  `@qodercn-ai/qoderclicn` distribution is registered as `qoderclicn`, with
+  isolated visible/headless config and session state, UUID session ids,
+  permission mapping, native stream-result completion, and managed suppression
+  of provider-owned update prompts.
+- **Qoder Uses Its Documented Headless Contract**: Qoder and Qoder CLI CN use
+  native `--print`, workspace, and `--config-dir` arguments instead of the
+  retired generic bare-mode assumptions.
+- **Config UI Access Can Be Persistent**: projects can configure a stable
+  loopback port and a token source through `token_env` or a protected
+  project-relative `token_file`, while the CLI avoids printing token values.
+- **Shutdown Finalizers Stay Reliable**: accepted shutdown work keeps its
+  completion path while the server is stopping, preventing cleanup callbacks
+  from being abandoned.
+- **Kill Tolerates The Expected Socket-Close Race**: if the keeper closes ccbd
+  immediately after shutdown intent is recorded, the CLI continues bounded
+  local authority cleanup instead of surfacing a transient missing-socket
+  error.
+- **WSL Process Audits Degrade Safely**: live processes remain visible when WSL
+  does not expose per-process procfs I/O counters; the audit reports partial I/O
+  capability instead of misclassifying those processes as vanished.
+- **Yazi Uses A Compact Two-Column Layout**: Rich mode removes the redundant
+  preview column and allocates more width to the file list and active preview.
+
+### Release Surface
+
+- **Packaging Is Portable And Synchronized**: sidebar checksum generation works
+  across supported hosts, and CLI, npm, Linux, macOS, and Android versions,
+  assets, links, and workflow defaults target 8.3.1.
+
+## v8.3.0 (2026-07-22)
+
+### Managed Provider Reliability
+
+- **Requests Stay Bound To Their Native Turns**: Kimi resumes the exact native
+  session and accepts replies only from the current wire turn, while Claude
+  queued prompts become eligible only after their activation boundary.
+- **Qoder Follows Its Real CLI Contract**: managed execution uses qodercli's
+  native non-interactive, session, resume, update, storage, and completion
+  behavior instead of assumptions inherited from other providers.
+- **Provider Extensions Are Inherited Safely**: managed Claude, Gemini, Droid,
+  Qwen, and Copilot homes project supported extensions and plugins only with
+  explicit ownership evidence, preserving user-owned assets and cleanup
+  boundaries.
+
+### Job Integrity And Diagnostics
+
+- **Follow-Ups Target The Exact Active Job**: active work can receive bounded
+  follow-up steering without starting a competing request or losing the
+  original job, message, attempt, and provider-turn lineage.
+- **Execution State Is Correlated End To End**: project view, trace, doctor,
+  heartbeat, sidebar, and Mobile surfaces expose shared execution phases and
+  bounded diagnosis for orphaned active inbound work.
+- **Cancelled Callback Chains Terminate Cleanly**: cancellation now records a
+  terminal continuation outcome instead of leaving child callbacks or delivery
+  state indefinitely active.
+
+### Update, Workspace, And Mobile Safety
+
+- **npm Owns npm-Managed Upgrades**: vendored npm payloads delegate updates to
+  the package manager, keeping package metadata and installed files atomic.
+- **Marker-Only Worktrees Retire Conservatively**: CCB removes an owned binding
+  only after proving no user payload is present, while retaining legacy or
+  ambiguous worktrees for recovery.
+- **Mobile Terminal Mode Stays In The Project**: chat and terminal views share
+  the selected project workspace, preserve agent/window navigation, and avoid
+  escaping into a detached screen.
+- **Sidebar Settings Open Reliably On WSL And macOS**: project tmux panes retain
+  desktop/browser transport state, host-native openers run before generic
+  browser discovery, immediate opener failures fall through, and the sidebar
+  displays a manual-open warning instead of appearing to ignore the click.
+
+### Release Surface
+
+- **Release Versions Are Synchronized**: CLI, npm, Linux, macOS, Android,
+  localized badges, workflow defaults, download links, and checksums target
+  8.3.0.
+
 ## v8.2.1 (2026-07-17)
 
 ### Startup And Lifecycle Reliability

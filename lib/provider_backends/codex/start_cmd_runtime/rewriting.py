@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import re
 
 from .parsing import find_codex_token_index
 
@@ -12,6 +13,8 @@ def build_resume_start_cmd(command: object, session_id: object) -> str:
     raw = str(command or '').strip()
     if not raw:
         return f'codex resume {shlex.quote(normalized_session_id)}'
+    if 'CCB_CODEX_MANAGED_REMOTE=1' in raw:
+        return _replace_managed_resume_id(raw, normalized_session_id)
     shell_prefix, codex_segment = split_last_shell_segment(raw)
     rebuilt_segment = rewrite_codex_segment(codex_segment, normalized_session_id)
     if not rebuilt_segment:
@@ -25,6 +28,8 @@ def strip_resume_start_cmd(command: object) -> str:
     raw = str(command or '').strip()
     if not raw:
         return ''
+    if 'CCB_CODEX_MANAGED_REMOTE=1' in raw:
+        return _replace_managed_resume_id(raw, '')
     shell_prefix, codex_segment = split_last_shell_segment(raw)
     stripped_segment = strip_resume_from_codex_segment(codex_segment)
     if stripped_segment is None:
@@ -80,6 +85,16 @@ def rewrite_codex_segment(segment: str, session_id: str) -> str | None:
     base_tokens = tokens[:resume_index] if resume_index is not None else list(tokens)
     base_tokens.extend(['resume', session_id])
     return ' '.join(shlex.quote(str(token)) for token in base_tokens)
+
+
+_MANAGED_RESUME_ASSIGNMENT_RE = re.compile(
+    r'(?P<prefix>\bCCB_CODEX_RESUME_ID=)(?:\'[^\']*\'|"[^"]*"|[^;\s]*)'
+)
+
+
+def _replace_managed_resume_id(command: str, session_id: str) -> str:
+    replacement = rf'\g<prefix>{shlex.quote(session_id)}'
+    return _MANAGED_RESUME_ASSIGNMENT_RE.sub(replacement, command, count=1)
 
 
 __all__ = [

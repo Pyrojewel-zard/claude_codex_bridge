@@ -19,6 +19,7 @@ class AgentTerminalPane extends StatefulWidget {
     required this.terminalTransport,
     this.gatewayTerminal = false,
     this.showHeader = true,
+    this.active = true,
     super.key,
   });
 
@@ -27,6 +28,7 @@ class AgentTerminalPane extends StatefulWidget {
   final TerminalTransport? terminalTransport;
   final bool gatewayTerminal;
   final bool showHeader;
+  final bool active;
 
   @override
   State<AgentTerminalPane> createState() => _AgentTerminalPaneState();
@@ -48,6 +50,7 @@ class _AgentTerminalPaneState extends State<AgentTerminalPane> {
       transport: transport,
       gatewayTerminal: widget.gatewayTerminal,
       showHeader: widget.showHeader,
+      active: widget.active,
     );
   }
 }
@@ -148,12 +151,14 @@ class _LiveTerminalPane extends StatefulWidget {
     required this.transport,
     required this.gatewayTerminal,
     required this.showHeader,
+    required this.active,
   });
 
   final AgentTerminalPaneModel model;
   final TerminalTransport transport;
   final bool gatewayTerminal;
   final bool showHeader;
+  final bool active;
 
   @override
   State<_LiveTerminalPane> createState() => _LiveTerminalPaneState();
@@ -225,10 +230,15 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   @override
   void didUpdateWidget(covariant _LiveTerminalPane oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.active && !widget.active) {
+      _deactivateTerminalInput();
+    }
     if (oldWidget.transport != widget.transport ||
         oldWidget.gatewayTerminal != widget.gatewayTerminal ||
-        oldWidget.model.target.sessionScopeKey !=
-            widget.model.target.sessionScopeKey) {
+        !_sameTerminalTargetIdentity(
+          oldWidget.model.target,
+          widget.model.target,
+        )) {
       _startSession(clearTerminal: true);
     }
   }
@@ -244,12 +254,8 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     } else {
       _cancelAutoReconnectTimer();
     }
-    unawaited(_closeCurrentSession());
-    if (clearTerminal) {
-      _terminal.write('\x1b[2J\x1b[H');
-    }
     _setControlStatus('Connecting');
-    final rawFuture = _openSession(generation);
+    final rawFuture = _replaceSession(generation, clearTerminal: clearTerminal);
     final future =
         resetReconnect
             ? rawFuture
@@ -257,6 +263,20 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     setState(() {
       _sessionFuture = future;
     });
+  }
+
+  Future<TerminalSession> _replaceSession(
+    int generation, {
+    required bool clearTerminal,
+  }) async {
+    await _closeCurrentSession();
+    if (!mounted || generation != _openGeneration) {
+      throw const TerminalTransportException('stale terminal session');
+    }
+    if (clearTerminal) {
+      _terminal.write('\x1b[2J\x1b[H');
+    }
+    return _openSession(generation);
   }
 
   Future<TerminalSession> _openSession(int generation) async {
@@ -354,10 +374,13 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     _outputSubscription = null;
     final session = _session;
     _session = null;
-    await subscription?.cancel();
+    final cancellation = subscription?.cancel();
     await session?.close().catchError((_) {
       // Best-effort route teardown; the gateway may already have closed.
     });
+    if (cancellation != null) {
+      unawaited(cancellation.catchError((_) {}));
+    }
   }
 
   void _writeTerminalBytes(List<int> bytes) {
@@ -626,6 +649,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
       builder: (context, snapshot) {
         final disconnected = _isTerminalControlsDisabled(_controlStatus);
         final connected =
+            widget.active &&
             snapshot.connectionState == ConnectionState.done &&
             snapshot.hasData &&
             _session != null &&
@@ -994,17 +1018,13 @@ bool _sameGeometry(TerminalGeometry a, TerminalGeometry b) {
       a.pixelHeight == b.pixelHeight;
 }
 
-extension on CcbTerminalTarget {
-  Object get sessionScopeKey {
-    return Object.hash(
-      projectId,
-      namespaceEpoch,
-      kind,
-      agent,
-      window,
-      paneId,
-      tmuxSocketPath,
-      tmuxSessionName,
-    );
-  }
+bool _sameTerminalTargetIdentity(CcbTerminalTarget a, CcbTerminalTarget b) {
+  return a.projectId == b.projectId &&
+      a.namespaceEpoch == b.namespaceEpoch &&
+      a.kind == b.kind &&
+      a.agent == b.agent &&
+      a.window == b.window &&
+      a.paneId == b.paneId &&
+      a.tmuxSocketPath == b.tmuxSocketPath &&
+      a.tmuxSessionName == b.tmuxSessionName;
 }

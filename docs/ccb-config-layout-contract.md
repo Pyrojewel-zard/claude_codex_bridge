@@ -566,6 +566,19 @@ Contract:
   "git-worktree"` to share a CCB-managed internal worktree with other agents in
   the same group. Group worktrees live under `.ccb/workspaces/groups/<group>`
   and use branch `ccb/group/<group>`.
+- CCB may write an untracked root `.ccb-workspace.json` binding into a managed
+  worktree. Startup retirement excludes only that exact path, and only when it
+  is a regular non-symlink schema-v2 `workspace_binding` whose project id,
+  target project, workspace path, workspace mode, branch, and agent identity
+  match current planner authority. Shared groups allow another current group
+  member's non-empty agent identity.
+- Every other tracked modification or untracked path remains dirty and blocks
+  automatic retirement. Missing, malformed, foreign, symlinked, tracked, or
+  authority-mismatched binding files are not cleanup exemptions.
+- Automatic retirement requires the owned branch to be an actual ancestor of
+  `HEAD`, rechecks dirtiness after removing the validated untracked binding,
+  and uses non-force `git worktree remove`. Squash or patch equivalence does not
+  authorize automatic branch deletion.
 - `workspace_path` and `workspace_group` are mutually exclusive.
 - `workspace_mode = "copy"` is the only mode that may create an explicit
   directory copy of the project tree.

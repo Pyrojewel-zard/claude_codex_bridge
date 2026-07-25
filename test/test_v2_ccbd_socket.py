@@ -761,7 +761,10 @@ def test_ccbd_stop_all_force_terminalizes_running_jobs_before_restart_restore(tm
     assert not app.paths.execution_state_path(job_id).exists()
 
 
-def test_ccbd_socket_rejects_mutating_requests_while_lifecycle_stopping(tmp_path: Path) -> None:
+def test_ccbd_socket_rejects_mutating_requests_while_lifecycle_stopping(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     project_root = tmp_path / 'repo-stopping-guard'
     ctx = _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
     app = CcbdApp(project_root)
@@ -773,6 +776,9 @@ def test_ccbd_socket_rejects_mutating_requests_while_lifecycle_stopping(tmp_path
             pid=777,
         )
     )
+    # Keep the socket alive long enough to exercise the request guard itself;
+    # lifecycle supervision shutdown is covered by the adjacent heartbeat test.
+    monkeypatch.setattr(app, 'heartbeat', lambda: app.lease)
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
@@ -813,7 +819,9 @@ def test_ccbd_socket_rejects_mutating_requests_while_lifecycle_stopping(tmp_path
             )
         )
 
-    client.shutdown()
+    # Stop the in-process server directly; the RPC assertion under test is the
+    # stable lifecycle rejection above.
+    app.socket_server.request_shutdown()
     thread.join(timeout=2)
     assert not thread.is_alive()
 

@@ -84,12 +84,20 @@ Inside that home, the managed Claude state is:
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/skills/` when skill inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/commands/` when command inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/plugins/`
-  - the agent-local writable plugin root when a usable source plugin seed is
-    inherited
+  - the normal agent-local writable plugin root when config/plugin inheritance
+    is enabled
   - passed through `CLAUDE_CODE_PLUGIN_CACHE_DIR`; despite the environment
     variable name, Claude Code treats its value as the plugins root and manages
     `marketplaces/` and `cache/` below it
   - must not be a symlink to the source home or another managed agent
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/ccb-empty-plugin-seed/`
+  - an empty CCB-owned seed used when no usable source seed may be exposed
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/ccb-empty-plugins/`
+  - the isolated writable root used before any usable source seed exists
+  - keeps the normal `plugins/` path available for a later first bootstrap
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/ccb-restricted-plugins/`
+  - the isolated writable plugin root used when `inherit_config=false` or a
+    hard role policy disables inherited assets
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/CLAUDE.md`
   - a CCB-generated memory projection when `inherit_memory = true`
   - not a user-editable source file
@@ -147,6 +155,11 @@ When `ccb` starts a managed Claude agent:
 - it must explicitly set the effective `HOME`
 - it must explicitly set the effective `CLAUDE_PROJECTS_ROOT`
 - it must ensure `CLAUDE_PROJECTS_ROOT == <claude_home>/.claude/projects`
+- it must use the user-installed Claude executable, disable Claude self-update
+  in the managed pane, and must not create a project-scoped CCB binary cache
+- it may detach only recognized CCB-owned legacy binary-cache symlinks from the
+  managed home; it must preserve foreign symlinks and defer cache-payload
+  deletion to explicit stopped-project cleanup
 - it must create the managed home, projects root, and session-env root before
   launching Claude
 - it must materialize required Claude auth/config projections into the managed
@@ -238,10 +251,15 @@ When `ccb` starts a managed Claude agent:
   stale inherited Claude account metadata in `.claude.json`
 - when skill inheritance is enabled, startup must route inherited Claude
   `skills/` into the managed home as a CCB projected asset on each managed
-  launch
+  launch; replacement or cleanup requires its valid same-label CCB marker,
+  while an unmarked or foreign-marker directory is preserved
 - when command inheritance is enabled, startup must route inherited Claude
   `commands/` into the managed home as a CCB projected asset on each managed
-  launch
+  launch under the same marker-first rule
+- a legacy markerless Claude skills/commands symlink may be adopted only when
+  it already resolves exactly to the current source; startup writes the marker
+  without replacing the symlink, and preserves all ordinary unmarked
+  directories even when their content matches the source
 - when config inheritance and inherited assets are enabled and the source
   `<source-home>/.claude/plugins/` contains `known_marketplaces.json`, a
   `marketplaces/` directory, or a `cache/` directory, startup must set
@@ -251,13 +269,33 @@ When `ccb` starts a managed Claude agent:
   `CLAUDE_CODE_PLUGIN_CACHE_DIR` to the current agent's managed
   `<claude-home>/.claude/plugins/` root so marketplace clones, installed plugin
   cache, and provider writes remain agent-local
+- before the first interactive launch into a new writable plugin root, startup
+  must atomically bootstrap that root from a usable source seed; Claude Code
+  versions that synchronize seed marketplaces only after their initial plugin
+  scan otherwise require a manual reload or second session
+- bootstrap must rebase source-root `installPath` and `installLocation` registry
+  values into the agent-local writable root before launch; installed plugin
+  code must not execute through an absolute source-home cache path
+- the bootstrap is a normal local copy, not a symlink; once the writable root
+  exists, startup must preserve it and let Claude own subsequent mutations
 - a source plugins directory containing only unrelated metadata such as
-  `blocklist.json` is not a usable seed and must not cause plugin environment
-  variables or an empty managed plugin root to be created
+  `blocklist.json` is not a usable seed and must not be exposed; startup must
+  instead export the managed empty seed and `ccb-empty-plugins` writable root
+  so an ambient caller seed cannot leak into the session; if a usable source
+  appears later, startup must bootstrap the still-missing normal `plugins/`
+  root before launch; an empty legacy normal root may be replaced for this
+  migration, but any root containing files or symlinks is provider-owned and
+  must be preserved
 - `inherit_config=false` and a hard role command policy disable plugin seed
-  inheritance; startup must not expose the source plugin seed in those modes
+  inheritance; startup must remove inherited plugin settings, export the
+  managed empty seed, and use `ccb-restricted-plugins` rather than expose the
+  source or normal plugin root
 - two managed Claude agents may reference the same read-only source seed but
   must receive different writable plugin roots
+- when CCB supplies an explicit `--settings` overlay, launcher capability
+  detection must capture the complete Claude help output and pass
+  `--setting-sources user,project,local` when supported; a truncated help probe
+  must not silently hide managed user settings such as `enabledPlugins`
 - when invoking a Windows Claude executable through WSL, both plugin path
   variables must be forwarded through `WSLENV` with `/p` path translation
 - when memory inheritance is enabled, startup must refresh the managed

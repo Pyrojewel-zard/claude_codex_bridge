@@ -31,6 +31,14 @@ class ParsedCancelCommand:
 
 
 @dataclass(frozen=True)
+class ParsedFollowupCommand:
+    project: str | None
+    job_id: str
+    message: str
+    kind: str = 'followup'
+
+
+@dataclass(frozen=True)
 class ParsedPendCommand:
     project: str | None
     target: str
@@ -106,6 +114,7 @@ __all__ = [
     'ParsedAckCommand',
     'ParsedAskCommand',
     'ParsedCancelCommand',
+    'ParsedFollowupCommand',
     'ParsedInboxCommand',
     'ParsedPendCommand',
     'ParsedQueueCommand',

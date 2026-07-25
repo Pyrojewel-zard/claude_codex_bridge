@@ -1046,6 +1046,35 @@ def test_project_view_redacts_server_tmux_evidence() -> None:
     assert fake.calls == [('project_view', 1)]
 
 
+def test_project_view_preserves_correlated_execution_phase_fields() -> None:
+    class _PhaseCcbdClient(_FakeCcbdClient):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['comms'] = [
+                {
+                    'id': 'job-phase',
+                    'status': 'running',
+                    'execution_phase': 'executing',
+                    'execution_phase_reason': 'provider_active',
+                    'execution_evidence': {
+                        'job_id': 'job-phase',
+                        'completion_anchor_seen': True,
+                    },
+                }
+            ]
+            return payload
+
+    payload = _service(_PhaseCcbdClient()).project_view_payload('proj-demo')
+
+    comm = payload['view']['comms'][0]
+    assert comm['execution_phase'] == 'executing'
+    assert comm['execution_phase_reason'] == 'provider_active'
+    assert comm['execution_evidence'] == {
+        'job_id': 'job-phase',
+        'completion_anchor_seen': True,
+    }
+
+
 def test_project_view_rejects_unknown_project() -> None:
     with pytest.raises(MobileGatewayError, match='unknown project') as excinfo:
         _service(_FakeCcbdClient()).project_view_payload('other')

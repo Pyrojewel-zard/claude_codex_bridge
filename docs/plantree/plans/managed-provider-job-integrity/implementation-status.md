@@ -1,44 +1,64 @@
 # Managed Provider And Job Integrity Status
 
-Date: 2026-07-20
+Date: 2026-07-21
 
 ## Current Phase
 
-R1/R2 combined candidate final review on branch
-`fix/managed-plugin-projection-safety`, based on `origin/main` at `5214ce03`.
+The strict repair queue is complete through R10. The integrated evidence commit
+is selected by `Repair-Slice: R10`; its clean verified predecessor is R11-C at
+`6a20a5144f90193428ac5b9833e7ddd57d11abc3`. Refreshed `origin/main` remains
+`aed27abf8899bd1d3ce72d08bb9133e3980f19ba` and is an ancestor of the final
+stack.
 
 ## Next Target
 
-Review the complete diff, commit, push, and open the main-based PR.
+Await explicit user authority for any push, PR update/closure, issue closure,
+merge, publication, or release. The recommended upstream dispositions are
+recorded in the R10 evidence; none has been applied remotely.
 
 ## Last Landed
 
-No R1/R2 commit has landed. The branch baseline is merged PR257 at `5214ce03`.
+R11-C remains the last code-bearing repair at
+`6a20a5144f90193428ac5b9833e7ddd57d11abc3`. R10 adds only final PlanTree and
+qualification evidence. Its external artifact is
+`/home/bfly/yunwei/test_ccb2/r10-integrated-real-20260721/r10-runtime-result.json`.
 
 ## Active TODO
 
-1. Review the ownership helper and provider-specific call sites once more.
-2. Run final focused regression after documentation/status edits.
-3. Commit, push, and open the PR.
+No production or qualification task remains in this goal. Remote disposition
+and release actions require a new explicit instruction.
 
 ## Blocked By
 
-Nothing blocks the PR. A true Claude plugin-load acceptance run depends on the
-test account having a source
-`.claude/plugins/` seed with marketplace/cache content; `blocklist.json` alone
-does not qualify and must not be treated as a pass.
+No candidate blocker. PR257 remains merged. PR258, PR259, PR264, PR265, and
+PR266 remain open/unstable at unchanged reviewed heads; Issues260-263 remain
+open because R10 intentionally did not mutate remote state.
 
 ## Last Verified
 
-- Focused provider-profile and launcher files: `222 passed`.
-- Full Python suite: `5373 passed`, `15 skipped`, one known non-deterministic
-  `ccbd shutdown` connection-reset failure.
-- Isolated rerun of that shutdown test: `1 passed`.
+- The union counterexample suite passed `945` tests; the complete Python suite
+  passed `5547` with `15` conditional skips. Provider blackbox passed `21`
+  tests with `57` deselected, and the current-main shutdown race test passed
+  `20/20` repeated candidate runs.
+- Rust passed sidebar `79`, helper `8`, runtime accelerator `10`, and all three
+  format gates. Flutter analyze reported no issues and all `659` tests passed.
+  Six `dart format` changes are unchanged current-main baseline files; the
+  candidate's only other mobile differences are the two intended R7
+  ProjectView model/fixture files covered by that gate.
 - External project
-  `/home/bfly/yunwei/test_ccb2/plugin-projection-r1-r2-20260720`: real Codex and
-  Claude panes mounted; Codex local seed/restart/source immutability passed;
-  Claude no-seed behavior passed; `ccb_test kill` left no live socket or
-  provider process.
-- Markdown local targets and `git diff --check`: passed.
+  `/home/bfly/yunwei/test_ccb2/r10-integrated-real-20260721` used the candidate
+  wrapper and a lab-local Role store. Codex CLI `0.144.6`, model
+  `gpt-5.6-terra`, effort `low`, and Claude CLI `2.1.206`, model
+  `deepseek-v4-pro`, each completed the identical frozen corpus exactly once
+  with reply `R10_REAL_OK`.
+- Candidate tracked SHA256 stayed `157a6c21...`; inherited Codex/Claude
+  extension-source SHA256 stayed `3fed0b5c...`. Live generation 3 was healthy
+  with zero active/pending/replay items, then non-forced `kill` left the
+  project unmounted with no project sockets or processes.
+- Full evidence and final dispositions:
+  [history/reviewed-repair-queue-evidence.md](history/reviewed-repair-queue-evidence.md#r10-integrated-qualification-and-disposition).
 
-Full evidence: [history/r1-r2-validation-2026-07-20.md](history/r1-r2-validation-2026-07-20.md).
+Prior R3-R6 evidence remains indexed in
+[history/reviewed-repair-queue-evidence.md](history/reviewed-repair-queue-evidence.md).
+R11 provider-extension qualification remains in
+[history/r11-provider-extension-validation-2026-07-20.md](history/r11-provider-extension-validation-2026-07-20.md).

@@ -45,4 +45,12 @@ def cleanup_cancel_flags(layout, agent_name: str, *, max_age_seconds: float = 86
         pass
 
 
-__all__ = ["cancel_flag_path", "cleanup_cancel_flags", "write_cancel_flag"]
+def clear_cancel_flag(layout, agent_name: str, job_id: str) -> None:
+    """Remove a losing-race flag after another terminal result wins."""
+    try:
+        cancel_flag_path(layout, agent_name, job_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+__all__ = ["cancel_flag_path", "cleanup_cancel_flags", "clear_cancel_flag", "write_cancel_flag"]

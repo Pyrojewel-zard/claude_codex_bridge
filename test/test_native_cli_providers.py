@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shlex
+from types import SimpleNamespace
 
 from agents.models import (
     AgentSpec,
@@ -15,7 +16,11 @@ from agents.models import (
 )
 from cli.models import ParsedStartCommand
 from provider_backends.deepseek.launcher import build_start_cmd as build_deepseek_start_cmd
-from provider_backends.kimi.launcher import build_start_cmd as build_kimi_start_cmd
+from provider_backends.kimi.launcher import (
+    build_session_payload as build_kimi_session_payload,
+    build_start_cmd as build_kimi_start_cmd,
+)
+from provider_backends.kimi.session import KIMI_RESTART_SESSION_MARKER
 from provider_backends.kimi.skills import kimi_skill_dirs_for_launch, materialize_kimi_skills
 from provider_backends.mimo.launcher import build_start_cmd as build_mimo_start_cmd
 
@@ -81,6 +86,146 @@ def test_kimi_start_cmd_treats_legacy_auto_flag_as_explicit(monkeypatch, tmp_pat
     assert cmd.endswith("kimi --auto --session abc")
     assert "--auto-approve" not in cmd
     assert "--continue" not in cmd
+
+
+def test_kimi_start_cmd_resumes_only_the_prevalidated_exact_session(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("KIMI_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("kimi_agent",), restore=True, auto_permission=False)
+    spec = _spec("kimi_agent", "kimi")
+    prepared = {
+        "kimi_resume_flag": "--session",
+        "kimi_resume_session_id": "session-owned-by-kimi-agent",
+        "kimi_resume_session_path": str(tmp_path / "wire.jsonl"),
+        "kimi_resume_status": "exact_session_ready",
+    }
+
+    cmd = build_kimi_start_cmd(
+        command,
+        spec,
+        tmp_path / "runtime",
+        "launch-2",
+        prepared_state=prepared,
+    )
+
+    command_parts = shlex.split(cmd.rsplit("; ", 1)[-1])
+    assert command_parts[-2:] == [
+        "--session",
+        "session-owned-by-kimi-agent",
+    ]
+    assert command_parts.count("--session") == 1
+    assert "--continue" not in cmd
+    assert prepared["kimi_resume_status"] == "exact_session_selected"
+    assert KIMI_RESTART_SESSION_MARKER not in cmd
+    assert prepared["kimi_restart_start_cmd_template"].count(KIMI_RESTART_SESSION_MARKER) == 1
+    assert prepared["kimi_capability_command_parts"] == ["kimi"]
+
+
+def test_kimi_explicit_session_control_wins_over_owned_resume(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("KIMI_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("kimi_agent",), restore=True, auto_permission=False)
+    spec = _spec("kimi_agent", "kimi", startup_args=("--continue",))
+    prepared = {
+        "kimi_resume_flag": "--session",
+        "kimi_resume_session_id": "session-owned-by-kimi-agent",
+        "kimi_resume_status": "exact_session_ready",
+    }
+
+    cmd = build_kimi_start_cmd(
+        command,
+        spec,
+        tmp_path / "runtime",
+        "launch-3",
+        prepared_state=prepared,
+    )
+
+    parts = shlex.split(cmd.rsplit("; ", 1)[-1])
+    assert parts.count("--continue") == 1
+    assert "--session" not in parts
+    assert prepared["kimi_resume_status"] == "explicit_session_control"
+
+
+def test_kimi_exact_selector_survives_provider_command_template_once(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("KIMI_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("kimi_agent",), restore=True, auto_permission=False)
+    spec = _spec(
+        "kimi_agent",
+        "kimi",
+        provider_command_template="env KIMI_WRAPPED=1 {command}",
+    )
+    prepared = {
+        "kimi_resume_flag": "--session",
+        "kimi_resume_session_id": "native-owned-session",
+        "kimi_resume_status": "exact_session_ready",
+    }
+
+    cmd = build_kimi_start_cmd(
+        command,
+        spec,
+        tmp_path / "runtime",
+        "launch-template",
+        prepared_state=prepared,
+    )
+
+    parts = shlex.split(cmd.rsplit("; ", 1)[-1])
+    assert parts == ["env", "KIMI_WRAPPED=1", "kimi", "--session", "native-owned-session"]
+    assert prepared["kimi_restart_start_cmd_template"].count(KIMI_RESTART_SESSION_MARKER) == 1
+
+
+def test_kimi_clear_reset_discards_carried_automatic_resume(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("KIMI_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("kimi_agent",), restore=False, auto_permission=False)
+    spec = _spec("kimi_agent", "kimi")
+    prepared = {
+        "kimi_resume_flag": "--session",
+        "kimi_resume_session_id": "session-owned-by-kimi-agent",
+        "kimi_resume_status": "exact_session_ready",
+    }
+
+    cmd = build_kimi_start_cmd(
+        command,
+        spec,
+        tmp_path / "runtime",
+        "launch-reset",
+        prepared_state=prepared,
+    )
+
+    assert "--session" not in shlex.split(cmd.rsplit("; ", 1)[-1])
+    assert "--continue" not in cmd
+    assert prepared["kimi_resume_status"] == "fresh_restore_disabled"
+
+
+def test_kimi_session_payload_retains_only_selected_exact_binding(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    context = SimpleNamespace(project=SimpleNamespace(project_id="project-1", project_root=project))
+    spec = _spec("kimi_agent", "kimi")
+    plan = SimpleNamespace(workspace_path=project)
+    prepared = {
+        "kimi_share_dir": str(tmp_path / "share"),
+        "kimi_resume_session_id": "session-owned-by-kimi-agent",
+        "kimi_resume_session_path": str(tmp_path / "share" / "sessions" / "hash" / "session-owned-by-kimi-agent" / "wire.jsonl"),
+        "kimi_resume_status": "exact_session_selected",
+    }
+
+    payload = build_kimi_session_payload(
+        context=context,
+        spec=spec,
+        plan=plan,
+        runtime_dir=tmp_path / "runtime",
+        run_cwd=project,
+        pane_id="%1",
+        pane_title_marker="marker",
+        start_cmd="kimi --session session-owned-by-kimi-agent",
+        launch_session_id="launch-4",
+        prepared_state=prepared,
+    )
+
+    assert payload["kimi_share_dir"] == str(tmp_path / "share")
+    assert payload["kimi_session_id"] == "session-owned-by-kimi-agent"
+    assert payload["kimi_session_path"] == prepared["kimi_resume_session_path"]
+    assert payload["kimi_resume_status"] == "exact_session_selected"
+    assert payload["kimi_restart_start_cmd_template"] == ""
+    assert payload["kimi_capability_command_parts"] == []
 
 
 def test_kimi_start_cmd_adds_materialized_skill_dirs(monkeypatch, tmp_path: Path) -> None:
@@ -161,6 +306,35 @@ def test_materialize_kimi_skills_projects_skill_overlays(tmp_path: Path) -> None
     assert (overlay_dir / "trellis-check.ccb-projection.json").is_file()
     assert (overlay_dir / "trellis-start.ccb-projection.json").is_file()
     assert not (overlay_dir / "unrelated").exists()
+
+
+def test_materialize_kimi_skills_preserves_unmarked_packaged_target(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    packaged = tmp_path / 'packaged-kimi-skills'
+    (packaged / 'ask').mkdir(parents=True)
+    (packaged / 'ask' / 'SKILL.md').write_text('packaged\n', encoding='utf-8')
+    state_dir = tmp_path / 'provider-state' / 'kimi'
+    inherited_dir = state_dir / 'inherited-skills'
+    (inherited_dir / 'user-skill').mkdir(parents=True)
+    (inherited_dir / 'user-skill' / 'SKILL.md').write_text('user\n', encoding='utf-8')
+    monkeypatch.setattr(
+        'provider_core.inherited_skills.packaged_inherited_skills_dir',
+        lambda provider: packaged,
+    )
+
+    active_dirs = materialize_kimi_skills(
+        project_root=None,
+        agent_name='agent1',
+        state_dir=state_dir,
+        profile=ProviderProfileSpec(inherit_skills=True),
+    )
+
+    assert inherited_dir not in active_dirs
+    assert (inherited_dir / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
+    assert not (inherited_dir / 'ask').exists()
+    assert not Path(f'{inherited_dir}.ccb-projection.json').exists()
 
 
 def test_deepseek_start_cmd_defaults_to_deepcode_and_keeps_startup_args(monkeypatch, tmp_path: Path) -> None:

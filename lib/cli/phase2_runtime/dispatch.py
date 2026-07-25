@@ -4,6 +4,7 @@ from .handlers_ask import handle_ask
 from .handlers_mailbox import (
     handle_ack,
     handle_cancel,
+    handle_followup,
     handle_inbox,
     handle_pend,
     handle_ping,
@@ -46,6 +47,7 @@ _HANDLERS = {
     'agent': handle_agent,
     'ask': handle_ask,
     'cancel': handle_cancel,
+    'followup': handle_followup,
     'clear': handle_clear,
     'cleanup': handle_cleanup,
     'config-ui': handle_config_ui,

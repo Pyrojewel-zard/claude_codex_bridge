@@ -1,6 +1,7 @@
 # Install Update Stability Roadmap
 
 Date: 2026-06-04
+Last verified: 2026-07-23
 
 ## Done
 
@@ -37,6 +38,55 @@ Date: 2026-06-04
   `CODEX_BIN_DIR` is outside the same temporary prefix or temporary HOME,
   preventing release smoke installs from rewriting the user's real stable
   `ccb` wrapper by accident.
+- npm runners now attest package ownership to the vendored Python process.
+  Ordinary `ccb update` and startup update acceptance validate that
+  provenance, print the exact `npm install -g @seemseam/ccb@<target>` action,
+  and leave the vendored release untouched. The runner retains strict equality
+  between the package manifest and payload `VERSION`, so the next invocation
+  neither downgrades nor repeats an immediate startup/relaunch loop.
+- 2026-07-22 verification for npm ownership: `92` update/install/package tests
+  passed, `npm pack --dry-run` produced the expected 19-file package surface,
+  and the final cross-feature affected suite passed `418` tests. Explicit
+  update keeps inner `VERSION` byte-identical; startup acceptance defers the
+  prompt, does not invoke tarball update, and does not relaunch.
+- Provider CLI updates are centralized under explicit `ccb update`: managed
+  Codex, Claude, Gemini, Droid, AGY, OpenCode, MiMo, Grok, Pi, and common
+  Node update-notifier paths suppress provider-owned startup prompts;
+  installed npm/native/Homebrew owners are detected conservatively; prompt,
+  check, all, decline, selection, and exact-version mute behavior is
+  supported; accepted updates are version-verified without restarting active
+  panes. The 2026-07-23 gate passed 448 related update/provider regressions,
+  31 release packaging/entrypoint tests, external `ccb_test --diagnose`, and a
+  real report-only provider scan.
+- Retired project-scoped Claude/Gemini Provider caches from the runtime path:
+  Claude now uses the user-installed executable with self-update disabled,
+  Gemini uses one user-scoped rebuildable npm/XDG cache, recognized legacy
+  Claude links are detached without deleting payload during startup, and
+  stopped-project cleanup owns payload removal. The 2026-07-23 gate passed 496
+  broad provider/storage/CLI regressions, 79 phase-2 entrypoint tests, an
+  external real Claude+Gemini mount/warm-start/kill smoke, current-project
+  cleanup, explicit orphan cleanup, and active-backend refusal. Claude's pane
+  resolved to the user installation at
+  `/home/bfly/.local/share/claude/versions/2.1.206`. The repository-wide run
+  reached 5933 passed and 15 skipped with one unrelated OpenCode shutdown
+  `ENOENT`; that exact test passed when rerun alone.
+- Added bounded post-update cleanup for that retired cache route. The newly
+  installed `ccb` owns the migration; simultaneous update windows are
+  deduplicated by a user-level lock, stopped current projects and verified
+  deleted-project buckets can be cleaned immediately, active/existing projects
+  are deferred to their next successful `ccb kill`, and unsafe content is
+  preserved. `--no-cache-cleanup` is the per-update opt-out, migration state is
+  recorded under the user state directory, cleanup failures never fail the
+  core update, and required-provisioning rollback skips cleanup.
+  The 2026-07-23 gate passed 636 update/provider/storage/kill/install/release
+  regressions, 11 repository-hygiene checks, syntax compilation, and whitespace
+  validation. An isolated external `ccb_test` smoke reported
+  `cleanup_legacy_provider_cache:deleted=1` after kill; the parent-authorized
+  post-update runner removed one manifest-valid orphan, preserved unknown and
+  user-scoped cache content, wrote migration state, emitted Chinese output, and
+  honored the per-run opt-out.
+  The final clean-environment repository run passed 5806 tests with 2 skips and
+  zero failures.
 
 ## In Progress
 
@@ -72,5 +122,7 @@ Date: 2026-06-04
 - Windows-native managed update.
 - Signed installer/update manifests.
 - Global background dependency update checks.
-- Full provider CLI installation management.
+- Installation of missing provider CLIs and unsafe/unknown provider package
+  owners; current work updates only already-installed providers with a
+  verified safe adapter.
 - Automatic cleanup of obsolete installed Role Pack digest versions.

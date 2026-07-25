@@ -6,9 +6,10 @@ from agents.models import AgentState
 from ccbd.api_models import CancelReceipt, JobStatus, TargetKind
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 
-from .cancel_flags import cleanup_cancel_flags, write_cancel_flag
+from .cancel_flags import cleanup_cancel_flags, clear_cancel_flag, write_cancel_flag
 from .completion import build_terminal_state
 from .finalization_runtime.artifacts import spill_terminal_reply_if_needed
+from .finalization_runtime.message_bureau import record_message_bureau_cancellation
 from .reply_delivery import resolve_reply_delivery_terminal
 
 
@@ -17,15 +18,7 @@ def cancel_job(dispatcher, job_id: str, *, record_reply: bool = True) -> CancelR
     if current is None:
         raise dispatcher._dispatch_error(f'unknown job: {job_id}')
     if current.status is JobStatus.CANCELLED:
-        return CancelReceipt(
-            job_id=current.job_id,
-            agent_name=current.agent_name,
-            target_kind=current.target_kind,
-            target_name=current.target_name,
-            provider_instance=current.provider_instance,
-            status=JobStatus.CANCELLED,
-            cancelled_at=current.updated_at,
-        )
+        return _cancel_receipt(current)
     if current.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.INCOMPLETE}:
         raise dispatcher._dispatch_error(f'job is already terminal: {current.status.value}')
 
@@ -61,23 +54,33 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
         finished_at=cancelled_at,
         diagnostics={'cancel_requested': True},
     )
-    decision = spill_terminal_reply_if_needed(
-        dispatcher,
-        current,
-        decision,
-        finished_at=cancelled_at,
-    )
-    if dispatcher._completion_tracker is not None:
-        dispatcher._completion_tracker.finish(current.job_id)
-    dispatcher._snapshot_writer.write_completion(
-        job_id=current.job_id,
-        agent_name=current.agent_name,
-        profile_family=dispatcher._profile_family_for_job(current),
-        state=build_terminal_state(decision, snapshot.state if snapshot else None),
-        decision=decision,
-        updated_at=cancelled_at,
-    )
     with dispatcher._chain_transition_lock:
+        latest = dispatcher.get(current.job_id)
+        if latest is None:
+            raise dispatcher._dispatch_error(f'unknown job: {current.job_id}')
+        if latest.status is JobStatus.CANCELLED:
+            return _cancel_receipt(latest)
+        if latest.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.INCOMPLETE}:
+            if current.target_kind is TargetKind.AGENT and current.agent_name:
+                clear_cancel_flag(dispatcher._layout, current.agent_name, current.job_id)
+            raise dispatcher._dispatch_error(f'job is already terminal: {latest.status.value}')
+        current = latest
+        decision = spill_terminal_reply_if_needed(
+            dispatcher,
+            current,
+            decision,
+            finished_at=cancelled_at,
+        )
+        if dispatcher._completion_tracker is not None:
+            dispatcher._completion_tracker.finish(current.job_id)
+        dispatcher._snapshot_writer.write_completion(
+            job_id=current.job_id,
+            agent_name=current.agent_name,
+            profile_family=dispatcher._profile_family_for_job(current),
+            state=build_terminal_state(decision, snapshot.state if snapshot else None),
+            decision=decision,
+            updated_at=cancelled_at,
+        )
         dispatcher._append_event(current, 'completion_terminal', decision.to_record(), timestamp=cancelled_at)
         terminal = replace(
             current,
@@ -96,7 +99,8 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
         dispatcher._state.remove_queued_for(current.target_kind, current.target_name, current.job_id)
         dispatcher._state.clear_active_for(current.target_kind, current.target_name, job_id=current.job_id)
         if dispatcher._message_bureau is not None:
-            dispatcher._message_bureau.record_terminal(
+            record_message_bureau_cancellation(
+                dispatcher,
                 terminal,
                 decision,
                 finished_at=cancelled_at,
@@ -105,6 +109,10 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
     if current.target_kind is TargetKind.AGENT:
         dispatcher._sync_runtime(current.agent_name, state=AgentState.IDLE)
     resolve_reply_delivery_terminal(dispatcher, terminal, finished_at=cancelled_at)
+    return _cancel_receipt(terminal)
+
+
+def _cancel_receipt(terminal) -> CancelReceipt:
     return CancelReceipt(
         job_id=terminal.job_id,
         agent_name=terminal.agent_name,
@@ -112,8 +120,6 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
         target_name=terminal.target_name,
         provider_instance=terminal.provider_instance,
         status=JobStatus.CANCELLED,
-        cancelled_at=cancelled_at,
+        cancelled_at=terminal.updated_at,
     )
-
-
 __all__ = ['cancel_job', 'cancel_with_decision']

@@ -397,9 +397,10 @@ def test_push_delivery_is_device_bound_deduped_and_visible_target_scoped(tmp_pat
 def test_push_delivery_runs_multiple_device_sends_concurrently(tmp_path: Path) -> None:
     client = _ActivityCcbdClient(project_id='proj-demo', project_root='/srv/demo', display_name='demo')
     sent: list[str] = []
+    senders_ready = threading.Barrier(3)
 
     def sender(token: str, _payload: dict[str, object], _timeout: float) -> PushSendResult:
-        time.sleep(0.12)
+        senders_ready.wait(timeout=2.0)
         sent.append(token)
         return PushSendResult(sent=True)
 
@@ -407,7 +408,7 @@ def test_push_delivery_runs_multiple_device_sends_concurrently(tmp_path: Path) -
         client,
         mobile_dir=tmp_path / 'mobile',
         push_sender=sender,
-        push_sender_timeout_seconds=1.0,
+        push_sender_timeout_seconds=3.0,
         push_sender_max_workers=3,
     )
     pairing = service.create_pairing_payload(
@@ -428,11 +429,8 @@ def test_push_delivery_runs_multiple_device_sends_concurrently(tmp_path: Path) -
 
     service.project_view_payload('proj-demo')
     client.activity_state = 'idle'
-    started = time.monotonic()
     service.project_view_payload('proj-demo')
-    elapsed = time.monotonic() - started
 
-    assert elapsed < 0.28
     assert sorted(sent) == ['token-0', 'token-1', 'token-2']
 
 

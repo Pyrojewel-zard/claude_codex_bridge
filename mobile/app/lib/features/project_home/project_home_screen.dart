@@ -455,9 +455,6 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
           mobileAgentsCollapsed: _mobileAgentsCollapsed,
           unreadAgentNames: _unreadAgentNamesForProject(view.project.id),
           onBack: _closeProject,
-          onOpenTerminal: (agentName) {
-            _openAgentTerminal(view, agentName);
-          },
           onOpenConnectionDetails: () {
             _openConnectionDetails(view);
           },

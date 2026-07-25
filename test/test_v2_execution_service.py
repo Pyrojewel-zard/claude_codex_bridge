@@ -516,7 +516,7 @@ def test_execution_service_claude_adapter_prefers_exact_hook_artifact(
         def ensure_pane(self):
             return True, '%2'
 
-    class EmptyReader:
+    class ActivatedReader:
         def __init__(self, *args, **kwargs) -> None:
             del args, kwargs
 
@@ -527,7 +527,12 @@ def test_execution_service_claude_adapter_prefers_exact_hook_artifact(
             return {'session_path': str(tmp_path / 'claude-session.jsonl'), 'offset': 0}
 
         def try_get_entries(self, state):
-            return [], state
+            if state.get('anchor_emitted'):
+                return [], state
+            return (
+                [{'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}'}],
+                {**state, 'anchor_emitted': True},
+            )
 
     write_event(
         provider='claude',
@@ -543,10 +548,12 @@ def test_execution_service_claude_adapter_prefers_exact_hook_artifact(
 
     monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
     monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
-    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', EmptyReader)
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', ActivatedReader)
 
     service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
     service.start(_anchored_job_for_provider('claude', fixed_req_id, body='real claude'), runtime_context=_runtime_context(tmp_path))
+    activation = service.poll()[0]
+    assert [item.kind for item in activation.items] == [CompletionItemKind.ANCHOR_SEEN]
     update = service.poll()[0]
 
     assert [item.kind for item in update.items] == [CompletionItemKind.ASSISTANT_FINAL]
@@ -772,10 +779,12 @@ def test_execution_service_claude_adapter_fails_on_terminal_api_error(
     assert update.decision.confidence is CompletionConfidence.OBSERVED
 
 
-def test_execution_service_claude_adapter_fails_on_pre_anchor_terminal_api_error(
+def test_execution_service_claude_adapter_fails_on_anchored_terminal_api_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from provider_execution import claude as claude_adapter_module
+
+    fixed_req_id = '20260318-000000-000-3-api-error'
 
     class FakeBackend:
         def send_text(self, pane_id: str, text: str) -> None:
@@ -796,6 +805,11 @@ def test_execution_service_claude_adapter_fails_on_pre_anchor_terminal_api_error
         def __init__(self, *args, **kwargs) -> None:
             del args, kwargs
             self._events = [
+                {
+                    'role': 'user',
+                    'text': f'CCB_REQ_ID: {fixed_req_id}',
+                    'entry_type': 'user',
+                },
                 {
                     'role': 'system',
                     'text': '',
@@ -831,16 +845,22 @@ def test_execution_service_claude_adapter_fails_on_pre_anchor_terminal_api_error
     monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
     monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FakeReader)
     service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
-    service.start(_job_for_provider('claude', body='real claude'), runtime_context=_runtime_context(tmp_path))
+    service.start(
+        _anchored_job_for_provider('claude', fixed_req_id, body='real claude'),
+        runtime_context=_runtime_context(tmp_path),
+    )
     update = service.poll()[0]
 
-    assert [item.kind for item in update.items] == [CompletionItemKind.ERROR]
+    assert [item.kind for item in update.items] == [
+        CompletionItemKind.ANCHOR_SEEN,
+        CompletionItemKind.ERROR,
+    ]
     assert update.items[-1].payload['reason'] == 'api_error'
     assert update.items[-1].payload['error_code'] == 'Unauthorized'
     assert update.decision is not None
     assert update.decision.status is CompletionStatus.FAILED
     assert update.decision.reason == 'api_error'
-    assert update.decision.anchor_seen is False
+    assert update.decision.anchor_seen is True
 
 
 def test_execution_service_claude_adapter_advances_state_across_nonterminal_api_errors(
@@ -1285,7 +1305,12 @@ def test_execution_service_claude_persists_before_ready_wait_and_resumes_prompt_
             return {'session_path': tmp_path / 'claude-session.jsonl', 'offset': 0, 'carry': b''}
 
         def try_get_entries(self, state):
-            return [], state
+            if '❯' not in pane_text['value'] or state.get('anchor_emitted'):
+                return [], state
+            return (
+                [{'role': 'user', 'text': f'CCB_REQ_ID: {fixed_req_id}'}],
+                {**state, 'anchor_emitted': True},
+            )
 
     backend = FakeBackend()
     monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())

@@ -292,6 +292,8 @@ Optional rich-media Yazi wrapper/profile.
 Capabilities:
 
 - all `ccb-yazi` behavior;
+- a compact two-column layout that hides the parent-directory column and keeps
+  the current-directory and preview columns at the default `4:3` proportion;
 - image preview when terminal support passes;
 - PDF page preview through Poppler image conversion;
 - video thumbnail preview through FFmpeg;

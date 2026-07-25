@@ -180,6 +180,8 @@ class CcbMobileLocalizations {
 
   String get openTerminal => isChinese ? '打开终端' : 'Open Terminal';
 
+  String get returnToChat => isChinese ? '返回对话' : 'Return to Chat';
+
   String messageAgent(String agentName) {
     return isChinese ? '给 $agentName 发消息' : 'Message $agentName';
   }

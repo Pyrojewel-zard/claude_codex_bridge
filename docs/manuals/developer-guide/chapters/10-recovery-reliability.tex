@@ -95,6 +95,10 @@ repair 不应吞掉 reply。失败 delivery job terminal 后，\src{resolve_repl
 cancel 是一种主动恢复。它要求 job 不是 terminal。cancel 后，dispatcher 会从 queued 和 active state 移除 job，执行 service cancel，写 cancelled completion decision，并记录 message-bureau terminal state。
 
 cancel 的风险是用户可能误以为它会删除所有通信记录。实际上它不会删除 lineage。trace 仍应能看到 cancelled job、attempt state 和相关 events。这是为了审计和后续 retry。
+普通 empty cancel 以 consumed completion notice 保留 trace 可见性而不占用
+caller mailbox。chain child cancel 会推进 callback continuation；但 stale-job
+恢复使用 \src{record_reply=False} 时不会生成 cancelled reply 或 continuation，
+因为随后创建的 retry attempt 继续拥有原 message lineage 的终态责任。
 
 \section{mailbox summary degraded}
 

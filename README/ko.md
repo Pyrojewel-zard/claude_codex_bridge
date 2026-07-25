@@ -6,7 +6,7 @@
 **Codex, Claude, Gemini 등 CLI Agent를 보이고 제어 가능하며 직접 이어받을 수 있는 워크플로로 조율**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -54,17 +54,19 @@
 
 ## 설치 방법
 
-npm으로 설치하거나 업데이트합니다.
+npm이 관리하는 CCB는 npm으로 설치하거나 업데이트합니다.
 
 ```bash
-npm install -g @seemseam/ccb
+npm install -g @seemseam/ccb@latest
 ```
 
-CCB 설치 후에는 내장 updater를 사용합니다.
+GitHub release 패키지 또는 소스 설치에는 CCB의 트랜잭션 updater를 사용합니다.
 
 ```bash
 ccb update
 ```
+
+npm 관리 설치에서 `ccb update`는 동일한 npm 명령만 표시하며 vendored payload를 직접 변경하지 않습니다.
 
 <details>
 <summary><b>GitHub release 패키지와 소스 설치 대체 경로</b></summary>
@@ -180,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 세부 정보, 안전 경계, 소스</b></summary>
 
-CCB 8.2.1은 Flutter CCB Mobile 소스를 [`mobile/`](../mobile/)에 포함하며 Android APK를 GitHub Releases로 배포합니다.
+CCB 8.3.1은 Flutter CCB Mobile 소스를 [`mobile/`](../mobile/)에 포함하며 Android APK를 GitHub Releases로 배포합니다.
 
-- [CCB Mobile v8.2.1 APK 다운로드](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [CCB Mobile v8.3.1 APK 다운로드](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - 앱 소스: [`mobile/app`](../mobile/app)
 - 서버 gateway 소스: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -261,6 +263,28 @@ sidebar 아이디어와 영감을 준 [tmux-agent-sidebar](https://github.com/hi
 ## 릴리스 노트
 
 <details open>
+<summary><b>v8.3.1</b> - Provider 업데이트 통합, 안전한 캐시 폐기, 지속 가능한 Config UI 접근</summary>
+
+- 지원되는 Provider 업그레이드를 `ccb update`로 통합하고 정확한 버전 확인, 거절, 버전별 건너뛰기를 제공합니다. 활성 pane은 자동으로 재시작하지 않습니다.
+- 프로젝트별 Claude/Gemini 소프트웨어 캐시를 폐기하고 소유권이 검증된 레거시 데이터만 정리합니다. 활성 프로젝트, session, 인증 데이터는 보존합니다.
+- token 값을 노출하지 않으면서 Config UI의 고정 loopback 포트와 보호된 token 소스를 설정할 수 있습니다.
+- 서버가 중지되는 동안 shutdown finalizer를 유지하고 Rich mode의 Yazi를 간결한 2열 레이아웃으로 변경했습니다.
+- CLI, npm, Linux, macOS, Android와 모든 릴리스 산출물을 8.3.1로 동기화했습니다.
+
+</details>
+
+<details>
+<summary><b>v8.3.0</b> - 정확한 provider turn, job 무결성, 프로젝트 내부 Mobile 터미널</summary>
+
+- Kimi, Claude, Qoder 실행을 각각의 네이티브 turn, activation, session, completion 계약에 바인딩했습니다.
+- 정확한 active job follow-up, 연계된 실행 단계, 고아 inbound 진단, 종결 cancellation 결과를 추가했습니다.
+- provider 확장과 Copilot plugin을 투영 asset의 명시적 ownership 보호와 함께 상속합니다.
+- npm-managed 설치의 업그레이드를 npm에 위임하고 marker-only worktree를 보수적으로 정리합니다.
+- Mobile chat과 terminal을 선택한 project workspace 안에 유지하고 모든 release surface를 8.3.0으로 동기화했습니다.
+
+</details>
+
+<details>
 <summary><b>v8.2.1</b> - 결정적 시작, 실행 가능한 인증 복구, Android 백그라운드 연결</summary>
 
 - 시작 세대 펜스, 제한된 준비 상태 증명, 작업 수와 타임라인 진단을 추가했습니다.

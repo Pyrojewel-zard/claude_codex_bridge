@@ -23,6 +23,7 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
         'inherit_skills/zai_skills/ask.md',
     ):
         text = (REPO_ROOT / relative_path).read_text(encoding='utf-8')
+        normalized = re.sub(r'\s+', ' ', text)
         assert 'command ask ' in text
         assert 'command ccb ask' not in text
         assert 'canonical `ccb ask`' not in text
@@ -51,9 +52,20 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
         assert 'Automatic spill for text over 4 KiB is a fallback' in text
         assert 'In `A --silence -> B`, B still runs an active job.' in text
         assert 'In task chains, each needed-result hop uses `--chain`' in text
+        assert 'Finish an inbound CCB task in its current turn.' in normalized
+        assert 'If the original caller is a registered CCB agent' in normalized
+        assert 'routes that turn\'s terminal result through the existing lineage' in normalized
+        assert 'do not open a new `ask` to report completion' in normalized
+        assert 'Direct CLI submitters read terminal results from control output' in normalized
+        assert 'such as `watch` or `trace`.' in normalized
         assert 'If the current task is a CCB result-chain continuation' in text
         assert 'Do not use `ask`, `--chain`, or' in text
         assert 'continuation completion upstream' in text
+        assert '`--silence` is not an active-job correction channel.' in text
+        assert '`ccb followup <active_job_id> --message "<correction>"`' in text
+        assert 'only `injected` is success' in text
+        assert 'cancel and resubmit the complete' in text
+        assert 'A `completed` CCB job means provider execution ended normally' in text
         assert 'command ask "$TARGET"' in text
         assert 'command ask --chain --artifact-reply "$TARGET"' in text
         legacy_chain_flag = '--' + 'call' + 'back'
@@ -64,6 +76,7 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
 
 def test_powershell_ask_skill_template_uses_short_ask_command() -> None:
     text = (REPO_ROOT / 'inherit_skills/claude_skills/ask/SKILL.md.powershell').read_text(encoding='utf-8')
+    normalized = re.sub(r'\s+', ' ', text)
 
     assert 'FilePath "ask"' in text
     assert 'ccb ask' not in text
@@ -92,9 +105,20 @@ def test_powershell_ask_skill_template_uses_short_ask_command() -> None:
     assert 'Automatic spill for text over 4 KiB is a fallback' in text
     assert 'In `A --silence -> B`, B still runs an active job.' in text
     assert 'In task chains, each needed-result hop uses `--chain`' in text
+    assert 'Finish an inbound CCB task in its current turn.' in normalized
+    assert 'If the original caller is a registered CCB agent' in normalized
+    assert 'routes that turn\'s terminal result through the existing lineage' in normalized
+    assert 'do not open a new `ask` to report completion' in normalized
+    assert 'Direct CLI submitters read terminal results from control output' in normalized
+    assert 'such as `watch` or `trace`.' in normalized
     assert 'If the current task is a CCB result-chain continuation' in text
     assert 'Do not use `ask`, `--chain`, or' in text
     assert 'continuation completion upstream' in text
+    assert '`--silence` is not an active-job correction channel.' in text
+    assert '`ccb followup <active_job_id> --message "<correction>"`' in text
+    assert 'only `injected` is success' in text
+    assert 'cancel and resubmit the complete' in text
+    assert 'A `completed` CCB job means provider execution ended normally' in text
     assert '@("--chain", "--artifact-reply", "$TARGET")' in text
     legacy_chain_flag = '--' + 'call' + 'back'
     assert legacy_chain_flag not in text
@@ -119,3 +143,16 @@ def test_kimi_ask_skill_projects_structured_receipt_contract_only_to_kimi() -> N
         assert field in kimi_text
         assert field not in codex_text
     assert 'Process updates are invalid receipts' in kimi_text
+
+
+def test_user_guide_requires_rematerialization_before_provider_adoption() -> None:
+    text = (REPO_ROOT / 'docs/manuals/user-guide/chapters/05-communication-workflows.tex').read_text(
+        encoding='utf-8'
+    )
+    normalized = re.sub(r'\s+', ' ', text)
+
+    assert 'registered CCB agent' in normalized
+    assert 'direct CLI' in normalized
+    assert '先重新 materialize runtime memory' in normalized
+    assert '再重启 provider 或启动新 session' in normalized
+    assert '不要假设正在运行的 provider session 会热加载' in normalized

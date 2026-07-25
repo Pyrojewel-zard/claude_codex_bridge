@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -21,6 +22,8 @@ from cli.services.config_ui import (
     open_config_ui_url,
     prepare_config_ui,
 )
+from cli.services.config_ui_settings import resolve_config_ui_settings
+from agents.config_loader import ConfigValidationError
 
 
 def _context(project_root: Path):
@@ -87,6 +90,9 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         token='test-token',
         idle_timeout_s=0.3,
     )
+    assert 'test-token' not in json.dumps(handle.summary)
+    assert handle.summary['url'].endswith('/')
+    assert handle.summary['bind'] == 'loopback'
     time.sleep(0.35)
     thread = threading.Thread(target=handle.serve_forever)
     thread.start()
@@ -139,6 +145,154 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         thread.join(timeout=2)
         handle.close()
     assert not thread.is_alive()
+
+
+def test_config_ui_uses_project_port_and_environment_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+port = 43123
+token_env = "CCB_CONFIG_UI_TEST_TOKEN"
+''',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CCB_CONFIG_UI_TEST_TOKEN', 'stable-secret')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+    )
+    try:
+        assert urlparse(handle.url).port == 43123
+        assert parse_qs(urlparse(handle.url).query)['token'] == ['stable-secret']
+        assert handle.summary['token_source'] == 'environment'
+        assert 'stable-secret' not in json.dumps(handle.summary)
+    finally:
+        handle.close()
+
+
+def test_config_ui_cli_port_overrides_project_port(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+port = 43123
+''',
+        encoding='utf-8',
+    )
+
+    resolved = resolve_config_ui_settings(project_root=project_root, cli_port=0)
+
+    assert resolved.port == 0
+    assert resolved.token is None
+    assert resolved.token_source == 'ephemeral'
+
+
+def test_config_ui_reads_owner_only_project_token_file(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    token_path = project_root / '.ccb' / 'config-ui.token'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+token_file = ".ccb/config-ui.token"
+''',
+        encoding='utf-8',
+    )
+    token_path.write_text('file-secret\n', encoding='utf-8')
+    token_path.chmod(0o600)
+
+    resolved = resolve_config_ui_settings(project_root=project_root, cli_port=None)
+
+    assert resolved.token == 'file-secret'
+    assert resolved.token_source == 'file'
+
+
+@pytest.mark.parametrize(
+    ('config_ui', 'message'),
+    [
+        ('token = "must-not-be-accepted"', 'unknown fields: token'),
+        ('token_env = "TOKEN"\ntoken_file = ".ccb/token"', 'mutually exclusive'),
+        ('token_env = "not-a-valid-name"', 'valid environment variable name'),
+        ('port = 70000', 'between 0 and 65535'),
+    ],
+)
+def test_config_ui_rejects_unsafe_project_settings(
+    tmp_path: Path,
+    config_ui: str,
+    message: str,
+) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        f'''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+{config_ui}
+''',
+        encoding='utf-8',
+    )
+
+    with pytest.raises(ConfigValidationError, match=message) as exc_info:
+        resolve_config_ui_settings(project_root=project_root, cli_port=None)
+    assert 'must-not-be-accepted' not in str(exc_info.value)
+
+
+def test_config_ui_rejects_insecure_token_file_without_leaking_contents(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    token_path = project_root / '.ccb' / 'config-ui.token'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+token_file = ".ccb/config-ui.token"
+''',
+        encoding='utf-8',
+    )
+    token_path.write_text('do-not-leak', encoding='utf-8')
+    token_path.chmod(0o644)
+
+    with pytest.raises(ConfigValidationError, match='owner-only permissions') as exc_info:
+        resolve_config_ui_settings(project_root=project_root, cli_port=None)
+    assert 'do-not-leak' not in str(exc_info.value)
 
 
 def test_config_ui_uses_builtin_demo_config_when_project_config_is_missing(
@@ -456,6 +610,7 @@ def _post_json(base_url: str, path: str, payload: dict[str, object]) -> dict[str
 
 def test_config_ui_browser_open_uses_wsl_fallback(monkeypatch) -> None:
     seen: list[tuple[str, ...]] = []
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
     monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         config_ui_module.shutil,
@@ -465,11 +620,119 @@ def test_config_ui_browser_open_uses_wsl_fallback(monkeypatch) -> None:
     monkeypatch.setattr(
         config_ui_module.subprocess,
         'Popen',
-        lambda command, **_kwargs: seen.append(tuple(command)),
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
     )
 
     assert open_config_ui_url('http://127.0.0.1:43123/?token=test') is True
     assert seen == [('wslview', 'http://127.0.0.1:43123/?token=test')]
+
+
+def test_config_ui_browser_open_prefers_wsl_host_opener_over_webbrowser(monkeypatch) -> None:
+    seen: list[object] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setattr(
+        config_ui_module.webbrowser,
+        'open',
+        lambda *_args, **_kwargs: seen.append('webbrowser') or True,
+    )
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name == 'wslview' else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert seen == [('wslview', url)]
+
+
+def test_config_ui_browser_open_prefers_macos_open_over_linux_opener(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.delenv('WSL_DISTRO_NAME', raising=False)
+    monkeypatch.delenv('WSL_INTEROP', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(config_ui_module, '_is_wsl_environment', lambda: False)
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name in {'open', 'xdg-open'} else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert seen == [('open', url)]
+
+
+def test_config_ui_browser_open_retries_after_wsl_opener_exits_nonzero(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name in {'wslview', 'cmd.exe'} else None,
+    )
+
+    def _popen(command, **_kwargs):
+        argv = tuple(command)
+        seen.append(argv)
+        return SimpleNamespace(wait=lambda **_wait_kwargs: 1 if argv[0] == 'wslview' else 0)
+
+    monkeypatch.setattr(config_ui_module.subprocess, 'Popen', _popen)
+
+    assert open_config_ui_url(url) is True
+    assert seen == [
+        ('wslview', url),
+        ('cmd.exe', '/c', 'start', '', url),
+    ]
+
+
+def test_config_ui_browser_open_reaps_opener_that_outlives_confirmation(monkeypatch) -> None:
+    reaped = threading.Event()
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name == 'wslview' else None,
+    )
+
+    class _SlowProcess:
+        def wait(self, timeout=None):
+            if timeout is not None:
+                raise config_ui_module.subprocess.TimeoutExpired('wslview', timeout)
+            reaped.set()
+            return 0
+
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda _command, **_kwargs: _SlowProcess(),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert reaped.wait(timeout=1.0)
 
 
 def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path: Path) -> None:

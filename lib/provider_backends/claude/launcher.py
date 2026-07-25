@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 from typing import Any
 
 from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
+from cli.services.role_command_policy import ensure_role_command_policy_supported
 from provider_backends.runtime_restore import ProviderRestoreTarget
 from provider_core.runtime_shared import provider_start_parts
 from provider_profiles import ResolvedProviderProfile, load_resolved_provider_profile
@@ -71,6 +73,7 @@ def build_start_cmd(
     if project_root is None:
         raise RuntimeError('Claude launch requires prepare_launch_context before build_start_cmd')
     agent_events_path = _path_or_none((prepared_state or {}).get('agent_events_path'))
+    command_policy = ensure_role_command_policy_supported(spec=spec)
     return _build_start_cmd_impl(
         command,
         spec,
@@ -84,6 +87,7 @@ def build_start_cmd(
             project_root=project_root,
             memory_projection_event_path=agent_events_path,
             memory_projection_marker_path=Path(runtime) / 'claude-memory-projection.json',
+            command_policy=command_policy,
             **kwargs,
         ),
         write_settings_overlay_fn=write_claude_settings_overlay,
@@ -256,17 +260,25 @@ def claude_cli_supports_flag(cmd_parts: list[str], flag: str) -> bool:
 def _claude_help_text(cmd_parts: tuple[str, ...]) -> str:
     command = tuple(cmd_parts or ('claude',))
     try:
-        completed = subprocess.run(
-            [*command, '--help'],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=3,
-        )
+        # Some native Claude builds truncate help output at 8 KiB when stdout
+        # is a pipe. Regular files preserve the complete option list.
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='replace') as stdout_file:
+            with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='replace') as stderr_file:
+                completed = subprocess.run(
+                    [*command, '--help'],
+                    check=False,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    text=True,
+                    timeout=3,
+                )
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                stdout = stdout_file.read()
+                stderr = stderr_file.read()
     except Exception:
         return ''
-    return f'{completed.stdout or ""}\n{completed.stderr or ""}'
+    return f'{completed.stdout or stdout}\n{completed.stderr or stderr}'
 
 
 def is_root_user() -> bool:

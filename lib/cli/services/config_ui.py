@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -30,6 +31,7 @@ from agents.models import parse_layout_spec
 from cli.context import CliContext
 from cli.models import ParsedConfigUiCommand, ParsedReloadCommand
 from cli.output import atomic_write_text
+from cli.services.config_ui_settings import resolve_config_ui_settings
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_model_shortcuts import supported_provider_model_shortcuts
 from provider_profiles import supported_provider_api_shortcuts, validate_provider_runtime_home_uniqueness
@@ -37,6 +39,7 @@ from provider_profiles import supported_provider_api_shortcuts, validate_provide
 
 DEFAULT_IDLE_TIMEOUT_S = 30 * 60
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
+_BROWSER_OPEN_CONFIRM_TIMEOUT_S = 2.0
 _PROFILE_NAME_PATTERN = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]{0,63}$')
 _PROTOTYPE_RELATIVE_PATH = Path(
     'docs/plantree/plans/agentic-loop-workflow/'
@@ -77,6 +80,7 @@ def prepare_config_ui(
     page = page_path.read_bytes()
     project_root = context.project.project_root.resolve()
     config_path = project_root / '.ccb' / 'ccb.config'
+    settings = resolve_config_ui_settings(project_root=project_root, cli_port=command.port)
     session_payload = json.dumps(
         {
             'schema_version': 2,
@@ -91,7 +95,7 @@ def prepare_config_ui(
         config_ui_provider_capabilities(project_root=project_root),
         ensure_ascii=False,
     ).encode('utf-8')
-    access_token = token or secrets.token_urlsafe(24)
+    access_token = token if token is not None else settings.token or secrets.token_urlsafe(24)
     last_activity = [time.monotonic()]
     if reload_action is None:
         from .reload import reload_config
@@ -111,7 +115,7 @@ def prepare_config_ui(
         token=access_token,
         last_activity=last_activity,
     )
-    server = ThreadingHTTPServer(('127.0.0.1', command.port), handler)
+    server = ThreadingHTTPServer(('127.0.0.1', settings.port), handler)
     server.daemon_threads = True
     host, port = server.server_address[:2]
     url = f'http://{host}:{port}/?token={access_token}'
@@ -119,7 +123,9 @@ def prepare_config_ui(
         url=url,
         summary={
             'config_ui_status': 'serving',
-            'url': url,
+            'url': f'http://{host}:{port}/',
+            'bind': 'loopback',
+            'token_source': 'injected' if token is not None else settings.token_source,
             'project_root': str(project_root),
             'config_path': str(config_path),
             'mode': 'editor',
@@ -131,34 +137,72 @@ def prepare_config_ui(
 
 
 def open_config_ui_url(url: str) -> bool:
+    for command in _browser_open_commands(url):
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                return_code = process.wait(timeout=_BROWSER_OPEN_CONFIRM_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                threading.Thread(
+                    target=_reap_browser_open_process,
+                    args=(process,),
+                    daemon=True,
+                ).start()
+                return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if return_code == 0:
+            return True
     try:
         if webbrowser.open(url, new=2):
             return True
     except Exception:
         pass
-    for command in _browser_open_commands(url):
-        if shutil.which(command[0]) is None:
-            continue
-        try:
-            subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            continue
-        return True
     return False
 
 
+def _reap_browser_open_process(process: subprocess.Popen) -> None:
+    try:
+        process.wait()
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def _browser_open_commands(url: str) -> tuple[tuple[str, ...], ...]:
-    return (
-        ('wslview', url),
-        ('cmd.exe', '/c', 'start', '', url),
-        ('xdg-open', url),
-        ('open', url),
-    )
+    if _is_wsl_environment():
+        return (
+            ('wslview', url),
+            ('cmd.exe', '/c', 'start', '', url),
+            ('explorer.exe', url),
+            ('xdg-open', url),
+        )
+    if sys.platform == 'darwin':
+        return (('open', url),)
+    if sys.platform.startswith(('linux', 'freebsd', 'openbsd')):
+        return (
+            ('xdg-open', url),
+            ('gio', 'open', url),
+        )
+    return ()
+
+
+def _is_wsl_environment() -> bool:
+    if str(os.environ.get('WSL_DISTRO_NAME') or '').strip():
+        return True
+    if str(os.environ.get('WSL_INTEROP') or '').strip():
+        return True
+    try:
+        return 'microsoft' in os.uname().release.lower()
+    except (AttributeError, OSError):
+        return False
 
 
 def config_ui_asset_path() -> Path:
@@ -817,6 +861,8 @@ def _editor_payload(
     )
     if isinstance(raw_document.get('maintenance'), dict):
         canonical_document['maintenance'] = raw_document['maintenance']
+    if isinstance(raw_document.get('config_ui'), dict):
+        canonical_document['config_ui'] = raw_document['config_ui']
     raw_ui = raw_document.get('ui')
     if isinstance(raw_ui, dict) and isinstance(raw_ui.get('sidebar'), dict):
         canonical_ui = canonical_document.setdefault('ui', {})

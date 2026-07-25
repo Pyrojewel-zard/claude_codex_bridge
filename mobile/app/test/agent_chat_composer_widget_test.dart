@@ -1032,7 +1032,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(TerminalView), findsOneWidget);
-    expect(find.text('demo / lead'), findsOneWidget);
+    expect(find.text('demo'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('return-to-agent-chat-button')),
+      findsOneWidget,
+    );
     expect(
       find.text('tmux -S /tmp/ccb-demo/tmux.sock attach-session -t ccb-demo'),
       findsNothing,

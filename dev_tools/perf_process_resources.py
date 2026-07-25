@@ -645,7 +645,17 @@ def capture_project_snapshot(
                 if io_tracker is not None
                 else _read_proc_io(proc_root / str(pid) / "io")
             )
-        except (FileNotFoundError, ProcessLookupError):
+        except FileNotFoundError:
+            if _proc_identity_matches(
+                proc_root / str(pid),
+                record.identity,
+            ):
+                io_values = None
+                io_unavailable += 1
+            else:
+                vanished += 1
+                continue
+        except ProcessLookupError:
             vanished += 1
             continue
         except PermissionError:
@@ -1227,6 +1237,23 @@ def _read_proc_record(
         command_text=command_text,
         executable_name=executable_name,
     )
+
+
+def _proc_identity_matches(
+    pid_path: Path,
+    expected_identity: ProcessIdentity,
+) -> bool:
+    try:
+        stat_text = (pid_path / "stat").read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+        pid, _ppid, _user, _system, start_ticks, _rss = _parse_proc_stat(
+            stat_text
+        )
+    except (OSError, ValueError):
+        return False
+    return (pid, start_ticks) == expected_identity
 
 
 def _parse_proc_stat(value: str) -> tuple[int, int, int, int, int, int]:

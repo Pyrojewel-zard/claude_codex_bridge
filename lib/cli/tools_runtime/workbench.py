@@ -1226,20 +1226,32 @@ def _write_yazi_config(paths: dict[str, Path], *, rich: bool) -> None:
     lines = [
         '# CCB managed Yazi profile. Do not edit; regenerate with `ccb tools install workbench`.',
         '',
-        '[preview]',
-        'wrap = "yes"',
-        'tab_size = 2',
-        'max_width = 1200',
-        'max_height = 1600',
-        'image_delay = 20',
-        'image_filter = "triangle"',
-        'image_quality = 75',
-        '',
-        '[plugin]',
-        f'{previewers_key} = [',
-        f'  {{ url = "*.md", run = \'piper -- {md} "$1"\' }},',
-        f'  {{ url = "*.markdown", run = \'piper -- {md} "$1"\' }},',
     ]
+    if rich:
+        lines.extend(
+            [
+                '[mgr]',
+                'ratio = [0, 4, 3]',
+                '',
+            ]
+        )
+    lines.extend(
+        [
+            '[preview]',
+            'wrap = "yes"',
+            'tab_size = 2',
+            'max_width = 1200',
+            'max_height = 1600',
+            'image_delay = 20',
+            'image_filter = "triangle"',
+            'image_quality = 75',
+            '',
+            '[plugin]',
+            f'{previewers_key} = [',
+            f'  {{ url = "*.md", run = \'piper -- {md} "$1"\' }},',
+            f'  {{ url = "*.markdown", run = \'piper -- {md} "$1"\' }},',
+        ]
+    )
     if rich:
         lines.extend(
             [

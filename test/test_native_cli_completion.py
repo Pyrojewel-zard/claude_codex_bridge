@@ -14,7 +14,13 @@ from provider_backends.deepseek.native_log import (
     observe_deepseek_session,
 )
 from provider_backends.kimi.execution import KimiProviderAdapter, _with_kimi_context_pointer
-from provider_backends.kimi.native_log import kimi_project_hash, kimi_sessions_root, observe_kimi_turn
+from provider_backends.kimi.native_log import (
+    kimi_code_project_dirname,
+    kimi_code_sessions_root,
+    kimi_project_hash,
+    kimi_sessions_root,
+    observe_kimi_turn,
+)
 from provider_backends.native_cli_support import wrap_native_prompt
 from provider_execution.base import ProviderSubmission
 
@@ -130,6 +136,361 @@ def test_kimi_observes_wire_turn_end_and_poll_emits_boundary(monkeypatch, tmp_pa
         CompletionItemKind.ASSISTANT_FINAL,
         CompletionItemKind.TURN_BOUNDARY,
     ]
+
+
+def test_kimi_observes_kimi_code_agent_wire_and_step_end(tmp_path: Path) -> None:
+    code_home = tmp_path / ".kimi-code"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    wire = (
+        kimi_code_sessions_root(work_dir, code_home=code_home)
+        / "native-session"
+        / "agents"
+        / "main"
+        / "wire.jsonl"
+    )
+    _write_jsonl(
+        wire,
+        [
+            {
+                "timestamp": "2026-07-22T00:00:01Z",
+                "message": {
+                    "type": "context.append_message",
+                    "payload": {
+                        "message": {
+                            "role": "user",
+                            "content": "CCB_REQ_ID: job_native123\n\nreview",
+                        }
+                    },
+                },
+            },
+            {
+                "timestamp": "2026-07-22T00:00:02Z",
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {
+                        "event": {
+                            "type": "content.part",
+                            "part": {"type": "part.think", "text": "private reasoning"},
+                        }
+                    },
+                },
+            },
+            {
+                "timestamp": "2026-07-22T00:00:03Z",
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {
+                        "event": {
+                            "type": "content.part",
+                            "part": {"type": "part.text", "text": "verdict: PASS"},
+                        }
+                    },
+                },
+            },
+            {
+                "timestamp": "2026-07-22T00:00:04Z",
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {"event": {"type": "step.end", "finishReason": "stop"}},
+                },
+            },
+        ],
+    )
+
+    observed = observe_kimi_turn(
+        work_dir,
+        "job_native123",
+        share_candidates=(),
+        code_home_candidates=(code_home,),
+    )
+
+    assert kimi_code_project_dirname(work_dir).startswith("wd_project_")
+    assert observed is not None
+    assert observed.completed is True
+    assert observed.reply == "verdict: PASS"
+    assert observed.session_id == "native-session"
+    assert observed.session_path == str(wire)
+
+
+def test_kimi_req_id_matching_rejects_prefix_and_later_mentions(tmp_path: Path) -> None:
+    code_home = tmp_path / ".kimi-code"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    root = kimi_code_sessions_root(work_dir, code_home=code_home)
+
+    def _rows(prompt: str, reply: str) -> list[dict[str, object]]:
+        return [
+            {
+                "message": {
+                    "type": "context.append_message",
+                    "payload": {"message": {"role": "user", "content": prompt}},
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {
+                        "event": {
+                            "type": "content.part",
+                            "part": {"type": "part.text", "text": reply},
+                        }
+                    },
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {"event": {"type": "step.end", "finishReason": "stop"}},
+                }
+            },
+        ]
+
+    _write_jsonl(
+        root / "wrong-session" / "agents" / "other" / "wire.jsonl",
+        _rows(
+            "CCB_REQ_ID: job_native1234\n\ncompare CCB_REQ_ID: job_native123",
+            "wrong reply",
+        ),
+    )
+    right_wire = root / "right-session" / "agents" / "main" / "wire.jsonl"
+    _write_jsonl(
+        right_wire,
+        _rows("CCB_REQ_ID: job_native123\n\nactual request", "right reply"),
+    )
+
+    observed = observe_kimi_turn(
+        work_dir,
+        "job_native123",
+        share_candidates=(),
+        code_home_candidates=(code_home,),
+    )
+
+    assert observed is not None
+    assert observed.reply == "right reply"
+    assert observed.session_path == str(right_wire)
+
+    right_wire.unlink()
+    assert (
+        observe_kimi_turn(
+            work_dir,
+            "job_native123",
+            share_candidates=(),
+            code_home_candidates=(code_home,),
+        )
+        is None
+    )
+
+
+def test_kimi_unknown_step_end_reason_stays_in_progress(tmp_path: Path) -> None:
+    code_home = tmp_path / ".kimi-code"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    wire = (
+        kimi_code_sessions_root(work_dir, code_home=code_home)
+        / "native-session"
+        / "agents"
+        / "main"
+        / "wire.jsonl"
+    )
+    _write_jsonl(
+        wire,
+        [
+            {
+                "message": {
+                    "type": "context.append_message",
+                    "payload": {
+                        "message": {"role": "user", "content": "CCB_REQ_ID: job_native123"}
+                    },
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {
+                        "event": {
+                            "type": "content.part",
+                            "part": {"type": "part.text", "text": "partial native reply"},
+                        }
+                    },
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {"event": {"type": "step.end", "finishReason": "cancelled"}},
+                }
+            },
+        ],
+    )
+
+    observed = observe_kimi_turn(
+        work_dir,
+        "job_native123",
+        share_candidates=(),
+        code_home_candidates=(code_home,),
+    )
+
+    assert observed is not None
+    assert observed.completed is False
+    assert observed.reply == "partial native reply"
+
+
+def test_kimi_next_user_turn_finalizes_reply_without_step_end(tmp_path: Path) -> None:
+    code_home = tmp_path / ".kimi-code"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    wire = (
+        kimi_code_sessions_root(work_dir, code_home=code_home)
+        / "native-session"
+        / "agents"
+        / "main"
+        / "wire.jsonl"
+    )
+    _write_jsonl(
+        wire,
+        [
+            {
+                "message": {
+                    "type": "context.append_message",
+                    "payload": {
+                        "message": {"role": "user", "content": "CCB_REQ_ID: job_native123"}
+                    },
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {
+                        "event": {
+                            "type": "content.part",
+                            "part": {"type": "part.text", "text": "complete by next turn"},
+                        }
+                    },
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_message",
+                    "payload": {"message": {"role": "user", "content": "unrelated next turn"}},
+                }
+            },
+        ],
+    )
+
+    observed = observe_kimi_turn(
+        work_dir,
+        "job_native123",
+        share_candidates=(),
+        code_home_candidates=(code_home,),
+    )
+
+    assert observed is not None
+    assert observed.completed is True
+    assert observed.reply == "complete by next turn"
+
+
+def test_kimi_native_anchor_prevents_completed_pane_override(tmp_path: Path) -> None:
+    code_home = tmp_path / ".kimi-code"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    wire = (
+        kimi_code_sessions_root(work_dir, code_home=code_home)
+        / "native-session"
+        / "agents"
+        / "main"
+        / "wire.jsonl"
+    )
+    _write_jsonl(
+        wire,
+        [
+            {
+                "message": {
+                    "type": "context.append_message",
+                    "payload": {
+                        "message": {"role": "user", "content": "CCB_REQ_ID: job_native123"}
+                    },
+                }
+            },
+            {
+                "message": {
+                    "type": "context.append_loop_event",
+                    "payload": {
+                        "event": {
+                            "type": "content.part",
+                            "part": {"type": "part.text", "text": "native answer still growing"},
+                        }
+                    },
+                }
+            },
+        ],
+    )
+    pane_text = (
+        "CCB_REQ_ID: job_native123\n"
+        " ● truncated pane answer\n"
+        "╭────────────────────────────────────────────────────────╮\n"
+        "│ >                                                      │\n"
+        "╰────────────────────────────────────────────────────────╯\n"
+    )
+
+    result = KimiProviderAdapter().poll(
+        _submission(
+            provider="kimi",
+            source_kind=CompletionSourceKind.SESSION_EVENT_LOG,
+            work_dir=work_dir,
+            pane_text=pane_text,
+            extra_state={"kimi_code_home": str(code_home)},
+        ),
+        now="2026-06-13T00:00:05Z",
+    )
+
+    assert result is not None
+    assert result.decision is None
+    assert result.submission.reply == "native answer still growing"
+    assert result.submission.runtime_state.get("pane_fallback_observed") is not True
+    assert CompletionItemKind.TURN_BOUNDARY not in [item.kind for item in result.items]
+
+
+def test_kimi_explicit_share_observation_does_not_scan_default_home(monkeypatch, tmp_path: Path) -> None:
+    default_home = tmp_path / "default-home"
+    explicit_share = tmp_path / "explicit-share"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    monkeypatch.setenv("HOME", str(default_home))
+
+    def _turn(reply: str) -> list[dict[str, object]]:
+        return [
+            {
+                "timestamp": "2026-06-13T00:00:01Z",
+                "message": {
+                    "type": "TurnBegin",
+                    "payload": {"user_input": [{"type": "text", "text": "CCB_REQ_ID: job_native123"}]},
+                },
+            },
+            {"timestamp": "2026-06-13T00:00:02Z", "message": {"type": "ContentPart", "payload": {"text": reply}}},
+            {"timestamp": "2026-06-13T00:00:03Z", "message": {"type": "TurnEnd", "payload": {}}},
+        ]
+
+    _write_jsonl(
+        kimi_sessions_root(work_dir, home=default_home) / "default-session" / "wire.jsonl",
+        _turn("wrong default reply"),
+    )
+    explicit_wire = (
+        kimi_sessions_root(work_dir, share_dir=explicit_share)
+        / "explicit-session"
+        / "wire.jsonl"
+    )
+    _write_jsonl(explicit_wire, _turn("right explicit reply"))
+
+    observed = observe_kimi_turn(
+        work_dir,
+        "job_native123",
+        share_candidates=(explicit_share,),
+    )
+
+    assert observed is not None
+    assert observed.session_path == str(explicit_wire)
+    assert observed.reply == "right explicit reply"
 
 
 def test_kimi_prompt_includes_context_pointer_when_session_has_projection() -> None:

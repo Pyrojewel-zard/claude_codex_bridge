@@ -25,6 +25,11 @@ def finalize_poll_result(
             "raw_buffer": poll.raw_buffer,
             "session_path": poll.session_path,
             "last_assistant_uuid": poll.last_assistant_uuid,
+            "prompt_enqueued": bool(getattr(poll, "prompt_enqueued", False)),
+            "queue_dequeue_observed": bool(getattr(poll, "queue_dequeue_observed", False)),
+            "prompt_activated": bool(getattr(poll, "prompt_activated", False)),
+            "prompt_enqueue_uuid": str(getattr(poll, "prompt_enqueue_uuid", "") or ""),
+            "prompt_activation_uuid": str(getattr(poll, "prompt_activation_uuid", "") or ""),
         },
     )
     if not poll.items:

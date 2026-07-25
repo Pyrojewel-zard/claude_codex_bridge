@@ -24,7 +24,15 @@ def _submission() -> ProviderSubmission:
 
 
 def test_poll_submission_returns_hook_result_before_pane_liveness(monkeypatch) -> None:
-    submission = _submission()
+    submission = replace(
+        _submission(),
+        runtime_state={
+            "state": {},
+            "mode": "active",
+            "anchor_seen": True,
+            "prompt_activated": True,
+        },
+    )
     prepared = SimpleNamespace(reader=object(), backend=object(), pane_id="%1")
     hook_result = ProviderPollResult(submission=submission)
     liveness_calls: list[str] = []
@@ -543,6 +551,11 @@ def test_claude_export_runtime_state_preserves_reply_delivery_flags() -> None:
             "raw_buffer": "",
             "session_path": "/tmp/session.jsonl",
             "last_assistant_uuid": "",
+            "prompt_enqueued": True,
+            "queue_dequeue_observed": True,
+            "prompt_activated": True,
+            "prompt_enqueue_uuid": "queue-1",
+            "prompt_activation_uuid": "queue-1",
             "completion_dir": "/tmp/completion",
             "prompt_text": "CCB_REPLY from=agent2 reply=rep_1",
             "prompt_sent": False,
@@ -558,3 +571,8 @@ def test_claude_export_runtime_state_preserves_reply_delivery_flags() -> None:
 
     assert exported["reply_delivery_complete_on_dispatch"] is True
     assert exported["reply_delivery_require_ready"] is True
+    assert exported["prompt_enqueued"] is True
+    assert exported["queue_dequeue_observed"] is True
+    assert exported["prompt_activated"] is True
+    assert exported["prompt_enqueue_uuid"] == "queue-1"
+    assert exported["prompt_activation_uuid"] == "queue-1"

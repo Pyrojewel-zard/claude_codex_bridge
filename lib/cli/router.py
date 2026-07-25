@@ -94,11 +94,14 @@ def print_start_help(*, file=None) -> None:
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
+              ccb cleanup --legacy-provider-caches
+                                    Also remove caches for project roots that no longer exist.
               ccb theme [light|dark|+|-]
                                     Set or show the global CCB UI theme.
 
             Core commands:
               ccb ask <agent> [from <sender>] <message>
+              ccb followup <job_id> --message <text>
               ccb doctor
 
             Diagnostics-only control-plane status:
@@ -119,7 +122,8 @@ def print_start_help(*, file=None) -> None:
 
             Management:
               ccb install mobile    Start the server-wide CCB Mobile gateway and pairing QR.
-              ccb version | ccb update [rich|mobile|VERSION] | ccb uninstall [rich] | ccb reinstall
+              ccb version | ccb update [rich|mobile|VERSION] [--providers prompt|check|all|none] [--no-cache-cleanup]
+                          | ccb uninstall [rich] | ccb reinstall
 
             Tools:
               ccb rich
@@ -222,6 +226,14 @@ _COMMAND_HELP = {
 
         Advanced lineage view:
           ccb trace <id>   Show the full job/message/reply lineage for one id.
+    """,
+    "followup": """
+        usage: ccb followup <job_id> --message <text>
+
+        Exact active-job correction:
+          Targets one running job and its exact provider turn.
+          Unsupported or stale provider transports fail closed and do not
+          create a queued job, send pane keys, substitute providers, or retry.
     """,
     "theme": """
         usage: ccb theme [dark|light|+|-|solarized|tokyo|gruvbox|rose-pine]
@@ -331,14 +343,17 @@ _COMMAND_HELP = {
           ccb doctor storage --json Emit full storage classification payload.
     """,
     "cleanup": """
-        usage: ccb cleanup
+        usage: ccb cleanup [--legacy-provider-caches]
 
         Storage cleanup:
-          ccb cleanup   Prune safe provider rebuildable caches after ccbd is stopped.
+          ccb cleanup   Prune safe rebuildable caches for the stopped current project.
+          ccb cleanup --legacy-provider-caches
+                        Also remove legacy provider caches whose recorded project roots no longer exist.
 
         Safety:
           - Refuses to run while ccbd is active or ask jobs are pending/running.
-          - Keeps Claude versions currently referenced by managed homes.
+          - Detaches only CCB-owned legacy Claude cache links.
+          - Cross-project cleanup requires the explicit legacy cache flag and a valid CCB manifest.
           - Does not remove provider sessions, auth, plugin bundles, mailbox data, or runtime authority.
           - Use `ccb doctor storage` before cleanup to inspect storage classes.
     """,
@@ -603,6 +618,20 @@ def _build_management_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser("update", help="Update CCB or an optional bundle")
     update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or optional bundle 'rich'/'mobile'")
+    update_parser.add_argument(
+        "--providers",
+        choices=("prompt", "check", "all", "none"),
+        default=None,
+        help="provider CLI handling after the CCB update (default: prompt on a TTY)",
+    )
+    update_parser.add_argument(
+        "--no-cache-cleanup",
+        "--no-cleanup",
+        dest="cache_cleanup",
+        action="store_false",
+        default=True,
+        help="skip the safe post-update migration of retired project Provider caches",
+    )
 
     subparsers.add_parser("version", help="Show version and check for updates")
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall ccb, or uninstall the optional rich bundle")

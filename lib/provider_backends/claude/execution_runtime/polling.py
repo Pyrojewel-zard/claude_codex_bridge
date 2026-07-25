@@ -3,12 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from completion.models import CompletionItemKind
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 from ccbd.system import parse_utc_timestamp
 from provider_execution.active import ensure_active_pane_alive, prepare_active_poll_without_liveness
 from provider_execution.base import ProviderPollResult, ProviderSubmission
-from provider_execution.common import build_item, request_anchor_from_runtime_state
 
 from .event_reading import is_turn_boundary_event, read_events, terminal_api_error_payload
 from .hook_results import poll_exact_hook
@@ -17,8 +15,10 @@ from .state_machine import (
     build_poll_state,
     finalize_poll_result,
     handle_assistant_event,
+    handle_prompt_lifecycle_event,
     handle_system_event,
     handle_user_event,
+    is_top_level_user_prompt,
 )
 from .start import looks_ready, send_prompt, state_session_path
 
@@ -43,11 +43,10 @@ def poll_submission(
     dispatch_items = ()
     if isinstance(prompt_dispatch, ProviderSubmission):
         submission = prompt_dispatch
-        dispatch_items = _prompt_dispatch_items(submission, now=now)
     reply_delivery_terminal = _reply_delivery_terminal_if_dispatched(submission, now=now)
     if reply_delivery_terminal is not None:
         return _merge_poll_result_items(reply_delivery_terminal, prefix_items=dispatch_items)
-    hook_result = poll_exact_hook(submission, now=now)
+    hook_result = poll_exact_hook(submission, now=now) if _prompt_completion_is_eligible(submission) else None
     if hook_result is not None:
         return _merge_poll_result_items(hook_result, prefix_items=dispatch_items)
     pane_dead_result = _ensure_prepared_pane_alive(submission, prepared=prepared, now=now)
@@ -131,6 +130,11 @@ def _idle_pane_round_result_terminal(
             "raw_buffer": poll.raw_buffer,
             "session_path": poll.session_path,
             "last_assistant_uuid": poll.last_assistant_uuid,
+            "prompt_enqueued": poll.prompt_enqueued,
+            "queue_dequeue_observed": poll.queue_dequeue_observed,
+            "prompt_activated": poll.prompt_activated,
+            "prompt_enqueue_uuid": poll.prompt_enqueue_uuid,
+            "prompt_activation_uuid": poll.prompt_activation_uuid,
         },
     )
     decision = CompletionDecision(
@@ -203,46 +207,31 @@ def _dispatch_deferred_prompt(
         )
     prompt = str(submission.runtime_state.get("prompt_text") or "")
     send_prompt(prepared.backend, prepared.pane_id, prompt)
-    next_seq = int(submission.runtime_state.get("next_seq", 1))
     anchor_seen = bool(submission.runtime_state.get("anchor_seen", False))
-    deferred_for_ready = bool(submission.runtime_state.get("prompt_deferred_for_ready", False))
-    anchor_emitted = deferred_for_ready and not anchor_seen
     updated = replace(
         submission,
         runtime_state={
             **submission.runtime_state,
             "prompt_sent": True,
             "prompt_sent_at": now,
-            "anchor_seen": anchor_seen or anchor_emitted,
-            "next_seq": next_seq + (1 if anchor_emitted else 0),
+            "anchor_seen": anchor_seen,
+            "prompt_activated": bool(submission.runtime_state.get("prompt_activated", False)),
             "prompt_deferred_for_ready": False,
-            "prompt_anchor_emitted_at": now if anchor_emitted else "",
+            "prompt_anchor_emitted_at": "",
         },
     )
     return updated
 
 
-def _prompt_dispatch_items(submission: ProviderSubmission, *, now: str) -> tuple:
-    if not bool(submission.runtime_state.get("prompt_sent", False)):
-        return ()
-    emitted_at = str(submission.runtime_state.get("prompt_anchor_emitted_at") or "").strip()
-    if emitted_at != now:
-        return ()
-    prior_seq = int(submission.runtime_state.get("next_seq", 1)) - 1
-    if prior_seq < 1:
-        prior_seq = 1
-    request_anchor = request_anchor_from_runtime_state(submission.runtime_state, fallback=submission.job_id)
-    session_path = str(submission.runtime_state.get("session_path") or "").strip() or None
-    return (
-        build_item(
-            submission,
-            kind=CompletionItemKind.ANCHOR_SEEN,
-            timestamp=now,
-            seq=prior_seq,
-            payload={"turn_id": request_anchor, "session_path": session_path},
-            cursor_kwargs={"session_path": session_path},
-        ),
-    )
+def _prompt_completion_is_eligible(submission: ProviderSubmission) -> bool:
+    state = submission.runtime_state
+    if bool(state.get("no_wrap", False)):
+        return True
+    if "prompt_activated" in state:
+        return bool(state.get("prompt_activated", False) and state.get("anchor_seen", False))
+    if state.get("prompt_anchor_emitted_at"):
+        return False
+    return bool(state.get("anchor_seen", False))
 
 
 def _merge_poll_result_items(result: ProviderPollResult, *, prefix_items: tuple) -> ProviderPollResult:
@@ -405,10 +394,14 @@ def _process_event(
     now: str,
 ) -> ProviderPollResult | None:
     role = str(event.get("role") or "")
-    if role == "user":
-        handle_user_event(submission, poll, text=str(event.get("text") or ""), now=now)
+    if role == "prompt_lifecycle":
+        handle_prompt_lifecycle_event(submission, poll, event, now=now)
         return None
-    if role == "system":
+    if role == "user":
+        if is_top_level_user_prompt(event):
+            handle_user_event(submission, poll, text=str(event.get("text") or ""), now=now)
+        return None
+    if role == "system" and poll.anchor_seen:
         return handle_system_event(submission, poll, event, now=now, state=state)
     if role == "assistant" and poll.anchor_seen:
         handle_assistant_event(submission, poll, event, now=now)

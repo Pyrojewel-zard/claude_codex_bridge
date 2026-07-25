@@ -49,6 +49,7 @@ def start_active_submission(
     no_wrap = no_wrap_requested(job) and not reply_delivery
     prompt = job.request.body if no_wrap else wrap_prompt_fn(job.request.body, request_anchor)
     session_path = state_session_path(state)
+    session_data = dict(getattr(prepared.session, 'data', {}) or {})
     if not wait_for_runtime_ready(prepared.backend, prepared.pane_id):
         return _runtime_not_ready_submission(
             job,
@@ -96,6 +97,11 @@ def start_active_submission(
             'delivery_target_session_path': session_path,
             'delivery_confirmed_at': '',
             'reply_delivery_complete_on_dispatch': reply_delivery,
+            'codex_app_server_enabled': bool(session_data.get('codex_app_server_enabled')),
+            'codex_app_server_socket': str(session_data.get('codex_app_server_socket') or ''),
+            'codex_app_server_remote_marker': str(
+                session_data.get('codex_app_server_remote_marker') or ''
+            ),
         },
     )
 

@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import shutil
 
+from cli.services.role_command_policy import role_command_policy_disables_inherited_assets
 from provider_core.memory_projection import (
     materialize_provider_memory_file,
     memory_projection_result,
     record_memory_projection_event,
 )
+from provider_core.projected_assets import seed_projected_tree
 from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
 from storage.atomic import atomic_write_text
-from storage.paths import PathLayout
+from storage.paths import ensure_provider_user_cache_dir
 
 from ..home_layout import GeminiHomeLayout, gemini_layout_for_home, gemini_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
 _GEMINI_LOGIN_AUTH_FILENAMES = ('oauth_creds.json', 'google_accounts.json')
+_GEMINI_EXTENSIONS_PROJECTION_LABEL = 'gemini-inherited-extensions'
 
 
 def resolve_gemini_home_layout(runtime_dir: Path, profile) -> GeminiHomeLayout:
@@ -44,6 +46,7 @@ def prepare_gemini_home_overrides(
     workspace_path: Path | None = None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
+    command_policy=None,
 ) -> dict[str, str]:
     layout = resolve_gemini_home_layout(runtime_dir, profile)
     if refresh_home:
@@ -55,8 +58,9 @@ def prepare_gemini_home_overrides(
             workspace_path=workspace_path,
             memory_projection_event_path=memory_projection_event_path,
             memory_projection_marker_path=memory_projection_marker_path,
+            command_policy=command_policy,
         )
-    cache_root = _gemini_shared_cache_root(project_root, runtime_dir)
+    cache_root = _gemini_shared_cache_root()
     return {
         'HOME': str(layout.home_root),
         'GEMINI_CLI_HOME': str(layout.home_root),
@@ -92,47 +96,11 @@ def _managed_isolated_home(runtime_dir: Path) -> Path:
     return Path(runtime_dir).expanduser() / 'gemini-home'
 
 
-def _gemini_shared_cache_root(project_root: Path | None, runtime_dir: Path) -> Path:
-    cache_root = _external_project_cache_root(project_root, runtime_dir)
-    if cache_root is None:
-        cache_root = Path(runtime_dir).expanduser() / 'rebuildable-cache'
-    root = cache_root / 'gemini'
+def _gemini_shared_cache_root() -> Path:
+    root = ensure_provider_user_cache_dir('gemini')
     (root / 'npm').mkdir(parents=True, exist_ok=True)
     (root / 'xdg').mkdir(parents=True, exist_ok=True)
     return root
-
-
-def _external_project_cache_root(project_root: Path | None, runtime_dir: Path) -> Path | None:
-    root = Path(project_root).expanduser() if project_root is not None else _project_root_from_runtime_dir(runtime_dir)
-    if root is None:
-        return None
-    try:
-        layout = PathLayout(root)
-    except Exception:
-        return None
-    return _user_cache_home() / 'ccb' / 'projects' / layout.project_id[:16] / 'provider-cache'
-
-
-def _user_cache_home() -> Path:
-    raw = str(os.environ.get('XDG_CACHE_HOME') or '').strip()
-    if raw:
-        return Path(raw).expanduser()
-    return Path.home() / '.cache'
-
-
-def _project_root_from_runtime_dir(runtime_dir: Path) -> Path | None:
-    ccb_dir = _project_ccb_dir(runtime_dir)
-    if ccb_dir is None:
-        return None
-    return ccb_dir.parent
-
-
-def _project_ccb_dir(runtime_dir: Path) -> Path | None:
-    current = Path(runtime_dir).expanduser()
-    for candidate in (current, *current.parents):
-        if candidate.name == '.ccb':
-            return candidate
-    return None
 
 
 def _is_within_home_root(candidate: Path, managed_home: Path) -> bool:
@@ -182,6 +150,7 @@ def materialize_gemini_home_config(
     workspace_path: Path | None = None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
+    command_policy=None,
 ) -> GeminiHomeLayout:
     layout = gemini_layout_for_home(target_home)
     _prepare_managed_home(layout)
@@ -196,6 +165,15 @@ def materialize_gemini_home_config(
         _materialize_env_file(source_root, layout, profile=profile)
         _materialize_trusted_folders(source_root, layout)
         _materialize_auth(source_root, layout, profile=profile)
+        seed_projected_tree(
+            source_root / '.gemini' / 'extensions',
+            layout.gemini_dir / 'extensions',
+            enabled=(
+                _inherits_config(profile)
+                and not role_command_policy_disables_inherited_assets(command_policy)
+            ),
+            label=_GEMINI_EXTENSIONS_PROJECTION_LABEL,
+        )
         memory_result = _materialize_gemini_memory(
             source_root,
             layout,
@@ -253,7 +231,7 @@ def _materialize_auth(source_home: Path, layout: GeminiHomeLayout, *, profile) -
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
     source_payload = _read_json_object(source_settings_path)
     if not source_payload:
-        return {} if _needs_settings_stub(profile) else None
+        return _disable_managed_gemini_autoupdate({})
 
     source_env = dict(source_payload.get('env') or {}) if isinstance(source_payload.get('env'), dict) else {}
     env_payload = dict(source_env) if _inherits_config(profile) else {}
@@ -276,9 +254,17 @@ def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[
         payload['env'] = env_payload
     else:
         payload.pop('env', None)
-    if payload:
-        return payload
-    return {} if _needs_settings_stub(profile) else None
+    return _disable_managed_gemini_autoupdate(payload)
+
+
+def _disable_managed_gemini_autoupdate(payload: dict[str, object]) -> dict[str, object]:
+    managed = dict(payload)
+    raw_general = managed.get('general')
+    general = dict(raw_general) if isinstance(raw_general, dict) else {}
+    general['enableAutoUpdate'] = False
+    general['enableAutoUpdateNotification'] = False
+    managed['general'] = general
+    return managed
 
 
 def _merge_settings_payload(
@@ -395,10 +381,6 @@ def _quote_env_value(value: object) -> str:
     raw = str(value)
     escaped = raw.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
     return f'"{escaped}"'
-
-
-def _needs_settings_stub(profile) -> bool:
-    return bool(_inherits_api(profile) or _inherits_auth(profile) or _inherits_config(profile))
 
 
 def _inherits_api(profile) -> bool:

@@ -26,7 +26,6 @@ def route_packaged_inherited_skills_dir(
         Path(target_dir),
         enabled=enabled,
         label=label,
-        allow_unmarked_replace=True,
     )
 
 

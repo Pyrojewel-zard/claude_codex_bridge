@@ -16,6 +16,7 @@ class DispatcherRuntimeState:
     completion_tracker: object
     job_store: object
     event_store: object
+    active_followup_store: object
     submission_store: object
     message_bureau: object
     message_bureau_control: object
@@ -82,6 +83,10 @@ class DispatcherRuntimeStateMixin:
     @property
     def _event_store(self):
         return self._runtime_state.event_store
+
+    @property
+    def _active_followup_store(self):
+        return self._runtime_state.active_followup_store
 
     @property
     def _submission_store(self):

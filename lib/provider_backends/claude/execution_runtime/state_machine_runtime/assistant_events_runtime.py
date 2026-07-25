@@ -18,6 +18,8 @@ def handle_assistant_event(
     text = assistant_text(event)
     subagent_id, subagent_name, is_subagent = assistant_identity(event)
     event_assistant_uuid = assistant_uuid(event)
+    if event_assistant_uuid and not is_subagent:
+        poll.last_assistant_uuid = event_assistant_uuid
     poll.raw_buffer = append_buffer(poll.raw_buffer, text)
 
     cleaned = cleaned_assistant_text(text, request_anchor=poll.request_anchor)

@@ -1135,6 +1135,101 @@ def test_prepare_provider_workspace_materializes_kimi_inherited_skills(tmp_path:
     assert 'command ask "$TARGET"' in skill_path.read_text(encoding='utf-8')
 
 
+def test_prepare_provider_workspace_materializes_qwen_extensions_from_account_home(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    source_extension = system_home / '.qwen' / 'extensions' / 'test-extension'
+    source_extension.mkdir(parents=True)
+    (source_extension / 'qwen-extension.json').write_text(
+        '{"name":"test-extension"}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.delenv('QWEN_HOME', raising=False)
+
+    layout = PathLayout(project_root)
+    prepare_provider_workspace(
+        layout=layout,
+        spec=_spec('agent1', provider='qwen'),
+        workspace_path=workspace,
+        completion_dir=layout.agent_provider_runtime_dir('agent1', 'qwen') / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    target_extensions = layout.agent_provider_state_dir('agent1', 'qwen') / 'home' / 'extensions'
+    target_extension = target_extensions / 'test-extension' / 'qwen-extension.json'
+    assert target_extension.read_text(encoding='utf-8') == '{"name":"test-extension"}\n'
+    assert not target_extensions.is_symlink()
+
+
+def test_prepare_provider_workspace_materializes_copilot_installed_plugins(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    copilot_home = system_home / '.copilot'
+    source_plugin = copilot_home / 'installed-plugins' / 'fixture-marketplace' / 'fixture-plugin'
+    source_plugin.mkdir(parents=True)
+    (source_plugin / 'plugin.json').write_text(
+        '{"name":"fixture-plugin","version":"1.0.0"}\n',
+        encoding='utf-8',
+    )
+    (source_plugin / 'skill.md').write_text('source plugin\n', encoding='utf-8')
+    (copilot_home / 'config.json').write_text(
+        '// User settings belong in settings.json.\n'
+        '// This file is managed automatically.\n'
+        + json.dumps(
+            {
+                'installedPlugins': [
+                    {
+                        'name': 'fixture-plugin',
+                        'marketplace': 'fixture-marketplace',
+                        'version': '1.0.0',
+                        'installed_at': '2026-07-21T00:00:00Z',
+                        'enabled': True,
+                        'cache_path': str(source_plugin),
+                    }
+                ],
+                'loggedInUsers': [{'login': 'must-not-copy'}],
+            },
+            indent=2,
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.delenv('COPILOT_HOME', raising=False)
+
+    layout = PathLayout(project_root)
+    prepare_provider_workspace(
+        layout=layout,
+        spec=_spec('agent1', provider='copilot'),
+        workspace_path=workspace,
+        completion_dir=layout.agent_provider_runtime_dir('agent1', 'copilot') / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    target_home = layout.agent_provider_state_dir('agent1', 'copilot') / 'home'
+    target_plugin = target_home / 'installed-plugins' / 'fixture-marketplace' / 'fixture-plugin'
+    config_text = (target_home / 'config.json').read_text(encoding='utf-8')
+    payload = json.loads(config_text[config_text.index('{'):])
+    assert 'loggedInUsers' not in payload
+    assert payload['installedPlugins'][0]['cache_path'] == str(target_plugin)
+    assert (target_plugin / 'skill.md').read_text(encoding='utf-8') == 'source plugin\n'
+    assert (target_home / '.ccb-installed-plugins-projection.json').is_file()
+    assert Path(f'{target_plugin}.ccb-projection.json').is_file()
+
+
 def test_prepare_provider_workspace_materializes_mimo_memory_config(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     workspace = project_root
@@ -1200,11 +1295,6 @@ def test_prepare_provider_workspace_records_claude_binary_cache_drift_once(tmp_p
     (versions_dir / '2.1.137').mkdir(parents=True, exist_ok=True)
     (versions_dir / '2.1.137' / 'claude').write_text('binary\n', encoding='utf-8')
 
-    monkeypatch.setattr(
-        'cli.services.provider_hooks._route_claude_binary_cache_if_possible',
-        lambda *, layout, home_root: None,
-    )
-
     for refresh_profile in (True, False):
         prepare_provider_workspace(
             layout=layout,
@@ -1236,11 +1326,6 @@ def test_prepare_provider_workspace_records_new_claude_binary_cache_signature(
     layout = PathLayout(project_root)
     versions_dir = layout.agent_provider_state_dir('agent1', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
     (versions_dir / '2.1.137').mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        'cli.services.provider_hooks._route_claude_binary_cache_if_possible',
-        lambda *, layout, home_root: None,
-    )
-
     prepare_provider_workspace(
         layout=layout,
         spec=_spec('agent1'),
@@ -1292,7 +1377,7 @@ def test_prepare_provider_workspace_does_not_record_claude_binary_cache_drift_wh
     assert all(event.get('event_type') != 'claude_binary_cache_drift' for event in events)
 
 
-def test_prepare_provider_workspace_routes_claude_binary_cache_to_external_cache(
+def test_prepare_provider_workspace_detaches_legacy_claude_binary_cache(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1301,14 +1386,19 @@ def test_prepare_provider_workspace_routes_claude_binary_cache_to_external_cache
     monkeypatch.setenv('HOME', str(tmp_path / 'system-home'))
     monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'xdg-cache'))
     layout = PathLayout(project_root)
-    first_versions = layout.agent_provider_state_dir('agent1', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
-    second_versions = layout.agent_provider_state_dir('agent2', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
-    first_versions.mkdir(parents=True, exist_ok=True)
-    second_versions.mkdir(parents=True, exist_ok=True)
-    (first_versions / '2.1.137').write_text('binary\n', encoding='utf-8')
-    (second_versions / '2.1.137').write_text('binary\n', encoding='utf-8')
+    shared_versions = layout.provider_external_cache_dir('claude') / 'versions'
+    shared_binary = shared_versions / '2.1.137'
+    shared_binary.parent.mkdir(parents=True, exist_ok=True)
+    shared_binary.write_text('binary\n', encoding='utf-8')
 
     for agent_name in ('agent1', 'agent2'):
+        managed_home = layout.agent_provider_state_dir(agent_name, 'claude') / 'home'
+        versions = managed_home / '.local' / 'share' / 'claude' / 'versions'
+        versions.parent.mkdir(parents=True, exist_ok=True)
+        versions.symlink_to(shared_versions, target_is_directory=True)
+        executable = managed_home / '.local' / 'bin' / 'claude'
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.symlink_to(shared_binary)
         prepare_provider_workspace(
             layout=layout,
             spec=_spec(agent_name),
@@ -1318,21 +1408,24 @@ def test_prepare_provider_workspace_routes_claude_binary_cache_to_external_cache
             refresh_profile=True,
         )
 
-    shared_versions = layout.provider_external_cache_dir('claude') / 'versions'
-    assert first_versions.is_symlink()
-    assert second_versions.is_symlink()
-    assert first_versions.resolve() == shared_versions.resolve()
-    assert second_versions.resolve() == shared_versions.resolve()
-    assert (shared_versions / '2.1.137').read_text(encoding='utf-8') == 'binary\n'
+    assert shared_binary.read_text(encoding='utf-8') == 'binary\n'
     assert not (layout.shared_cache_dir / 'claude' / 'versions' / '2.1.137').exists()
-    assert (first_versions.parent / 'versions.ccb-projection.json').is_file()
     for agent_name in ('agent1', 'agent2'):
+        managed_home = layout.agent_provider_state_dir(agent_name, 'claude') / 'home'
+        versions = managed_home / '.local' / 'share' / 'claude' / 'versions'
+        executable = managed_home / '.local' / 'bin' / 'claude'
+        assert not versions.exists()
+        assert not versions.is_symlink()
+        assert not executable.exists()
+        assert not executable.is_symlink()
         events_path = layout.agent_events_path(agent_name)
         events = [json.loads(line) for line in events_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+        detached = [event for event in events if event.get('event_type') == 'claude_binary_cache_detached']
+        assert len(detached) == 1
         assert all(event.get('event_type') != 'claude_binary_cache_drift' for event in events)
 
 
-def test_prepare_provider_workspace_routes_claude_binary_cache_from_home_active_version(
+def test_prepare_provider_workspace_does_not_create_claude_project_cache_from_home_active_version(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1359,12 +1452,10 @@ def test_prepare_provider_workspace_routes_claude_binary_cache_from_home_active_
     )
 
     managed_home = layout.agent_provider_state_dir('agent1', 'claude') / 'home'
-    shared_active = layout.provider_external_cache_dir('claude') / 'versions' / '2.1.141'
-    assert (managed_home / '.local' / 'share' / 'claude' / 'versions').resolve() == (
-        layout.provider_external_cache_dir('claude') / 'versions'
-    ).resolve()
-    assert (shared_active / 'claude').read_text(encoding='utf-8') == 'home active binary\n'
-    assert (managed_home / '.local' / 'bin' / 'claude').resolve() == (shared_active / 'claude').resolve()
+    assert not (managed_home / '.local' / 'share' / 'claude' / 'versions').exists()
+    assert not (managed_home / '.local' / 'bin' / 'claude').exists()
+    assert not layout.external_provider_cache_root.exists()
+    assert active_binary.read_text(encoding='utf-8') == 'home active binary\n'
 
 
 def test_prepare_provider_workspace_keeps_unknown_claude_versions_dir_unmodified(

@@ -596,6 +596,53 @@ Rules:
   - superseded finalize paths should remain visible as `mount_superseded`
     instead of collapsing into missing history
 
+#### ProjectView and queue execution-phase diagnostics
+
+ProjectView Comms records and structured queue agent records may expose the
+optional schema-v1 fields `execution_phase`, `execution_phase_reason`, and
+`execution_evidence`. The stable phase vocabulary is `queued`, `injecting`,
+`executing`, `provider_idle_pending_terminal`, `reply_queued`,
+`reply_delivering`, `orphaned`, `terminal`, and `unknown`.
+
+These fields are a read-only correlated projection. A confident non-terminal
+request phase requires exact job, attempt, inbound event, mailbox head/active,
+lease, completion snapshot, agent, and current provider identity joins. A
+correlated reply record and reply-delivery job determine the reply phases.
+Terminal job/completion authority wins over lagging mailbox or lease cleanup;
+missing, stale, contradictory, or mismatched evidence produces `unknown`.
+`execution_evidence` contains only the compact identity and state facts used by
+the resolver and is diagnostics evidence, not scheduling authority.
+
+ProjectView and queue reads must not poll providers, capture extra state solely
+for this projection, mutate authority, or trigger recovery. In particular,
+`orphaned` reports bounded current-session provider-idle evidence without
+automatically cancelling, retrying, restarting, resending, or terminalizing the
+job. Older producers may omit the fields, and CLI, Rust sidebar, and mobile
+clients must fall back to existing mailbox/job/business status fields.
+
+R8 narrows `orphaned` for the Issue260 active-inbound condition. An exact
+Claude idle prompt after the bound request first produces
+`provider_idle_pending_terminal`; it becomes `orphaned` only when the same
+job/attempt/inbound/mailbox/lease/completion anchor and current provider
+session/reference, pane, workspace, and runtime generations are observed idle
+again after at least 30 seconds. Job progress, terminal evidence, active
+provider work, missing or changed lineage, pane/session/generation rotation,
+and ProjectView service restart reset the in-memory observation. The earlier
+job-age threshold only makes the first observation eligible, and cached
+ProjectView responses do not advance the window.
+
+A confirmed Comms row adds `active_inbound_diagnostic` with condition
+`orphaned_active_inbound`, exact job/attempt/inbound/mailbox/lease/provider
+evidence, job age and last progress, observation start/elapsed/required
+seconds, `recommended_action=explicit_comms_recover`, an exact recover target,
+and `automatic_action=none`. Maintenance concern evidence preserves the same
+record; trace merges it only for jobs in the resolved lineage; doctor lists
+the current records; CLI and sidebar consumers render them without rederiving
+the condition. Reading any of these surfaces must not call recovery or mutate
+job, attempt, inbound, mailbox, lease, completion, reply, or provider runtime
+authority. Explicit `comms recover` remains a separate operator action that
+revalidates authority when invoked.
+
 ### 3.6 Doctor Read Path
 
 `ccb doctor` is the best-effort project diagnostics read path.

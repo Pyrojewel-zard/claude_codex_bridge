@@ -820,6 +820,23 @@ def _request_message(prompt: str) -> str:
         return raw
 
 
+def _sync_prompt_buffer_request(
+    line: str,
+    current_lines: list[str],
+    current_req: str,
+) -> tuple[list[str], str]:
+    match = REQ_ID_RE.match(line)
+    if not match:
+        return current_lines, current_req
+
+    next_req = match.group(1).strip()
+    # Exact-turn prompts can complete before optional guidance has drained from
+    # stdin. A new outer anchor starts a fresh request, so drop that stale tail.
+    if current_lines and current_req != next_req:
+        current_lines = []
+    return current_lines, next_req
+
+
 def _looks_like_exact_turn_prompt(provider: str, line: str, current_lines: list[str], current_req: str) -> bool:
     if not current_req:
         return False
@@ -946,19 +963,40 @@ def _claude_session_path() -> Path:
 
 
 def _handle_claude(req_id: str, prompt: str, delay_s: float, session_path: Path) -> None:
+    user_uuid = f"user-{uuid.uuid4().hex}"
     user_entry = {
-        "type": "event_msg",
-        "payload": {"type": "assistant_message", "role": "user", "message": prompt},
+        "type": "user",
+        "uuid": user_uuid,
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": prompt}],
+        },
     }
     _append_jsonl(session_path, user_entry)
     if delay_s:
         time.sleep(delay_s)
     reply = f"stub reply for {req_id}\nCCB_DONE: {req_id}"
+    assistant_uuid = f"assistant-{uuid.uuid4().hex}"
     assistant_entry = {
-        "type": "event_msg",
-        "payload": {"type": "assistant_message", "role": "assistant", "message": reply},
+        "type": "assistant",
+        "uuid": assistant_uuid,
+        "parentUuid": user_uuid,
+        "message": {
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": reply}],
+        },
     }
     _append_jsonl(session_path, assistant_entry)
+    _append_jsonl(
+        session_path,
+        {
+            "type": "system",
+            "subtype": "turn_duration",
+            "parentUuid": assistant_uuid,
+            "durationMs": max(1, int(delay_s * 1000)),
+        },
+    )
 
 
 def _opencode_storage_root() -> Path:
@@ -1201,6 +1239,18 @@ def _native_cli_prompt(provider: str, argv: list[str]) -> str | None:
         return _mimo_run_prompt(argv)
     if provider == "qwen" and "--bare" in argv:
         return _last_positional(argv, options_with_values={"--output-format", "--session-id", "--model"})
+    if provider in {"qoder", "qoderclicn"} and ("-p" in argv or "--print" in argv):
+        return _last_positional(
+            argv,
+            options_with_values={
+                "--config-dir",
+                "--output-format",
+                "--permission-mode",
+                "--session-id",
+                "--model",
+                "-w",
+            },
+        )
     if provider == "cursor" and "--print" in argv:
         return _last_positional(argv, options_with_values={"--output-format", "--workspace", "--model"})
     if provider == "copilot" and "-p" in argv:
@@ -1373,6 +1423,52 @@ def _handle_native_cli_run(provider: str, argv: list[str], delay_s: float) -> in
                     "stopReason": "Cancelled" if mode == "cancelled" else "EndTurn",
                     "sessionId": f"ses-grok-{req_id}",
                     "requestId": f"req-grok-{req_id}",
+                },
+                ensure_ascii=True,
+            ),
+            flush=True,
+        )
+        return 0
+    if provider in {"qoder", "qoderclicn"}:
+        session_id = f"11111111-1111-5111-8111-{abs(hash(req_id)) % 10**12:012d}"
+        print(
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "session_id": session_id,
+                    "permissionMode": "dontAsk",
+                },
+                ensure_ascii=True,
+            ),
+            flush=True,
+        )
+        if reply:
+            print(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": reply}],
+                        },
+                        "session_id": session_id,
+                    },
+                    ensure_ascii=True,
+                ),
+                flush=True,
+            )
+        if mode == "no_terminal":
+            return 0
+        print(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": reply,
+                    "stop_reason": "end_turn",
+                    "session_id": session_id,
                 },
                 ensure_ascii=True,
             ),
@@ -1607,6 +1703,8 @@ def main(argv: list[str]) -> int:
         "copilot",
         "codebuddy",
         "qwen",
+        "qoder",
+        "qoderclicn",
         "cursor",
         "crush",
         "grok",
@@ -1638,7 +1736,7 @@ def main(argv: list[str]) -> int:
 
     if provider == "mimo" and _mimo_run_prompt(provider_arguments) is not None:
         return _handle_mimo_run_cli(provider_arguments, delay_s)
-    if provider in {"qwen", "cursor", "copilot", "crush", "grok", "kiro", "pi", "omp", "zai"} and _native_cli_prompt(provider, provider_arguments) is not None:
+    if provider in {"qwen", "qoder", "qoderclicn", "cursor", "copilot", "crush", "grok", "kiro", "pi", "omp", "zai"} and _native_cli_prompt(provider, provider_arguments) is not None:
         return _handle_native_cli_run(provider, provider_arguments, delay_s)
 
     # Provider-specific initialization.
@@ -1740,7 +1838,7 @@ def main(argv: list[str]) -> int:
             return
         if provider == "claude":
             assert claude_session_path is not None
-            _handle_claude(req_id, _request_message(prompt) or prompt, delay_s, claude_session_path)
+            _handle_claude(req_id, prompt, delay_s, claude_session_path)
             _write_hook_event(provider, Path.cwd(), req_id, f"stub reply for {req_id}")
             return
         if provider == "opencode":
@@ -1797,9 +1895,7 @@ def main(argv: list[str]) -> int:
         if not line and not current_lines:
             continue
 
-        m = REQ_ID_RE.match(line)
-        if m:
-            current_req = m.group(1).strip()
+        current_lines, current_req = _sync_prompt_buffer_request(line, current_lines, current_req)
 
         current_lines.append(line)
 

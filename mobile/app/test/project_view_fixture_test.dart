@@ -182,4 +182,44 @@ void main() {
     expect(agent.activityReason, 'codex_runtime_reconnecting');
     expect(agent.lastProgressAt, '2026-06-29T10:00:00Z');
   });
+
+  test(
+    'project view prefers additive execution phase with legacy fallback',
+    () {
+      final view = CcbProjectView.fromProjectViewPayload({
+        'view': {
+          'project': {
+            'id': 'proj-phase',
+            'root': '/tmp/proj-phase',
+            'display_name': 'phase',
+          },
+          'namespace': {'epoch': 2},
+          'comms': [
+            {
+              'id': 'job-new',
+              'status': 'running',
+              'business_status': 'replying',
+              'status_label': 'work',
+              'execution_phase': 'provider_idle_pending_terminal',
+              'execution_phase_reason': 'provider_idle_terminal_pending',
+            },
+            {
+              'id': 'job-old',
+              'status': 'running',
+              'business_status': 'replying',
+              'status_label': 'work',
+            },
+          ],
+        },
+      });
+
+      expect(view.comms[0].displayPhase, 'provider_idle_pending_terminal');
+      expect(
+        view.comms[0].executionPhaseReason,
+        'provider_idle_terminal_pending',
+      );
+      expect(view.comms[1].displayPhase, 'work');
+      expect(view.comms[1].executionPhase, isNull);
+    },
+  );
 }

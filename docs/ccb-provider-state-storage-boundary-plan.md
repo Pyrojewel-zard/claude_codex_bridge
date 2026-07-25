@@ -11,9 +11,25 @@ This plan defines the code-level and layout-level boundary for storage under
 .ccb/shared-cache/
 ```
 
-The immediate goal is not deletion. The goal is to make the storage model
-explicit so CCB can later audit, compact, prune, or share cache without touching
-conversation authority or breaking `ccbd` / `ask` stability.
+The original goal was classification before deletion. The current goal is to
+keep that explicit storage model while retiring the project-scoped
+Claude/Gemini cache safely, without touching conversation authority or
+breaking `ccbd` / `ask` stability.
+
+Superseding decision, 2026-07-23:
+
+- CCB no longer creates or depends on project-scoped Claude/Gemini caches under
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/`.
+- Managed Claude panes use the user-installed executable and disable Claude's
+  self-updater. CCB does not copy provider binaries into project cache.
+- Managed Gemini panes use one user-scoped rebuildable cache under
+  `~/.cache/ccb/provider-cache/gemini/`; cache identity is not project or
+  session authority.
+- Existing project-scoped caches are legacy residue. Startup detaches only
+  recognized CCB-owned Claude cache links, while explicit stopped-project
+  cleanup removes the current legacy cache. Cross-project orphan cleanup
+  requires `ccb cleanup --legacy-provider-caches` and a valid manifest whose
+  recorded project root no longer exists.
 
 This plan complements:
 
@@ -134,10 +150,19 @@ Examples:
 - `<runtime_state_root>/runtime/memory/<agent>.md`
 - `project_root/.ccb/runtime/memory/<agent>.md` provider compatibility bridge
 - bridge pids, FIFOs, runtime logs, session switch records
+- managed Codex app-server socket, pid, remote-attachment marker, stdout, and
+  stderr artifacts under the agent's provider-runtime directory
+- a managed Codex app-server socket whose preferred path is unsafe may use the
+  shared runtime-socket root with a provider-runtime-derived hashed name; it
+  remains runtime-ephemeral and its exact effective path is recorded by the
+  agent-local remote marker
 - project sockets and heartbeat artifacts
 
 Cleanup must only remove this class during explicit stop/reset/kill flows or
-after ownership checks prove the process generation is dead.
+after ownership checks prove the process generation is dead. Explicit project
+stop/kill removes the exact managed Codex app-server socket, pid, and remote
+marker after terminating the owned processes, including when the bridge could
+not finish its own graceful cleanup.
 
 ### 3.4 Startup Authority Bundle
 
@@ -152,7 +177,9 @@ Examples:
   shareable managed startup bundles; their managed targets are per-agent
   writable state
 - Claude source `.claude/plugins/` may be exposed as read-only seed authority
-  through `CLAUDE_CODE_PLUGIN_SEED_DIR`; it is not copied into shared cache
+  through `CLAUDE_CODE_PLUGIN_SEED_DIR`; a new agent may bootstrap one local
+  writable copy with plugin registry paths rebased into that local root before
+  its first interactive process, but the source is not copied into shared cache
 - provider startup projection manifests that must match their payload tree
 
 Rules:
@@ -162,9 +189,11 @@ Rules:
 - generated OpenCode `provider-state/opencode/opencode.json` is
   `PROJECTED_CONFIG`; project `opencode.json` remains user content outside the
   provider-state tree
-- Qwen, Cursor, Copilot, Crush, Kiro, Pi, and Z.ai use shared native CLI provider-state
-  roots with `<provider>_home` and `<provider>_data_dir`; until provider-native
-  config projection is added, their contents are classified as provider-owned
+- Qwen, Cursor, Copilot, Crush, Kiro, Pi, and Z.ai use shared native CLI
+  provider-state roots with `<provider>_home` and `<provider>_data_dir`;
+  Qwen's marker-owned `extensions/` seed and Copilot's marker-owned
+  `config.json.installedPlugins` entries plus installed plugin trees are
+  `PROJECTED_CONFIG`, while their remaining contents are provider-owned
   session/auth/cache evidence rather than project worktree content
 - sharing is allowed only after content-addressed whole-bundle storage and
   atomic replacement are implemented
@@ -183,6 +212,8 @@ Examples:
 - Gemini `.cache/node-gyp/`
 - Gemini `.cache/vscode-ripgrep/`
 - provider package manager caches that do not include session/auth state
+- Copilot's agent-local `<provider-state>/copilot/data/cache/` selected by
+  `COPILOT_CACHE_HOME`
 
 This class is the primary target for storage optimization. Rebuildable cache
 records must include enough metadata for safe decisions, such as
@@ -205,8 +236,14 @@ Examples:
 - Claude `.claude/skills/`, `.claude/commands/`, `.claude/CLAUDE.md`
 - Claude `.claude/plugins/` as the agent-local writable plugin root selected by
   `CLAUDE_CODE_PLUGIN_CACHE_DIR`
-- Droid inherited `skills/`
-- Gemini `.gemini/settings.json`, `.gemini/trustedFolders.json`
+- Droid inherited `skills/`, marker-owned local `plugins/`, and only the
+  marker-owned `enabledPlugins` entries merged into managed `settings.json`
+- Gemini `.gemini/settings.json`, `.gemini/trustedFolders.json`, and
+  marker-owned local `.gemini/extensions/`
+- Qwen marker-owned local `extensions/`
+- Copilot's allowlisted `config.json.installedPlugins` metadata, aggregate
+  ownership marker, per-tree markers, and agent-local `installed-plugins/`
+  copies
 - Kimi inherited and role `skills/` directories under managed provider state
 - OpenCode generated `opencode.json` and generated ask skill instruction files
   under `.ccb/runtime/skills/<agent>/opencode/`
@@ -216,6 +253,16 @@ they were created by a projection step. They must classify as `SECRET`.
 Provider sessions, auth, memory files, provider-runtime FIFO/completion
 artifacts, `.claude/projects/`, and `.gemini/tmp/` must not be routed through
 shared-cache.
+
+Projected-tree replacement and cleanup require a valid local regular-file
+marker with schema version 1, record type `ccb_projected_asset`, the exact
+consumer label, a non-empty source, and a recognized projection mode. An
+unmarked directory remains user-owned even when its content matches the
+current source. A foreign, malformed, wrong-label, or symlinked marker blocks
+projection and cleanup. The only markerless migration may write a marker next
+to an existing symlink that already resolves exactly to the current source;
+it must not replace that symlink. The compatibility
+`allow_unmarked_replace` keyword grants no ownership authority.
 
 ### 3.7 Secret
 
@@ -240,6 +287,9 @@ Examples:
 - macOS Keychain-derived Claude credentials
 - macOS Claude `Library/Keychains` fallback symlink
 - `.env` files containing provider credentials
+- Copilot `config.json`, because installed-plugin metadata shares that file
+  with authentication and application state, plus Copilot `mcp-secrets/` and
+  `mcp-oauth-config/`
 
 Secrets may still live inside managed provider homes, but storage tooling must
 handle them through explicit allow/deny classifications.
@@ -324,12 +374,16 @@ cache.
     codex/
       startup-bundles/
         content-addressed-only/
-    claude/
-      bin/
-      versions/
-    gemini/
-      npm/
-      node-gyp/
+```
+
+User-scoped rebuildable cache outside project/runtime authority:
+
+```text
+~/.cache/ccb/provider-cache/
+  gemini/
+    MANIFEST.json
+    npm/
+    xdg/
 ```
 
 Rules:
@@ -341,10 +395,17 @@ Rules:
   inheritance is enabled. This is credential/config projection only; Grok
   sessions, active-session state, logs, and runtime output remain agent-scoped
   under the managed home.
+- Managed Copilot extracts only validated `installedPlugins` entries from the
+  source `config.json`, rebases each accepted `cache_path`, and copies the exact
+  corresponding source tree into the agent-local `installed-plugins/` root.
+  Authentication, settings, permissions, sessions, plugin data, MCP secrets,
+  and marketplace cache remain outside projection authority.
 - `.ccb/provider-profiles/` must not silently become a long-lived runtime home
   unless the user explicitly configures that path as an external provider home.
 - `.ccb/shared-cache/` contains only rebuildable cache and never conversation
   sessions, mailbox data, runtime authority, auth secrets, or trust authority.
+- New Claude/Gemini startup paths must not create provider cache under
+  `.ccb/shared-cache/` or `~/.cache/ccb/projects/`.
 - Codex startup bundles may use shared cache only after content-addressed
   whole-bundle storage and atomic replacement exist; default remains per-agent.
 - If runtime state is relocated on WSL-mounted filesystems, profile/runtime
@@ -503,6 +564,15 @@ Required behavior:
 - refuse to run while `ccbd` is active or pending/running `ask` jobs exist
 - treat malformed or unreadable job JSONL as unknown pending work and refuse
   cleanup rather than crashing or pruning blindly
+- detach only Claude symlinks that resolve exactly to a recognized legacy CCB
+  project/shared cache before removing that cache
+- remove the stopped current project's legacy Claude/Gemini cache directories
+- scan other project buckets only with explicit
+  `--legacy-provider-caches`; require a valid provider manifest, verify its
+  project id against the recorded absolute project root, and delete only when
+  that project root no longer exists
+- after a successful project `ccb kill`, retry removal of that project's
+  retired Claude/Gemini cache without an extra byte-size traversal
 
 Suggested command surface:
 
@@ -518,33 +588,36 @@ Exit criteria:
 - `ccb cleanup` deletes only safe rebuildable cache and preserves authority,
   sessions, secrets, and startup authority bundles
 
-### Phase D - Shared Cache For Rebuildable Provider Assets
+### Phase D - Retire Project-Scoped Provider Cache
 
-Move selected rebuildable cache out of per-agent managed homes.
-
-Initial candidates:
-
-- Claude version binaries, after Phase C proves safe classification
-- Gemini npm/node-gyp cache, only if environment variables can safely redirect
-  tool cache without changing auth/session state
-- Codex startup bundles only after content-addressed whole-bundle sharing and
-  atomic replacement exist; default remains per-agent
+The earlier Phase D project-scoped Claude/Gemini shared-cache direction is
+superseded. It reduced duplication only within one project, accumulated
+unbounded orphan buckets across deleted projects, and did not improve the warm
+startup path because reusable bindings skip provider preparation.
 
 Required behavior:
 
-- shared cache must not contain provider conversations or auth secrets
-- shared cache must be reference-count safe or content-addressed
-- removing one agent must not break another agent
-- fallback to per-agent cache if a provider refuses redirected cache paths
-- on WSL drvfs anchors without runtime-state relocation, shared cache must be
-  disabled and per-agent cache retained
-- startup warnings about cache fallback must not fail `ask` jobs
+- managed Claude startup must not create, copy, hash, or select binaries under
+  a CCB project cache
+- managed Claude startup must disable provider self-update and detach
+  recognized legacy CCB cache symlinks without deleting cache payload during
+  startup
+- managed Gemini startup may share rebuildable npm/XDG cache only at the user
+  scope, never at project or agent scope
+- user-scoped Gemini cache resolution must not recursively nest when a managed
+  Gemini process invokes CCB with its own `XDG_CACHE_HOME`
+- provider sessions, auth, config, trust, and runtime homes remain agent scoped
+- project-scoped legacy cleanup must remain outside normal startup and job
+  delivery; a newly installed post-update runner may perform bounded migration
+  with a user-level lock, project lifecycle gates, and conservative deferral
 
 Exit criteria:
 
-- two same-provider agents do not duplicate large rebuildable cache by default
-- provider sessions remain isolated
-- Linux, macOS, and WSL launches still work
+- a new Claude/Gemini project creates no
+  `~/.cache/ccb/projects/<id>/provider-cache`
+- two projects use the same user-scoped Gemini rebuildable cache
+- Claude executes from the user/provider installation managed by `ccb update`
+- Linux, macOS, and WSL managed launches preserve session isolation
 
 ### Phase E - JSONL Retention And Compaction
 
@@ -590,7 +663,8 @@ May route through projected assets or shared-cache:
 - inherited `skills/` and `commands/`; startup should prefer symlinks to the
   source home and fall back to marked copies
 - Kimi inherited skill roots; startup routes them as projected assets and passes
-  them with `--skills-dir`
+  them with `--skills-dir`; an unmarked conflicting managed-state directory is
+  preserved and omitted from the active managed roots
 - `.tmp/plugins/`; the real bundle may live under
   `.ccb/shared-cache/codex/plugin-bundles/<sha>/`, with managed homes pointing
   at that bundle and retaining their local `.tmp/plugins.sha`
@@ -630,11 +704,11 @@ Must remain secret and agent-local:
 - `.config/claude-code/auth.json`
 - `Library/Keychains` macOS fallback symlink
 
-Candidates for shared/rebuildable cache:
+Legacy rebuildable cache:
 
-- `.local/share/claude/versions/` routed to
-  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/versions`
-- `.local/bin/claude` shim/symlink
+- `.local/share/claude/versions/` and `.local/bin/claude` inside managed homes
+- retired project cache under
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/`
 - rebuildable Claude residue under `.cache/claude`, `.npm/_logs`,
   `.claude/cache`, `.claude/telemetry`, and `.claude/paste-cache`
 
@@ -644,6 +718,10 @@ read-only `CLAUDE_CODE_PLUGIN_SEED_DIR` contract. The misleadingly named
 `cache/` child, and must resolve to a different managed path for every agent.
 Do not route managed `.claude/plugins/marketplaces` or `.claude/plugins/cache`
 through CCB shared cache without a future provider-supported ownership design.
+
+New managed startup does not generate these binary caches. It uses the
+user-installed Claude executable, disables self-update in managed panes, and
+leaves session/auth isolation in the private managed `HOME`.
 
 The Claude-specific implementation details live in
 [docs/claude-binary-cache-dedup-plan.md](/home/bfly/yunwei/ccb_source/docs/claude-binary-cache-dedup-plan.md).
@@ -664,15 +742,59 @@ Must remain secret and agent-local:
 - `.gemini/oauth_creds.json`
 - `.gemini/google_accounts.json`
 
-Candidates for shared/rebuildable cache:
+User-scoped rebuildable cache:
 
 - `NPM_CONFIG_CACHE` and `npm_config_cache` routed to
-  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/npm`
+  `~/.cache/ccb/provider-cache/gemini/npm`
 - `XDG_CACHE_HOME` routed to
-  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/xdg`
+  `~/.cache/ccb/provider-cache/gemini/xdg`
 
 These routes must not change `HOME`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`, auth, or
-session identity.
+session identity. The retired per-project route is legacy residue only.
+
+### 6.4 Install-Wide Provider Update Metadata
+
+`ccb update` may persist non-secret, user-wide provider update metadata at:
+
+```text
+$XDG_STATE_HOME/ccb/provider-updates.json
+```
+
+with `~/.local/state/ccb/provider-updates.json` as the fallback. This file is
+not provider session authority and must never live inside an agent-managed
+provider home. It may contain provider id, resolved executable path, installed
+and available versions, package owner, exact muted version, last decision, and
+last verified update result. It must not contain credentials, provider
+configuration payloads, session ids, prompts, or conversation content.
+
+The update lock is user-wide and adjacent to this state. Provider pane startup
+must neither read the state as launch authority nor perform registry checks;
+only the explicit CCB update flow owns discovery and mutation.
+
+### 6.4 Qoder
+
+Qoder must use its documented `--config-dir` option to bind the visible TUI and
+per-job print subprocess to the same agent-local provider-state root. The
+unsupported `QODER_HOME` assumption is not an isolation boundary.
+
+Must remain agent-isolated:
+
+- the exact `--config-dir` root
+- `.auth/`, logs, sessions, settings, installation identity, and security state
+- deterministic per-job native session UUIDs
+
+Must remain secret and agent-local:
+
+- all `.auth/` descendants
+- any future credential or token records introduced under the config root
+
+Candidates for rebuildable cache:
+
+- `.cache/` descendants such as endpoint and DNS caches
+
+An explicit user-provided `--config-dir` overrides CCB's managed root and must
+be preserved without adding a second option. CCB diagnostics may report that
+external path but must not copy, classify, clean, or inspect its credentials.
 
 ## 7. WSL And macOS Requirements
 
@@ -682,12 +804,10 @@ WSL:
   runtime-critical mutable state on unsupported filesystems
 - provider profile/runtime state must not be split across anchor and relocated
   root in a way that breaks startup or cleanup
-- shared cache may live under relocated runtime state or user cache, not under
-  an unsafe mounted-drive path by default
-- if the project anchor is on drvfs and runtime-state relocation is not active,
-  Phase D shared cache must be disabled and per-agent cache retained
-- `ccb doctor storage` must report shared cache as enabled once drvfs projects
-  have a usable relocated runtime-state root
+- user-scoped Gemini cache lives in the Linux/WSL user cache and must not be
+  placed on the project-mounted drive merely because the project anchor is
+  under drvfs
+- Claude/Gemini startup does not require project shared-cache availability
 - shared-cache disabled reason codes are currently limited to:
   - `wsl_drvfs_requires_runtime_relocation`: the anchor is on drvfs without a
     usable relocated runtime-state root; shared cache root must be reported as
@@ -721,6 +841,12 @@ Required changes:
   defined in Section 3
 - cache summaries should include active/reclaimable metadata and a reason when
   a path is not safe to prune
+- `ccb doctor storage` must separately report the stopped current project's
+  retired external provider-cache root/presence/bytes and the new user-scoped
+  provider-cache root/presence. The user-scoped cache size is not recursively
+  scanned in the normal project diagnostic path because it is shared and may
+  contain a large npm tree. These values are outside the `.ccb` `total_bytes`
+  classification total.
 
 Bundle export rule:
 
@@ -747,6 +873,9 @@ Required unit tests:
   `SECRET` as the primary storage class
 - classify Gemini npm/node-gyp cache as rebuildable cache
 - classify Gemini `.gemini/tmp/` as session
+- classify Copilot `config.json` as secret mixed state, installed plugin
+  metadata/trees as projected config, plugin data as session state, and
+  `data/cache/` as rebuildable cache
 - classify provider auth files as secret
 - provider profile default path does not become runtime home
 - explicit Codex provider profile home remains allowed and visible as explicit
@@ -786,10 +915,11 @@ Required real tests:
 6. Keep `ccb doctor storage` as the only cleanup preview/audit surface.
 7. Evaluate Codex startup-bundle sharing only after content-addressed
    whole-bundle atomic replacement exists.
-8. Evaluate Claude shared binary cache only after Linux/macOS/WSL real launch
-   verification.
-9. Evaluate Gemini npm/node-gyp cache redirection after real launch
-   verification.
+8. Retire project-scoped Claude/Gemini cache generation, migrate recognized
+   legacy links conservatively, and run bounded cleanup from the newly
+   installed post-update runner with active projects deferred to `ccb kill`.
+9. Keep only the user-scoped Gemini npm/XDG cache after Linux/macOS/WSL real
+   launch verification.
 10. Add JSONL retention/compaction after provider-state size is under control.
 
 ## 11. Non-Goals
@@ -801,6 +931,8 @@ Required real tests:
 - Do not share auth, trust, session roots, mailbox records, runtime authority,
   or active provider logs.
 - Do not make cleanup part of normal `ask` critical path.
+- Do not stop active projects for update-time cleanup or make cleanup failure
+  fail an otherwise successful core update.
 - Do not run destructive `ccb cleanup` concurrently with an active backend:
   cleanup must acquire the project startup/lifecycle guard, confirm `ccbd` is
   stopped inside that guard, and refuse to prune while pending `ask` jobs exist.
@@ -835,8 +967,8 @@ Implemented:
   the single future shared-cache root under the effective runtime-state root,
   so WSL relocation will not split shared cache back onto unsupported anchor
   filesystems. The provider-specific helper accepts only canonical shared-cache
-  candidate providers (`claude`, `codex`, `gemini`) to avoid split cache buckets
-  from display names or non-normalized provider strings.
+  candidate provider `codex`; Claude/Gemini are rejected so retired
+  project-scoped caches cannot be recreated through this API.
 - `PathLayout.ensure_provider_shared_cache_dir()` is the only approved shared
   cache creation helper. It writes a versioned `MANIFEST.json`, creates under
   the effective runtime-state root, and hard-fails on WSL drvfs project anchors
@@ -846,6 +978,11 @@ Implemented:
   `false`; when a WSL drvfs anchor is not relocated, `shared_cache_root` is
   `null` rather than an unsafe project-mounted path.
 - Provider auth/OAuth files classify as `SECRET`, not `PROJECTED_CONFIG`.
+- Copilot `config.json` classifies as `SECRET` because it mixes authentication
+  and application state. Its CCB-owned installed plugin trees and markers
+  classify as `PROJECTED_CONFIG`, `plugin-data/` remains session state, and the
+  agent-local `data/cache/` selected by `COPILOT_CACHE_HOME` classifies as
+  `REBUILDABLE_CACHE`.
 - Codex `.tmp/plugins/` plus `.tmp/plugins.sha` classify as
   `STARTUP_AUTHORITY_BUNDLE`, not rebuildable cache.
 - Codex `.ccb-session-namespace.json` and Gemini `.gemini/tmp/` classify as
@@ -892,13 +1029,30 @@ Implemented:
 - `ccb config validate` rejects duplicate effective provider runtime homes
   before startup as well.
 - `ccb cleanup` is implemented as the single cleanup entrypoint. It refuses to
-  run while `ccbd` is active or ask jobs are pending/running, prunes old Claude
-  version caches while keeping versions currently referenced by managed homes,
-  removes unreferenced legacy Claude shared-cache versions after external-cache
-  migration,
-  removes rebuildable Claude residue, removes Gemini rebuildable
-  npm/node-gyp/ripgrep caches, and trims stale `pane-crash-*.log` runtime
-  residue.
+  run while `ccbd` is active or ask jobs are pending/running, prunes old local
+  Claude version residue, removes rebuildable Claude/Gemini cache residue,
+  safely detaches CCB-owned legacy Claude cache links, removes the stopped
+  current project's retired provider cache, and trims stale
+  `pane-crash-*.log` runtime residue.
+- `ccb cleanup --legacy-provider-caches` additionally removes provider caches
+  for recorded project roots that no longer exist. It validates the CCB
+  manifest, absolute project root, and recomputed project id before deletion;
+  caches for existing projects and malformed/mismatched manifests are kept.
+- After a real version change, the newly installed `ccb __post-update` runner
+  performs the retired-cache migration only when authorized by its parent
+  updater. A stale-owner-aware user-level lock prevents simultaneous update
+  windows from duplicating the sweep. It cleans a stopped current project under
+  `startup.lock`, removes cross-project payload only from per-Provider
+  schema-v1 manifest-valid buckets whose recorded roots no longer exist, and
+  defers active/current or other existing projects to their next successful
+  `ccb kill`.
+- Automatic migration does not perform a separate recursive byte-size walk,
+  never removes the user-scoped Gemini cache, preserves unknown Provider
+  entries, malformed/symlinked manifests and foreign links, and records a
+  bounded result in `$XDG_STATE_HOME/ccb/provider-cache-cleanup.json`.
+- `ccb update --no-cache-cleanup` skips this migration for one update. Cleanup
+  errors are warnings and do not roll back the core release; cleanup is skipped
+  when required post-update provisioning has already selected rollback.
 - `ccb cleanup` holds the project `startup.lock` while re-checking backend/job
   state and pruning; malformed job JSONL blocks cleanup conservatively.
 - cleanup reports symlinked Claude `versions/` directories and skips
@@ -909,8 +1063,41 @@ Implemented:
 - diagnostics bundle provider-state walking does not follow symlinks and
   hard-excludes Codex plugin bundles, Claude version caches, and Gemini/npm
   rebuildable caches even if storage classification fails.
-- storage diagnostics include explicit shared-cache disabled status/reason for
-  providers that still use the project-scoped shared-cache path.
+- new managed Claude/Gemini startup no longer consumes the project-scoped
+  shared-cache status as launch authority.
+- storage diagnostics report the retired current-project cache as a separate
+  boundary total and identify the user-scoped Provider cache without
+  recursively scanning it, so legacy external cache is no longer invisible
+  beside `.ccb` totals without slowing normal diagnostics.
+- managed Claude startup exports `DISABLE_AUTOUPDATER=1`, consumes the
+  user-installed executable, and does not create a CCB binary cache.
+- managed Gemini startup disables update checks and routes npm/XDG cache to one
+  user-scoped `~/.cache/ccb/provider-cache/gemini/` tree without recursive
+  cache nesting.
+- 2026-07-23 cache-retirement validation:
+  - 496 broad Provider/storage/CLI regressions passed
+  - all 79 phase-2 entrypoint tests passed in their focused run
+  - repository-wide pytest reached 5933 passed and 15 skipped with one
+    unrelated OpenCode shutdown `ENOENT`; the exact test passed on isolated
+    rerun
+  - external `/home/bfly/yunwei/test_ccb2/cache-retirement-smoke` mounted real
+    managed Gemini and Claude panes, completed cold and warm starts, and killed
+    cleanly; Claude resolved to the user installation at
+    `/home/bfly/.local/share/claude/versions/2.1.206`
+  - the retired project-cache path remained absent while the user-scoped
+    Gemini cache was created
+  - stopped current-project cleanup detached an exact legacy Claude link and
+    removed current Claude/Gemini payloads; explicit orphan cleanup removed
+    only manifest-valid Claude/Gemini payloads, preserved an unknown Provider
+    directory, and active-backend cleanup was refused
+  - automatic cleanup follow-up passed 636 related regressions, 11 repository
+    hygiene checks, syntax compilation, and whitespace validation
+  - an isolated external `ccb_test kill` removed a synthetic current-project
+    cache and exposed the cleanup action; an authorized post-update smoke
+    removed one valid orphan, preserved unknown and user-scoped content, wrote
+    state, produced Chinese output, and honored `--no-cache-cleanup`
+  - the final clean-environment repository run passed 5806 tests with 2 skips
+    and zero failures
 - Linux real validation passed with the current Phase A-C implementation:
   - full unit suite: `1747 passed`
   - communication matrix: `test/system_comm_matrix.sh` passed, covering mixed
@@ -955,7 +1142,7 @@ Not implemented yet:
 
 Next recommended work:
 
-1. Evaluate shared-cache redirection only after repeated Linux/macOS/WSL cleanup
-   validation proves stable.
-2. Keep `ccb cleanup` conservative until Phase D has content-addressed or
-   provider-supported shared-cache semantics.
+1. Complete Linux source-runtime launch/cleanup verification, then repeat the
+   managed Claude/Gemini smoke on macOS and WSL.
+2. Keep cross-project legacy deletion explicit and manifest-gated; do not move
+   it into startup or automatic update.

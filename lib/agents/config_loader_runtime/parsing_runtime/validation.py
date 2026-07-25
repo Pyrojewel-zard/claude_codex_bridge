@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 from typing import Any
 
 from agents.config_loader_runtime.role_lookup import RoleLookupError, installed_role_default_agent_name, looks_like_role_id, normalize_role_id
@@ -27,6 +28,8 @@ from .loop_capacity import parse_loop_capacity
 from .topology import agents_from_topology_windows, parse_sidebar, parse_sidebar_view, parse_tool_windows, parse_topology_windows
 
 _MAINTENANCE_TOP_LEVEL_KEYS = {'heartbeat'}
+_CONFIG_UI_KEYS = {'port', 'token_env', 'token_file'}
+_ENVIRONMENT_VARIABLE_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 _MAINTENANCE_HEARTBEAT_KEYS = {
     'enabled',
     'assessor',
@@ -73,6 +76,7 @@ def validate_project_config(
         project_root=resolved_project_root,
     )
     _validate_document_shape(document)
+    validate_config_ui_settings(document.get('config_ui'))
     windows = parse_topology_windows(document.get('windows'))
     tool_windows = parse_tool_windows(document.get('tool_windows'))
     _validate_topology_presence(document, windows=windows, tool_windows=tool_windows)
@@ -114,6 +118,30 @@ def _validate_document_shape(document: dict[str, Any]) -> None:
         )
     if document.get('version') != 2:
         raise ConfigValidationError('version must be 2')
+
+
+def validate_config_ui_settings(value: object) -> dict[str, object]:
+    if value is None:
+        return {}
+    settings = expect_mapping(value, field_name='config_ui')
+    unknown = sorted(set(settings) - _CONFIG_UI_KEYS)
+    if unknown:
+        raise ConfigValidationError(
+            f'config_ui contains unknown fields: {", ".join(unknown)}'
+        )
+    port = settings.get('port')
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535):
+        raise ConfigValidationError('config_ui.port must be an integer between 0 and 65535')
+    for key in ('token_env', 'token_file'):
+        if key in settings:
+            value = expect_string(settings[key], field_name=f'config_ui.{key}').strip()
+            if not value:
+                raise ConfigValidationError(f'config_ui.{key} must not be empty')
+            if key == 'token_env' and not _ENVIRONMENT_VARIABLE_NAME.fullmatch(value):
+                raise ConfigValidationError('config_ui.token_env must be a valid environment variable name')
+    if 'token_env' in settings and 'token_file' in settings:
+        raise ConfigValidationError('config_ui.token_env and config_ui.token_file are mutually exclusive')
+    return dict(settings)
 
 
 def _parse_default_agents(document: dict[str, Any]) -> tuple[str, ...]:

@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -54,17 +54,37 @@
 
 ## How to Install
 
-Install or update with npm:
+Install or update an npm-managed CCB with npm:
 
 ```bash
-npm install -g @seemseam/ccb
+npm install -g @seemseam/ccb@latest
 ```
 
-After CCB is installed, use CCB's updater:
+For GitHub release-package or source installs, use CCB's transactional updater:
 
 ```bash
 ccb update
 ```
+
+On an npm-managed install, `ccb update` prints the equivalent npm command and
+does not modify npm's vendored payload in place.
+
+CCB-managed provider panes suppress known provider-native startup update prompts.
+After updating CCB—or immediately when CCB is already current—`ccb update`
+checks installed provider CLIs and offers supported updates once. Use
+`--providers check`, `--providers all`, or `--providers none` for explicit
+report-only, non-interactive update, or skip behavior. Declining prompts again
+on the next `ccb update`; skipping a version hides only that exact version.
+CCB never restarts active provider panes during this flow, so an accepted
+provider update applies when that pane next starts or is explicitly restarted.
+
+After a release change, the newly installed CCB also retires old
+project-scoped Claude/Gemini caches. Manifest-valid caches for deleted projects
+are removed immediately. A stopped current project is cleaned immediately;
+active or other existing projects are preserved and cleaned after their next
+successful `ccb kill`. Unknown providers, malformed manifests, foreign
+symlinks, sessions/auth, and the user-scoped Gemini cache are never removed by
+this migration. Use `ccb update --no-cache-cleanup` to skip it for one update.
 
 To roll back, use the same transactional updater with an older released version,
 for example `ccb update 8.1.3`. CCB rejects a same-version artifact whose build
@@ -120,6 +140,20 @@ mkdir -p .ccb
 A blank project starts light: CCB opens one `main` window with a single agent named `demo`, selecting the first supported CLI available on the machine (Codex, Claude, Gemini, then other providers). It no longer mounts a multi-agent team by default.
 
 Click the **⚙ Settings** icon at the top-left of the CCB sidebar to open the local configuration control panel. You can also run `ccb config ui` from the project directory.
+
+#### Persistent local Config UI access
+
+The Config UI always binds to loopback. To use a stable local port and token, configure a token **source** in `.ccb/ccb.config`; never put a literal token in that file:
+
+```toml
+[config_ui]
+port = 43123
+token_env = "CCB_CONFIG_UI_TOKEN"
+# Or use this instead of token_env:
+# token_file = ".ccb/config-ui.token"
+```
+
+`--port` remains a one-run override. `token_file` must be project-relative, non-symlinked, and owner-only (`chmod 600 .ccb/config-ui.token` on POSIX). Without a token source, CCB keeps the existing random token and ephemeral-port behavior. The CLI prints only the loopback URL and token source, never the token value.
 
 <p align="center">
   <img src="assets/readme_v7/config-control-panel.png" alt="CCB configuration control panel editing the default demo agent" width="960">
@@ -186,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.2.1 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.3.1 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.2.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [Download CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -272,6 +306,31 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.3.1</b> - Unified Provider updates, safe cache retirement, and persistent Config UI access</summary>
+
+- Centralized supported Provider upgrades under `ccb update`, with exact version checks, explicit decline/skip choices, and no automatic restart of active panes.
+- Retired project-scoped Claude/Gemini software caches in favor of the user-installed Claude executable and one user-scoped Gemini cache.
+- Added bounded post-update and post-shutdown cleanup that preserves active projects, unknown content, sessions, authentication data, and user-owned caches.
+- Added persistent Config UI loopback port and protected token-source settings without exposing token values.
+- Added native Qoder CLI CN support with isolated config/session state and corrected Qoder `--print` / `--config-dir` execution.
+- Preserved shutdown finalizers while the server is stopping and made sidebar release checksum generation portable.
+- Switched Rich mode to a compact two-column Yazi layout and synchronized all release surfaces to 8.3.1.
+
+</details>
+
+<details>
+<summary><b>v8.3.0</b> - Exact provider turns, job integrity, and project-bound Mobile terminal</summary>
+
+- Bound Kimi, Claude, and Qoder execution to their native turn, activation, session, and completion contracts.
+- Added exact active-job follow-ups, correlated execution phases, orphaned-inbound diagnosis, and terminal cancellation outcomes.
+- Inherited provider extensions and Copilot plugins with explicit projected-asset ownership safeguards.
+- Delegated npm-managed upgrades to npm and made marker-only worktree retirement conservative.
+- Kept Mobile chat and terminal modes inside the selected project workspace and synchronized all release surfaces to 8.3.0.
+- Fixed sidebar settings launch on WSL and macOS with native browser fallbacks, refreshed desktop-session environment, and visible manual-open status.
+
+</details>
+
+<details>
 <summary><b>v8.2.1</b> - Deterministic startup, actionable auth recovery, and Android background access</summary>
 
 - Added end-to-end startup generation fencing, bounded readiness proof, and detailed startup operation/timeline diagnostics.

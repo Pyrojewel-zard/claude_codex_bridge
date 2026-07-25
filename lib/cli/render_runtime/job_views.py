@@ -108,9 +108,15 @@ def render_cancel(payload: Mapping[str, object]) -> tuple[str, ...]:
     return ('cancel_status: ok', *render_mapping(payload))
 
 
+def render_followup(payload: Mapping[str, object]) -> tuple[str, ...]:
+    status = str(payload.get('status') or 'unknown')
+    return (f'followup_status: {status}', *render_mapping(payload))
+
+
 __all__ = [
     'render_ask',
     'render_cancel',
+    'render_followup',
     'render_resubmit',
     'render_retry',
     'render_wait',

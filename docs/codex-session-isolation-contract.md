@@ -55,6 +55,31 @@ The canonical managed Codex runtime artifact layout includes at minimum:
 
 - `.ccb/agents/<agent>/provider-runtime/codex/completion/`
 - `.ccb/agents/<agent>/provider-runtime/codex/bridge.log`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.sock`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.pid`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.stdout.log`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.stderr.log`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.remote`
+
+The app-server socket, pid, and remote marker are runtime-ephemeral evidence
+owned by the same agent runtime generation as the Codex bridge. The marker
+contains the exact socket path and is created only by the shell branch that
+executes the visible TUI with `--remote`; a live socket without that matching
+marker must not advertise active-turn follow-up. These files are not
+conversation or job authority. Failed startup, bridge shutdown, and project
+stop/kill must terminate the exact child and remove these owned artifacts.
+Project stop performs an idempotent post-termination cleanup so a bridge that
+reaches forced termination cannot leave a false remote-capability marker.
+
+When the preferred app-server socket exceeds the platform Unix-domain path
+limit or lives on an unsupported filesystem, CCB applies the same bounded
+socket-placement rule as the project control plane. The effective socket is
+`<runtime-socket-root>/app-server-<provider-runtime-hash>.sock`; pid, logs, and
+the remote marker remain in the agent provider-runtime directory, and the
+marker records that exact effective path. The hashed name is derived from the
+full provider runtime directory so two Codex agents cannot share a fallback
+socket. Bridge shutdown and project stop/kill must remove the effective socket
+as well as the local marker and pid.
 
 By default, the managed Codex home is:
 
@@ -266,6 +291,16 @@ terminalize the job. Codex collaboration `agent_message` and
 `sub_agent_activity` records are internal provider evidence and must not enter
 the caller-visible reply buffer. Caller-visible completion may come only from
 the bound top-level turn's final assistant message or `task_complete`.
+
+An active-job correction may enter that immutable binding only when the visible
+managed TUI is attached to the same agent-scoped app-server and CCB has both the
+managed thread id and bound active turn id. Injection uses native
+`turn/steer(threadId, expectedTurnId, input, clientUserMessageId)`; the expected
+turn id is a required atomic precondition and the follow-up id is the
+idempotency key. A legacy/local TUI, stale or unreachable socket, unbound turn,
+changed turn, or provider refusal must fail closed. Pane input, global session
+search, provider substitution, cancel/resubmit, and a new ordinary job are not
+valid implicit fallbacks for this operation.
 
 Native in-pane Codex session switches are supported only through the managed
 session-switch boundary:

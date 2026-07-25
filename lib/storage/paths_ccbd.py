@@ -227,6 +227,10 @@ class CcbdOpsPathMixin:
     def ccbd_reload_handoff_path(self):
         return self.ccbd_dir / 'reload-handoff.json'
 
+    @property
+    def ccbd_active_followups_path(self):
+        return self.ccbd_dir / 'active-followups.jsonl'
+
 
 class CcbdArtifactsPathMixin:
     @property

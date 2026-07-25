@@ -453,6 +453,17 @@ The poller may still synthesize one terminal decision, but the authority read pa
 
 Codex does not need to be forced into the Gemini/Claude hook model.
 
+Native active-turn steering is input transport, not completion authority. When
+the visible managed TUI shares an agent-scoped app-server, CCB may use
+`turn/steer` with the already bound thread id and an `expectedTurnId`
+precondition. Successful steering keeps the same job and immutable top-level
+turn binding; it does not synthesize completion, reset reliability timers by
+itself, or authorize another turn's assistant/terminal events. A terminal
+precondition failure must yield to the existing completion/cancel authority.
+Capability additionally requires the runtime-owned remote marker written only
+by the TUI's `--remote` branch; a live app-server beside a local-fallback TUI
+does not qualify.
+
 Its design should remain:
 
 - primary authority = protocol/session log
@@ -672,6 +683,63 @@ Required:
 
 Claude-specific session-boundary logic may still provide stronger observed completion than Gemini, but must no longer rely on hook exactness alone.
 
+Claude queued prompt delivery has a separate activation boundary. A
+`queue-operation/enqueue` carrying the exact outer request anchor proves only
+that Claude accepted the command into its queue. A content-free
+`queue-operation/dequeue` is uncorrelated diagnostic evidence. The queued job
+becomes active only when Claude replays the exact prompt as
+`attachment/queued_command.prompt`; a normal top-level user prompt remains the
+idle-REPL activation path. `anchor_seen` may be emitted only after one of those
+exact activation records, except for the explicit `no_wrap` contract.
+
+Until activation, assistant text and UUIDs, tool-only and subagent events,
+system turn boundaries and API errors, hook artifacts, and pane-idle recovery
+must not contribute completion evidence to the queued job. Enqueue, dequeue
+observation, activation, and anchoring must persist independently with the
+reader cursor across daemon restart. Session rotation clears those correlated
+facts and requires activation in the new top-level session. Pane dispatch,
+elapsed time, apparent FIFO order, or an idle prompt may not substitute for
+exact queued-command identity.
+
+### 10.4 Kimi
+
+Kimi native completion must support both observed provider layouts without
+weakening per-launch storage authority:
+
+- legacy `.kimi/sessions/<md5(workdir)>/<session>/wire.jsonl`
+- current `.kimi-code/sessions/wd_<basename>_<sha256-prefix>/<session>/agents/<agent>/wire.jsonl`
+
+The launcher records both exact state roots and the completion reader scans
+only those roots. A request binds first to a `CCB_REQ_ID` header at the start
+of the submitted prompt; legacy fallback uses an exact token boundary and must
+not match request-id prefixes or later mentions in another agent's prompt.
+
+`TurnEnd` and successful terminal `step.end` reasons are primary turn
+boundaries. A subsequent user turn may close a reply-bearing prior turn when
+the provider omitted an explicit boundary. Unknown, cancelled, interrupted,
+error, and tool-use finish reasons are not successful completion authority.
+Once a native log owns the request anchor, pane text is rescue evidence only
+and may not replace an incomplete native observation.
+
+Observed native session paths remain agent-scoped restart authority. Both
+layouts must validate the exact non-symlinked root, project directory, session
+id, and wire path before exact-session restart; mismatched or missing roots
+fail fresh rather than falling back to a workdir-global session.
+
+### 10.5 Qoder
+
+Qoder jobs use the documented print-mode stream contract with an exact
+agent-local `--config-dir`, `-w <workspace>`, `-p`,
+`--output-format stream-json`, and a deterministic UUID `--session-id`. CCB job
+ids must not be passed directly because Qoder rejects non-UUID session ids.
+
+Completion authority is a Qoder `result` envelope with `is_error=false` and a
+normal stop reason. Assistant envelopes may provide the latest reply text but
+do not terminalize by themselves. `is_error=true`, assistant error fields,
+authentication failures, non-normal result reasons, nonzero exit, and a clean
+process exit without a result envelope all fail or remain incomplete; they may
+not be returned as successful assistant text.
+
 ## 11. Placement In Code
 
 ### 11.1 Completion Manifest Layer
@@ -763,7 +831,28 @@ Add tests for:
 - session-boundary and hook evidence merge correctly
 - timeout closure works when hook never arrives
 
-### 12.4 Cross-Provider Reliability
+### 12.4 Kimi
+
+Add tests for:
+
+- both native wire layouts and session-id extraction
+- exact request headers, prefix collisions, and cross-agent mentions
+- successful versus cancelled/error/tool-use `step.end` reasons
+- next-turn closure when an explicit boundary is absent
+- native in-progress evidence preventing completed pane override
+- exact-session persistence, root drift, and symlink rejection for both layouts
+
+### 12.5 Qoder
+
+Add tests for:
+
+- documented print/config/workspace arguments and UUID-only session identity
+- result/assistant de-duplication and successful result terminalization
+- authentication and `is_error=true` envelopes
+- clean exit without a result envelope
+- visible/headless config-root consistency and explicit user overrides
+
+### 12.6 Cross-Provider Reliability
 
 Add execution-layer tests for:
 
@@ -842,6 +931,10 @@ that child reply inside the same turn.
   normal `TASK_REPLY` to the parent agent
 - when the child logical message reaches a terminal reply, CCB submits a normal
   `callback_continuation` `TASK_REQUEST` back to the parent agent
+- cancelled is a valid terminal child result: CCB submits exactly one parent
+  continuation with the child identity, `cancelled` status, and any partial
+  output instead of leaving the edge pending or converting cancellation into
+  a callback failure
 - the continuation uses the original caller as `from_actor`, preserving the
   normal final reply routing path
 
@@ -868,6 +961,21 @@ caller, callback target, child reply id/status, continuation job/message, and
 state. Dispatcher maintenance must repair the crash window where the child
 reply was recorded and the continuation was not yet submitted. Repair is
 idempotent: an edge with an existing continuation job is not submitted again.
+Normal completion and cancellation serialize through the same chain transition
+lock and callback edge authority. The first persisted terminal job wins a
+completion/cancel race; a losing cancellation must not rewrite the completion
+snapshot, attempt, reply, or edge. Internal stale-job recovery with
+`record_reply=False` does not create a cancelled continuation because its retry
+remains responsible for the existing message lineage. Cancelling the parent
+itself before delegation completes terminalizes its outgoing edge as
+`chain_parent_cancelled`; a later child result cannot reopen that edge or
+create a continuation for the cancelled parent.
+
+For a non-chain cancelled job, an empty result with no reply artifact is a
+durable `ReplyRecord` plus a consumed-from-birth `completion_notice`. It is
+visible in trace but does not increment the registered caller's mailbox depth
+or create a provider reply-delivery turn. Partial text and artifact-backed
+cancel results retain normal exactly-once `TASK_REPLY` delivery.
 
 Callback edge state is also the backend safety boundary for nested delegation.
 Edges must carry a timeout deadline, and dispatcher maintenance must transition
