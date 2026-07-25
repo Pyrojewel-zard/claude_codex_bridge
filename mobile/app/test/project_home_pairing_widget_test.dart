@@ -37,9 +37,10 @@ void main() {
         'http://127.0.0.1:8787',
       );
 
-      await tester.tap(
-        find.byKey(const ValueKey('gateway-route-use-example-button')),
+      final useExampleButton = find.byKey(
+        const ValueKey('gateway-route-use-example-button'),
       );
+      tester.widget<TextButton>(useExampleButton).onPressed!();
       await tester.pump();
 
       expect(
