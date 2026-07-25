@@ -163,15 +163,48 @@ class CcbMobileLocalizations {
 
   String get mobileUpdatesDescription =>
       isChinese
-          ? '打开官方发布页下载新的 APK，并通过相同签名渠道覆盖安装。'
-          : 'Open the official release page to download a newer APK and install it over the same signed channel.';
+          ? '启动时会自动检查新版本，也可以在这里手动检查。'
+          : 'Updates are checked automatically at startup, or you can check manually here.';
 
   String get mobileUpdateInstallNote =>
       isChinese
           ? '覆盖安装会保留已配对资料。若 Android 提示签名冲突，说明曾安装不同签名的测试包，需要一次性卸载后再安装正式包。'
           : 'Cover-installing preserves paired data. If Android reports a signature conflict, an older test APK used a different signature and must be uninstalled once before installing the official build.';
 
-  String get openApkDownload => isChinese ? '打开 APK 下载' : 'Open APK download';
+  String get checkForUpdates => isChinese ? '检查更新' : 'Check for updates';
+
+  String get checkingForUpdates => isChinese ? '正在检查' : 'Checking';
+
+  String get alreadyLatestVersion => isChinese ? '当前已是最新版本。' : 'You are up to date.';
+
+  String newVersionAvailable(String version) =>
+      isChinese ? '发现新版本 $version。' : 'Version $version is available.';
+
+  String get downloadAndInstall => isChinese ? '下载并安装' : 'Download and install';
+
+  String get downloadingUpdate => isChinese ? '正在下载' : 'Downloading';
+
+  String downloadingVersion(String version) =>
+      isChinese ? '正在下载 $version 并校验安装包…' : 'Downloading and verifying $version…';
+
+  String get androidInstallerOpened =>
+      isChinese ? '安装包已校验，已打开 Android 安装器。' : 'APK verified. Android installer opened.';
+
+  String get updateCheckFailed =>
+      isChinese ? '检查更新失败，请检查网络或打开发布页。' : 'Update check failed. Check your network or open the release page.';
+
+  String get updateDownloadFailed =>
+      isChinese ? '更新下载或校验失败，请重试或打开发布页。' : 'Update download or verification failed. Retry or open the release page.';
+
+  String get openReleasePage => isChinese ? '打开发布页' : 'Open release page';
+
+  String get updateAvailableTitle => isChinese ? '发现 CCB Mobile 更新' : 'CCB Mobile update available';
+
+  String get later => isChinese ? '稍后' : 'Later';
+
+  String get updateNow => isChinese ? '立即更新' : 'Update now';
+
+  String get openApkDownload => openReleasePage;
 
   String get couldNotOpenUpdateUrl =>
       isChinese ? '无法打开更新下载链接' : 'Could not open update download';

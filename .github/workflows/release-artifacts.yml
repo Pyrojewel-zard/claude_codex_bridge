@@ -215,6 +215,7 @@ jobs:
           }
           print(json.dumps(manifest, indent=2, sort_keys=False))
           PY
+          cp "dist-release/ccb-mobile-${TAG_NAME}.json" "dist-release/ccb-mobile-latest.json"
 
       - name: Upload mobile workflow artifacts
         uses: actions/upload-artifact@v4
@@ -223,6 +224,7 @@ jobs:
           path: |
             dist-release/ccb-mobile-${{ github.event.inputs.tag || github.ref_name }}.apk
             dist-release/ccb-mobile-${{ github.event.inputs.tag || github.ref_name }}.json
+            dist-release/ccb-mobile-latest.json
           if-no-files-found: error
 
   publish:
@@ -256,6 +258,7 @@ jobs:
           test -f ccb-macos-universal.tar.gz
           test -f "ccb-mobile-${TAG_NAME}.apk"
           test -f "ccb-mobile-${TAG_NAME}.json"
+          test -f "ccb-mobile-latest.json"
           sha256sum ccb-*.tar.gz ccb-mobile-*.apk ccb-mobile-*.json | sort -k2 > SHA256SUMS
           sha256sum -c SHA256SUMS
           notes_file="$GITHUB_WORKSPACE/docs/releases/${TAG_NAME}.md"
@@ -275,6 +278,6 @@ jobs:
               --title "$TAG_NAME" \
               --notes-file "$notes_file"
           fi
-          gh release upload "$TAG_NAME" ccb-linux-x86_64.tar.gz ccb-macos-universal.tar.gz "ccb-mobile-${TAG_NAME}.apk" "ccb-mobile-${TAG_NAME}.json" SHA256SUMS \
+          gh release upload "$TAG_NAME" ccb-linux-x86_64.tar.gz ccb-macos-universal.tar.gz "ccb-mobile-${TAG_NAME}.apk" "ccb-mobile-${TAG_NAME}.json" ccb-mobile-latest.json SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
