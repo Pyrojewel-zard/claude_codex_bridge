@@ -73,6 +73,27 @@ class CcbMobileLocalizations {
 
   String get route => isChinese ? '路由' : 'Route';
 
+  String get useExampleAddress =>
+      isChinese ? '使用示例地址' : 'Use example address';
+
+  String routeDescription(String route) {
+    return switch (route) {
+      'lan' => isChinese
+          ? '仅同一局域网。电脑需监听一个明确的私网 IP。'
+          : 'Same private LAN only. The computer must listen on a specific private IP.',
+      'tailnet' => isChinese
+          ? '经 Tailscale Serve 访问，网关仍只监听本机回环地址。'
+          : 'Access through Tailscale Serve; the gateway remains loopback-only.',
+      'cloudflare_tunnel' => isChinese
+          ? '经 Cloudflare Tunnel 访问，使用你的 HTTPS 公开地址。'
+          : 'Access through Cloudflare Tunnel using your HTTPS public URL.',
+      'relay' => isChinese
+          ? '经 Relay 访问。请使用电脑生成的二维码；手动配置仅用于已有地址。'
+          : 'Access through a Relay. Prefer the QR from the computer; manual configuration is for an existing address only.',
+      _ => '',
+    };
+  }
+
   String get scanQr => isChinese ? '扫码' : 'Scan QR';
 
   String get claim => isChinese ? '连接' : 'Claim';
@@ -177,15 +198,48 @@ class CcbMobileLocalizations {
 
   String get mobileUpdatesDescription =>
       isChinese
-          ? '打开官方发布页下载新的 APK，并通过相同签名渠道覆盖安装。'
-          : 'Open the official release page to download a newer APK and install it over the same signed channel.';
+          ? '启动时会自动检查新版本，也可以在这里手动检查。'
+          : 'Updates are checked automatically at startup, or you can check manually here.';
 
   String get mobileUpdateInstallNote =>
       isChinese
           ? '覆盖安装会保留已配对资料。若 Android 提示签名冲突，说明曾安装不同签名的测试包，需要一次性卸载后再安装正式包。'
           : 'Cover-installing preserves paired data. If Android reports a signature conflict, an older test APK used a different signature and must be uninstalled once before installing the official build.';
 
-  String get openApkDownload => isChinese ? '打开 APK 下载' : 'Open APK download';
+  String get checkForUpdates => isChinese ? '检查更新' : 'Check for updates';
+
+  String get checkingForUpdates => isChinese ? '正在检查' : 'Checking';
+
+  String get alreadyLatestVersion => isChinese ? '当前已是最新版本。' : 'You are up to date.';
+
+  String newVersionAvailable(String version) =>
+      isChinese ? '发现新版本 $version。' : 'Version $version is available.';
+
+  String get downloadAndInstall => isChinese ? '下载并安装' : 'Download and install';
+
+  String get downloadingUpdate => isChinese ? '正在下载' : 'Downloading';
+
+  String downloadingVersion(String version) =>
+      isChinese ? '正在下载 $version 并校验安装包…' : 'Downloading and verifying $version…';
+
+  String get androidInstallerOpened =>
+      isChinese ? '安装包已校验，已打开 Android 安装器。' : 'APK verified. Android installer opened.';
+
+  String get updateCheckFailed =>
+      isChinese ? '检查更新失败，请检查网络或打开发布页。' : 'Update check failed. Check your network or open the release page.';
+
+  String get updateDownloadFailed =>
+      isChinese ? '更新下载或校验失败，请重试或打开发布页。' : 'Update download or verification failed. Retry or open the release page.';
+
+  String get openReleasePage => isChinese ? '打开发布页' : 'Open release page';
+
+  String get updateAvailableTitle => isChinese ? '发现 CCB Mobile 更新' : 'CCB Mobile update available';
+
+  String get later => isChinese ? '稍后' : 'Later';
+
+  String get updateNow => isChinese ? '立即更新' : 'Update now';
+
+  String get openApkDownload => openReleasePage;
 
   String get couldNotOpenUpdateUrl =>
       isChinese ? '无法打开更新下载链接' : 'Could not open update download';

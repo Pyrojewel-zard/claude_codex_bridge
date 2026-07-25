@@ -762,7 +762,10 @@ def test_mobile_host_serve_runs_relay_connector_with_activated_identity(
     state_dir = tmp_path / 'mobile-relay'
     paths = mobile_host_service_paths(state_dir)
     events: list[str] = []
-    credentials = SimpleNamespace(host_id='host-activated')
+    credentials = SimpleNamespace(
+        host_id='host-activated',
+        relay_mode='official',
+    )
 
     class _Handle:
         summary = {

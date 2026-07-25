@@ -23,13 +23,18 @@ from provider_backends.qoder.execution import (
     _qoder_session_id_for_job,
     observe_qoder_output,
 )
+from provider_backends.qoderclicn.execution import (
+    _build_command as build_qoderclicn_command,
+    _qoderclicn_session_id_for_job,
+    observe_qoderclicn_output,
+)
 from provider_backends.zai.execution import observe_zai_output
 from provider_core.pathing import session_filename_for_agent
 from provider_core.registry import build_default_backend_registry
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
 
 
-PROVIDERS = ("qwen", "qoder", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
+PROVIDERS = ("qwen", "qoder", "qoderclicn", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
 STRUCTURED_PROVIDERS = ("qwen", "cursor", "copilot", "pi", "omp")
 
 
@@ -95,6 +100,75 @@ def _adapter(provider: str):
     assert backend is not None
     assert backend.execution_adapter is not None
     return backend.execution_adapter
+
+
+def test_qoderclicn_headless_command_uses_qoder_contract_and_uuid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("QODERCLICN_START_CMD", raising=False)
+    provider = "qoderclicn"
+    work_dir = tmp_path / "repo-qoderclicn-command"
+    work_dir.mkdir()
+    config_dir = work_dir / ".ccb" / "agents" / "qoderclicn1" / "provider-state" / provider / "home"
+    request = NativeCliExecutionRequest(
+        provider=provider,
+        job=_job(provider, work_dir),
+        work_dir=work_dir,
+        session_data={f"{provider}_config_dir": str(config_dir)},
+        prompt="Reply exactly once.",
+        request_anchor="CCB_REQ_ID: job",
+    )
+
+    command = build_qoderclicn_command(request)
+    session_id = command[command.index("--session-id") + 1]
+
+    assert command == [
+        "qoderclicn",
+        "--config-dir",
+        str(config_dir),
+        "--permission-mode",
+        "dont_ask",
+        "-w",
+        str(work_dir),
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--session-id",
+        session_id,
+        "Reply exactly once.",
+    ]
+    assert str(uuid.UUID(session_id)) == session_id
+    assert session_id == _qoderclicn_session_id_for_job(request.job.job_id)
+    assert session_id != request.job.job_id
+    assert config_dir.is_dir()
+
+
+def test_qoderclicn_headless_command_does_not_repeat_explicit_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    explicit_config = tmp_path / "explicit-qoderclicn"
+    monkeypatch.setenv(
+        "QODERCLICN_START_CMD",
+        f"qoderclicn --config-dir {explicit_config} --yolo",
+    )
+    work_dir = tmp_path / "repo-qoderclicn-explicit"
+    work_dir.mkdir()
+    request = NativeCliExecutionRequest(
+        provider="qoderclicn",
+        job=_job("qoderclicn", work_dir),
+        work_dir=work_dir,
+        session_data={"qoderclicn_headless_permission_mode": "auto"},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+
+    command = build_qoderclicn_command(request)
+
+    assert command.count("--config-dir") == 1
+    assert command.count("--yolo") == 1
+    assert "--permission-mode" not in command
 
 
 def _install_stub(monkeypatch, provider: str, *, mode: str = "") -> None:
@@ -247,24 +321,109 @@ def test_qoder_observer_fails_closed_on_stream_result_error(tmp_path: Path) -> N
     assert observed.error == "Not logged in"
 
 
-def test_qoder_provider_requires_native_result_envelope(monkeypatch, tmp_path: Path) -> None:
-    work_dir = tmp_path / "repo-qoder-no-result"
-    work_dir.mkdir()
-    _write_session("qoder", work_dir)
-    _install_stub(monkeypatch, "qoder", mode="no_terminal")
+def test_qoderclicn_observer_uses_result_without_duplicate_assistant_text(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "qoderclicn.jsonl"
+    session_id = "22222222-2222-5222-8222-222222222222"
+    output.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {"type": "system", "subtype": "init", "session_id": session_id},
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "QODER_CN_OK"}],
+                    },
+                    "session_id": session_id,
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": "QODER_CN_OK",
+                    "stop_reason": "end_turn",
+                    "session_id": session_id,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
-    adapter = _adapter("qoder")
+    observed = observe_qoderclicn_output(output)
+
+    assert observed.text == "QODER_CN_OK"
+    assert observed.finished is True
+    assert observed.finish_reason == "completed"
+    assert observed.turn_ref == session_id
+    assert observed.error == ""
+
+
+def test_qoderclicn_observer_waits_for_error_result_envelope(tmp_path: Path) -> None:
+    output = tmp_path / "qoderclicn-error.jsonl"
+    assistant_error = {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Not logged in"}],
+        },
+        "error": "authentication_failed",
+    }
+    output.write_text(json.dumps(assistant_error) + "\n", encoding="utf-8")
+
+    assistant_only = observe_qoderclicn_output(output)
+
+    assert assistant_only.finished is False
+    assert assistant_only.text == "Not logged in"
+    assert assistant_only.error == ""
+
+    with output.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": True,
+                    "result": "Not logged in",
+                    "stop_reason": "stop_sequence",
+                }
+            )
+            + "\n"
+        )
+
+    observed = observe_qoderclicn_output(output)
+
+    assert observed.finished is True
+    assert observed.text == ""
+    assert observed.error == "Not logged in"
+
+
+@pytest.mark.parametrize("provider", ("qoder", "qoderclicn"))
+def test_qoder_provider_requires_native_result_envelope(
+    monkeypatch,
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    work_dir = tmp_path / f"repo-{provider}-no-result"
+    work_dir.mkdir()
+    _write_session(provider, work_dir)
+    _install_stub(monkeypatch, provider, mode="no_terminal")
+
+    adapter = _adapter(provider)
     submission = adapter.start(
-        _job("qoder", work_dir),
-        context=_runtime_context("qoder", work_dir),
+        _job(provider, work_dir),
+        context=_runtime_context(provider, work_dir),
         now="2026-06-13T00:00:00Z",
     )
     terminal, emitted = _run_to_terminal(adapter, submission)
 
     assert terminal.decision is not None
     assert terminal.decision.status is CompletionStatus.INCOMPLETE
-    assert terminal.decision.reason == "qoder_native_terminal_missing"
-    assert terminal.decision.reply == "stub reply for job_qoder_run123"
+    assert terminal.decision.reason == f"{provider}_native_terminal_missing"
+    assert terminal.decision.reply == f"stub reply for job_{provider}_run123"
     assert CompletionItemKind.TURN_BOUNDARY not in emitted
 
 

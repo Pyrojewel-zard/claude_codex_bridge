@@ -11,9 +11,10 @@ handle legacy state without user-facing traceback-style failures, and render
 the main user prompts in Chinese or English.
 
 This plan covers installer shell behavior, `ccb update`, post-update
-provisioning, managed tools, Role Packs, and validation. It is intentionally
-separate from the Role Pack plan: Role Packs define role semantics, while this
-plan defines installation and update resilience.
+provisioning, managed provider CLI updates, managed tools, Role Packs, and
+validation. It is intentionally separate from the Role Pack plan: Role Packs
+define role semantics, while this plan defines installation and update
+resilience.
 
 ## File Map
 
@@ -57,6 +58,12 @@ In scope:
   Role Packs.
 - Post-update Role Pack refresh and legacy id migration such as
   `ccb.archi -> agentroles.archi`.
+- Suppression of provider-native update prompts inside CCB-managed panes and
+  explicit provider version management through `ccb update`.
+- Retirement of legacy project-scoped Claude/Gemini caches during upgrade:
+  new runtime preparation must not recreate them; the newly installed updater
+  removes only bounded, manifest-verified orphan caches and defers active or
+  existing projects to their next successful project kill.
 - Chinese and English user-visible install/update prompts, warnings, and next
   actions.
 
@@ -64,11 +71,13 @@ Out of scope:
 
 - Windows-native managed update.
 - Automatically changing user shell rc files beyond existing PATH guidance.
-- Rewriting provider-native installers for Codex, Claude, Gemini, or
-  OpenCode.
+- Installing missing provider CLIs or rewriting provider-native installers.
 - Automatically merging root-owned and normal-user profiles.
 - Background automatic Role Pack updates outside explicit install/update
   commands.
+- Deleting cross-project provider-cache buckets during normal startup or job
+  delivery, or deleting any update-time bucket whose per-Provider manifest and
+  missing project root cannot be verified.
 
 ## Non-Drift Contract
 
@@ -86,3 +95,8 @@ Out of scope:
   only.
 - Every interactive prompt that affects install/update behavior must have
   Chinese and English text selected by `CCB_LANG` or locale detection.
+- Managed update/startup must not recreate
+  `~/.cache/ccb/projects/<project-id>/provider-cache`; upgrade migration may
+  clean a stopped current project and manifest-valid deleted-project buckets.
+  Active and other existing projects remain untouched until their next
+  successful `ccb kill`; malformed/unknown/symlinked content remains untouched.

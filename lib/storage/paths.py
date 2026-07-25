@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from project.ids import compute_project_id, project_slug
+from runtime_env.source_home import current_provider_source_home
 
 from .atomic import atomic_write_json
 from .path_helpers import (
@@ -35,8 +36,9 @@ from .paths_ccbd import (
 )
 from .paths_targets import TargetPathMixin
 
-_SHARED_CACHE_PROVIDERS = frozenset({'claude', 'codex', 'gemini'})
+_SHARED_CACHE_PROVIDERS = frozenset({'codex'})
 _EXTERNAL_CACHE_PROVIDERS = frozenset({'claude', 'gemini'})
+_USER_PROVIDER_CACHE_PROVIDERS = frozenset({'gemini'})
 
 
 @dataclass(frozen=True)
@@ -144,7 +146,7 @@ class PathLayout(
 
     @property
     def external_provider_cache_root(self) -> Path:
-        return _user_cache_home() / 'ccb' / 'projects' / self.project_id[:16] / 'provider-cache'
+        return legacy_provider_projects_root() / self.project_id[:16] / 'provider-cache'
 
     def provider_external_cache_dir(self, provider: str) -> Path:
         normalized = normalized_segment(provider, label='provider')
@@ -153,25 +155,15 @@ class PathLayout(
             raise ValueError(f'provider must be one of: {supported}')
         return self.external_provider_cache_root / normalized
 
-    def ensure_provider_external_cache_dir(self, provider: str, *, created_at: str | None = None) -> Path:
-        cache_dir = self.provider_external_cache_dir(provider)
-        timestamp = created_at or _utc_now()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        manifest_path = cache_dir / 'MANIFEST.json'
-        if not manifest_path.exists():
-            atomic_write_json(
-                manifest_path,
-                {
-                    'schema_version': 1,
-                    'record_type': 'ccb_external_provider_cache_manifest',
-                    'provider': cache_dir.name,
-                    'project_id': self.project_id,
-                    'project_root': str(self.project_root),
-                    'created_at': timestamp,
-                    'entries': [],
-                },
-            )
-        return cache_dir
+    @property
+    def user_provider_cache_root(self) -> Path:
+        return user_provider_cache_root()
+
+    def provider_user_cache_dir(self, provider: str) -> Path:
+        return provider_user_cache_dir(provider)
+
+    def ensure_provider_user_cache_dir(self, provider: str, *, created_at: str | None = None) -> Path:
+        return ensure_provider_user_cache_dir(provider, created_at=created_at)
 
     @property
     def runtime_root_marker_path(self) -> Path:
@@ -297,8 +289,76 @@ def _utc_now() -> str:
 def _user_cache_home() -> Path:
     raw = str(os.environ.get('XDG_CACHE_HOME') or '').strip()
     if raw:
-        return Path(raw).expanduser()
-    return Path.home() / '.cache'
+        candidate = Path(raw).expanduser()
+        managed_base = _managed_provider_xdg_cache_base(candidate)
+        return managed_base if managed_base is not None else candidate
+    return current_provider_source_home() / '.cache'
 
 
-__all__ = ['PathLayout']
+def _managed_provider_xdg_cache_base(path: Path) -> Path | None:
+    candidate = Path(path).expanduser()
+    for ancestor in (candidate, *candidate.parents):
+        if ancestor.name != 'ccb':
+            continue
+        try:
+            relative = candidate.relative_to(ancestor)
+        except ValueError:
+            continue
+        parts = relative.parts
+        if parts[:3] == ('provider-cache', 'gemini', 'xdg'):
+            return ancestor.parent
+        if (
+            len(parts) >= 5
+            and parts[0] == 'projects'
+            and parts[2:5] == ('provider-cache', 'gemini', 'xdg')
+        ):
+            return ancestor.parent
+    return None
+
+
+def user_provider_cache_root() -> Path:
+    return _user_cache_home() / 'ccb' / 'provider-cache'
+
+
+def legacy_provider_projects_root() -> Path:
+    return _user_cache_home() / 'ccb' / 'projects'
+
+
+def provider_user_cache_dir(provider: str) -> Path:
+    normalized = normalized_segment(provider, label='provider')
+    if (
+        normalized != str(provider or '').strip().lower()
+        or normalized not in _USER_PROVIDER_CACHE_PROVIDERS
+    ):
+        supported = ', '.join(sorted(_USER_PROVIDER_CACHE_PROVIDERS))
+        raise ValueError(f'provider must be one of: {supported}')
+    return user_provider_cache_root() / normalized
+
+
+def ensure_provider_user_cache_dir(provider: str, *, created_at: str | None = None) -> Path:
+    cache_dir = provider_user_cache_dir(provider)
+    timestamp = created_at or _utc_now()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = cache_dir / 'MANIFEST.json'
+    if not manifest_path.exists():
+        atomic_write_json(
+            manifest_path,
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_user_provider_cache_manifest',
+                'provider': cache_dir.name,
+                'scope': 'user',
+                'created_at': timestamp,
+                'entries': [],
+            },
+        )
+    return cache_dir
+
+
+__all__ = [
+    'PathLayout',
+    'ensure_provider_user_cache_dir',
+    'legacy_provider_projects_root',
+    'provider_user_cache_dir',
+    'user_provider_cache_root',
+]

@@ -653,6 +653,16 @@ def test_ci_runs_rust_sidebar_checks() -> None:
     assert 'bin/build-ccb-rs-helper' in text
 
 
+def test_ci_full_matrix_uses_short_tmpdir_for_unix_sockets() -> None:
+    text = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
+    run_tests_step = text.split('- name: Run tests', 1)[1].split(
+        '- name: Guard dynamic layout provider matrix smoke',
+        1,
+    )[0]
+
+    assert 'TMPDIR: /tmp' in run_tests_step
+
+
 def test_macos_install_smoke_uses_prebuilt_sidebar_helper() -> None:
     text = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
 
@@ -684,6 +694,7 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
     assert f'default: "v{version}"' in text
+    assert 'test "$TAG_NAME" = "v$version"' in text
     assert 'os: ubuntu-22.04' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
     assert 'rustup target add x86_64-apple-darwin aarch64-apple-darwin' in text

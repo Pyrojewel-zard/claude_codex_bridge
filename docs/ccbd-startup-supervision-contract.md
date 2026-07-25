@@ -336,6 +336,28 @@ Managed provider startup mutation rules:
   - `build_session_payload` receives the same final `prepared_state` used by
     command assembly
 - provider bootstrap config needed for managed launches must live under `.ccb/agents/<agent>/provider-state/<provider>/` or an explicit validated provider-profile runtime home
+- managed Codex startup must write `check_for_update_on_startup = false` into
+  the generated agent-local `CODEX_HOME/config.toml`; managed Claude startup
+  must export `DISABLE_AUTOUPDATER=1`; managed Gemini startup must write both
+  `general.enableAutoUpdate = false` and
+  `general.enableAutoUpdateNotification = false` into the generated
+  agent-local `.gemini/settings.json`. Managed Grok receives
+  `GROK_DISABLE_AUTOUPDATER=1`; managed Droid receives
+  `FACTORYD_DISABLE_AUTO_UPDATE=1`; managed AGY receives
+  `AGY_CLI_DISABLE_AUTO_UPDATE=1`. All managed provider processes also
+  receive `NO_UPDATE_NOTIFIER=1` for CLIs using the common Node
+  update-notifier convention. These overrides apply only to CCB-managed
+  provider processes and must not modify the user's provider-global
+  configuration.
+  Provider version checks and upgrades belong to the explicit `ccb update`
+  flow, never to pane startup or job delivery.
+- managed Claude startup must use the user-installed Provider executable and
+  must not create/copy/hash/link a CCB project-scoped binary cache; recognized
+  legacy CCB cache links may be detached during preparation without deleting
+  cache payload
+- managed Gemini startup routes rebuildable npm/XDG cache to one user-scoped
+  `~/.cache/ccb/provider-cache/gemini/` tree and must not create the retired
+  `~/.cache/ccb/projects/<project-id>/provider-cache/gemini/` route
 - managed OpenCode startup writes `.ccb/agents/<agent>/provider-state/opencode/opencode.json` as a generated `OPENCODE_CONFIG` file; it reads and merges project `opencode.json` without modifying that project file, uses project-relative memory instructions through `.ccb/runtime/memory/<agent>.md`, uses project-relative inherited ask skill instructions through `.ccb/runtime/skills/<agent>/opencode/ask.md`, disables OpenCode autoupdate for managed panes so startup and job delivery cannot be blocked by an interactive update prompt, and injects `--continue` only when the effective restore policy is not fresh and the configured command does not already contain an explicit OpenCode session selector
 - managed Kimi startup must not infer conversation authority from work-directory
   recency or inject `--continue`: `.kimi-<agent>-session` owns a native Kimi
@@ -1010,6 +1032,7 @@ That means:
 - shutdown-style RPC handlers that return an after-response finalizer must enqueue that finalizer even when writing the response fails; `stop_all` may destroy the tmux pane that issued `ccb kill`, and a disconnected client must not prevent backend unmount/finalization
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown
 - CLI remote-stop shutdown helpers must snapshot structured control-plane pids and record shutdown intent before sending `stop_all`; they must also keep tracking any current `ccbd` and project `keeper` pids still published by the project lease during the bounded shutdown wait so a missed pre-stop snapshot cannot leave a live backend behind
+- if the keeper closes the control-plane transport after shutdown intent is recorded but before `stop_all` or `shutdown` returns, the CLI must continue through bounded local pid cleanup and lifecycle finalization; this transport loss is not proof of success, but it must not surface as a raw socket error or abort authoritative cleanup
 - CLI remote-stop shutdown helpers must not treat lifecycle `phase=unmounted` alone as terminal; after a successful `stop_all` response they must also wait for the recorded and currently published `ccbd` / project `keeper` pids to exit, terminate lingering control-plane pids with the same bounded pid-tree cleanup used by the local shutdown path, and persist lifecycle `phase=unmounted` / `desired_state=stopped`
 - orphan process collection must include structured control-plane pid authority from `.ccb/ccbd/lease.json`, `.ccb/ccbd/keeper.json`, and `.ccb/ccbd/lifecycle.json`; `/proc` command-line matching is only a fallback evidence source and must not be the only way to find ccbd/keeper residue
 - control-plane `/proc` fallback matching must be scoped to CCB control-plane commands for the same `--project <project_root>`; it must not broadly kill every process whose command line mentions the project root

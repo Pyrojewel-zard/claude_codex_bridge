@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
-import 'package:ccb_mobile/features/project_home/project_home_onboarding.dart';
 
 import 'support/project_home_test_fakes.dart';
 
@@ -35,7 +34,10 @@ void main() {
       find.byKey(const ValueKey('project-home-update-panel')),
       findsOneWidget,
     );
-    expect(find.text('Current version: 8.3.0+8030000'), findsOneWidget);
+    expect(
+      find.text('Current version: $ccbMobileDefaultVersion'),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('project-home-onboarding-scan-button')),
       findsOneWidget,
@@ -200,9 +202,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.byKey(const ValueKey('project-home-onboarding-scan-button')),
+    final scanButton = find.byKey(
+      const ValueKey('project-home-onboarding-scan-button'),
     );
+    await tester.ensureVisible(scanButton);
+    await tester.tap(scanButton);
     await tester.pumpAndSettle();
 
     expect(scanCalls, 1);

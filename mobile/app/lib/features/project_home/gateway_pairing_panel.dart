@@ -28,6 +28,7 @@ class GatewayPairingPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = CcbMobileLocalizations.of(context);
+    final reference = _routeReference(routeKind);
     return ExpansionTile(
       key: const ValueKey('gateway-pairing-panel'),
       tilePadding: EdgeInsets.zero,
@@ -48,6 +49,19 @@ class GatewayPairingPanel extends StatelessWidget {
             labelText: strings.gatewayUrl,
             prefixIcon: const Icon(Icons.link),
           ),
+        ),
+        const SizedBox(height: 8),
+        _RouteReference(
+          description: strings.routeDescription(routeKind.wireName),
+          exampleUrl: reference.exampleUrl,
+          onUseExample: () {
+            gatewayUrlController.value = TextEditingValue(
+              text: reference.exampleUrl,
+              selection: TextSelection.collapsed(
+                offset: reference.exampleUrl.length,
+              ),
+            );
+          },
         ),
         const SizedBox(height: 8),
         TextField(
@@ -124,6 +138,87 @@ class GatewayPairingPanel extends StatelessWidget {
       ],
     );
   }
+}
+
+class _RouteReference extends StatelessWidget {
+  const _RouteReference({
+    required this.description,
+    required this.exampleUrl,
+    required this.onUseExample,
+  });
+
+  final String description;
+  final String exampleUrl;
+  final VoidCallback onUseExample;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = CcbMobileLocalizations.of(context);
+    final colorScheme = Theme.of(context).colorScheme;
+    return Semantics(
+      container: true,
+      label: '$description $exampleUrl',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              description,
+              key: const ValueKey('gateway-route-description'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    exampleUrl,
+                    key: const ValueKey('gateway-route-example-url'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      fontFamily: 'monospace',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey('gateway-route-use-example-button'),
+                  onPressed: onUseExample,
+                  child: Text(strings.useExampleAddress),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteReferenceData {
+  const _RouteReferenceData(this.exampleUrl);
+
+  final String exampleUrl;
+}
+
+_RouteReferenceData _routeReference(RouteProviderKind kind) {
+  return switch (kind) {
+    RouteProviderKind.lan => const _RouteReferenceData(
+      'http://192.168.1.20:8787',
+    ),
+    RouteProviderKind.tailnet => const _RouteReferenceData(
+      'https://desktop.tailnet.ts.net',
+    ),
+    RouteProviderKind.cloudflareTunnel => const _RouteReferenceData(
+      'https://mobile.example.com',
+    ),
+    RouteProviderKind.relay => const _RouteReferenceData(
+      'https://relay.example.com',
+    ),
+  };
 }
 
 String _routeProviderLabel(RouteProviderKind kind) {

@@ -25,7 +25,7 @@
 \cmd{ccb clear [agents]} & 清理上下文。 \\
 \cmd{ccb restart <agent>} & 重启 agent。 \\
 \cmd{ccb reload [--dry-run]} & 重载配置。 \\
-\cmd{ccb cleanup} & 清理残留。 \\
+\cmd{ccb cleanup [--legacy-provider-caches]} & 清理当前项目残留；显式选项额外清理已删除项目的旧 Provider 缓存。 \\
 \cmd{ccb kill [-f]} & 停止 backend。 \\
 \bottomrule
 \end{longtable}
@@ -59,7 +59,11 @@
 命令 & 作用 \\
 \midrule
 \cmd{ccb version} & 版本。 \\
-\cmd{ccb update} & 更新。 \\
+\cmd{ccb update} & 更新 CCB，并统一检查已安装 provider CLI。 \\
+\cmd{ccb update --providers check} & 仅报告 provider 可用更新。 \\
+\cmd{ccb update --providers all} & 更新所有可安全管理的已安装 provider。 \\
+\cmd{ccb update --providers none} & 本次不检查 provider 更新。 \\
+\cmd{ccb update --no-cache-cleanup} & 本次跳过旧项目级 Provider 缓存迁移。 \\
 \cmd{ccb uninstall} & 卸载。 \\
 \cmd{ccb reinstall} & 重装。 \\
 \cmd{ccb roles list} & roles 列表。 \\

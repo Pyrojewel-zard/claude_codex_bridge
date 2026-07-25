@@ -17,6 +17,12 @@ The general storage boundary plan is authoritative for cross-provider storage
 classes, `.ccb/provider-profiles` semantics, shared cache placement, and
 diagnostics/cleanup sequencing.
 
+Superseding decision, 2026-07-23: project-scoped Claude binary sharing is
+retired. Managed panes use the user-installed Claude executable, export
+`DISABLE_AUTOUPDATER=1`, and do not copy/hash/link Claude binaries under
+`~/.cache/ccb/projects/` or `.ccb/shared-cache/`. The former shared-cache
+implementation remains relevant only as a guarded upgrade-cleanup format.
+
 ## 2. Current Problem
 
 Managed Claude launches set `HOME` to the agent-scoped provider-state home:
@@ -92,45 +98,32 @@ The intended boundary is:
 
 - CCB may set private `HOME` to isolate Claude conversation state.
 - CCB should not let that private `HOME` make provider binaries project-owned.
-- If Claude insists on `$HOME/.local/...`, CCB must either prune that cache
-  conservatively or redirect it through a verified shared-cache strategy.
+- CCB disables managed-pane self-update and uses the user-installed executable.
+- If Claude still writes `$HOME/.local/...`, CCB reports the drift and permits
+  conservative stopped-project cleanup; it does not redirect the binary into a
+  project cache.
 
 ## 4. Target State
 
-Default managed Claude launches should still use an agent-scoped private
-`HOME`, but the Claude executable/version cache should resolve outside that
-private home.
-
-When the source user home has an active Claude Code binary under
-`~/.local/bin/claude` pointing into `~/.local/share/claude/versions/`, CCB should
-treat that active source-home version as the preferred managed Claude binary
-version. Managed startup may copy that version into the CCB provider cache, but
-the managed `.local/bin/claude` link should follow the source-home active
-version instead of selecting a different version only because it is already
-present or numerically newer in the shared cache.
-
-Preferred target:
-
-```text
-~/.cache/ccb/projects/<project-id-prefix>/provider-cache/
-  claude/
-    versions/
-      <version>
-
-.ccb/agents/<agent>/provider-state/claude/home/
-  .local/share/claude/versions -> ~/.cache/ccb/.../claude/versions
-  .local/bin/claude -> ../share/claude/versions/<current-version>/claude
-```
-
-or, if CCB can safely rely on the user installation:
+Default managed Claude launches still use an agent-scoped private `HOME`, but
+the executable is owned by the user's Provider installation:
 
 ```text
 ~/.local/bin/claude
 ~/.local/share/claude/versions/
+
+.ccb/agents/<agent>/provider-state/claude/home/
+  .claude/...
 ```
 
-The managed agent home should contain only a shim or no `.local/share/claude`
-tree at all.
+The managed agent home should contain no CCB-created `.local/bin/claude` or
+`.local/share/claude/versions` projection. Provider version discovery and
+mutation belong to explicit `ccb update`; managed Claude startup disables
+Claude's native self-updater.
+
+During one-way migration, startup may remove only symlinks whose target is
+exactly a known CCB legacy cache root. It must preserve cache payload for
+explicit stopped-project cleanup and must not remove foreign/user symlinks.
 
 ## 5. Implementation Phases
 
@@ -187,45 +180,37 @@ Exit criteria:
 - repeated cleanup is idempotent
 - corrupted or unexpected symlink layouts are reported, not force-deleted
 
-### Phase 2 - Shared Binary Cache
+### Phase 2 - User-Owned Executable
 
-Move Claude binary/version storage out of each agent home.
+The earlier project-shared binary-cache approach is retired.
 
 Approach:
 
-1. Resolve the real account source Claude executable using the source home or
-   `PATH`.
-2. Create a CCB project-scoped user cache under
-   `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/`.
-3. In each managed Claude home, ensure `.local/bin/claude` points to the shared
-   cache executable or force the launch command to use the shared executable
-   path directly.
-4. Ensure the managed `HOME` still points to the agent home for `.claude/*`
-   isolation.
-
-Important constraint:
-
-- do not share `.claude/projects`, `.claude/session-env`, settings, auth, or
-  trust files
-- only share executable/version cache material
+1. Use the Provider executable already resolved from the user's startup
+   environment or explicit `CLAUDE_START_CMD`.
+2. Export `DISABLE_AUTOUPDATER=1` and the common no-update-notifier override
+   only inside CCB-managed panes.
+3. Do not create a CCB Claude binary cache.
+4. Keep managed `HOME` scoped to the agent for `.claude/*` isolation.
 
 Exit criteria:
 
-- two Claude agents do not duplicate `versions/<version>` under their
-  provider-state homes
+- new projects create no CCB Claude binary cache
 - Claude conversations remain isolated by managed home
-- removing one agent does not remove the shared executable needed by another
-  agent
+- provider version changes occur only through explicit `ccb update`
 
 ### Phase 3 - Startup Guard
 
-Prevent future binary-cache drift back into provider-state.
+Prevent future binary-cache drift back into provider-state and migrate legacy
+CCB projections.
 
 Required behavior:
 
-- on managed Claude startup, detect
-  `<managed-home>/.local/share/claude/versions`
-- if shared cache is enabled, move or prune it according to Phase 1/2 policy
+- on managed Claude startup, detect CCB-owned legacy `versions` symlinks
+- detach only links targeting the retired external or `.ccb/shared-cache`
+  Claude roots
+- remove a managed `.local/bin/claude` link only when it resolves inside that
+  same retired cache
 - emit a diagnostics notice when Claude writes binary cache into provider-state
   again
 - never let this notice affect ask/job completion semantics
@@ -239,9 +224,10 @@ Exit criteria:
 
 ### Claude CLI May Require HOME-Local Binaries
 
-If Claude Code hardcodes `$HOME/.local/share/claude/versions`, direct sharing may
-not be enough. In that case, keep Phase 1 pruning as the default safe fix and
-make Phase 2 opt-in until verified on Linux, macOS, and WSL.
+If a future Claude release ignores `DISABLE_AUTOUPDATER` and writes
+`$HOME/.local/share/claude/versions` again, retain drift diagnostics and
+stopped-project pruning. Do not reintroduce project-scoped binary copying
+without a new measured decision.
 
 ### Symlink Safety
 
@@ -269,8 +255,10 @@ Required unit tests:
 - classifies current vs. old version files
 - prune keeps only versions currently referenced by managed Claude homes
 - prune refuses unsafe symlink targets
-- shared-cache launch still writes `HOME=<managed-home>`
-- shared-cache launch does not share `.claude/projects`
+- managed launch still writes `HOME=<managed-home>`
+- managed launch exports `DISABLE_AUTOUPDATER=1`
+- new startup creates no CCB project binary cache
+- legacy CCB links are detached while foreign links are preserved
 - storage classification marks `.claude/.credentials.json` and
   `.config/claude-code/auth.json` as secret, not cache or projected config
 
@@ -279,21 +267,18 @@ Required integration tests:
 - Linux managed Claude startup after prune
 - macOS managed Claude startup after prune
 - WSL managed Claude startup after prune
-- two Claude agents share binary cache but keep separate session roots
+- two Claude agents use the user-installed executable but keep separate session
+  roots
 
-## 8. Recommended First Slice
+## 8. Recommended Migration Slice
 
-Implement Phase 0 and Phase 1 first.
-
-Reason:
-
-- they solve the immediate disk-growth problem
-- they do not change Claude startup semantics
-- they are safer than redirecting Claude's self-update path before cross-platform
-  verification
-
-Only after Phase 1 is stable should CCB attempt the shared-cache startup path in
-Phase 2.
+1. Disable Claude self-update in managed panes.
+2. Stop creating the project cache.
+3. Detach only exact CCB-owned legacy links during provider preparation.
+4. Remove the current stopped project's cache through `ccb cleanup`.
+5. Require `--legacy-provider-caches` plus manifest/project-id validation for
+   cross-project orphan cleanup.
+6. Verify fresh and migrated launches on Linux, macOS, and WSL.
 
 ## 9. Current Implementation Status
 
@@ -316,28 +301,27 @@ Implemented:
 - Managed Claude startup preparation records a de-duplicated
   `claude_binary_cache_drift` agent event when a per-agent `versions/` cache
   appears, so diagnostics can explain why provider-state is growing again.
-- Managed Claude startup preparation now routes
-  `.local/share/claude/versions` to
-  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/versions`.
-  Existing per-agent version directories, and legacy symlinks that pointed at
-  `.ccb/shared-cache/claude/versions`, are copied into the external cache and
-  replaced with a marked symlink when every entry is a recognizable Claude
-  version cache. Unknown entries are left untouched and continue to emit the
-  drift event.
-- `ccb cleanup` prunes the external Claude `versions/` cache, legacy
-  `.ccb/shared-cache/claude/versions`, and legacy per-agent `versions/`
-  directories. A shared cache keeps versions referenced by managed homes that
-  actually point at that cache plus one rollback version; unreferenced legacy
-  shared caches are removed after external-cache migration.
+- The former route to
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/versions`
+  has been removed. New startup performs no binary copy, hash, shared-cache
+  creation, or active-version selection.
+- Managed Claude startup exports `DISABLE_AUTOUPDATER=1`.
+- Startup detaches exact CCB-owned legacy external/shared-cache links and emits
+  `claude_binary_cache_detached`; foreign symlinks are preserved.
+- `ccb cleanup` removes the stopped current project's retired cache after
+  detaching its recognized links.
+- `ccb cleanup --legacy-provider-caches` removes only manifest-valid cache
+  buckets whose recomputed project identity matches and whose recorded project
+  root no longer exists.
 - `ccb cleanup` removes rebuildable Claude cache residue from managed homes:
   `.cache/claude`, `.npm/_logs`, `.claude/cache`, `.claude/telemetry`,
   `.claude/paste-cache`, and `.claude/plugins/marketplaces`.
 
 Not implemented yet:
 
-- Active startup guard that redirects or removes future per-agent binary-cache
-  drift after Claude recreates an unrecognized local versions directory.
+- Cross-platform real-provider qualification of the retired-cache migration on
+  Linux, macOS, and WSL.
 
-The next Claude-specific step is real launch validation on Linux, macOS, and
-WSL to confirm Claude Code continues to update through the symlinked
-`versions/` directory.
+The next Claude-specific step is real launch validation confirming managed
+Claude starts from the user installation, does not recreate the project cache,
+and preserves isolated conversation/auth state.

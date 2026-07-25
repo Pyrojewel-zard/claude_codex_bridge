@@ -232,6 +232,25 @@ def test_prepare_server_mobile_gateway_uses_running_projects(tmp_path: Path, mon
         handle.close()
 
 
+def test_prepare_server_mobile_gateway_rejects_lan_listener_for_tailnet(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr('cli.services.mobile.mobile_host_state_dir', lambda: tmp_path / 'mobile-state')
+    client = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    registry = MobileGatewayProjectRegistry([
+        MobileGatewayProject('proj-one', Path('/srv/one'), lambda: client, display_name='one'),
+    ])
+
+    with pytest.raises(ValueError, match='loopback'):
+        prepare_server_mobile_gateway(
+            SimpleNamespace(
+                listen='192.168.31.155:8787',
+                public_url=None,
+                route_provider='tailnet',
+            ),
+            project_registry=registry,
+            host_id='host-test',
+        )
+
+
 def test_prepare_server_mobile_gateway_reports_redacted_push_sender_diagnostic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

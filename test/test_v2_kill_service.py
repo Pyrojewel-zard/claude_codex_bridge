@@ -10,10 +10,12 @@ from agents.store import AgentRuntimeStore
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore
 from ccbd.models import LeaseHealth
 from ccbd.services.start_policy import CcbdStartPolicy, CcbdStartPolicyStore
+from ccbd.socket_client import CcbdClientError
 from cli.context import CliContextBuilder
 from cli.services.kill_runtime.agent_cleanup import collect_candidate_tmux_sockets, prepare_local_shutdown
 from cli.services.kill_runtime.remote import await_remote_shutdown
 import cli.services.daemon as daemon_service
+import cli.services.kill as kill_service
 from cli.services.daemon import CcbdServiceError
 from cli.models import ParsedKillCommand
 from cli.services.daemon import KillSummary, shutdown_daemon
@@ -22,6 +24,82 @@ from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
 from workspace.materializer import WorkspaceMaterializer
 from workspace.planner import WorkspacePlanner
+
+
+def test_post_kill_cleanup_removes_retired_project_provider_cache(monkeypatch) -> None:
+    context = SimpleNamespace(paths=SimpleNamespace())
+    summary = KillSummary(
+        project_id='project-id',
+        state='unmounted',
+        socket_path='/tmp/ccb.sock',
+        forced=False,
+        runtime_actions=('existing-action',),
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'current_project_legacy_provider_cache_present',
+        lambda _paths: True,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'cleanup_current_project_legacy_provider_caches',
+        lambda _context, *, measure_bytes: SimpleNamespace(
+            actions=(
+                SimpleNamespace(kind='legacy_cache_link'),
+                SimpleNamespace(kind='legacy_project_cache'),
+            ),
+            skipped_count=0,
+        ),
+    )
+
+    result = kill_service._cleanup_legacy_provider_cache_after_kill(context, summary)
+
+    assert result.runtime_actions == (
+        'existing-action',
+        'cleanup_legacy_provider_cache:deleted=1',
+    )
+
+
+def test_post_kill_cleanup_failure_is_deferred_non_destructively(monkeypatch) -> None:
+    context = SimpleNamespace(paths=SimpleNamespace())
+    summary = KillSummary(
+        project_id='project-id',
+        state='unmounted',
+        socket_path='/tmp/ccb.sock',
+        forced=False,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'current_project_legacy_provider_cache_present',
+        lambda _paths: True,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'cleanup_current_project_legacy_provider_caches',
+        lambda _context, *, measure_bytes: (_ for _ in ()).throw(RuntimeError('still busy')),
+    )
+
+    result = kill_service._cleanup_legacy_provider_cache_after_kill(context, summary)
+
+    assert result.state == 'unmounted'
+    assert 'cleanup deferred after kill' in result.runtime_warnings[0]
+
+
+def test_post_kill_cleanup_does_not_run_when_shutdown_is_incomplete(monkeypatch) -> None:
+    context = SimpleNamespace(paths=SimpleNamespace())
+    summary = KillSummary(
+        project_id='project-id',
+        state='mounted',
+        socket_path='/tmp/ccb.sock',
+        forced=False,
+    )
+    monkeypatch.setattr(
+        kill_service,
+        'current_project_legacy_provider_cache_present',
+        lambda _paths: (_ for _ in ()).throw(AssertionError('must not inspect cache')),
+    )
+
+    assert kill_service._cleanup_legacy_provider_cache_after_kill(context, summary) is summary
 
 
 def _namespace_controller(*, destroyed: bool):
@@ -337,6 +415,55 @@ def test_remote_stop_records_shutdown_intent_before_stop_all(tmp_path: Path, mon
     kill_project(context, command)
 
     assert events == ['connect', 'intent:kill', 'remote_stop']
+
+
+def test_remote_stop_transport_loss_after_intent_falls_back_to_local_shutdown(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-kill-remote-stop-socket-race'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+    events: list[str] = []
+
+    class _DisappearingClient:
+        def stop_all(self, *, force: bool):
+            assert force is False
+            events.append('remote_stop')
+            cause = FileNotFoundError(2, 'No such file or directory')
+            raise CcbdClientError(str(cause)) from cause
+
+    monkeypatch.setattr(
+        'cli.services.kill.connect_mounted_daemon',
+        lambda context, allow_restart_stale: events.append('connect')
+        or SimpleNamespace(client=_DisappearingClient()),
+    )
+    monkeypatch.setattr(
+        'cli.services.kill.record_shutdown_intent',
+        lambda context, reason: events.append(f'intent:{reason}'),
+    )
+    monkeypatch.setattr('cli.services.kill._collect_project_authority_pid_candidates', lambda _project_root: {})
+    monkeypatch.setattr('cli.services.kill.ProjectNamespaceController', _namespace_controller(destroyed=True))
+    monkeypatch.setattr(
+        'cli.services.kill.shutdown_daemon',
+        lambda context, force: events.append('local_shutdown')
+        or KillSummary(
+            project_id=context.project.project_id,
+            state='unmounted',
+            socket_path=str(context.paths.ccbd_socket_path),
+            forced=force,
+        ),
+    )
+    monkeypatch.setattr('cli.services.kill.set_tmux_ui_active', lambda active: None)
+    monkeypatch.setattr('cli.services.kill.cleanup_project_tmux_orphans_by_socket', lambda **kwargs: ())
+
+    summary = kill_project(context, command)
+
+    assert summary.state == 'unmounted'
+    assert events == ['connect', 'intent:kill', 'remote_stop', 'local_shutdown']
 
 
 def test_kill_project_writes_shutdown_report_after_remote_stop_all(tmp_path: Path, monkeypatch) -> None:
@@ -781,6 +908,52 @@ def test_shutdown_daemon_terminates_lingering_ccbd_pid(tmp_path: Path, monkeypat
             'expected_daemon_instance_id': 'daemon-a',
         }
     ]
+    assert summary.state == 'unmounted'
+
+
+def test_shutdown_daemon_finishes_when_socket_disappears_after_intent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-kill-daemon-socket-race'
+    project_root.mkdir(parents=True, exist_ok=True)
+    bootstrap_project(project_root)
+    command = ParsedKillCommand(project=None, force=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+
+    lease = SimpleNamespace(
+        mount_state=SimpleNamespace(value='unmounted'),
+        ccbd_pid=0,
+        daemon_instance_id='daemon-a',
+    )
+    manager = SimpleNamespace(
+        mark_unmounted=lambda **kwargs: lease,
+        load_state=lambda: lease,
+    )
+    inspection = SimpleNamespace(
+        phase='unmounted',
+        socket_connectable=True,
+        pid_alive=False,
+        lease=lease,
+    )
+    client_calls: list[str] = []
+
+    class DisappearingClient:
+        def __init__(self, _path, *, timeout_s=None):
+            pass
+
+        def shutdown(self):
+            client_calls.append('shutdown')
+            cause = FileNotFoundError(2, 'No such file or directory')
+            raise CcbdClientError(str(cause)) from cause
+
+    monkeypatch.setattr('cli.services.daemon.inspect_daemon', lambda context: (manager, None, inspection))
+    monkeypatch.setattr('cli.services.daemon.CcbdClient', DisappearingClient)
+    monkeypatch.setattr('cli.services.daemon._wait_for_keeper_exit', lambda context, timeout_s: True)
+
+    summary = shutdown_daemon(context, force=False)
+
+    assert client_calls == ['shutdown']
     assert summary.state == 'unmounted'
 
 

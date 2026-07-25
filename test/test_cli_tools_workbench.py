@@ -96,8 +96,10 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert 'previewers = [' in safe_config
     assert 'preloaders = []' in safe_config
     assert 'prepend_preloaders' not in safe_config
+    assert 'ratio = [0, 4, 3]' not in safe_config
     assert '*.pdf' in safe_config
     assert '*.mp4' in safe_config
+    assert 'ratio = [0, 4, 3]' in rich_config
     assert '*.png' not in rich_config
     assert 'ccb-image-preview' not in rich_config
     assert 'run = "image"' in rich_config

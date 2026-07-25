@@ -89,6 +89,7 @@ def build_start_cmd(
         _ensure_bypass_permission_acceptance(home_overrides, project_root=restore_target.run_cwd)
     env_prefix = join_env_prefix(
         build_env_prefix_fn(profile=profile, extra_env=spec.env),
+        export_env_clause({'DISABLE_AUTOUPDATER': '1'}),
         export_env_clause(provider_user_session_env()),
         export_env_clause(home_overrides),
         export_env_clause(_ROOT_SANDBOX_ENV if root_user else {}),

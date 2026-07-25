@@ -303,9 +303,11 @@ jobs:
         run: |
           set -euo pipefail
           export TERM=xterm-256color
+          # The short WSL sample makes nearest-rank p95 equal the maximum.
           CCB_LINUX_SOAK_SECONDS=35 \
           CCB_LINUX_SOAK_KILL_EVERY=2 \
           CCB_LINUX_SOAK_STUB_DELAY=0.2 \
+          CCB_LINUX_SOAK_P95_RECEIPT_MS=2500 \
           CCB_LINUX_SOAK_WATCH_TIMEOUT_S=90 \
             bash test/system_linux_soak.sh
 

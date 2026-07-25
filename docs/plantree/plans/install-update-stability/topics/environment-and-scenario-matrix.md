@@ -28,7 +28,7 @@ User profile:
 - sudo to root with `SUDO_USER`
 - custom `CODEX_INSTALL_PREFIX`
 - custom `CODEX_BIN_DIR`
-- custom `XDG_DATA_HOME` and `XDG_CACHE_HOME`
+- custom `XDG_DATA_HOME`, `XDG_CACHE_HOME`, and `XDG_STATE_HOME`
 
 Interactivity:
 
@@ -36,6 +36,28 @@ Interactivity:
 - non-interactive CI or pipe
 - env-forced install, for example `CCB_INSTALL_ROLES=1`
 - env-skipped install, for example `CCB_INSTALL_ROLES=0`
+- provider update modes `prompt`, `check`, `all`, and `none`
+
+Provider installation owner:
+
+- global npm/NVM package discoverable from the resolved executable
+- provider-native self-updater
+- provider-native read-only latest-version probe, currently Droid
+- Homebrew formula or cask with a known package mapping
+- Snap-managed executable
+- Windows interop executable or shim resolved from WSL
+- custom `*_START_CMD` wrapper or unknown package owner
+
+Provider cache state:
+
+- no prior CCB Provider cache
+- current-project legacy Claude/Gemini cache
+- recognized CCB-owned Claude cache links in a managed home
+- foreign or malformed Claude cache links
+- another existing project's legacy cache
+- deleted project's manifest-valid legacy cache
+- malformed or project-id-mismatched orphan cache
+- user-scoped Gemini npm/XDG cache
 
 Network:
 
@@ -107,6 +129,40 @@ Managed update:
   commands.
 - Source/dev update installs the selected release into the managed prefix while
   leaving `./ccb` in the checkout as live source.
+- A current CCB release skips tarball reinstallation and still runs the
+  requested provider update check.
+- Default non-interactive update performs no provider prompt or provider
+  mutation.
+- Declining a provider update offers it again on the next `ccb update`;
+  skipping records only the exact available version.
+- A newer provider version clears the older muted-version state.
+- npm updates use the npm executable adjacent to the resolved provider command
+  when available, preserving NVM/version-manager ownership.
+- Snap, Windows interop, custom wrapper, and unsupported native owners are
+  reported without mutation.
+- Successful provider updates are version-verified and do not automatically
+  restart active panes.
+- A transient provider-native latest-check failure is retried once, then
+  reported without blocking the CCB update.
+- New Claude/Gemini startup never creates the retired project-scoped Provider
+  cache route.
+- A real version update removes only stopped-current or manifest-valid
+  deleted-project legacy caches. Active/current and other existing projects
+  remain until their next successful `ccb kill`.
+- Concurrent update windows serialize legacy cache migration; malformed,
+  unknown, or symlinked content and the user-scoped Gemini cache are preserved.
+- `--no-cache-cleanup` disables update-time migration without disabling the
+  core or Provider update flow.
+- Managed Claude uses the user installation and detaches only exact CCB-owned
+  legacy cache links; foreign links are preserved.
+- Managed Gemini uses one user-scoped npm/XDG cache without recursive
+  `.../xdg/ccb/provider-cache/...` nesting.
+- Default stopped-project cleanup removes only the current project's legacy
+  Claude/Gemini cache; it does not scan other project buckets.
+- Explicit orphan cleanup preserves existing projects and malformed or
+  mismatched manifests, and removes only known Provider directories from a
+  manifest-valid deleted-project bucket.
+- Cleanup refuses while `ccbd` is active or ask work is pending.
 
 Role Pack update:
 

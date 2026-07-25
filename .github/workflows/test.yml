@@ -52,6 +52,10 @@ jobs:
       - name: Run tests
         run: pytest test/ -v --tb=short -m "not provider_blackbox"
         shell: bash
+        env:
+          # macOS AF_UNIX paths are limited; RUNNER_TEMP can make pytest's
+          # per-test socket paths exceed that limit after /var resolves.
+          TMPDIR: /tmp
 
       - name: Guard dynamic layout provider matrix smoke
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'

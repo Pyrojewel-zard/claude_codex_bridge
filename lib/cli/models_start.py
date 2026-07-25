@@ -226,6 +226,7 @@ class ParsedQuestionCommand:
 @dataclass(frozen=True)
 class ParsedCleanupCommand:
     project: str | None
+    legacy_provider_caches: bool = False
     kind: str = 'cleanup'
 
 
@@ -250,7 +251,7 @@ class ParsedConfigValidateCommand:
 class ParsedConfigUiCommand:
     project: str | None
     no_open: bool = False
-    port: int = 0
+    port: int | None = None
     kind: str = 'config-ui'
 
 

@@ -45,7 +45,8 @@ class MobileGatewayServeHandle:
 
 
 def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
-    listen = parse_listen_address(command.listen)
+    route_provider = str(command.route_provider or 'lan').strip().lower() or 'lan'
+    listen = parse_listen_address(command.listen, allow_lan=route_provider == 'lan')
     push_sender, push_diagnostic, push_options = _push_sender_setup()
     service = MobileGatewayService(
         project_id=context.project.project_id,
@@ -60,7 +61,6 @@ def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
     server = build_mobile_gateway_server(listen, service)
     host, port = server.server_address[:2]
     local_gateway_url = f'http://{host}:{port}'
-    route_provider = str(command.route_provider or 'lan')
     relay_credentials = _relay_host_credentials() if route_provider == 'relay' else None
     gateway_url = (
         relay_credentials.relay_http_origin
@@ -120,8 +120,8 @@ def prepare_server_mobile_gateway(
     rotate_pairing: bool = False,
 ) -> MobileGatewayServeHandle:
     registry = project_registry or _running_server_project_registry()
-    listen = parse_listen_address(command.listen)
-    route_provider = str(command.route_provider or 'lan')
+    route_provider = str(command.route_provider or 'lan').strip().lower() or 'lan'
+    listen = parse_listen_address(command.listen, allow_lan=route_provider == 'lan')
     relay_credentials = _relay_host_credentials() if route_provider == 'relay' else None
     requested_host_id = str(host_id or '').strip()
     if relay_credentials is not None and requested_host_id and requested_host_id != relay_credentials.host_id:

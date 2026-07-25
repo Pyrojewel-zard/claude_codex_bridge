@@ -72,7 +72,7 @@ def print_start_help(*, file=None) -> None:
               ccb config ui        Open the local project configuration panel.
               ccb maintenance status Show maintenance heartbeat config and stored status.
               ccb maintenance tick   Run one maintenance heartbeat diagnosis tick.
-              ccb mobile serve       Start the loopback CCB Mobile gateway for the current project.
+              ccb mobile serve       Start the CCB Mobile gateway for the current project.
               ccb mobile devices     List paired mobile devices for the current project.
               ccb mobile revoke <id> Revoke one paired mobile device locally.
               ccb agent add NAME:PROVIDER --role ROLE [--window NAME|--window-class CLASS] --hidden --json
@@ -94,6 +94,8 @@ def print_start_help(*, file=None) -> None:
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
+              ccb cleanup --legacy-provider-caches
+                                    Also remove caches for project roots that no longer exist.
               ccb theme [light|dark|+|-]
                                     Set or show the global CCB UI theme.
 
@@ -120,7 +122,8 @@ def print_start_help(*, file=None) -> None:
 
             Management:
               ccb install mobile    Start the server-wide CCB Mobile gateway and pairing QR.
-              ccb version | ccb update [rich|mobile|VERSION] | ccb uninstall [rich] | ccb reinstall
+              ccb version | ccb update [rich|mobile|VERSION] [--providers prompt|check|all|none] [--no-cache-cleanup]
+                          | ccb uninstall [rich] | ccb reinstall
 
             Tools:
               ccb rich
@@ -340,14 +343,17 @@ _COMMAND_HELP = {
           ccb doctor storage --json Emit full storage classification payload.
     """,
     "cleanup": """
-        usage: ccb cleanup
+        usage: ccb cleanup [--legacy-provider-caches]
 
         Storage cleanup:
-          ccb cleanup   Prune safe provider rebuildable caches after ccbd is stopped.
+          ccb cleanup   Prune safe rebuildable caches for the stopped current project.
+          ccb cleanup --legacy-provider-caches
+                        Also remove legacy provider caches whose recorded project roots no longer exist.
 
         Safety:
           - Refuses to run while ccbd is active or ask jobs are pending/running.
-          - Keeps Claude versions currently referenced by managed homes.
+          - Detaches only CCB-owned legacy Claude cache links.
+          - Cross-project cleanup requires the explicit legacy cache flag and a valid CCB manifest.
           - Does not remove provider sessions, auth, plugin bundles, mailbox data, or runtime authority.
           - Use `ccb doctor storage` before cleanup to inspect storage classes.
     """,
@@ -398,10 +404,13 @@ _COMMAND_HELP = {
 
         CCB Mobile gateway:
           ccb mobile serve
-              Start the loopback, current-project HTTP gateway and emit a
-              short-lived pairing code.
+              Start the current-project HTTP gateway on loopback by default
+              and emit a short-lived pairing code.
           ccb mobile serve --listen 127.0.0.1:0
               Start on a dynamic loopback port.
+          ccb mobile serve --listen 192.168.31.155:8787 --route-provider lan
+              Bind one specific private interface for direct LAN access and
+              infer the pairing URL from the listen address.
           ccb mobile serve --listen 127.0.0.1:8787 --public-url https://mobile.example.com --route-provider cloudflare_tunnel
               Keep the gateway loopback-bound but emit Cloudflare route
               metadata in the pairing payload.
@@ -637,7 +646,11 @@ def _build_management_parser() -> argparse.ArgumentParser:
 
     install_parser = subparsers.add_parser("install", help="Install or activate optional CCB capabilities")
     install_parser.add_argument("target", nargs="?", help="'mobile' to start the server-wide CCB Mobile gateway")
-    install_parser.add_argument("--listen", default="127.0.0.1:8787")
+    install_parser.add_argument(
+        "--listen",
+        default="127.0.0.1:8787",
+        help="HOST:PORT; route-provider lan also accepts a specific private interface IP",
+    )
     install_parser.add_argument("--public-url", default=None)
     install_parser.add_argument(
         "--route-provider",
@@ -650,6 +663,20 @@ def _build_management_parser() -> argparse.ArgumentParser:
     update_parser.add_argument("--listen", default=None)
     update_parser.add_argument("--public-url", default=None)
     update_parser.add_argument("--route-provider", default=None, choices=("lan", "tailnet", "cloudflare_tunnel", "relay"))
+    update_parser.add_argument(
+        "--providers",
+        choices=("prompt", "check", "all", "none"),
+        default=None,
+        help="provider CLI handling after the CCB update (default: prompt on a TTY)",
+    )
+    update_parser.add_argument(
+        "--no-cache-cleanup",
+        "--no-cleanup",
+        dest="cache_cleanup",
+        action="store_false",
+        default=True,
+        help="skip the safe post-update migration of retired project Provider caches",
+    )
 
     subparsers.add_parser("version", help="Show version and check for updates")
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall ccb, or uninstall the optional rich bundle")

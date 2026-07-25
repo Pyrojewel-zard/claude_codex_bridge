@@ -61,7 +61,10 @@ def handle_config_ui(context, command, out, services) -> int:
     if callable(flush):
         flush()
     if not command.no_open and not services.open_config_ui_url(handle.url):
-        services.write_lines(out, ('browser_open: failed; open the URL above manually',))
+        services.write_lines(
+            out,
+            ('browser_open: failed; use the configured token source with the loopback URL above',),
+        )
         if callable(flush):
             flush()
     try:

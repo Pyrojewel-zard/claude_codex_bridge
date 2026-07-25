@@ -48,6 +48,12 @@ def _clear_post_update_env(monkeypatch) -> None:
         "CCB_POST_UPDATE_REQUIRED",
         "CCB_POST_UPDATE_TIMEOUT_SECONDS",
         "CCB_ENTRYPOINT_SMOKE_TIMEOUT_SECONDS",
+        "CCB_PROVIDER_UPDATE_FLOW",
+        "CCB_PROVIDER_UPDATE_MODE",
+        "CCB_UPDATE_PROVIDERS",
+        "CCB_POST_UPDATE_CACHE_CLEANUP_FLOW",
+        "CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED",
+        "CCB_UPDATE_CACHE_CLEANUP",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -64,11 +70,21 @@ def test_cmd_update_defaults_to_latest_release(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(update_runtime, "pick_temp_base_dir", lambda _install_dir: tmp_base)
     monkeypatch.setattr(update_runtime, "get_available_versions", lambda: ["5.1.0", "5.3.0", "5.2.8"])
 
-    def _fake_update_via_tarball(tmp_base_arg, *, install_dir, target_version, old_info):
+    def _fake_update_via_tarball(
+        tmp_base_arg,
+        *,
+        install_dir,
+        target_version,
+        old_info,
+        provider_mode,
+        cache_cleanup_enabled,
+    ):
         captured["tmp_base"] = tmp_base_arg
         captured["install_dir"] = install_dir
         captured["target_version"] = target_version
         captured["old_info"] = old_info
+        captured["provider_mode"] = provider_mode
+        captured["cache_cleanup_enabled"] = cache_cleanup_enabled
         return 0
 
     monkeypatch.setattr(update_runtime, "_update_via_tarball", _fake_update_via_tarball)
@@ -79,6 +95,8 @@ def test_cmd_update_defaults_to_latest_release(monkeypatch, tmp_path: Path) -> N
     assert captured["tmp_base"] == tmp_base
     assert captured["install_dir"] == install_dir
     assert captured["target_version"] == "5.3.0"
+    assert captured["provider_mode"] == "prompt"
+    assert captured["cache_cleanup_enabled"] is True
 
 
 def test_cmd_update_delegates_npm_managed_install_without_mutating_payload(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -141,6 +159,47 @@ def test_cmd_update_errors_when_latest_release_cannot_be_resolved(monkeypatch, t
     assert code == 1
 
 
+def test_cmd_update_current_release_runs_provider_flow_without_reinstall(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    tmp_base = tmp_path / "tmp-base"
+    tmp_base.mkdir()
+    provider_modes: list[str] = []
+
+    monkeypatch.setenv("CODEX_INSTALL_PREFIX", str(install_dir))
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime, "pick_temp_base_dir", lambda _install_dir: tmp_base)
+    monkeypatch.setattr(update_runtime, "_resolve_latest_release_version", lambda: "8.3.0")
+    monkeypatch.setattr(
+        update_runtime,
+        "get_version_info",
+        lambda _path: {"version": "8.3.0", "commit": "same-build"},
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "_run_provider_updates_nonblocking",
+        lambda *, mode: provider_modes.append(mode),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "_update_via_tarball",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("current CCB must not reinstall")),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target=None, providers="check"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert provider_modes == ["check"]
+    assert "Already up to date" in capsys.readouterr().out
+
+
 def test_cmd_update_rejects_non_unix_platform(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setattr(update_runtime.platform, "system", lambda: "Windows")
 
@@ -163,11 +222,21 @@ def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeyp
     monkeypatch.setattr(update_runtime, "_resolve_latest_release_version", lambda: "6.0.12")
     calls: dict[str, object] = {}
 
-    def _fake_update_via_tarball(tmp_base_arg, *, install_dir, target_version, old_info):
+    def _fake_update_via_tarball(
+        tmp_base_arg,
+        *,
+        install_dir,
+        target_version,
+        old_info,
+        provider_mode,
+        cache_cleanup_enabled,
+    ):
         calls["tmp_base"] = tmp_base_arg
         calls["install_dir"] = install_dir
         calls["target_version"] = target_version
         calls["old_info"] = old_info
+        calls["provider_mode"] = provider_mode
+        calls["cache_cleanup_enabled"] = cache_cleanup_enabled
         return 0
 
     monkeypatch.setattr(update_runtime, "_update_via_tarball", _fake_update_via_tarball)
@@ -190,6 +259,8 @@ def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeyp
     assert calls["install_dir"] == managed_prefix
     assert calls["target_version"] == "6.0.12"
     assert calls["old_info"]["install_mode"] == "source"
+    assert calls["provider_mode"] == "prompt"
+    assert calls["cache_cleanup_enabled"] is True
 
 
 def test_release_artifact_name_uses_linux_arch_aliases(monkeypatch) -> None:
@@ -287,6 +358,8 @@ def test_update_via_tarball_uses_staged_unix_installer(monkeypatch, tmp_path: Pa
             "install_dir": install_dir,
             "old_info": {"version": "6.0.7"},
             "new_info": {"version": "6.0.8", "commit": "targetbuild"},
+            "provider_mode": "prompt",
+            "cache_cleanup_enabled": True,
         }
     ]
 
@@ -551,6 +624,39 @@ def test_post_update_delegation_runs_installed_entrypoint(monkeypatch, tmp_path:
     assert calls[1]["kwargs"]["cwd"] == Path.cwd()
     assert calls[1]["kwargs"]["env"]["CODEX_INSTALL_PREFIX"] == str(install_dir)
     assert calls[1]["kwargs"]["env"]["CCB_SKIP_STARTUP_UPDATE_CHECK"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_PROVIDER_UPDATE_FLOW"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_PROVIDER_UPDATE_MODE"] == "prompt"
+    assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_CACHE_CLEANUP_FLOW"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED"] == "1"
+    assert calls[1]["kwargs"]["timeout"] == update_runtime.POST_UPDATE_WITH_PROVIDERS_TIMEOUT_SECONDS
+
+
+def test_post_update_without_provider_flow_keeps_short_default_timeout(monkeypatch, tmp_path: Path) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.delenv("CODEX_BIN_DIR", raising=False)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    ccb_entry = install_dir / "ccb"
+    ccb_entry.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def _fake_run(command, **kwargs):
+        calls.append({"command": list(command), "kwargs": dict(kwargs)})
+        return update_runtime.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(update_runtime.subprocess, "run", _fake_run)
+
+    ok = update_runtime._run_post_update_with_new_entrypoint(
+        install_dir=install_dir,
+        old_info={"version": "8.2.0"},
+        new_info={"version": "8.3.0"},
+        provider_mode="none",
+        cache_cleanup_enabled=False,
+    )
+
+    assert ok is True
+    assert calls[1]["kwargs"]["timeout"] == update_runtime.POST_UPDATE_TIMEOUT_SECONDS
+    assert calls[1]["command"][-1] == "--no-cache-cleanup"
 
 
 def test_post_update_delegation_prefers_current_bin_wrapper(monkeypatch, tmp_path: Path) -> None:
@@ -872,6 +978,137 @@ def test_post_update_internal_command_runs_new_process_provisioning(monkeypatch,
 
     assert code == 0
     assert calls == [{"roles": {"install_dir": install_dir}}]
+
+
+def test_post_update_internal_command_runs_provider_flow_when_authorized(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    install_dir = tmp_path / "install"
+    provider_modes: list[str] = []
+    monkeypatch.setenv("CCB_PROVIDER_UPDATE_FLOW", "1")
+    monkeypatch.setenv("CCB_PROVIDER_UPDATE_MODE", "all")
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "_run_provider_updates_nonblocking",
+        lambda *, mode: provider_modes.append(mode),
+    )
+
+    code = update_runtime.maybe_handle_post_update_command(
+        [update_runtime.POST_UPDATE_COMMAND, "--from-version", "8.2.0", "--to-version", "8.3.0"],
+        script_root=install_dir,
+    )
+
+    assert code == 0
+    assert provider_modes == ["all"]
+
+
+def test_post_update_internal_command_runs_cache_migration_when_authorized(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    install_dir = tmp_path / "install"
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **kwargs: calls.append(dict(kwargs)),
+    )
+
+    code = update_runtime.maybe_handle_post_update_command(
+        [update_runtime.POST_UPDATE_COMMAND, "--from-version", "8.3.0", "--to-version", "8.4.0"],
+        script_root=install_dir,
+    )
+
+    assert code == 0
+    assert calls == [
+        {
+            "from_version": "8.3.0",
+            "to_version": "8.4.0",
+            "cwd": Path.cwd(),
+        }
+    ]
+
+
+def test_post_update_cache_migration_opt_out_is_honored(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED", "0")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("cleanup must be skipped")),
+    )
+
+    code = update_runtime.maybe_handle_post_update_command(
+        [
+            update_runtime.POST_UPDATE_COMMAND,
+            "--from-version",
+            "8.3.0",
+            "--to-version",
+            "8.4.0",
+            "--no-cache-cleanup",
+        ],
+        script_root=tmp_path / "install",
+    )
+
+    assert code == 0
+
+
+def test_post_update_cache_migration_failure_does_not_fail_core_update(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("disk busy")),
+    )
+
+    code = update_runtime._run_post_update_provisioning(
+        install_dir=tmp_path / "install",
+        from_version="8.3.0",
+        to_version="8.4.0",
+    )
+
+    assert code == 0
+    assert "core update is unaffected" in capsys.readouterr().out
+
+
+def test_required_post_update_failure_skips_cache_migration_before_rollback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_REQUIRED", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 1)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("cleanup must wait for a committed update")),
+    )
+
+    code = update_runtime._run_post_update_provisioning(install_dir=tmp_path / "install")
+
+    assert code == 1
 
 
 def test_entrypoint_routes_internal_post_update_command(monkeypatch, tmp_path: Path) -> None:

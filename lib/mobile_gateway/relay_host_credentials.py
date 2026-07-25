@@ -30,7 +30,9 @@ RELAY_MODE_OFFICIAL = 'official'
 RELAY_MODE_SELF_HOSTED = 'self_hosted'
 RELAY_MODES = frozenset({RELAY_MODE_OFFICIAL, RELAY_MODE_SELF_HOSTED})
 CCB_OFFICIAL_RELAY_ORIGIN = 'wss://47.120.71.142'
-_CCB_OFFICIAL_RELAY_ORIGIN_ALIASES = frozenset({CCB_OFFICIAL_RELAY_ORIGIN, 'wss://relay.seemlab.top'})
+_CCB_OFFICIAL_RELAY_ORIGIN_ALIASES = frozenset(
+    {CCB_OFFICIAL_RELAY_ORIGIN, 'wss://relay.seemlab.top'}
+)
 
 
 class RelayHostCredentialsError(RuntimeError):

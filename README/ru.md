@@ -6,7 +6,7 @@
 **Координируйте Codex, Claude, Gemini и другие CLI Agent в видимых и управляемых процессах, которые можно напрямую взять под контроль**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Детали Mobile App, граница безопасности и исходники</b></summary>
 
-CCB 8.3.0 включает Flutter source CCB Mobile в [`mobile/`](../mobile/) и публикует Android APK через GitHub Releases:
+CCB 8.3.1 включает Flutter source CCB Mobile в [`mobile/`](../mobile/) и публикует Android APK через GitHub Releases:
 
-- [Скачать CCB Mobile v8.3.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.0/ccb-mobile-v8.3.0.apk)
+- [Скачать CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
 - Исходники app: [`mobile/app`](../mobile/app)
 - Исходники server gateway: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,17 @@ CCB поддерживает [Agent Roles Spec](https://github.com/SeemSeam/agen
 ## Release Notes
 
 <details open>
+<summary><b>v8.3.1</b> - Единое обновление providers, безопасный вывод кешей и постоянный доступ к Config UI</summary>
+
+- Объединяет поддерживаемые обновления providers в `ccb update`: точная проверка версии, отказ и пропуск конкретной версии без перезапуска активных panes.
+- Выводит из эксплуатации проектные кеши Claude/Gemini и удаляет только подтверждённые CCB legacy-данные; активные проекты, sessions и данные аутентификации сохраняются.
+- Позволяет задать стабильный loopback-порт и защищённый источник token для Config UI без вывода значения token.
+- Сохраняет shutdown finalizers во время остановки сервера и использует компактный двухколоночный Yazi layout в Rich mode.
+- Синхронизирует CLI, npm, Linux, macOS, Android и все release-артефакты с 8.3.1.
+
+</details>
+
+<details>
 <summary><b>v8.3.0</b> - Точные provider-turn, целостность jobs и Mobile-терминал внутри проекта</summary>
 
 - Kimi, Claude и Qoder привязаны к своим нативным контрактам turn, активации, сессии и завершения.
