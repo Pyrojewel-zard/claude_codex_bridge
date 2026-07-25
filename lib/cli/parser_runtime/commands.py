@@ -112,7 +112,11 @@ def parse_mobile(tokens: list[str], *, project: str | None, error_type) -> Parse
     if action != 'serve':
         raise error_type('mobile only supports: serve, devices, revoke')
     parser = argparse.ArgumentParser(prog='ccb mobile serve', add_help=False)
-    parser.add_argument('--listen', default='127.0.0.1:8787')
+    parser.add_argument(
+        '--listen',
+        default='127.0.0.1:8787',
+        help='HOST:PORT; route-provider lan also accepts a specific private interface IP',
+    )
     parser.add_argument('--public-url', default=None)
     parser.add_argument(
         '--route-provider',

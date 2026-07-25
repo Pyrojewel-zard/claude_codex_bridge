@@ -230,7 +230,8 @@ The phone app is a remote controller for real CCB projects running on a server. 
 
 Safety boundary:
 
-- The CCB gateway binds only to loopback, for example `127.0.0.1:8787`.
+- The CCB gateway binds to loopback by default, for example `127.0.0.1:8787`.
+- For direct LAN access, bind one specific private interface address (wildcard and public addresses are rejected): `ccb install mobile --route-provider lan --listen 192.168.31.155:8787`. The pairing URL is inferred from `--listen`; no forwarding process or `--public-url` is needed.
 - Remote access uses Tailscale Serve, not Tailscale Funnel.
 - CCB does not store Tailscale passwords, OAuth tokens, admin API tokens, or automatically modify tailnet ACLs/grants.
 - The phone receives only the scopes authorized by the pairing profile, such as view, content, terminal, file upload, and file download.

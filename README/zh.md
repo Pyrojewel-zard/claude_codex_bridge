@@ -221,7 +221,8 @@ CCB 8.3.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，�
 
 安全边界：
 
-- CCB gateway 只绑定 loopback，例如 `127.0.0.1:8787`。
+- CCB gateway 默认绑定 loopback，例如 `127.0.0.1:8787`。
+- 局域网直连时可绑定一个明确的私网网卡地址（拒绝通配地址和公网地址）：`ccb install mobile --route-provider lan --listen 192.168.31.155:8787`。配对 URL 会从 `--listen` 自动推导，无需额外转发进程或 `--public-url`。
 - 远程访问使用 Tailscale Serve，不启用 Tailscale Funnel。
 - CCB 不保存 Tailscale 密码、OAuth token、admin API token，也不会自动修改 tailnet ACL/grants。
 - 手机只获得 pairing profile 授权的 scope，例如 view、content、terminal、file upload 和 file download。
