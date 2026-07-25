@@ -1338,7 +1338,31 @@ Write semantics:
   handoff trust, but must not by themselves trigger daemon restart while the
   modern daemon remains mounted and connectable
 
-### 7.10 Diagnostics Bundle
+### 7.10 Config Restart Intent
+
+Path:
+
+- `.ccb/ccbd/config-restart-intent.json`
+
+Required purpose:
+
+- Config UI may explicitly classify an active-config edit as restart-bound.
+  This is a foreground-start instruction, not generic config drift and not
+  keeper authority.
+- The record contains the active config file digest plus the current daemon
+  instance and generation, but never API keys, URLs, env values, or other
+  config contents.
+- Keeper must leave the mounted daemon running until the user next starts CCB.
+- The next foreground `ccb` must stop that recorded daemon holder and start a
+  fresh generation even when an earlier faulty reload already published the
+  target config signature.
+- A successful start clears the intent only after the fresh lease reports the
+  current active config signature. A changed target, failed start, or reused
+  daemon holder leaves the intent pending.
+- Ordinary manual file edits without this explicit intent retain the existing
+  reload-pending behavior and must not restart the daemon automatically.
+
+### 7.11 Diagnostics Bundle
 
 Command:
 

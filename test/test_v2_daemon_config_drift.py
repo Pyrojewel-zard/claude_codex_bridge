@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 import cli.services.daemon as daemon_service
+from cli.services.config_restart_intent import record_config_restart_intent
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
 import pytest
@@ -42,6 +44,8 @@ def _inspection(
     mount_state: MountState = MountState.MOUNTED,
     reason: str,
     config_signature: str | None = None,
+    generation: int = 1,
+    daemon_instance_id: str | None = None,
 ) -> LeaseInspection:
     lease = CcbdLease(
         project_id=context.project.project_id,
@@ -52,8 +56,9 @@ def _inspection(
         started_at='2026-03-29T00:00:00Z',
         last_heartbeat_at='2026-03-29T00:00:00Z',
         mount_state=mount_state,
-        generation=1,
+        generation=generation,
         config_signature=config_signature,
+        daemon_instance_id=daemon_instance_id,
     )
     return LeaseInspection(
         lease=lease,
@@ -229,6 +234,77 @@ def test_connect_compatible_daemon_skips_probe_when_lease_signature_matches(
 
     assert handle is not None
     assert captured == [None]
+
+
+def test_connect_compatible_daemon_restarts_explicit_config_ui_source_holder(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-explicit-config-restart'
+    ctx = _context(project_root, 'agent1:codex\n')
+    expected = project_config_identity_payload(load_project_config(project_root).config)
+    MountManager(ctx.paths).mark_mounted(
+        project_id=ctx.project.project_id,
+        pid=12345,
+        socket_path=ctx.paths.ccbd_socket_path,
+        generation=4,
+        config_signature=str(expected['config_signature']),
+        daemon_instance_id='daemon-before-config-save',
+    )
+    config_digest = hashlib.sha256(
+        (project_root / '.ccb' / 'ccb.config').read_bytes()
+    ).hexdigest()
+    record_config_restart_intent(
+        project_root,
+        target_config_digest=config_digest,
+        affected_agents=('agent1',),
+        reason='provider_launch_config_changed',
+        layout=ctx.paths,
+    )
+    inspection = _inspection(
+        ctx,
+        health=LeaseHealth.HEALTHY,
+        socket_connectable=True,
+        pid_alive=True,
+        heartbeat_fresh=True,
+        reason='healthy',
+        config_signature=str(expected['config_signature']),
+        generation=4,
+        daemon_instance_id='daemon-before-config-save',
+    )
+    clients: list[object] = []
+    shutdown_calls: list[object] = []
+
+    class FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None) -> None:
+            clients.append((socket_path, timeout_s))
+
+        def ping(self, target: str = 'ccbd') -> dict:
+            raise AssertionError('explicit restart must bypass config-signature probe')
+
+    monkeypatch.setattr(daemon_service, 'CcbdClient', FakeClient)
+    monkeypatch.setattr(
+        daemon_service,
+        '_shutdown_incompatible_daemon',
+        lambda context, client: shutdown_calls.append((context, client)),
+    )
+
+    ordinary_handle = daemon_service._connect_compatible_daemon(
+        ctx,
+        inspection,
+        restart_on_mismatch=True,
+    )
+    handle = daemon_service._connect_start_compatible_daemon(
+        ctx,
+        inspection,
+        restart_on_mismatch=True,
+    )
+
+    assert ordinary_handle is not None
+    assert handle is None
+    assert len(clients) == 2
+    assert len(shutdown_calls) == 1
+    assert shutdown_calls[0][0] is ctx
 
 
 def test_ensure_daemon_started_keeps_healthy_daemon_on_reload_pending_config_drift(monkeypatch, tmp_path: Path) -> None:

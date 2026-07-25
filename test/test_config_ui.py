@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import sys
@@ -16,6 +17,7 @@ import pytest
 
 import cli.services.config_ui as config_ui_module
 from cli.models import ParsedConfigUiCommand
+from cli.services.config_restart_intent import load_config_restart_intent
 from cli.services.config_ui import (
     config_ui_asset_path,
     config_ui_provider_capabilities,
@@ -24,6 +26,7 @@ from cli.services.config_ui import (
 )
 from cli.services.config_ui_settings import resolve_config_ui_settings
 from agents.config_loader import ConfigValidationError
+from storage.paths import PathLayout
 
 
 def _context(project_root: Path):
@@ -39,6 +42,8 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert 'id="staticDeletePane"' in page
     assert 'id="basicDeletePane"' in page
     assert 'function deleteSelectedPane()' in page
+    assert 'if (result.restart_required)' in page
+    assert 'configRestartRequired' in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
     assert match is not None
     embedded_icon = base64.b64decode(match.group(1))
@@ -475,6 +480,195 @@ def test_config_ui_validates_saves_with_digest_guard_and_hot_reloads(tmp_path: P
         thread.join(timeout=2)
         handle.close()
     assert not thread.is_alive()
+
+
+def test_config_ui_saves_api_change_without_hot_reload_and_schedules_restart(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-api-restart'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = '''version = 2
+
+[windows]
+main = "agent1:codex"
+
+[agents.agent1]
+key = "old-secret"
+url = "https://old.example.test"
+'''
+    updated = original.replace('old-secret', 'new-secret').replace(
+        'https://old.example.test',
+        'https://new.example.test',
+    )
+    config_path.write_text(original, encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    reload_calls: list[bool] = []
+
+    def _reload(dry_run: bool) -> dict[str, object]:
+        reload_calls.append(dry_run)
+        assert dry_run is True
+        return {
+            'status': 'ok',
+            'plan_class': 'replace_agent',
+            'future_safe_to_apply': True,
+            'operations': [
+                {
+                    'op': 'replace_agent',
+                    'agent': 'agent1',
+                    'fields': ['api', 'provider_profile'],
+                }
+            ],
+        }
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=1.0,
+        reload_action=_reload,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        applied = _post_json(
+            handle.url,
+            '/api/apply',
+            {
+                'text': updated,
+                'expected_digest': config['digest'],
+                'mode': 'hot_reload',
+            },
+        )
+
+        assert applied['status'] == 'restart_required'
+        assert applied['restart_required'] is True
+        assert applied['affected_agents'] == ['agent1']
+        assert applied['dry_run']['plan_class'] == 'replace_agent'
+        assert 'reload' not in applied
+        assert reload_calls == [True]
+        assert config_path.read_text(encoding='utf-8') == updated
+
+        layout = PathLayout(project_root)
+        intent = load_config_restart_intent(layout)
+        assert intent is not None
+        assert intent.affected_agents == ('agent1',)
+        persisted = layout.ccbd_config_restart_intent_path.read_text(encoding='utf-8')
+        assert 'old-secret' not in persisted
+        assert 'new-secret' not in persisted
+        assert 'https://new.example.test' not in persisted
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_schedules_api_restart_when_daemon_dry_run_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-api-restart-offline'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = '''version = 2
+
+[windows]
+main = "agent1:codex"
+
+[agents.agent1]
+key = "old-secret"
+url = "https://old.example.test"
+'''
+    updated = original.replace('old-secret', 'new-secret')
+    config_path.write_text(original, encoding='utf-8')
+    expected_digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    def _unavailable(_dry_run: bool) -> dict[str, object]:
+        raise RuntimeError('daemon unavailable')
+
+    status, applied = config_ui_module._apply_candidate(
+        {
+            'text': updated,
+            'expected_digest': expected_digest,
+            'mode': 'hot_reload',
+        },
+        config_path=config_path,
+        project_root=project_root,
+        path_layout=PathLayout(project_root),
+        reload_action=_unavailable,
+        mutation_lock=threading.Lock(),
+    )
+
+    assert int(status) == 200
+    assert applied['status'] == 'restart_required'
+    assert applied['restart_required'] is True
+    assert applied['affected_agents'] == ['agent1']
+    assert applied['dry_run']['status'] == 'unavailable'
+    assert applied['reload_warning'] == 'daemon unavailable'
+    assert config_path.read_text(encoding='utf-8') == updated
+    assert load_config_restart_intent(PathLayout(project_root)) is not None
+
+
+def test_config_ui_safe_apply_clears_matching_save_only_restart_intent(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-safe-apply-after-save'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = 'version = 2\n\n[windows]\nmain = "agent1:codex"\n'
+    updated = original.replace('agent1:codex', 'agent1:codex, agent2:claude')
+    config_path.write_text(original, encoding='utf-8')
+    layout = PathLayout(project_root)
+    original_digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    status, saved = config_ui_module._apply_candidate(
+        {
+            'text': updated,
+            'expected_digest': original_digest,
+            'mode': 'save',
+        },
+        config_path=config_path,
+        project_root=project_root,
+        path_layout=layout,
+        reload_action=lambda _dry_run: {},
+        mutation_lock=threading.Lock(),
+    )
+
+    assert int(status) == 200
+    assert saved['restart_required'] is True
+    assert load_config_restart_intent(layout) is not None
+    reload_calls: list[bool] = []
+
+    def _reload(dry_run: bool) -> dict[str, object]:
+        reload_calls.append(dry_run)
+        if dry_run:
+            return {
+                'status': 'ok',
+                'plan_class': 'add_agent',
+                'future_safe_to_apply': True,
+            }
+        return {'status': 'published', 'plan_class': 'add_agent'}
+
+    status, applied = config_ui_module._apply_candidate(
+        {
+            'text': updated,
+            'expected_digest': saved['digest'],
+            'mode': 'hot_reload',
+        },
+        config_path=config_path,
+        project_root=project_root,
+        path_layout=layout,
+        reload_action=_reload,
+        mutation_lock=threading.Lock(),
+    )
+
+    assert int(status) == 200
+    assert applied['status'] == 'reloaded'
+    assert reload_calls == [True, False]
+    assert load_config_restart_intent(layout) is None
 
 
 def test_config_ui_rejects_invalid_candidate_without_writing(tmp_path: Path) -> None:
