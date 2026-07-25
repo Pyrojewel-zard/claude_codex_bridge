@@ -59,6 +59,27 @@ class CcbMobileLocalizations {
 
   String get route => isChinese ? '路由' : 'Route';
 
+  String get useExampleAddress =>
+      isChinese ? '使用示例地址' : 'Use example address';
+
+  String routeDescription(String route) {
+    return switch (route) {
+      'lan' => isChinese
+          ? '仅同一局域网。电脑需监听一个明确的私网 IP。'
+          : 'Same private LAN only. The computer must listen on a specific private IP.',
+      'tailnet' => isChinese
+          ? '经 Tailscale Serve 访问，网关仍只监听本机回环地址。'
+          : 'Access through Tailscale Serve; the gateway remains loopback-only.',
+      'cloudflare_tunnel' => isChinese
+          ? '经 Cloudflare Tunnel 访问，使用你的 HTTPS 公开地址。'
+          : 'Access through Cloudflare Tunnel using your HTTPS public URL.',
+      'relay' => isChinese
+          ? '经 Relay 访问。请使用电脑生成的二维码；手动配置仅用于已有地址。'
+          : 'Access through a Relay. Prefer the QR from the computer; manual configuration is for an existing address only.',
+      _ => '',
+    };
+  }
+
   String get scanQr => isChinese ? '扫码' : 'Scan QR';
 
   String get claim => isChinese ? '连接' : 'Claim';

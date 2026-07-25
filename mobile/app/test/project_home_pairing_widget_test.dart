@@ -8,6 +8,51 @@ import 'support/project_home_test_fakes.dart';
 
 void main() {
   group('project home pairing widget validation', () {
+    testWidgets('manual pairing shows a route reference and fills it only on request', (
+      tester,
+    ) async {
+      await _pumpProjectHome(
+        tester,
+        pairingClaimAndStore: ({
+          required pairing,
+          required deviceName,
+          required store,
+          deviceId,
+        }) async => throw StateError('not claimed'),
+      );
+      await _openPairingPanel(tester);
+
+      expect(
+        find.text('Same private LAN only. The computer must listen on a specific private IP.'),
+        findsOneWidget,
+      );
+      expect(find.text('http://192.168.1.20:8787'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('gateway-url-field')),
+            )
+            .controller
+            ?.text,
+        'http://127.0.0.1:8787',
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('gateway-route-use-example-button')),
+      );
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('gateway-url-field')),
+            )
+            .controller
+            ?.text,
+        'http://192.168.1.20:8787',
+      );
+    });
+
     testWidgets('manual invalid gateway URL does not claim or enter loading', (
       tester,
     ) async {
