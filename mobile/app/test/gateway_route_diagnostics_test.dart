@@ -168,6 +168,32 @@ void main() {
     ]);
   });
 
+  test(
+    'uses a listed project when server-wide host id is not a project',
+    () async {
+      final transport = _FakeGatewayTransport(
+        RouteProvider(
+          kind: RouteProviderKind.relay,
+          gatewayUrl: Uri.parse('https://relay.seemlab.top'),
+          websocketUrl: Uri.parse('wss://relay.seemlab.top'),
+        ),
+      );
+
+      final report = await GatewayRouteDiagnostics(
+        transport: transport,
+      ).check(projectId: 'host-server-wide');
+
+      expect(report.ready, isTrue);
+      expect(report.checkedProjectId, 'proj-demo');
+      expect(transport.calls, [
+        'health',
+        'device',
+        'listProjects',
+        'getProjectView:proj-demo',
+      ]);
+    },
+  );
+
   test('fails closed when paired device is revoked', () async {
     final transport = _FakeGatewayTransport(
       RouteProvider(

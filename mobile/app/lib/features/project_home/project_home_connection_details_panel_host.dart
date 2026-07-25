@@ -9,7 +9,7 @@ import '../../transport/gateway_route_diagnostics.dart';
 import 'connection_details.dart';
 import 'project_home_update_panel.dart';
 
-class ProjectHomeConnectionDetailsPanelHost extends StatelessWidget {
+class ProjectHomeConnectionDetailsPanelHost extends StatefulWidget {
   const ProjectHomeConnectionDetailsPanelHost({
     required this.view,
     required this.mode,
@@ -38,8 +38,73 @@ class ProjectHomeConnectionDetailsPanelHost extends StatelessWidget {
   final ValueListenable<CcbLifecycleAction?> runningLifecycleActionListenable;
   final ValueChanged<AppRuntimeMode> onModeChanged;
   final ValueChanged<GatewayPairedHost> onProfileSelected;
-  final VoidCallback onCheckRoute;
+  final Future<GatewayRouteDiagnosticReport?> Function() onCheckRoute;
   final ValueChanged<CcbLifecycleAction> onLifecycleAction;
+
+  @override
+  State<ProjectHomeConnectionDetailsPanelHost> createState() =>
+      _ProjectHomeConnectionDetailsPanelHostState();
+}
+
+class _ProjectHomeConnectionDetailsPanelHostState
+    extends State<ProjectHomeConnectionDetailsPanelHost> {
+  late AppRuntimeMode _mode;
+  GatewayPairedHost? _selectedProfile;
+  GatewayRouteDiagnosticReport? _routeDiagnostics;
+  late bool _checkingRoute;
+
+  @override
+  void initState() {
+    super.initState();
+    _mode = widget.mode;
+    _selectedProfile = widget.selectedProfile;
+    _routeDiagnostics = widget.routeDiagnostics;
+    _checkingRoute = widget.checkingRoute;
+  }
+
+  @override
+  void didUpdateWidget(ProjectHomeConnectionDetailsPanelHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _mode = widget.mode;
+    _selectedProfile = widget.selectedProfile;
+    _routeDiagnostics = widget.routeDiagnostics;
+    _checkingRoute = widget.checkingRoute;
+  }
+
+  void _handleModeChanged(AppRuntimeMode mode) {
+    setState(() {
+      _mode = mode;
+      _routeDiagnostics = null;
+    });
+    widget.onModeChanged(mode);
+  }
+
+  void _handleProfileSelected(GatewayPairedHost profile) {
+    setState(() {
+      _selectedProfile = profile;
+      _routeDiagnostics = null;
+    });
+    widget.onProfileSelected(profile);
+  }
+
+  Future<void> _checkRoute() async {
+    if (_checkingRoute) {
+      return;
+    }
+    setState(() {
+      _checkingRoute = true;
+    });
+    final report = await widget.onCheckRoute();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _checkingRoute = false;
+      if (report != null) {
+        _routeDiagnostics = report;
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,20 +112,21 @@ class ProjectHomeConnectionDetailsPanelHost extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         ConnectionDetailsPanel(
-          view: view,
-          mode: mode,
-          profiles: profiles,
-          selectedProfile: selectedProfile,
-          routeDiagnostics: routeDiagnostics,
-          lifecycleResultListenable: lifecycleResultListenable,
-          loadingProfiles: loadingProfiles,
-          checkingRoute: checkingRoute,
-          runningLifecycleActionListenable: runningLifecycleActionListenable,
+          view: widget.view,
+          mode: _mode,
+          profiles: widget.profiles,
+          selectedProfile: _selectedProfile,
+          routeDiagnostics: _routeDiagnostics,
+          lifecycleResultListenable: widget.lifecycleResultListenable,
+          loadingProfiles: widget.loadingProfiles,
+          checkingRoute: _checkingRoute,
+          runningLifecycleActionListenable:
+              widget.runningLifecycleActionListenable,
           initiallyExpanded: true,
-          onModeChanged: onModeChanged,
-          onProfileSelected: onProfileSelected,
-          onCheckRoute: onCheckRoute,
-          onLifecycleAction: onLifecycleAction,
+          onModeChanged: _handleModeChanged,
+          onProfileSelected: _handleProfileSelected,
+          onCheckRoute: _checkRoute,
+          onLifecycleAction: widget.onLifecycleAction,
         ),
         const SizedBox(height: 12),
         const ProjectHomeUpdatePanel(),

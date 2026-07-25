@@ -57,12 +57,14 @@ void main() {
     expect(checkedHost?.profile.deviceId, 'dev-cloudflare');
     expect(diagnosticsCalls, 1);
 
-    tester
-        .widget<OutlinedButton>(
-          find.byKey(const ValueKey('gateway-route-check-button')),
-        )
-        .onPressed!();
-    await tester.pump();
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('gateway-route-check-button')),
+          )
+          .onPressed,
+      isNull,
+    );
     expect(diagnosticsCalls, 1);
 
     diagnostics.complete(
@@ -86,7 +88,14 @@ void main() {
       find.byKey(const ValueKey('gateway-route-diagnostics-status')),
       findsOneWidget,
     );
-    expect(find.text('Route ready'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('gateway-route-diagnostics-status')),
+          )
+          .data,
+      'Route ready',
+    );
     expect(
       find.descendant(
         of: find.byType(SnackBar, skipOffstage: false),

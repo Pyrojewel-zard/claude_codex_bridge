@@ -1640,7 +1640,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     _pairingForm.setRouteKind(value);
   }
 
-  Future<void> _checkGatewayRoute() async {
+  Future<GatewayRouteDiagnosticReport?> _checkGatewayRoute() async {
     final profile = _selectedProfile;
     final beginOutcome = _routeDiagnosticsCoordinator.begin(
       selectedProfile: _selectedProfile,
@@ -1648,13 +1648,13 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     );
     if (beginOutcome.kind == ProjectHomeRouteDiagnosticsOutcomeKind.noProfile) {
       _showSnack(beginOutcome.snackMessage!);
-      return;
+      return null;
     }
     if (beginOutcome.kind == ProjectHomeRouteDiagnosticsOutcomeKind.busy) {
-      return;
+      return null;
     }
     if (beginOutcome.kind != ProjectHomeRouteDiagnosticsOutcomeKind.ready) {
-      return;
+      return null;
     }
     setState(() {
       _checkingRoute = true;
@@ -1664,7 +1664,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       diagnostics: widget.gatewayRouteDiagnostics,
     );
     if (!mounted) {
-      return;
+      return null;
     }
     if (outcome.kind == ProjectHomeRouteDiagnosticsOutcomeKind.success) {
       final report = outcome.report!;
@@ -1673,7 +1673,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         _checkingRoute = false;
       });
       _showSnack(outcome.snackMessage!);
-      return;
+      return report;
     }
     if (outcome.kind == ProjectHomeRouteDiagnosticsOutcomeKind.failure) {
       setState(() {
@@ -1681,6 +1681,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       });
       _showSnack(outcome.snackMessage!);
     }
+    return null;
   }
 
   Future<void> _requestLifecycle(

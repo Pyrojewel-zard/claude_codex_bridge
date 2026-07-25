@@ -41,12 +41,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('连接 CCB Mobile'), findsOneWidget);
-    expect(find.text('安装 Tailscale'), findsOneWidget);
+    expect(find.text('激活 CCB 官方 Relay'), findsOneWidget);
     expect(find.text('在电脑上运行一条命令'), findsOneWidget);
     expect(find.text('扫描二维码'), findsOneWidget);
     expect(find.text('扫描电脑二维码'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('gateway-pairing-panel')));
+    final pairingPanel = find.byKey(const ValueKey('gateway-pairing-panel'));
+    await tester.ensureVisible(pairingPanel);
+    await tester.pumpAndSettle();
+    await tester.tap(pairingPanel);
     await tester.pumpAndSettle();
 
     expect(find.text('网关地址'), findsOneWidget);
