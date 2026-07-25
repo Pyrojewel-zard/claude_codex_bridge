@@ -694,6 +694,7 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
     assert f'default: "v{version}"' in text
+    assert 'test "$TAG_NAME" = "v$version"' in text
     assert 'os: ubuntu-22.04' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
     assert 'rustup target add x86_64-apple-darwin aarch64-apple-darwin' in text

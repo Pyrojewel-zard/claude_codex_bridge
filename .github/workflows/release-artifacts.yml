@@ -156,6 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
+          test "$TAG_NAME" = "v$version"
           test "$(tr -d '[:space:]' < VERSION)" = "$version"
           app_version="$(python - <<'PY'
           from pathlib import Path
