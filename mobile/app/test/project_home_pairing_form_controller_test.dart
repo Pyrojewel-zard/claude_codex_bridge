@@ -5,230 +5,93 @@ import 'package:ccb_mobile/transport/route_provider.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('defaults expose initial text and route kind', () {
+  test('defaults expose only an empty connection code', () {
     final controller = ProjectHomePairingFormController();
     addTearDown(controller.dispose);
 
-    expect(controller.gatewayUrlController.text, 'http://127.0.0.1:8787');
-    expect(controller.pairingCodeController.text, isEmpty);
-    expect(controller.deviceNameController.text, 'Phone');
-    expect(controller.routeKind, RouteProviderKind.lan);
-    expect(controller.routeKindListenable.value, RouteProviderKind.lan);
+    expect(controller.connectionCodeController.text, isEmpty);
   });
 
-  test('setRouteKind updates getter and listenable', () {
-    final controller = ProjectHomePairingFormController();
-    addTearDown(controller.dispose);
-    final changes = <RouteProviderKind>[];
-    controller.routeKindListenable.addListener(() {
-      changes.add(controller.routeKindListenable.value);
-    });
-
-    controller.setRouteKind(RouteProviderKind.relay);
-
-    expect(controller.routeKind, RouteProviderKind.relay);
-    expect(controller.routeKindListenable.value, RouteProviderKind.relay);
-    expect(changes, [RouteProviderKind.relay]);
-  });
-
-  test('manual request uses current route and trimmed fields', () {
-    final controller = ProjectHomePairingFormController();
-    addTearDown(controller.dispose);
-    controller.gatewayUrlController.text = ' https://gateway.example.com/base ';
-    controller.pairingCodeController.text = ' code-123 ';
-    controller.deviceNameController.text = ' Pixel ';
-    controller.setRouteKind(RouteProviderKind.cloudflareTunnel);
-
-    final request = controller.buildRequest();
-
-    expect(request.deviceName, 'Pixel');
-    expect(request.pairing.pairingCode, 'code-123');
-    expect(
-      request.pairing.gatewayUrl,
-      Uri.parse('https://gateway.example.com/base'),
+  test('typed connection code owns route and defaults device name', () {
+    final pairing = _relayPairing();
+    final controller = ProjectHomePairingFormController(
+      connectionCodeText: pairing.toConnectionCode(),
     );
-    expect(
-      request.pairing.claimEndpoint,
-      Uri.parse('https://gateway.example.com/v1/pairing/claim'),
-    );
-    expect(request.pairing.routeProvider, RouteProviderKind.cloudflareTunnel);
-    expect(request.pairing.scopes, projectHomeManualPairingScopes);
-  });
-
-  test('manual request defaults empty device name', () {
-    final controller = ProjectHomePairingFormController();
     addTearDown(controller.dispose);
-    controller.gatewayUrlController.text = 'http://gateway.local:8787';
-    controller.pairingCodeController.text = 'abc';
-    controller.deviceNameController.text = '   ';
 
     final request = controller.buildRequest();
 
     expect(request.deviceName, projectHomePairingDefaultDeviceName);
-  });
-
-  test('invalid manual URL throws existing message', () {
-    final controller = ProjectHomePairingFormController();
-    addTearDown(controller.dispose);
-    controller.gatewayUrlController.text = 'not a url';
-    controller.pairingCodeController.text = 'abc';
-
-    expect(
-      controller.buildRequest,
-      throwsA(
-        isA<ProjectHomePairingRequestException>().having(
-          (error) => error.message,
-          'message',
-          'Gateway URL is required',
-        ),
-      ),
-    );
-  });
-
-  test('missing manual code throws existing message', () {
-    final controller = ProjectHomePairingFormController();
-    addTearDown(controller.dispose);
-    controller.gatewayUrlController.text = 'http://gateway.local:8787';
-    controller.pairingCodeController.text = '   ';
-
-    expect(
-      controller.buildRequest,
-      throwsA(
-        isA<ProjectHomePairingRequestException>().having(
-          (error) => error.message,
-          'message',
-          'Pairing code is required',
-        ),
-      ),
-    );
-  });
-
-  test(
-    'override request returns same payload and ignores invalid manual fields',
-    () {
-      final controller = ProjectHomePairingFormController();
-      addTearDown(controller.dispose);
-      final payload = _pairingPayload(
-        code: 'scan-code',
-        routeKind: RouteProviderKind.cloudflareTunnel,
-      );
-      controller.gatewayUrlController.text = 'not a url';
-      controller.pairingCodeController.text = '';
-      controller.deviceNameController.text = ' Scanner ';
-
-      final request = controller.buildRequest(pairingOverride: payload);
-
-      expect(request.pairing, same(payload));
-      expect(request.deviceName, 'Scanner');
-    },
-  );
-
-  test('scanned payload applies URL code route and notifies', () {
-    final controller = ProjectHomePairingFormController();
-    addTearDown(controller.dispose);
-    final changes = <RouteProviderKind>[];
-    controller.routeKindListenable.addListener(() {
-      changes.add(controller.routeKindListenable.value);
-    });
-    final payload = _pairingPayload(
-      gatewayUrl: Uri.parse('https://scan.example.com'),
-      code: 'scan-code',
-      routeKind: RouteProviderKind.cloudflareTunnel,
-    );
-
-    controller.applyScannedPairing(payload);
-
-    expect(controller.gatewayUrlController.text, 'https://scan.example.com');
-    expect(controller.pairingCodeController.text, 'scan-code');
-    expect(controller.routeKind, RouteProviderKind.cloudflareTunnel);
-    expect(changes, [RouteProviderKind.cloudflareTunnel]);
-  });
-
-  test('scanned relay payload survives a claim retry', () {
-    final controller = ProjectHomePairingFormController();
-    addTearDown(controller.dispose);
-    final payload = _relayPairingPayload();
-
-    controller.applyScannedPairing(payload);
-
-    final request = controller.buildRequest();
-
-    expect(request.pairing, same(payload));
-    expect(request.pairing.hostId, 'host-relay');
+    expect(request.pairing.routeProvider, RouteProviderKind.relay);
     expect(request.pairing.relayBootstrap?.sessionId, 'relay-session');
-    expect(
-      request.pairing.relayBootstrap?.rendezvousCapability,
-      'ccb-relay-rv-v1.payload.signature',
-    );
   });
 
-  test('editing a scanned relay identity discards its one-time bootstrap', () {
+  test('scanned payload is retained for retry after a failed claim', () {
     final controller = ProjectHomePairingFormController();
     addTearDown(controller.dispose);
-    final payload = _relayPairingPayload();
-    controller.applyScannedPairing(payload);
+    final pairing = _relayPairing();
 
-    controller.pairingCodeController.text = 'replacement-code';
+    controller.applyScannedPairing(pairing);
     final request = controller.buildRequest();
 
-    expect(request.pairing, isNot(same(payload)));
-    expect(request.pairing.pairingCode, 'replacement-code');
+    expect(controller.connectionCodeController.text, isEmpty);
+    expect(request.pairing, same(pairing));
+    expect(request.pairing.relayBootstrap?.sessionId, 'relay-session');
+  });
+
+  test('typed code replaces a retained scanned payload', () {
+    final controller = ProjectHomePairingFormController();
+    addTearDown(controller.dispose);
+    controller.applyScannedPairing(_relayPairing());
+    final typed = _lanPairing();
+    controller.connectionCodeController.text = typed.toConnectionCode();
+
+    final request = controller.buildRequest();
+
+    expect(request.pairing.pairingCode, 'lan-code');
+    expect(request.pairing.routeProvider, RouteProviderKind.lan);
     expect(request.pairing.relayBootstrap, isNull);
   });
 
-  test('activation applies URL and route without clearing code or device', () {
-    final controller = ProjectHomePairingFormController();
+  test('explicit scan override wins during the immediate scan claim', () {
+    final controller = ProjectHomePairingFormController(
+      connectionCodeText: _lanPairing().toConnectionCode(),
+    );
     addTearDown(controller.dispose);
-    controller.pairingCodeController.text = 'keep-code';
-    controller.deviceNameController.text = 'Keep Device';
+    final scanned = _relayPairing();
 
-    controller.applyGatewayActivation(
-      gatewayUrlText: 'https://activated.example.com',
-      routeKind: RouteProviderKind.relay,
-    );
+    final request = controller.buildRequest(pairingOverride: scanned);
 
-    expect(
-      controller.gatewayUrlController.text,
-      'https://activated.example.com',
-    );
-    expect(controller.routeKind, RouteProviderKind.relay);
-    expect(controller.pairingCodeController.text, 'keep-code');
-    expect(controller.deviceNameController.text, 'Keep Device');
+    expect(request.pairing, same(scanned));
   });
 
-  test('clearPairingCode only clears code', () {
+  test('clearing pairing removes typed and retained scan state', () {
     final controller = ProjectHomePairingFormController();
     addTearDown(controller.dispose);
-    controller.gatewayUrlController.text = 'https://gateway.example.com';
-    controller.pairingCodeController.text = 'clear-me';
-    controller.deviceNameController.text = 'Device';
-    controller.setRouteKind(RouteProviderKind.tailnet);
+    controller.applyScannedPairing(_relayPairing());
+    controller.connectionCodeController.text = _lanPairing().toConnectionCode();
 
     controller.clearPairingCode();
 
-    expect(controller.gatewayUrlController.text, 'https://gateway.example.com');
-    expect(controller.pairingCodeController.text, isEmpty);
-    expect(controller.deviceNameController.text, 'Device');
-    expect(controller.routeKind, RouteProviderKind.tailnet);
+    expect(controller.connectionCodeController.text, isEmpty);
+    expect(
+      controller.buildRequest,
+      throwsA(isA<ProjectHomePairingRequestException>()),
+    );
   });
 }
 
-GatewayPairingPayload _pairingPayload({
-  String code = 'code',
-  Uri? gatewayUrl,
-  RouteProviderKind routeKind = RouteProviderKind.lan,
-}) {
-  final url = gatewayUrl ?? Uri.parse('http://gateway.local:8787');
+GatewayPairingPayload _lanPairing() {
   return GatewayPairingPayload(
-    pairingCode: code,
-    claimEndpoint: url.resolve('/v1/pairing/claim'),
-    routeProvider: routeKind,
-    gatewayUrl: url,
-    scopes: const {'view', 'focus'},
+    pairingCode: 'lan-code',
+    claimEndpoint: Uri.parse('http://gateway.local:8787/v1/pairing/claim'),
+    routeProvider: RouteProviderKind.lan,
+    gatewayUrl: Uri.parse('http://gateway.local:8787'),
+    scopes: const {'view', 'notify'},
   );
 }
 
-GatewayPairingPayload _relayPairingPayload() {
+GatewayPairingPayload _relayPairing() {
   return GatewayPairingPayload.fromJson({
     'pairing_code': 'relay-code',
     'claim_endpoint': 'https://relay.example.com/v1/pairing/claim',

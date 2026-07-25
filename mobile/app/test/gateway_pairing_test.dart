@@ -205,6 +205,74 @@ void main() {
     );
   });
 
+  test(
+    'connection code round trips complete Relay bootstrap without padding',
+    () {
+      final original = GatewayPairingPayload.fromJson({
+        'pairing_code': 'relay-code',
+        'claim_endpoint': 'https://relay.example.com/v1/pairing/claim',
+        'route_provider': 'relay',
+        'gateway_url': 'https://relay.example.com',
+        'scopes': ['view', 'notify'],
+        'project_id': 'host-relay',
+        'host_id': 'host-relay',
+        'websocket_url': 'wss://relay.example.com',
+        'server_fingerprint': 'sha256:relay-host',
+        'relay_session_id': 'relay-session',
+        'relay_client_private_key_b64': 'bootstrap-private-key',
+        'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+        'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+        'relay_bootstrap_expires_at': '2026-07-25T00:00:00Z',
+        'relay_bootstrap_single_use': true,
+      });
+
+      final code = original.toConnectionCode();
+      final decoded = GatewayPairingPayload.fromConnectionText(code);
+
+      expect(code, startsWith(gatewayPairingConnectionCodePrefix));
+      expect(code, isNot(contains('=')));
+      expect(decoded.toJson(), original.toJson());
+      expect(decoded.relayBootstrap?.sessionId, 'relay-session');
+      expect(decoded.relayBootstrapSingleUse, isTrue);
+    },
+  );
+
+  test('connection parser retains raw QR JSON compatibility', () {
+    final rawJson = jsonEncode({
+      'pairing_code': 'lan-code',
+      'claim_endpoint': '$baseUrl/v1/pairing/claim',
+      'route_provider': 'lan',
+      'gateway_url': baseUrl.toString(),
+      'scopes': ['view'],
+    });
+
+    final decoded = GatewayPairingPayload.fromConnectionText(rawJson);
+
+    expect(decoded.pairingCode, 'lan-code');
+    expect(decoded.routeProvider, RouteProviderKind.lan);
+  });
+
+  test('connection parser rejects malformed and oversized input', () {
+    expect(
+      () => GatewayPairingPayload.fromConnectionText('ccb1_%%%'),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromConnectionText('ccb1__w'),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromConnectionText('[]'),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromConnectionText(
+        List.filled(16 * 1024 + 1, 'x').join(),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('parses mobile update pairing QR payload JSON', () {
     final payload = GatewayPairingPayload.fromQrText(
       jsonEncode({

@@ -437,11 +437,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-    expect(_routeKindValue(tester), RouteProviderKind.cloudflareTunnel);
-    expect(
-      _textField(tester, const ValueKey('gateway-url-field')).controller?.text,
-      'https://mobile.example.com',
-    );
+    expect(find.byKey(const ValueKey('connection-code-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('gateway-url-field')), findsNothing);
   });
 
   testWidgets('profile dropdown selection activates without snack', (
@@ -558,18 +555,6 @@ GatewayPairedHost? _profileValue(WidgetTester tester) {
         find.byType(DropdownButtonFormField<GatewayPairedHost>),
       )
       .value;
-}
-
-RouteProviderKind? _routeKindValue(WidgetTester tester) {
-  return tester
-      .state<FormFieldState<RouteProviderKind>>(
-        find.byType(DropdownButtonFormField<RouteProviderKind>),
-      )
-      .value;
-}
-
-TextField _textField(WidgetTester tester, ValueKey<String> key) {
-  return tester.widget<TextField>(find.byKey(key));
 }
 
 Future<GatewayHostProfileStore> _profileStoreWith(

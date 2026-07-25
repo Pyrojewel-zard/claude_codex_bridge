@@ -28,8 +28,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Connect CCB Mobile'), findsOneWidget);
-    expect(find.text('CCB official'), findsOneWidget);
-    expect(find.text('ccb update mobile --route-provider relay'), findsOneWidget);
+    expect(find.text('ccb update mobile'), findsOneWidget);
+    expect(find.text('Enter connection code'), findsOneWidget);
+    expect(find.text('CCB official'), findsNothing);
+    expect(find.text('ccb update mobile --route-provider relay'), findsNothing);
     expect(
       find.byKey(const ValueKey('project-home-update-panel')),
       findsOneWidget,

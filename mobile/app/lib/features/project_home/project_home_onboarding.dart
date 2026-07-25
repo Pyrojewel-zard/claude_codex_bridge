@@ -1,22 +1,16 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_theme.dart';
 import '../../app/background_connection.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
-import '../../transport/route_provider.dart';
 import 'gateway_pairing_panel.dart';
 import 'project_home_update_panel.dart';
 
 class ProjectHomeOnboardingScaffold extends StatelessWidget {
   const ProjectHomeOnboardingScaffold({
-    required this.gatewayUrlController,
-    required this.pairingCodeController,
-    required this.deviceNameController,
-    required this.routeKindListenable,
+    required this.connectionCodeController,
     required this.claiming,
     required this.loadingProfiles,
-    required this.onRouteKindChanged,
     required this.onScan,
     required this.onClaim,
     this.themePreference = CcbThemePreference.system,
@@ -30,17 +24,13 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
     super.key,
   });
 
-  final TextEditingController gatewayUrlController;
-  final TextEditingController pairingCodeController;
-  final TextEditingController deviceNameController;
-  final ValueListenable<RouteProviderKind> routeKindListenable;
+  final TextEditingController connectionCodeController;
   final bool claiming;
   final bool loadingProfiles;
   final CcbThemePreference themePreference;
   final bool backgroundConnectionEnabled;
   final BackgroundConnectionSystemStatus? backgroundConnectionSystemStatus;
   final bool backgroundConnectionSystemStatusLoading;
-  final ValueChanged<RouteProviderKind> onRouteKindChanged;
   final ValueChanged<CcbThemePreference>? onThemePreferenceChanged;
   final ValueChanged<bool>? onBackgroundConnectionEnabledChanged;
   final VoidCallback? onOpenBackgroundConnectionSystemSettings;
@@ -93,12 +83,11 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-              const _RelaySetupSection(),
               _OnboardingStep(
                 icon: Icons.terminal,
                 title: strings.runComputerCommandTitle,
                 body: strings.runComputerCommandBody,
-                code: 'ccb update mobile --route-provider relay',
+                code: 'ccb update mobile',
               ),
               _OnboardingStep(
                 icon: Icons.qr_code_scanner,
@@ -121,20 +110,10 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              ValueListenableBuilder<RouteProviderKind>(
-                valueListenable: routeKindListenable,
-                builder: (context, routeKind, _) {
-                  return GatewayPairingPanel(
-                    gatewayUrlController: gatewayUrlController,
-                    pairingCodeController: pairingCodeController,
-                    deviceNameController: deviceNameController,
-                    routeKind: routeKind,
-                    claiming: claiming,
-                    onRouteKindChanged: onRouteKindChanged,
-                    onScan: onScan,
-                    onClaim: onClaim,
-                  );
-                },
+              GatewayPairingPanel(
+                connectionCodeController: connectionCodeController,
+                claiming: claiming,
+                onClaim: onClaim,
               ),
               const SizedBox(height: 16),
               _ThemePreferenceSection(
@@ -155,63 +134,6 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _RelaySetupSection extends StatefulWidget {
-  const _RelaySetupSection();
-
-  @override
-  State<_RelaySetupSection> createState() => _RelaySetupSectionState();
-}
-
-class _RelaySetupSectionState extends State<_RelaySetupSection> {
-  var _mode = RelayDeploymentMode.official;
-
-  @override
-  Widget build(BuildContext context) {
-    final strings = CcbMobileLocalizations.of(context);
-    final selfHosted = _mode == RelayDeploymentMode.selfHosted;
-    final command = selfHosted
-        ? 'ccb relay host activate --mode self-hosted --relay-origin wss://relay.example.com --invitation-file /path/to/ccb-relay.key'
-        : 'ccb relay host activate --mode official --invitation-file /path/to/ccb-relay.key';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          strings.relaySetupMode,
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const SizedBox(height: 8),
-        SegmentedButton<RelayDeploymentMode>(
-          segments: [
-            ButtonSegment(
-              value: RelayDeploymentMode.official,
-              label: Text(strings.officialRelay),
-            ),
-            ButtonSegment(
-              value: RelayDeploymentMode.selfHosted,
-              label: Text(strings.selfHostedRelay),
-            ),
-          ],
-          selected: {_mode},
-          onSelectionChanged: (value) => setState(() => _mode = value.single),
-        ),
-        const SizedBox(height: 12),
-        _OnboardingStep(
-          icon: selfHosted ? Icons.dns_outlined : Icons.verified_user_outlined,
-          title:
-              selfHosted
-                  ? strings.activateSelfHostedRelayTitle
-                  : strings.activateOfficialRelayTitle,
-          body:
-              selfHosted
-                  ? strings.activateSelfHostedRelayBody
-                  : strings.activateOfficialRelayBody,
-          code: command,
-        ),
-      ],
     );
   }
 }

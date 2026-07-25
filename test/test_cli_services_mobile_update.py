@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 from types import SimpleNamespace
@@ -281,7 +282,15 @@ def test_lan_onboarding_prints_qr_and_same_network_guidance(monkeypatch) -> None
     assert json.loads(qr_payloads[0])["route_provider"] == "lan"
     assert "same trusted local network" in text
     assert "Do not expose this listener to the public Internet" in text
-    assert "Manual Pairing" in text
+    assert "paste this connection code" in text
+    connection_code = next(
+        line
+        for line in output
+        if line.startswith(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
+    )
+    assert connection_code.startswith(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
+    decoded = _decode_connection_code(connection_code)
+    assert json.loads(decoded)["gateway_url"] == "http://192.168.31.155:8787"
 
 
 @pytest.mark.parametrize(
@@ -462,7 +471,7 @@ def test_onboarding_prints_configured_mobile_app_download_url() -> None:
     assert "Download APK: https://example.test/ccb-mobile.apk" in text
     assert mobile_update.DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL not in text
     assert "adb install -r build/app/outputs/flutter-apk/app-debug.apk" not in text
-    assert "Open CCB Mobile, tap Scan computer QR" in text
+    assert "scan the QR or paste the connection code" in text
 
 
 def test_onboarding_logged_in_starts_gateway_serve_and_prints_qr() -> None:
@@ -504,7 +513,7 @@ def test_onboarding_logged_in_starts_gateway_serve_and_prints_qr() -> None:
         "http://127.0.0.1:8787",
     ) in run_commands
     assert "Computer gateway: https://desktop.tailnet.ts.net:8787" in text
-    assert "Open CCB Mobile, tap Scan computer QR" in text
+    assert "scan the QR or paste the connection code" in text
     assert "Scan this QR in CCB Mobile" in text
     assert "loopback-only gateway" in text
     assert "no Funnel" in text
@@ -564,17 +573,22 @@ def test_onboarding_logged_in_starts_managed_mobile_service_when_callback_provid
     assert "status: started" in text
     assert "pid: 1234" in text
     assert "service_log: /tmp/mobile-state/service.log" in text
-    assert "pairing_code: stable-code" in text
+    assert "pairing_code: stable-code" not in text
     assert "pairing_expires_at: 2026-07-02T00:10:00Z" in text
-    assert "pairing_claim_endpoint: https://desktop.tailnet.ts.net:8787/v1/pairing/claim" in text
+    assert "pairing_claim_endpoint:" not in text
     assert "Scan this QR in CCB Mobile" in text
     assert "QR-LINE-1" in text
     assert "QR-LINE-2" in text
-    assert "If scanning fails, use Manual Pairing in CCB Mobile" in text
-    assert "Gateway URL: https://desktop.tailnet.ts.net:8787" in text
-    assert "Pairing Code: stable-code" in text
+    assert "paste this connection code in CCB Mobile" in text
+    connection_code = next(
+        line
+        for line in output
+        if line.startswith(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
+    )
+    assert connection_code.startswith(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
     assert len(qr_payloads) == 1
     payload = json.loads(qr_payloads[0][0])
+    assert json.loads(_decode_connection_code(connection_code)) == payload
     assert payload == {
         "claim_endpoint": "https://desktop.tailnet.ts.net:8787/v1/pairing/claim",
         "expires_at": "2026-07-02T00:10:00Z",
@@ -586,6 +600,22 @@ def test_onboarding_logged_in_starts_managed_mobile_service_when_callback_provid
     assert qr_payloads[0][1]["quiet_zone"] == 2
     assert qr_payloads[0][1]["compact"] is True
     assert "Start the loopback-only CCB Mobile gateway in one terminal" not in text
+
+
+def test_mobile_connection_code_is_unpadded_base64url_round_trip() -> None:
+    payload = '{"claim_endpoint":"https://example.test/v1/pairing/claim","pairing_code":"synthetic"}'
+
+    connection_code = mobile_update.build_mobile_connection_code(payload)
+
+    assert connection_code.startswith(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
+    assert "=" not in connection_code
+    assert _decode_connection_code(connection_code) == payload
+
+
+def _decode_connection_code(value: str) -> str:
+    encoded = value.removeprefix(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
+    encoded += "=" * (-len(encoded) % 4)
+    return base64.urlsafe_b64decode(encoded).decode("utf-8")
 
 
 def test_onboarding_managed_service_qr_keeps_full_payload_and_scanner_safe_border() -> None:
@@ -671,4 +701,15 @@ def test_relay_onboarding_prints_full_mode_bound_pairing_qr(monkeypatch) -> None
     assert code == 0
     assert json.loads(qr_payloads[0][0])['relay_mode'] == 'official'
     assert qr_payloads[0][1] == {'ansi': False, 'quiet_zone': 2, 'compact': True}
-    assert 'one-time Relay invitation stays on the computer' in '\n'.join(output)
+    text = '\n'.join(output)
+    assert 'one-time Relay invitation stays on the computer' in text
+    assert 'paste this connection code in CCB Mobile' in text
+    connection_code = next(
+        line
+        for line in output
+        if line.startswith(mobile_update.MOBILE_CONNECTION_CODE_PREFIX)
+    )
+    assert json.loads(_decode_connection_code(connection_code)) == json.loads(
+        qr_payloads[0][0]
+    )
+    assert 'same host fingerprint and single-use bootstrap' in text

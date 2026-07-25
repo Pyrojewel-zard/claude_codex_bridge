@@ -5,6 +5,7 @@ Status: In Progress
 
 Deployment modes: [official and self-hosted Relay](../../../relay/relay-deployment-modes.md).
 Guided setup: [interactive mobile route onboarding](topics/mobile-update-interactive-route-onboarding.md).
+Phone pairing: [scan-or-code onboarding](topics/mobile-pairing-scan-or-code.md).
 
 ## Purpose
 

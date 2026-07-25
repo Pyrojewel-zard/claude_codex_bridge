@@ -26,7 +26,6 @@ import '../../repository/gateway_mobile_ccb_repository.dart';
 import '../../transport/gateway_route_diagnostics.dart';
 import '../../transport/gateway_connection_outcome.dart';
 import '../../transport/http_gateway_transport.dart';
-import '../../transport/route_provider.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/agent_execution_status.dart';
 import 'project_home_connection_details_panel_host.dart';
@@ -674,10 +673,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
 
   Widget _buildOnboardingScaffold() {
     return ProjectHomeOnboardingScaffold(
-      gatewayUrlController: _pairingForm.gatewayUrlController,
-      pairingCodeController: _pairingForm.pairingCodeController,
-      deviceNameController: _pairingForm.deviceNameController,
-      routeKindListenable: _pairingForm.routeKindListenable,
+      connectionCodeController: _pairingForm.connectionCodeController,
       claiming: _claimingPairing,
       loadingProfiles: _loadingProfiles,
       themePreference: widget.themePreference,
@@ -690,11 +686,6 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
           _backgroundConnectionSystemStatusLoading,
       onOpenBackgroundConnectionSystemSettings:
           _openBackgroundConnectionSystemSettings,
-      onRouteKindChanged: (value) {
-        setState(() {
-          _setPairingRouteKind(value);
-        });
-      },
       onScan: _scanGatewayProfile,
       onClaim: _claimGatewayProfile,
       onClose: _canClosePairingSetup ? _closePairingSetup : null,
@@ -1378,10 +1369,6 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     final activationGeneration = ++_gatewayActivationGeneration;
     _gatewayProfileActivationSucceeded = false;
     _requestBackgroundConnectionReconcile();
-    _pairingForm.applyGatewayActivation(
-      gatewayUrlText: activation.gatewayUrlText,
-      routeKind: activation.routeKind,
-    );
     final session = _runtimeSessionCoordinator.activateGateway(
       activation: activation,
       repositoryFactory: widget.gatewayRepositoryFactory,
@@ -1634,10 +1621,6 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         });
         _showSnack(outcome.snackMessage!);
     }
-  }
-
-  void _setPairingRouteKind(RouteProviderKind value) {
-    _pairingForm.setRouteKind(value);
   }
 
   Future<GatewayRouteDiagnosticReport?> _checkGatewayRoute() async {

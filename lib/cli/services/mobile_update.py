@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import ipaddress
 import json
@@ -22,6 +23,7 @@ from mobile_gateway import parse_listen_address
 TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download"
 TAILSCALE_LOGIN_URL = "https://login.tailscale.com/start"
 DEFAULT_MOBILE_GATEWAY_LISTEN = "127.0.0.1:8787"
+MOBILE_CONNECTION_CODE_PREFIX = "ccb1_"
 CCB_MOBILE_APP_DOWNLOAD_URL_ENV = "CCB_MOBILE_APP_DOWNLOAD_URL"
 DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL = (
     "https://github.com/SeemSeam/claude_codex_bridge/releases/download/"
@@ -265,19 +267,38 @@ def run_mobile_relay_onboarding(
     print_fn("")
     print_fn("On your phone:")
     print_fn("   1. Install or update CCB Mobile.")
-    print_fn("   2. Open CCB Mobile and tap Scan computer QR.")
-    print_fn("   3. Scan the complete Relay QR below.")
-    print_fn("   The one-time Relay invitation stays on the computer and is not part of this QR.")
-    app_download_url = _clean_text(env.get(CCB_MOBILE_APP_DOWNLOAD_URL_ENV)) or DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL
+    print_fn("   2. Open CCB Mobile.")
+    print_fn(
+        "   3. Scan the complete Relay QR, or paste the connection code below."
+    )
+    print_fn(
+        "   The one-time Relay invitation stays on the computer "
+        "and is not part of this QR."
+    )
+    app_download_url = (
+        _clean_text(env.get(CCB_MOBILE_APP_DOWNLOAD_URL_ENV))
+        or DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL
+    )
     print_fn(f"   APK: {app_download_url}")
     print_fn("")
     print_fn("Scan this QR in CCB Mobile:")
-    use_ansi = (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
-    for line in render_terminal_qr(qr_payload, ansi=use_ansi, quiet_zone=2, compact=True):
+    use_ansi = (
+        (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
+    )
+    for line in render_terminal_qr(
+        qr_payload,
+        ansi=use_ansi,
+        quiet_zone=2,
+        compact=True,
+    ):
         print_fn(line)
     print_fn("")
-    print_fn("Relay pairing requires the complete QR because it includes the host fingerprint and single-use bootstrap.")
-    print_fn("If scanning fails, run this command again to rotate the QR.")
+    _print_pairing_fallback(service, print_fn=print_fn)
+    print_fn(
+        "The QR and connection code contain the same host fingerprint "
+        "and single-use bootstrap."
+    )
+    print_fn("Run this command again when that bootstrap expires or has already been used.")
     return 0
 
 
@@ -309,8 +330,8 @@ def run_mobile_lan_onboarding(
         ),
         phone_steps=(
             "Connect the phone and computer to the same trusted local network.",
-            "Open CCB Mobile and tap Scan computer QR.",
-            "Scan the complete LAN QR below.",
+            "Open CCB Mobile.",
+            "Scan the complete LAN QR or paste the connection code below.",
         ),
         start_service_fn=start_service_fn,
         environ=environ,
@@ -335,8 +356,8 @@ def run_mobile_cloudflare_onboarding(
         ),
         phone_steps=(
             "Confirm the named Cloudflare Tunnel is running.",
-            "Open CCB Mobile and tap Scan computer QR.",
-            "Scan the complete tunnel QR below.",
+            "Open CCB Mobile.",
+            "Scan the complete tunnel QR or paste the connection code below.",
         ),
         start_service_fn=start_service_fn,
         environ=environ,
@@ -889,17 +910,20 @@ def _pairing_qr_text(summary: Mapping[str, object]) -> str:
     )
 
 
+def build_mobile_connection_code(pairing_payload: str) -> str:
+    payload = str(pairing_payload or "").strip()
+    if not payload:
+        raise ValueError("mobile pairing payload is empty")
+    encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+    return f"{MOBILE_CONNECTION_CODE_PREFIX}{encoded.rstrip('=')}"
+
+
 def _print_pairing_fallback(
     summary: Mapping[str, object], *, print_fn: Callable[[str], None]
 ) -> None:
-    pairing = summary.get("pairing")
-    if not isinstance(pairing, Mapping):
-        return
-    print_fn("If scanning fails, use Manual Pairing in CCB Mobile:")
-    print_fn(
-        f"  Gateway URL: {pairing.get('gateway_url') or summary.get('gateway_url') or ''}"
-    )
-    print_fn(f"  Pairing Code: {pairing.get('pairing_code') or ''}")
+    connection_code = build_mobile_connection_code(_pairing_qr_text(summary))
+    print_fn("If scanning is unavailable, paste this connection code in CCB Mobile:")
+    print_fn(connection_code)
 
 
 def _split_loopback_listen(value: str) -> tuple[str, str]:
@@ -1018,10 +1042,12 @@ def _print_mobile_app_steps(
     )
     print_fn("   3. Turn on the Tailscale VPN.")
     if qr_ready:
-        print_fn("   4. Open CCB Mobile, tap Scan computer QR, and scan the QR below.")
+        print_fn(
+            "   4. Open CCB Mobile, then scan the QR or paste the connection code below."
+        )
     else:
         print_fn(
-            "   4. After the next `ccb update mobile` prints a QR, open CCB Mobile and scan it."
+            "   4. After the next `ccb update mobile` prints a QR and connection code, open CCB Mobile."
         )
 
 
@@ -1045,12 +1071,8 @@ def _print_mobile_service_summary(print_fn: Callable[[str], None], service: Mapp
         print_fn(f"   replaced_pid: {service.get('replaced_pid')}")
     pairing = service.get("pairing")
     if isinstance(pairing, Mapping):
-        if pairing.get("pairing_code"):
-            print_fn(f"   pairing_code: {pairing.get('pairing_code')}")
         if pairing.get("expires_at"):
             print_fn(f"   pairing_expires_at: {pairing.get('expires_at')}")
-        if pairing.get("claim_endpoint"):
-            print_fn(f"   pairing_claim_endpoint: {pairing.get('claim_endpoint')}")
 
 
 def _should_open_login(environ: Mapping[str, str]) -> bool:
@@ -1090,6 +1112,7 @@ def _quote_shell_part(value: object) -> str:
 
 __all__ = [
     "DEFAULT_MOBILE_GATEWAY_LISTEN",
+    "MOBILE_CONNECTION_CODE_PREFIX",
     "CCB_MOBILE_APP_DOWNLOAD_URL_ENV",
     "DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL",
     "TAILSCALE_LINUX_INSTALL_COMMAND",
@@ -1097,6 +1120,7 @@ __all__ = [
     "TAILSCALE_LOGIN_URL",
     "TailnetOnboardingCommands",
     "TailscaleStatus",
+    "build_mobile_connection_code",
     "build_tailnet_onboarding_commands",
     "detect_tailscale",
     "install_tailscale",

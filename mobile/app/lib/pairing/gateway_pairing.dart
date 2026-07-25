@@ -5,6 +5,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../transport/route_provider.dart';
 
+const gatewayPairingConnectionCodePrefix = 'ccb1_';
+const _maxGatewayPairingTextLength = 16 * 1024;
+
 class GatewayPairingException implements Exception {
   GatewayPairingException(this.uri, this.statusCode, this.message);
 
@@ -85,17 +88,50 @@ class GatewayPairingPayload {
   }
 
   factory GatewayPairingPayload.fromQrText(String text) {
+    return GatewayPairingPayload.fromConnectionText(text);
+  }
+
+  factory GatewayPairingPayload.fromConnectionText(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
-      throw const FormatException('pairing QR payload is empty');
+      throw const FormatException('connection code is empty');
     }
-    final decoded = jsonDecode(trimmed);
+    if (trimmed.length > _maxGatewayPairingTextLength) {
+      throw const FormatException('connection code is too large');
+    }
+    var payloadText = trimmed;
+    if (trimmed.startsWith(gatewayPairingConnectionCodePrefix)) {
+      final encoded = trimmed.substring(
+        gatewayPairingConnectionCodePrefix.length,
+      );
+      if (encoded.isEmpty) {
+        throw const FormatException('connection code payload is empty');
+      }
+      try {
+        final decodedBytes = base64Url.decode(base64Url.normalize(encoded));
+        if (decodedBytes.length > _maxGatewayPairingTextLength) {
+          throw const FormatException('connection code payload is too large');
+        }
+        payloadText = utf8.decode(decodedBytes, allowMalformed: false);
+      } on FormatException {
+        throw const FormatException('connection code is invalid');
+      }
+    }
+    final decoded = jsonDecode(payloadText);
     if (decoded is Map) {
       return GatewayPairingPayload.fromJson({
         for (final entry in decoded.entries) entry.key.toString(): entry.value,
       });
     }
-    throw const FormatException('pairing QR payload must be a JSON object');
+    throw const FormatException(
+      'connection code must contain a pairing object',
+    );
+  }
+
+  String toConnectionCode() {
+    final payload = utf8.encode(jsonEncode(toJson()));
+    final encoded = base64Url.encode(payload).replaceFirst(RegExp(r'=+$'), '');
+    return '$gatewayPairingConnectionCodePrefix$encoded';
   }
 
   Map<String, Object?> toJson() {
@@ -184,7 +220,9 @@ class GatewayPairedHost {
     if (claimedRelayMode != null &&
         pairing.relayMode != null &&
         claimedRelayMode != pairing.relayMode) {
-      throw const FormatException('claimed relay deployment mode does not match pairing');
+      throw const FormatException(
+        'claimed relay deployment mode does not match pairing',
+      );
     }
     final relayMode = claimedRelayMode ?? pairing.relayMode;
     validateRelayDeployment(
