@@ -19,11 +19,62 @@ enum RouteProviderKind {
   }
 }
 
+enum RelayDeploymentMode {
+  official('official'),
+  selfHosted('self_hosted');
+
+  const RelayDeploymentMode(this.wireName);
+
+  final String wireName;
+
+  static RelayDeploymentMode fromWireName(String value) {
+    final normalized = value.trim().toLowerCase().replaceAll('-', '_');
+    for (final mode in values) {
+      if (mode.wireName == normalized) {
+        return mode;
+      }
+    }
+    throw ArgumentError.value(value, 'value', 'unknown relay deployment mode');
+  }
+
+  static RelayDeploymentMode? maybeFromJson(Object? value) {
+    final text = value is String ? value.trim() : '';
+    return text.isEmpty ? null : fromWireName(text);
+  }
+}
+
+const ccbOfficialRelayHosts = {'47.120.71.142', 'relay.seemlab.top'};
+
+bool isCcbOfficialRelayUri(Uri uri) {
+  return (uri.scheme == 'https' || uri.scheme == 'wss') &&
+      ccbOfficialRelayHosts.contains(uri.host.toLowerCase()) &&
+      (uri.hasPort == false || uri.port == 443);
+}
+
+void validateRelayDeployment({
+  required RouteProviderKind kind,
+  RelayDeploymentMode? mode,
+  required Uri gatewayUrl,
+  Uri? websocketUrl,
+}) {
+  if (mode != null && kind != RouteProviderKind.relay) {
+    throw const FormatException('relay deployment mode requires relay routing');
+  }
+  if (mode == RelayDeploymentMode.official &&
+      (!isCcbOfficialRelayUri(gatewayUrl) ||
+          (websocketUrl != null && !isCcbOfficialRelayUri(websocketUrl)))) {
+    throw const FormatException(
+      'official relay mode requires the CCB official relay endpoint',
+    );
+  }
+}
+
 class RouteProvider {
   const RouteProvider({
     required this.kind,
     required this.gatewayUrl,
     this.websocketUrl,
+    this.relayMode,
     this.hostFingerprint,
     this.relayBootstrap,
     this.relayAccess,
@@ -34,6 +85,7 @@ class RouteProvider {
   final RouteProviderKind kind;
   final Uri gatewayUrl;
   final Uri? websocketUrl;
+  final RelayDeploymentMode? relayMode;
   final String? hostFingerprint;
   final RelayPhoneSessionBootstrap? relayBootstrap;
   final RelayPhoneAccessCredentials? relayAccess;
@@ -45,6 +97,7 @@ class RouteProvider {
       'route_provider': kind.wireName,
       'gateway_url': gatewayUrl.toString(),
       if (websocketUrl != null) 'websocket_url': websocketUrl.toString(),
+      if (relayMode != null) 'relay_mode': relayMode!.wireName,
       if (_hasText(hostFingerprint)) 'server_fingerprint': hostFingerprint,
       if (relayBootstrap != null) ...relayBootstrap!.toJson(),
       if (relayAccess != null) ...relayAccess!.toJson(),

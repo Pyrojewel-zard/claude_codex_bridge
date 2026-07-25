@@ -87,6 +87,7 @@ class RelayHostConnectorRuntime:
         return {
             **payload,
             'host_id': self.credentials.host_id,
+            'relay_mode': self.credentials.relay_mode,
             'relay_origin': self.credentials.relay_origin,
             'gateway_origin': self.gateway_origin,
             'host_fingerprint': self.credentials.host_fingerprint,
@@ -131,6 +132,7 @@ def relay_host_runtime_summary(
     return {
         'status': state,
         'mode': 'production_outbound_wss',
+        'relay_mode': credentials.relay_mode,
         'host_id': credentials.host_id,
         'relay_origin': credentials.relay_origin,
         'server_fingerprint': credentials.host_fingerprint,

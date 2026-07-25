@@ -29,6 +29,7 @@ class GatewayPairingPayload {
     this.expiresAt,
     this.hostId,
     this.websocketUrl,
+    this.relayMode,
     this.hostFingerprint,
     this.relayBootstrap,
     this.relayBootstrapExpiresAt,
@@ -44,24 +45,36 @@ class GatewayPairingPayload {
   final DateTime? expiresAt;
   final String? hostId;
   final Uri? websocketUrl;
+  final RelayDeploymentMode? relayMode;
   final String? hostFingerprint;
   final RelayPhoneSessionBootstrap? relayBootstrap;
   final DateTime? relayBootstrapExpiresAt;
   final bool relayBootstrapSingleUse;
 
   factory GatewayPairingPayload.fromJson(Map<String, Object?> json) {
+    final routeProvider = RouteProviderKind.fromWireName(
+      _requiredText(json['route_provider'], 'route_provider'),
+    );
+    final gatewayUrl = _requiredUri(json['gateway_url'], 'gateway_url');
+    final websocketUrl = _optionalUri(json['websocket_url']);
+    final relayMode = RelayDeploymentMode.maybeFromJson(json['relay_mode']);
+    validateRelayDeployment(
+      kind: routeProvider,
+      mode: relayMode,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+    );
     return GatewayPairingPayload(
       pairingCode: _requiredText(json['pairing_code'], 'pairing_code'),
       claimEndpoint: _requiredUri(json['claim_endpoint'], 'claim_endpoint'),
-      routeProvider: RouteProviderKind.fromWireName(
-        _requiredText(json['route_provider'], 'route_provider'),
-      ),
-      gatewayUrl: _requiredUri(json['gateway_url'], 'gateway_url'),
+      routeProvider: routeProvider,
+      gatewayUrl: gatewayUrl,
       scopes: _stringSet(json['scopes']),
       projectId: _optionalText(json['project_id']),
       expiresAt: _optionalDateTime(json['expires_at']),
       hostId: _optionalText(json['host_id']),
-      websocketUrl: _optionalUri(json['websocket_url']),
+      websocketUrl: websocketUrl,
+      relayMode: relayMode,
       hostFingerprint: _optionalText(json['server_fingerprint']),
       relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(json),
       relayBootstrapExpiresAt: _optionalDateTime(
@@ -96,6 +109,7 @@ class GatewayPairingPayload {
       if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
       if (_hasText(hostId)) 'host_id': hostId,
       if (websocketUrl != null) 'websocket_url': websocketUrl.toString(),
+      if (relayMode != null) 'relay_mode': relayMode!.wireName,
       if (_hasText(hostFingerprint)) 'server_fingerprint': hostFingerprint,
       if (relayBootstrap != null) ...relayBootstrap!.toJson(),
       if (relayBootstrapExpiresAt != null)
@@ -156,14 +170,34 @@ class GatewayPairedHost {
               phoneAuthPrivateKeyB64: relayPhoneAuthPrivateKeyB64!,
             )
             : RelayPhoneAccessCredentials.maybeFromJson(hostProfile);
+    final routeKind = RouteProviderKind.fromWireName(
+      _optionalText(hostProfile['route_provider']) ??
+          pairing.routeProvider.wireName,
+    );
+    final gatewayUrl =
+        _optionalUri(hostProfile['gateway_url']) ?? pairing.gatewayUrl;
+    final websocketUrl =
+        _optionalUri(hostProfile['websocket_url']) ?? pairing.websocketUrl;
+    final claimedRelayMode = RelayDeploymentMode.maybeFromJson(
+      hostProfile['relay_mode'],
+    );
+    if (claimedRelayMode != null &&
+        pairing.relayMode != null &&
+        claimedRelayMode != pairing.relayMode) {
+      throw const FormatException('claimed relay deployment mode does not match pairing');
+    }
+    final relayMode = claimedRelayMode ?? pairing.relayMode;
+    validateRelayDeployment(
+      kind: routeKind,
+      mode: relayMode,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+    );
     final routeProvider = RouteProvider(
-      kind: RouteProviderKind.fromWireName(
-        _optionalText(hostProfile['route_provider']) ??
-            pairing.routeProvider.wireName,
-      ),
-      gatewayUrl:
-          _optionalUri(hostProfile['gateway_url']) ?? pairing.gatewayUrl,
-      websocketUrl: _optionalUri(hostProfile['websocket_url']),
+      kind: routeKind,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+      relayMode: relayMode,
       hostFingerprint: _optionalText(hostProfile['server_fingerprint']),
       relayBootstrap:
           relayAccess == null
@@ -191,12 +225,25 @@ class GatewayPairedHost {
 
   factory GatewayPairedHost.fromSecureJson(Map<String, Object?> json) {
     final profileJson = _map(json['profile']);
+    final routeKind = RouteProviderKind.fromWireName(
+      _requiredText(profileJson['route_provider'], 'route_provider'),
+    );
+    final gatewayUrl = _requiredUri(profileJson['gateway_url'], 'gateway_url');
+    final websocketUrl = _optionalUri(profileJson['websocket_url']);
+    final relayMode = RelayDeploymentMode.maybeFromJson(
+      profileJson['relay_mode'],
+    );
+    validateRelayDeployment(
+      kind: routeKind,
+      mode: relayMode,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+    );
     final routeProvider = RouteProvider(
-      kind: RouteProviderKind.fromWireName(
-        _requiredText(profileJson['route_provider'], 'route_provider'),
-      ),
-      gatewayUrl: _requiredUri(profileJson['gateway_url'], 'gateway_url'),
-      websocketUrl: _optionalUri(profileJson['websocket_url']),
+      kind: routeKind,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+      relayMode: relayMode,
       hostFingerprint: _optionalText(profileJson['server_fingerprint']),
       relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(profileJson),
       relayAccess: RelayPhoneAccessCredentials.maybeFromJson(profileJson),

@@ -227,6 +227,16 @@ def test_relay_host_activate_parser_and_render_surface_only_public_metadata() ->
     assert command.invitation_file == '/tmp/relay-invitation'
     assert command.credential_path == '/tmp/relay-credentials.json'
     assert command.json_output is True
+    assert command.relay_mode is None
+
+    official = CliParser().parse(
+        ['relay', 'host', 'activate', '--mode', 'official', '--invitation-file', '/tmp/key']
+    )
+    self_hosted = CliParser().parse(
+        ['relay', 'host', 'activate', '--mode', 'self-hosted', '--relay-origin', 'wss://relay.example.test', '--invitation-file', '/tmp/key']
+    )
+    assert official.relay_mode == 'official'
+    assert self_hosted.relay_mode == 'self-hosted'
 
     lines = render_relay_operator(
         {

@@ -483,3 +483,34 @@ def test_onboarding_reports_non_mapping_mobile_service_result() -> None:
     text = "\n".join(output)
     assert code == 1
     assert "CCB Mobile gateway update failed: TypeError: mobile service starter must return a mapping" in text
+
+
+def test_relay_onboarding_prints_full_mode_bound_pairing_qr(monkeypatch) -> None:
+    output: list[str] = []
+    qr_payloads: list[tuple[str, dict[str, object]]] = []
+
+    def _render_qr(payload: str, **kwargs: object) -> tuple[str, ...]:
+        qr_payloads.append((payload, dict(kwargs)))
+        return ('QR',)
+
+    monkeypatch.setattr(mobile_update, 'render_terminal_qr', _render_qr)
+    code = mobile_update.run_mobile_relay_onboarding(
+        start_service_fn=lambda: {
+            'route_provider': 'relay',
+            'pairing': {
+                'pairing_code': 'pair-code',
+                'claim_endpoint': 'https://47.120.71.142/v1/pairing/claim',
+                'gateway_url': 'https://47.120.71.142',
+                'websocket_url': 'wss://47.120.71.142',
+                'relay_mode': 'official',
+                'scopes': ['view'],
+            },
+        },
+        print_fn=output.append,
+        qr_ansi=False,
+    )
+
+    assert code == 0
+    assert json.loads(qr_payloads[0][0])['relay_mode'] == 'official'
+    assert qr_payloads[0][1] == {'ansi': False, 'quiet_zone': 2, 'compact': True}
+    assert 'one-time Relay invitation stays on the computer' in '\n'.join(output)

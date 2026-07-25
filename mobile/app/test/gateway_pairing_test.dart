@@ -36,6 +36,32 @@ void main() {
     await server.close(force: true);
   });
 
+  test('accepts official Relay QR only for the official endpoint', () {
+    final pairing = GatewayPairingPayload.fromJson({
+      'pairing_code': 'official-code',
+      'claim_endpoint': 'https://47.120.71.142/v1/pairing/claim',
+      'route_provider': 'relay',
+      'relay_mode': 'official',
+      'gateway_url': 'https://47.120.71.142',
+      'websocket_url': 'wss://47.120.71.142',
+      'scopes': ['view'],
+    });
+    expect(pairing.relayMode, RelayDeploymentMode.official);
+
+    expect(
+      () => GatewayPairingPayload.fromJson({
+        'pairing_code': 'spoofed-code',
+        'claim_endpoint': 'https://relay.example.test/v1/pairing/claim',
+        'route_provider': 'relay',
+        'relay_mode': 'official',
+        'gateway_url': 'https://relay.example.test',
+        'websocket_url': 'wss://relay.example.test',
+        'scopes': ['view'],
+      }),
+      throwsFormatException,
+    );
+  });
+
   test('claims pairing payload and stores host profile securely', () async {
     final secureStore = _MemorySecureStore();
     final store = GatewayHostProfileStore(secureStore: secureStore);

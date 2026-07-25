@@ -450,7 +450,16 @@ _COMMAND_HELP = {
           - Stopping the gateway does not stop ccbd, provider panes, or tmux.
     """,
     "relay": """
-        usage: ccb relay <invite|host> <issue|status|list|revoke>
+        usage: ccb relay <invite|host> <issue|activate|status|list|revoke>
+
+        Host activation:
+          ccb relay host activate --mode official --invitation-file /path/to/one-time-invitation
+              Use the CCB Official Relay. Request one one-time invitation from
+              the CCB Relay operator; the invitation is consumed on success.
+          ccb relay host activate --mode self-hosted --relay-origin wss://relay.example.com --invitation-file /path/to/one-time-invitation
+              Use an operator-managed Relay with a trusted TLS endpoint.
+          Omitting --mode preserves compatibility: an explicit --relay-origin
+          selects self-hosted mode; otherwise official mode is selected.
 
         CCB hosted relay operator-local admission:
           ccb relay invite issue --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json --ttl-seconds 900 --json
@@ -638,6 +647,9 @@ def _build_management_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser("update", help="Update CCB or an optional bundle")
     update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or optional bundle 'rich'/'mobile'")
+    update_parser.add_argument("--listen", default=None)
+    update_parser.add_argument("--public-url", default=None)
+    update_parser.add_argument("--route-provider", default=None, choices=("lan", "tailnet", "cloudflare_tunnel", "relay"))
 
     subparsers.add_parser("version", help="Show version and check for updates")
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall ccb, or uninstall the optional rich bundle")

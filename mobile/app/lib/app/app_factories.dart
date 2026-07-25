@@ -106,6 +106,7 @@ Future<GatewayPairedHost> _claimRelayPairing({
       kind: RouteProviderKind.relay,
       gatewayUrl: pairing.gatewayUrl,
       websocketUrl: websocketUrl,
+      relayMode: pairing.relayMode,
       hostFingerprint: hostFingerprint,
       relayBootstrap: bootstrap,
       capabilities: const {'relay_tunnel'},

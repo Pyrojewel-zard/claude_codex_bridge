@@ -22,13 +22,27 @@ class CcbMobileLocalizations {
           ? '把手机作为电脑上 CCB 项目的实时查看和输入界面。'
           : 'Use your phone as a live view and input surface for CCB projects running on your computer.';
 
-  String get installTailscaleTitle =>
-      isChinese ? '安装 Tailscale' : 'Install Tailscale';
+  String get relaySetupMode => isChinese ? 'Relay 模式' : 'Relay mode';
 
-  String get installTailscaleBody =>
+  String get officialRelay => isChinese ? 'CCB 官方' : 'CCB official';
+
+  String get selfHostedRelay => isChinese ? '自建 Relay' : 'Self-hosted Relay';
+
+  String get activateOfficialRelayTitle =>
+      isChinese ? '激活 CCB 官方 Relay' : 'Activate the CCB official Relay';
+
+  String get activateOfficialRelayBody =>
       isChinese
-          ? '在这台手机上安装 Tailscale，并登录到和电脑相同的 tailnet。'
-          : 'Install Tailscale on this phone and sign in to the same tailnet as your computer.';
+          ? '向 CCB Relay 运营方申请一次性邀请码，并仅在电脑端通过所有者可读文件使用。手机不需要输入邀请码。'
+          : 'Request a single-use invitation from the CCB Relay operator. Keep it in an owner-readable file on the computer; the phone never receives it.';
+
+  String get activateSelfHostedRelayTitle =>
+      isChinese ? '激活自建 Relay' : 'Activate a self-hosted Relay';
+
+  String get activateSelfHostedRelayBody =>
+      isChinese
+          ? '先部署具有可信 TLS 的 CCB Relay，再用该 Relay 自己签发的一次性邀请码激活电脑。'
+          : 'Deploy a CCB Relay with trusted TLS first, then activate the computer with a single-use invitation issued by that Relay.';
 
   String get runComputerCommandTitle =>
       isChinese ? '在电脑上运行一条命令' : 'Run one command on the computer';
@@ -42,8 +56,8 @@ class CcbMobileLocalizations {
 
   String get scanQrBody =>
       isChinese
-          ? '保持手机上的 Tailscale VPN 开启，然后扫描电脑显示的二维码。'
-          : 'Keep Tailscale VPN enabled on the phone, then scan the QR shown by the computer.';
+          ? '扫描电脑显示的二维码。二维码只导入 Relay 地址、主机指纹和一次性配对引导。'
+          : 'Scan the QR displayed on the computer. It imports only the Relay endpoint, host fingerprint, and one-time pairing bootstrap.';
 
   String get pairing => isChinese ? '正在配对' : 'Pairing';
 

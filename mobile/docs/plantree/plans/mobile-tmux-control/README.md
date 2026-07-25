@@ -3,6 +3,8 @@
 Date: 2026-06-17
 Status: In Progress
 
+Deployment modes: [official and self-hosted Relay](../../../relay/relay-deployment-modes.md).
+
 ## Purpose
 
 Design a mobile and iPad remote-control surface for CCB that connects to

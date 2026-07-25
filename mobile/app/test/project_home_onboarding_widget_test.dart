@@ -29,8 +29,8 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Connect CCB Mobile'), findsOneWidget);
-    expect(find.text(projectHomeTailscaleDownloadUrl), findsOneWidget);
-    expect(find.text('ccb update mobile'), findsOneWidget);
+    expect(find.text('CCB official'), findsOneWidget);
+    expect(find.text('ccb update mobile --route-provider relay'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('project-home-update-panel')),
       findsOneWidget,

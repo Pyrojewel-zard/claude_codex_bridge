@@ -353,6 +353,11 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
                 'gateway_url': str(summary.get('gateway_url') or summary.get('local_gateway_url') or ''),
                 'route_provider': str(summary.get('route_provider') or args.route_provider or 'tailnet'),
                 **(
+                    {'relay_mode': relay_credentials.relay_mode}
+                    if relay_credentials is not None
+                    else {}
+                ),
+                **(
                     {'relay_outbound': relay_runtime.diagnostics()}
                     if relay_runtime is not None
                     else {}

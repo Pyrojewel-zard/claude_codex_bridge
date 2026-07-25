@@ -203,6 +203,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
     if target == 'host':
         if action == 'activate':
             parser = argparse.ArgumentParser(prog='ccb relay host activate', add_help=False)
+            parser.add_argument('--mode', dest='relay_mode', choices=('official', 'self-hosted'), default=None)
             parser.add_argument('--relay-origin', default=None)
             invitation = parser.add_mutually_exclusive_group()
             invitation.add_argument('--invitation', default=None)
@@ -219,6 +220,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
                 project=project,
                 target=target,
                 action=action,
+                relay_mode=_optional_parser_text(namespace.relay_mode),
                 relay_origin=_optional_parser_text(namespace.relay_origin),
                 invitation=_optional_parser_text(namespace.invitation),
                 invitation_file=_optional_parser_text(namespace.invitation_file),

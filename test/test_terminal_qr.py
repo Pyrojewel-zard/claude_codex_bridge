@@ -116,3 +116,15 @@ def test_terminal_qr_can_render_ansi_blocks() -> None:
 
     assert any("\x1b[40m" in line for line in lines)
     assert any("\x1b[47m" in line for line in lines)
+
+
+def test_terminal_qr_supports_complete_relay_pairing_payload() -> None:
+    payload = 'x' * 1390
+
+    qr = make_terminal_qr(payload)
+    lines = render_terminal_qr(payload, ansi=False, quiet_zone=2, compact=True)
+
+    assert qr.version == 27
+    assert qr.size == 125
+    assert len(lines) == 65
+    assert all(len(line) == 129 for line in lines)

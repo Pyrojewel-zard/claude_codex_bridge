@@ -235,6 +235,48 @@ def run_mobile_update_onboarding(
     return 0
 
 
+def run_mobile_relay_onboarding(
+    *,
+    start_service_fn: Callable[[], Mapping[str, object]],
+    environ: Mapping[str, str] | None = None,
+    print_fn: Callable[[str], None] = print,
+    qr_ansi: bool | None = None,
+) -> int:
+    env = os.environ if environ is None else environ
+    print_fn("CCB Mobile Relay setup")
+    print_fn("Security: loopback-only gateway with an outbound encrypted Relay connector.")
+    print_fn("")
+    print_fn("Starting or refreshing the loopback-only CCB Mobile gateway:")
+    try:
+        service = start_service_fn()
+        if not isinstance(service, Mapping):
+            raise TypeError('mobile service starter must return a mapping')
+        if str(service.get('route_provider') or '') != 'relay':
+            raise ValueError('mobile service did not start in relay mode')
+        _print_mobile_service_summary(print_fn, service)
+        qr_payload = _pairing_qr_text(service)
+    except Exception as exc:
+        print_fn(f"❌ CCB Mobile gateway update failed: {type(exc).__name__}: {exc}")
+        return 1
+    print_fn("")
+    print_fn("On your phone:")
+    print_fn("   1. Install or update CCB Mobile.")
+    print_fn("   2. Open CCB Mobile and tap Scan computer QR.")
+    print_fn("   3. Scan the complete Relay QR below.")
+    print_fn("   The one-time Relay invitation stays on the computer and is not part of this QR.")
+    app_download_url = _clean_text(env.get(CCB_MOBILE_APP_DOWNLOAD_URL_ENV)) or DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL
+    print_fn(f"   APK: {app_download_url}")
+    print_fn("")
+    print_fn("Scan this QR in CCB Mobile:")
+    use_ansi = (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
+    for line in render_terminal_qr(qr_payload, ansi=use_ansi, quiet_zone=2, compact=True):
+        print_fn(line)
+    print_fn("")
+    print_fn("Relay pairing requires the complete QR because it includes the host fingerprint and single-use bootstrap.")
+    print_fn("If scanning fails, run this command again to rotate the QR.")
+    return 0
+
+
 def detect_tailscale(
     *,
     which_fn: Callable[[str], str | None] = shutil.which,
@@ -517,6 +559,7 @@ def _pairing_qr_text(summary: Mapping[str, object]) -> str:
     for key in (
         "project_id",
         "host_id",
+        "relay_mode",
         "expires_at",
         "websocket_url",
         "server_fingerprint",
@@ -752,5 +795,6 @@ __all__ = [
     "build_tailnet_onboarding_commands",
     "detect_tailscale",
     "install_tailscale",
+    "run_mobile_relay_onboarding",
     "run_mobile_update_onboarding",
 ]

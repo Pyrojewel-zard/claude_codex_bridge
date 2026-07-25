@@ -38,10 +38,28 @@ from mobile_gateway.relay_admission import (
 )
 from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
 from mobile_gateway.relay_host_credentials import (
+    CCB_OFFICIAL_RELAY_ORIGIN,
+    RELAY_MODE_OFFICIAL,
+    RELAY_MODE_SELF_HOSTED,
     RelayHostCredentials,
+    RelayHostCredentialsError,
     activate_relay_host,
     load_relay_host_credentials,
 )
+
+
+def test_official_mode_rejects_custom_relay_origin() -> None:
+    with pytest.raises(RelayHostCredentialsError, match='official relay mode'):
+        RelayHostCredentials(
+            relay_origin='wss://relay.example.test',
+            host_id='host-test',
+            invitation_id='invite-test',
+            host_signing_private_key_b64='a' * 43,
+            host_crypto_private_key_b64='b' * 43,
+            activated_at='2026-07-25T00:00:00+00:00',
+            relay_mode=RELAY_MODE_OFFICIAL,
+        )
+    assert CCB_OFFICIAL_RELAY_ORIGIN == 'wss://47.120.71.142'
 from mobile_gateway.relay_host_runtime import (
     RelayHostConnectorRuntime,
     RelayHostRuntimeError,
@@ -112,6 +130,7 @@ async def _host_activation_client_persists_owner_only_bound_keys(
     try:
         credentials = await asyncio.to_thread(
             activate_relay_host,
+            relay_mode=RELAY_MODE_SELF_HOSTED,
             relay_origin=service.url('/').removesuffix('/'),
             invitation=invitation.invitation,
             credential_path=credential_path,
@@ -149,6 +168,7 @@ async def _host_runtime_registers_and_stops(tmp_path: Path) -> None:
             x25519.X25519PrivateKey.generate()
         ),
         activated_at='2026-07-22T00:00:00+00:00',
+        relay_mode=RELAY_MODE_SELF_HOSTED,
     )
     runtime = RelayHostConnectorRuntime(
         credentials=credentials,
@@ -184,6 +204,7 @@ async def _host_runtime_fails_startup_for_revoked_credentials(tmp_path: Path) ->
             x25519.X25519PrivateKey.generate()
         ),
         activated_at='2026-07-22T00:00:00+00:00',
+        relay_mode=RELAY_MODE_SELF_HOSTED,
     )
     runtime = RelayHostConnectorRuntime(
         credentials=credentials,
