@@ -222,6 +222,7 @@ def _apply_agent_api_shortcut(
         skill_overlays=dict(provider_profile.skill_overlays),
         inherit_skills=provider_profile.inherit_skills,
         inherit_commands=provider_profile.inherit_commands,
+        inherit_agents=provider_profile.inherit_agents,
         inherit_memory=provider_profile.inherit_memory,
     )
 

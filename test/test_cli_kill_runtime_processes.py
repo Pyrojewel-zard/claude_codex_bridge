@@ -3,6 +3,8 @@ from __future__ import annotations
 import signal
 from pathlib import Path
 
+import pytest
+
 import cli.kill_runtime.processes as processes
 from project.resolver import bootstrap_project
 from runtime_accelerator.ownership import ProcessIdentity, legacy_marker_path
@@ -12,6 +14,16 @@ from runtime_pid_cleanup import (
     list_process_cmdlines,
     remove_pid_files,
 )
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb so .ccb/ccbd paths match PathLayout.
+
+    Production defaults to ~/.local/ccb relocation; covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
 def test_kill_pid_tree_once_uses_taskkill_on_windows(monkeypatch) -> None:

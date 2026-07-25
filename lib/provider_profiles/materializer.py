@@ -95,6 +95,7 @@ def materialize_provider_profile(
             inherit_config=profile_spec.inherit_config,
             inherit_skills=profile_spec.inherit_skills,
             inherit_commands=profile_spec.inherit_commands,
+            inherit_agents=profile_spec.inherit_agents,
             inherit_memory=profile_spec.inherit_memory,
         )
 

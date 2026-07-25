@@ -14,6 +14,16 @@ from storage_classification import summarize_storage, summarize_storage_compact
 from storage_classification.provider_home import classify_provider_home
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_default_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb so shared-cache/agents land in-project.
+
+    Production defaults to ~/.local/ccb relocation; covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _write(path: Path, text: str = 'x') -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')

@@ -99,7 +99,7 @@ def runtime_state_root_candidates() -> tuple[Path, ...]:
     xdg_state_root = _absolute_path_from_value(xdg_state_home)
     if xdg_state_root is not None:
         candidates.append(xdg_state_root / 'ccb' / 'projects')
-    candidates.append(_account_home_dir() / '.local' / 'state' / 'ccb' / 'projects')
+    candidates.append(_account_home_dir() / '.local' / 'ccb' / 'projects')
     unique: list[Path] = []
     for candidate in candidates:
         if candidate not in unique:
@@ -114,7 +114,7 @@ def runtime_state_base_root() -> Path:
             return candidate
     if candidates:
         return candidates[0]
-    return _account_home_dir() / '.local' / 'state' / 'ccb' / 'projects'
+    return _account_home_dir() / '.local' / 'ccb' / 'projects'
 
 
 def runtime_state_root_for_project(project_id: str) -> Path:
@@ -175,6 +175,23 @@ def choose_runtime_state_placement(
             relocation_reason='wsl_drvfs',
             filesystem_hint=filesystem_hint,
         )
+    if _anchor_runtime_state_requested():
+        return RuntimeStatePlacement(
+            anchor_path=anchor,
+            effective_path=anchor,
+            root_kind='project',
+            relocation_reason=None,
+            filesystem_hint=filesystem_hint,
+        )
+    relocated = runtime_state_root_for_project(project_id)
+    if pathname_runtime_state_supported(relocated):
+        return RuntimeStatePlacement(
+            anchor_path=anchor,
+            effective_path=relocated,
+            root_kind='relocated',
+            relocation_reason='default_relocate',
+            filesystem_hint=filesystem_hint,
+        )
     return RuntimeStatePlacement(
         anchor_path=anchor,
         effective_path=anchor,
@@ -182,6 +199,12 @@ def choose_runtime_state_placement(
         relocation_reason=None,
         filesystem_hint=filesystem_hint,
     )
+
+
+def _anchor_runtime_state_requested() -> bool:
+    """Opt-out flag: set CCB_RUNTIME_STATE_ANCHOR=1 to keep state under .ccb."""
+    raw = str(os.environ.get('CCB_RUNTIME_STATE_ANCHOR') or '').strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
 
 
 def choose_socket_placement(

@@ -34,6 +34,16 @@ from provider_core.pathing import session_filename_for_agent
 from storage.paths import PathLayout
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for stable path assertions.
+
+    Production defaults to relocating to ~/.local/ccb; relocation is covered
+    separately in test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _spec(name: str, provider: str = "codex", *, provider_profile: ProviderProfileSpec | None = None) -> AgentSpec:
     return AgentSpec(
         name=name,
@@ -247,7 +257,8 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     )
     assert (runtime_home / 'company-codex-api-key').read_text(encoding='utf-8') == 'company-key-v2\n'
     assert (runtime_home / 'skills' / 'demo.md').is_file()
-    assert not (runtime_home / 'skills').is_symlink()
+    # Fork policy: codex skills project via symlink first, matching commands.
+    assert (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'commands').is_symlink()
     assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
@@ -899,6 +910,9 @@ def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_p
 
 
 def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_path: Path) -> None:
+    # Fork policy: codex skills project via symlink first (copy fallback).
+    # When the target already matches the source, the legacy copy is
+    # replaced with a symlink at the tree root, per _can_replace_projected_target.
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
     (source_home / 'skills').mkdir(parents=True, exist_ok=True)
@@ -912,7 +926,8 @@ def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_p
         source_home=source_home,
     )
 
-    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills').resolve() == (source_home / 'skills').resolve()
     assert (target_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
     assert (target_home / 'skills.ccb-projection.json').is_file()
 

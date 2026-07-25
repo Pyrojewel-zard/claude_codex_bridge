@@ -59,6 +59,17 @@ def _reset_detached_tmux_server_cache() -> None:
     tmux_panes._PREPARED_DETACHED_TMUX_SERVER_KEYS.clear()
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_default_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions.
+
+    The relocated-runtime test force-overrides _state_root directly, bypassing
+    this anchor. Production default relocation is covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _spec(
     name: str,
     provider: str = 'codex',

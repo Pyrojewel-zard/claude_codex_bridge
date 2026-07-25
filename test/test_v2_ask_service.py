@@ -41,6 +41,17 @@ def _clear_caller_project_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('CCB_SESSION_ID', raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_default_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions.
+
+    The relocated-runtime test sets its own runtime-root-ref marker and bypasses
+    this anchor. Production default relocation is covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _build_context(project_root: Path) -> object:
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
     (project_root / '.ccb' / 'ccb.config').write_text('cmd; agent1:codex, agent2:claude\n', encoding='utf-8')

@@ -5,8 +5,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from storage.paths import PathLayout
 from storage.path_helpers import runtime_project_anchor_from_path, runtime_state_root_from_anchor_ref
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_default_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions.
+
+    Tests that exercise relocation (WSL, env overrides, ref markers) set their
+    own env and bypass this anchor. Production default relocation to
+    ~/.local/ccb is covered in test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
 def test_path_layout_uses_project_scoped_locations(tmp_path: Path) -> None:
@@ -146,7 +159,7 @@ def test_path_layout_wsl_runtime_state_uses_account_home_instead_of_process_home
 
     layout = PathLayout(Path('/mnt/c/Users/demo/repo'))
 
-    assert layout.runtime_state_root == account_home / '.local' / 'state' / 'ccb' / 'projects' / layout.project_id
+    assert layout.runtime_state_root == account_home / '.local' / 'ccb' / 'projects' / layout.project_id
     assert str(layout.runtime_state_root).startswith(str(account_home))
     assert not str(layout.runtime_state_root).startswith(str(provider_home))
 

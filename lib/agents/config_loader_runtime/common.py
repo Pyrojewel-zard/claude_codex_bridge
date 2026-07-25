@@ -41,6 +41,7 @@ ALLOWED_PROVIDER_PROFILE_KEYS = {
     'inherit_config',
     'inherit_skills',
     'inherit_commands',
+    'inherit_agents',
     'inherit_memory',
 }
 ALLOWED_AGENT_KEYS = {

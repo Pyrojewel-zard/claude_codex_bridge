@@ -59,6 +59,7 @@ _CLAUDE_JSON_MCP_PROJECT_KEYS = (
 _MACOS_KEYCHAIN_CLAUDE_SERVICES = ('Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code')
 _CLAUDE_SKILLS_PROJECTION_LABEL = 'claude-inherited-skills'
 _CLAUDE_COMMANDS_PROJECTION_LABEL = 'claude-inherited-commands'
+_CLAUDE_AGENTS_PROJECTION_LABEL = 'claude-inherited-agents'
 _CLAUDE_PLUGIN_SEED_ENV = 'CLAUDE_CODE_PLUGIN_SEED_DIR'
 _CLAUDE_PLUGIN_CACHE_ENV = 'CLAUDE_CODE_PLUGIN_CACHE_DIR'
 
@@ -331,6 +332,12 @@ def _materialize_inherited_assets(
         label=_CLAUDE_COMMANDS_PROJECTION_LABEL,
     )
     _route_inherited_tree(
+        source_home / '.claude' / 'agents',
+        target_layout.claude_dir / 'agents',
+        enabled=_inherits_agents(profile),
+        label=_CLAUDE_AGENTS_PROJECTION_LABEL,
+    )
+    _route_inherited_tree(
         source_home / '.claude' / 'skills',
         target_layout.claude_dir / 'skills',
         enabled=inherited_assets_enabled and _inherits_skills(profile),
@@ -342,6 +349,11 @@ def _materialize_inherited_assets(
         provider='claude',
         target_skills_dir=target_layout.claude_dir / 'skills',
     )
+    # Ensure CCB built-in skills (ask, ccb-clear) exist in the source
+    # skills dir.  External tools (e.g., cc-switch) may clear them;
+    # re-inject on every materialize so managed-homes that symlink to
+    # source always have them.
+    _inject_missing_ccb_skills(source_home / '.claude' / 'skills')
     memory_result = _materialize_claude_memory(
         source_home,
         target_layout,
@@ -520,7 +532,7 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
 
     for source_auth, target_auth in _source_auth_paths(source_home, target_layout):
         if source_auth.is_file():
-            _sync_file(source_auth, target_auth)
+            _sync_file_as_symlink(source_auth, target_auth)
     _materialize_macos_keychain_auth(target_layout)
 
 
@@ -1153,6 +1165,10 @@ def _inherits_commands(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_commands', True))
 
 
+def _inherits_agents(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_agents', True))
+
+
 def _inherits_memory(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_memory', True))
 
@@ -1230,6 +1246,37 @@ def _sync_file(source: Path, target: Path) -> None:
         pass
 
 
+def _sync_file_as_symlink(source: Path, target: Path) -> None:
+    """Project a single auth file via symlink (preferred) with copy fallback.
+
+    Mirrors route_projected_tree's symlink-first policy but for individual files:
+    keeps managed-home auth pointing at the real source credential so refresh
+    tokens are never duplicated into stale copies.
+    """
+    source = Path(source).expanduser()
+    target = Path(target).expanduser()
+    if not source.is_file():
+        _remove_file(target)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if target.is_symlink() and target.resolve() == source.resolve():
+            return
+    except Exception:
+        pass
+    if target.exists() or target.is_symlink():
+        _remove_file(target)
+    try:
+        target.symlink_to(source)
+        return
+    except Exception:
+        _remove_file(target)
+    try:
+        shutil.copy2(source, target)
+    except Exception:
+        pass
+
+
 def _remove_file(path: Path) -> None:
     try:
         path.unlink()
@@ -1258,6 +1305,86 @@ def _sync_tree(source: Path, target: Path) -> None:
 
 def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
     route_projected_tree(source, target, enabled=enabled, label=label, allow_unmarked_replace=True)
+
+
+# Injectable CCB skills that must always be present in the source home's
+# .claude/skills directory, even when external tools (e.g., cc-switch)
+# manage that tree.  These are core CCB delegation primitives, not
+# user-inherited skills.
+_CCB_INJECTABLE_SKILL_NAMES = ('ask', 'ccb-clear')
+
+
+def _inject_missing_ccb_skills(source_skills_dir: Path) -> None:
+    """Ensure CCB built-in skills exist in the (resolved) source skills dir."""
+    injectable_root = _ccb_injectable_skills_root()
+    if injectable_root is None or not injectable_root.is_dir():
+        return
+
+    # Resolve through any symlink chain (e.g., ~/.claude/skills → .cc-switch/skills)
+    try:
+        resolved = source_skills_dir.resolve()
+    except (OSError, RuntimeError):
+        resolved = source_skills_dir
+
+    if not resolved.is_dir():
+        return
+
+    for skill_name in _CCB_INJECTABLE_SKILL_NAMES:
+        source_skill = injectable_root / skill_name
+        if not source_skill.is_dir():
+            continue
+        target = resolved / skill_name
+        if _is_valid_skill_dir(target):
+            continue
+        _install_skill_entry(source_skill, target)
+
+
+def _ccb_injectable_skills_root() -> Path | None:
+    """Locate the CCB install tree's ``inherit_skills/claude_skills/``."""
+    # 1. CODEX_INSTALL_PREFIX env var
+    install_prefix = (os.environ.get('CODEX_INSTALL_PREFIX') or '').strip()
+    if install_prefix:
+        candidate = Path(install_prefix).expanduser() / 'inherit_skills' / 'claude_skills'
+        if candidate.is_dir():
+            return candidate
+
+    # 2. Locate from module path (installed tree)
+    try:
+        path = Path(__file__).resolve().parent
+        for parent in path.parents:
+            candidate = parent / 'inherit_skills' / 'claude_skills'
+            if candidate.is_dir():
+                return candidate
+    except Exception:
+        pass
+
+    # 3. Default install path
+    candidate = Path.home() / '.local' / 'share' / 'codex-dual' / 'inherit_skills' / 'claude_skills'
+    return candidate if candidate.is_dir() else None
+
+
+def _is_valid_skill_dir(path: Path) -> bool:
+    """Return True if *path* exists and has a valid SKILL.md or SKILL.md.bash."""
+    try:
+        return (path.is_dir() or path.is_symlink()) and (
+            (path / 'SKILL.md').is_file() or (path / 'SKILL.md.bash').is_file()
+        )
+    except (OSError, RuntimeError):
+        return False
+
+
+def _install_skill_entry(source: Path, target: Path) -> None:
+    """Copy a skill tree from *source* to *target*, quietly."""
+    if target.exists() or target.is_symlink():
+        shutil.rmtree(target, ignore_errors=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copytree(source, target, symlinks=True)
+    except Exception:
+        try:
+            shutil.copytree(source, target, symlinks=False)
+        except Exception:
+            pass
 
 
 def _system_home_root() -> Path:

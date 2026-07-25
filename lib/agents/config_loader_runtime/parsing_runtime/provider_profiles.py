@@ -79,6 +79,11 @@ def parse_provider_profile(agent_name: str, value: Any) -> ProviderProfileSpec:
                 if 'inherit_commands' in raw
                 else True
             ),
+            inherit_agents=(
+                expect_bool(raw['inherit_agents'], field_name=f'agents.{agent_name}.provider_profile.inherit_agents')
+                if 'inherit_agents' in raw
+                else True
+            ),
             inherit_memory=(
                 expect_bool(raw['inherit_memory'], field_name=f'agents.{agent_name}.provider_profile.inherit_memory')
                 if 'inherit_memory' in raw

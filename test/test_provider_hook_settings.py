@@ -6,6 +6,8 @@ from pathlib import Path
 import shlex
 from types import SimpleNamespace
 
+import pytest
+
 try:  # pragma: no cover - version shim
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
@@ -23,6 +25,17 @@ from provider_hooks.settings import (
     migrate_legacy_project_ccb_hooks,
 )
 from storage.paths import PathLayout
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """These tests assert materialize behavior against project-anchored paths.
+
+    Production defaults to relocating runtime state to ~/.local/ccb; pin the
+    anchor here so the path assertions stay stable. Relocation itself is
+    covered in test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
 def _spec(name: str, provider: str = "claude", *, provider_profile: ProviderProfileSpec | None = None) -> AgentSpec:

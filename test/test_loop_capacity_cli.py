@@ -55,6 +55,16 @@ from storage.paths import PathLayout
 from storage.text_artifacts import write_text_artifact
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb so .ccb/runtime/loop paths match PathLayout.
+
+    Production defaults to ~/.local/ccb relocation; covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')

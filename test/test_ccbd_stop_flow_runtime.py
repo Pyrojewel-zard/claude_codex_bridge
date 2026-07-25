@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ccbd.stop_flow_runtime.pid_cleanup import collect_pid_candidates
 from ccbd.stop_flow_runtime.service import stop_all_project
 from cli.services.kill_runtime.pid_cleanup import collect_project_authority_pid_candidates
@@ -10,6 +12,16 @@ from ccbd.stop_flow_runtime.pid_cleanup import terminate_runtime_pids
 from ccbd.stop_flow_runtime.runtime_records import extra_agent_dir_names
 from runtime_pid_cleanup import collect_project_process_candidates
 from runtime_pid_cleanup.termination import terminate_runtime_pids as terminate_runtime_pids_impl
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb so .ccb/ccbd paths match PathLayout.
+
+    Production defaults to ~/.local/ccb relocation (and pid cleanup already
+    scans the relocated root); covered in test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
 def test_stop_all_project_defers_namespace_destroy_until_after_response(tmp_path: Path) -> None:

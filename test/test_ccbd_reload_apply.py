@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from agents.models import AgentState
 from agents.config_loader import load_project_config
 from ccbd.app import CcbdApp
@@ -16,6 +18,16 @@ from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.project_namespace_runtime import NamespacePatchApplyResult, build_namespace_topology_plan
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from ccbd.start_flow_runtime import StartFlowSummary
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for stable dynamic-agent path assertions.
+
+    Production defaults to ~/.local/ccb relocation; covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
 BASE_CONFIG = """version = 2

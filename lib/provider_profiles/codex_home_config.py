@@ -89,6 +89,12 @@ _CODEX_INHERITED_HOOK_EVENTS_ENV = 'CCB_CODEX_INHERITED_HOOK_EVENTS'
 _CODEX_INHERITED_COMMAND_HOOK_MARKERS_ENV = 'CCB_CODEX_INHERITED_COMMAND_HOOK_MARKERS'
 _CODEX_COMMAND_HOOK_DEFAULT_TIMEOUT_S = 600
 _TOML_TABLE_HEADER_RE = re.compile(r'^\s*\[{1,2}[^\]]+\]{1,2}\s*(?:#.*)?$')
+_CODEX_AUTH_MODE_ENV = 'CCB_CODEX_AUTH_MODE'
+_CODEX_AUTH_MODE_SYMLINK = 'symlink'
+_CODEX_AUTH_MODE_COPY = 'copy'
+_CODEX_AUTH_MODE_NONE = 'none'
+_CODEX_AUTH_MODES = (_CODEX_AUTH_MODE_SYMLINK, _CODEX_AUTH_MODE_COPY, _CODEX_AUTH_MODE_NONE)
+_CODEX_AUTH_MODE_DEFAULT = _CODEX_AUTH_MODE_SYMLINK
 
 
 @dataclass(frozen=True)
@@ -890,12 +896,73 @@ def _materialize_auth_file(source: Path, target: Path, *, profile, authority: Co
 
 
 def _sync_auth_file(source: Path, target: Path, *, profile) -> None:
+    mode = _codex_auth_mode(profile)
+    if mode == _CODEX_AUTH_MODE_NONE:
+        target.unlink(missing_ok=True)
+        return
     if not _inherits_auth(profile):
         return
     if not source.is_file():
         target.unlink(missing_ok=True)
         return
-    _sync_file(source, target)
+    if mode == _CODEX_AUTH_MODE_SYMLINK:
+        _project_auth_symlink(source, target)
+    else:
+        _sync_file(source, target)
+
+
+def _codex_auth_mode(profile) -> str:
+    """Resolve codex auth handling mode: symlink (default) | copy | none.
+
+    Priority: profile.env.CCB_CODEX_AUTH_MODE > process env > symlink default.
+    Opt-in per fork policy: copy preserves upstream behavior, none skips auth.
+    """
+    env_value = ''
+    if profile is not None:
+        env_value = str(_profile_env(profile).get(_CODEX_AUTH_MODE_ENV) or '').strip().lower()
+    if not env_value:
+        env_value = str(os.environ.get(_CODEX_AUTH_MODE_ENV) or '').strip().lower()
+    if env_value in _CODEX_AUTH_MODES:
+        return env_value
+    return _CODEX_AUTH_MODE_DEFAULT
+
+
+def _project_auth_symlink(source: Path, target: Path) -> None:
+    """Project auth.json as a symlink to the real Codex auth file (copy fallback).
+
+    Keeps managed-home auth.json pointing at the source credential so ChatGPT
+    refresh tokens are never duplicated into stale per-home copies.
+    """
+    source = Path(source).expanduser()
+    target = Path(target).expanduser()
+    if not source.is_file():
+        target.unlink(missing_ok=True)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if target.is_symlink() and target.resolve() == source.resolve():
+            return
+    except Exception:
+        pass
+    if target.exists() or target.is_symlink():
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            return
+    try:
+        target.symlink_to(source)
+        return
+    except Exception:
+        try:
+            target.unlink()
+        except Exception:
+            pass
+    try:
+        shutil.copy2(source, target)
+    except Exception:
+        pass
 
 
 def _write_auth_file(target: Path, api_key: str) -> None:
@@ -1147,6 +1214,11 @@ def _copy_inherited_tree(source: Path, target: Path, *, enabled: bool, label: st
         elif not target.is_dir() or tree_content_fingerprint(target) != tree_content_fingerprint(source):
             _repair_owned_codex_skill_entries(source, target)
             return
+    # Prefer symlink-first (fork policy) so codex managed skills point at the
+    # real user skill tree; route_projected_tree carries a shutil.copytree
+    # fallback for platforms where symlinking is unavailable.
+    if route_projected_tree(source, target, enabled=True, label=label, allow_unmarked_replace=True):
+        return
     if copy_projected_tree_to_cache(source, target, label=label):
         return
     remove_projected_path(target, label=label)

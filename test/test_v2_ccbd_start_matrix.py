@@ -17,6 +17,16 @@ import cli.phase2 as phase2_module
 from runtime_accelerator.ownership import load_runtime_accelerator_owner, owner_manifest_path
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb so .ccb/ccbd lease paths match PathLayout.
+
+    Production defaults to ~/.local/ccb relocation; covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
