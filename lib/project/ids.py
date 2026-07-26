@@ -36,6 +36,15 @@ def normalize_project_path(value: str | Path) -> str:
 
 
 def compute_project_id(project_root: Path) -> str:
+    from .identity_store import load_project_identity
+
+    identity = load_project_identity(project_root)
+    if identity is not None:
+        return identity.project_id
+    return compute_legacy_project_id(project_root)
+
+
+def compute_legacy_project_id(project_root: Path) -> str:
     normalized = normalize_project_path(project_root)
     if not normalized:
         raise ValueError('project_root cannot be empty')
@@ -43,8 +52,21 @@ def compute_project_id(project_root: Path) -> str:
 
 
 def project_slug(project_root: Path) -> str:
+    from .identity_store import load_project_identity
+
+    identity = load_project_identity(project_root)
+    if identity is not None:
+        return identity.project_slug
+    return legacy_project_slug(project_root)
+
+
+def legacy_project_slug(project_root: Path) -> str:
     normalized = normalize_project_path(project_root)
-    digest = compute_project_id(project_root)[:8]
+    digest = compute_legacy_project_id(project_root)[:8]
     base_name = Path(normalized).name or 'project'
-    slug = re.sub(r'[^a-z0-9._-]+', '-', base_name.lower()).strip('-') or 'project'
-    return f'{slug}-{digest}'
+    return project_slug_from_name(base_name, digest)
+
+
+def project_slug_from_name(base_name: str, project_id: str) -> str:
+    slug = re.sub(r'[^a-z0-9._-]+', '-', str(base_name or '').lower()).strip('-') or 'project'
+    return f'{slug}-{str(project_id)[:8]}'

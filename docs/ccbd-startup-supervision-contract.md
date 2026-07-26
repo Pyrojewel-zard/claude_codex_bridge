@@ -97,6 +97,24 @@ Out of scope:
 
 - One `.ccb` anchor defines one project control-plane scope.
 - The directory that owns `.ccb/` is the only authority root for that project.
+- `.ccb/project.identity.json` defines the anchor's stable `project_id` and
+  stable project slug once that record exists. The recorded `bound_root` is a
+  replaceable locator used to detect relocation or copying; it must not be
+  hashed again to redefine project identity.
+- New empty anchors receive a random 256-bit project ID. A pre-identity legacy
+  anchor preserves its current path-derived ID when its existing anchor content
+  or current runtime authority agrees with the current root, or adopts the
+  unanimous legacy ID when inactive runtime evidence points to a previous root
+  that no longer exists.
+- Conflicting legacy IDs or a foreign legacy binding that cannot be proven to
+  be an inactive move must fail closed instead of silently minting another ID.
+- Moving or renaming an inactive anchor must preserve its project ID and slug,
+  update its root binding, and advance its binding epoch.
+- A copied identity whose previously bound root still exists must fail closed
+  until an explicit project-fork workflow gives the copy a distinct identity.
+- Relocation must fail closed while recorded backend authority is still live;
+  a live keeper, ccbd PID, or connectable ccbd socket must not be silently
+  reinterpreted as inactive move residue.
 - Project lifecycle state must live under that project's `.ccb/` only.
 - Startup, supervision, and shutdown must be reasoned per project anchor, never globally.
 - CCB-managed tmux servers must be started with an isolated tmux config so user-level
@@ -118,8 +136,17 @@ Out of scope:
 - An `UNMOUNTED` lease whose `project_id` no longer matches the current anchor
   is copied/moved-project residue, not live backend authority; startup may
   supersede it with a fresh generation for the current anchor.
-- A mounted lease with a different `project_id` must still fail closed unless a
-  separate explicit shutdown/cleanup path has first made it unmounted.
+- A stale or dead mounted lease and lifecycle whose `project_id` no longer
+  matches the current stable anchor identity may be marked unmounted and
+  rebuilt under the current identity inside the startup lock. The replacement
+  must preserve monotonic generation and must recompute the effective socket
+  locator from the current `PathLayout`.
+- Keeper lifecycle reconciliation must validate both `keeper_pid` and
+  `project_id`; matching a copied keeper PID alone must never carry a foreign
+  lifecycle ID into a new startup fence.
+- A live mounted lease with a different `project_id` must still fail closed;
+  only a startup-lock reconciliation that proves the lease stale or dead may
+  mark it unmounted before takeover.
 - A second `ccbd` may only replace the current one through explicit takeover rules.
 - Once takeover has replaced the recorded lease holder, the previous daemon must treat that lease as lost authority:
   - heartbeat refresh must not succeed against a replaced holder
@@ -750,6 +777,8 @@ Foreground command split:
   - must require interactive confirmation
   - must clear and rebuild project-owned runtime state, logs, workspaces, and mail/message residue
   - must preserve `.ccb/ccb.config` exactly when it exists
+  - must preserve `.ccb/project.identity.json` exactly when it exists so reset
+    rebuilds runtime state without changing project identity or stable slug
   - must preserve user-owned `.ccb/ccb_memory.md`, `.ccb/history/`, and
     `.ccb/agents/<agent>/memory.md` files
   - must preserve managed provider conversation history for the same normalized

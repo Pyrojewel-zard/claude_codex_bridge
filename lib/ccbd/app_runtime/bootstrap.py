@@ -26,7 +26,7 @@ from ccbd.socket_server import CcbdSocketServer
 from fault_injection import FaultInjectionService
 from heartbeat import HeartbeatPolicy, HeartbeatStateStore
 from mobile_gateway.project_registry import publish_mobile_gateway_project
-from project.ids import compute_project_id
+from project.identity_store import ensure_project_identity
 from provider_core.catalog import build_default_provider_catalog
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionService
@@ -53,7 +53,7 @@ def initialize_app(
     keeper_startup_checkpoint=None,
 ) -> None:
     app.project_root = Path(project_root).expanduser().resolve()
-    app.project_id = compute_project_id(app.project_root)
+    app.project_id = ensure_project_identity(app.project_root).project_id
     app.paths = PathLayout(app.project_root)
     app.paths.ensure_runtime_state_root()
     _publish_mobile_gateway_project(app.project_id, app.project_root, app.paths.ccbd_socket_path, clock=clock)
