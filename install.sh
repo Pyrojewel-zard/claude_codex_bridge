@@ -117,6 +117,9 @@ msg() {
     pip_index_fallback)
       en_msg="WARN: pip could not reach the primary package index; retrying with: $1"
       zh_msg="警告：pip 无法访问主软件源；正在改用备用源重试：$1" ;;
+    pip_download_retry)
+      en_msg="WARN: pip download was interrupted; retrying ($1/$2)"
+      zh_msg="警告：pip 下载中断；正在重试（$1/$2）" ;;
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
@@ -743,6 +746,16 @@ pip_failure_allows_index_fallback() {
     "$pip_log" 2>/dev/null
 }
 
+pip_failure_allows_same_index_retry() {
+  local pip_log="$1"
+  if [[ "$pip_log" == "/dev/null" ]]; then
+    return 0
+  fi
+  grep -Eiq \
+    'IncompleteRead|ProtocolError|ChunkedEncodingError|Connection (aborted|broken|error|refused|reset)|ConnectionResetError|ConnectTimeout|ReadTimeout|TimeoutError|timed out|ProxyError|NameResolutionError|NewConnectionError|Temporary failure|Name or service not known|nodename nor servname|Network is (down|unreachable)|No route to host|Max retries exceeded|RemoteDisconnected|Remote end closed connection' \
+    "$pip_log" 2>/dev/null
+}
+
 pip_index_display_url() {
   printf '%s\n' "$1" | sed -E 's#(https?://)[^/@]+@#\1***@#'
 }
@@ -792,6 +805,17 @@ pip_install_with_index_fallback() {
   local fallback_index=""
   fallback_index="$(pip_fallback_index_url 2>/dev/null || true)"
   if [[ -z "$fallback_index" || "$fallback_index" == "$primary_index" ]]; then
+    local attempt=1
+    local max_attempts=3
+    while (( attempt < max_attempts )) && pip_failure_allows_same_index_retry "$pip_log"; do
+      attempt=$((attempt + 1))
+      msg pip_download_retry "$attempt" "$max_attempts"
+      if pip_install_once "$python_cmd" "$pip_log" "write" "$primary_index" "$@"; then
+        return 0
+      else
+        first_status=$?
+      fi
+    done
     return "$first_status"
   fi
 
@@ -1367,7 +1391,7 @@ use_managed_venv() {
     1|true|yes|on) return 0 ;;
     0|false|no|off) return 1 ;;
   esac
-  [[ "$(resolve_install_mode)" == "release" && "$(detect_platform)" == "macos" ]]
+  [[ "$(resolve_install_mode)" == "release" ]]
 }
 
 resolve_live_source_root() {

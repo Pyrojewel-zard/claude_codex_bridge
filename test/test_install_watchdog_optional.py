@@ -221,6 +221,33 @@ def test_install_requirements_defers_watchdog_to_managed_venv(tmp_path: Path) ->
     assert "requirements-ok" in completed.stdout
 
 
+def test_release_install_requirements_never_use_system_pip_by_default(
+    tmp_path: Path,
+) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        install_tomli() { echo unexpected-system-tomli; exit 9; }
+        install_watchdog() { echo unexpected-system-watchdog; exit 9; }
+        install_mobile_relay_dependencies_for_python() {
+          echo unexpected-system-relay-deps
+          exit 9
+        }
+        require_terminal_backend() { echo "tmux stub"; }
+        install_requirements
+        echo requirements-ok
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "managed Python venv" in completed.stdout
+    assert "unexpected-system-tomli" not in completed.stdout
+    assert "unexpected-system-watchdog" not in completed.stdout
+    assert "unexpected-system-relay-deps" not in completed.stdout
+    assert "requirements-ok" in completed.stdout
+
+
 def test_install_tomli_for_python_uses_real_virtualenv_scope(tmp_path: Path) -> None:
     completed = _run_install_snippet(
         tmp_path,
@@ -462,6 +489,56 @@ def test_install_watchdog_retries_macos_dns_failure_with_fallback_index(tmp_path
     assert len(pip_calls) == 2
     assert "--index-url" not in pip_calls[0]
     assert "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" in pip_calls[1]
+
+
+def test_pip_retries_interrupted_download_without_fallback_index(
+    tmp_path: Path,
+) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        venv_dir="$HOME/managed-venv"
+        fake_modules="$HOME/fake-modules"
+        pip_argv_marker="$HOME/pip-argv.txt"
+        attempt_marker="$HOME/pip-attempt.txt"
+        pip_log="$HOME/pip.log"
+        python3 -m venv "$venv_dir"
+        mkdir -p "$fake_modules"
+        cat > "$fake_modules/pip.py" <<'PY'
+        import os
+        import pathlib
+        import sys
+
+        argv_marker = pathlib.Path(os.environ["PIP_ARGV_MARKER"])
+        with argv_marker.open("a", encoding="utf-8") as stream:
+            stream.write(" ".join(sys.argv[1:]) + "\\n")
+        attempt_marker = pathlib.Path(os.environ["PIP_ATTEMPT_MARKER"])
+        attempt = int(attempt_marker.read_text(encoding="utf-8") or "0") + 1
+        attempt_marker.write_text(str(attempt), encoding="utf-8")
+        if attempt == 1:
+            print(
+                "ProtocolError: Connection broken: "
+                "IncompleteRead(1024 bytes read, 2048 more expected)"
+            )
+            raise SystemExit(1)
+        raise SystemExit(0)
+        PY
+        echo 0 > "$attempt_marker"
+        detect_platform() { echo linux; }
+        PIP_ARGV_MARKER="$pip_argv_marker" \
+        PIP_ATTEMPT_MARKER="$attempt_marker" \
+        PYTHONPATH="$fake_modules" \
+          pip_install_with_index_fallback \
+            "$venv_dir/bin/python" "$pip_log" "example-package"
+        cat "$pip_argv_marker"
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "download was interrupted; retrying (2/3)" in completed.stdout
+    pip_calls = (tmp_path / "home" / "pip-argv.txt").read_text(encoding="utf-8").splitlines()
+    assert len(pip_calls) == 2
+    assert all("--index-url" not in call for call in pip_calls)
 
 
 def test_install_pip_fallback_never_disables_https_verification() -> None:
@@ -725,12 +802,47 @@ def test_install_managed_venv_selects_python_when_called_directly(tmp_path: Path
     assert "venv-ok" in completed.stdout
 
 
-def test_use_managed_venv_auto_requires_release_on_macos(tmp_path: Path) -> None:
+def test_release_mode_uses_managed_venv_by_default(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        if ! use_managed_venv; then
+          echo missing-managed-venv
+          exit 1
+        fi
+        echo release-managed-venv
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "release-managed-venv" in completed.stdout
+
+
+def test_release_mode_can_explicitly_disable_managed_venv(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        CCB_USE_MANAGED_VENV=0
+        if use_managed_venv; then
+          echo unexpected-managed-venv
+          exit 1
+        fi
+        echo release-managed-venv-disabled
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "release-managed-venv-disabled" in completed.stdout
+
+
+def test_source_mode_stays_unmanaged_even_when_requested(tmp_path: Path) -> None:
     completed = _run_install_snippet(
         tmp_path,
         """
         CCB_SOURCE_KIND=source
-        CCB_BUILD_PLATFORM=macos
+        CCB_USE_MANAGED_VENV=1
         if use_managed_venv; then
           echo unexpected-managed-venv
           exit 1
