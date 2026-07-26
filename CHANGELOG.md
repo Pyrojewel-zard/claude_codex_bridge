@@ -1,5 +1,40 @@
 # Changelog
 
+## v8.4.0 (2026-07-26)
+
+### Mobile Relay And Pairing
+
+- **Encrypted Relay Transport**: CCB Mobile can connect through an AEAD
+  encrypted Relay with bounded admission, multiplexed unary/terminal/event/file
+  streams, one-time host invitations, and official or self-hosted deployment
+  modes. Relay operators cannot read application payloads.
+- **Route Choice Lives On The Computer**: `ccb update mobile` guides Tailscale,
+  validated private-LAN, official Relay, and self-hosted Relay setup. The phone
+  now only scans a QR code or enters a pairing code.
+- **Trusted Android Updates**: the app checks canonical GitHub release metadata
+  and verifies the signed APK's exact size and SHA-256 before asking Android to
+  install it.
+
+### Identity, Appearance, And Recovery
+
+- **Projects Survive Relocation**: stable project identity is preserved when a
+  project directory is moved or renamed, while ambiguous or foreign identity
+  claims fail closed.
+- **System Theme Following**: terminal, workbench, and Config UI surfaces can
+  follow the operating system's light/dark appearance without changing project
+  behavior.
+- **Managed Codex Reconnect**: the opt-in reconnect watcher is projected into
+  managed Codex homes, binds exact pane/session identity, retains only bounded
+  terminal failure evidence, and refuses unsafe recovery input.
+
+### Configuration And Operations
+
+- **Config Changes Apply Predictably**: provider-affecting Config UI edits are
+  recorded for the next CCB start instead of silently mutating active panes.
+- **Relay Deployment Is Operator-Bounded**: production service, TLS proxy,
+  invitation issuance, quota, rollback, and self-hosting guidance are included;
+  public invitations remain operator-issued and single use.
+
 ## v8.3.1 (2026-07-24)
 
 ### Unified Provider Updates

@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.4.0-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.3.1 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.4.0 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [Download CCB Mobile v8.4.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.0/ccb-mobile-v8.4.0.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,6 +309,18 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.4.0</b> - Encrypted Mobile Relay, simpler pairing, stable project identity, and Codex reconnect</summary>
+
+- Added end-to-end encrypted CCB Mobile Relay transport with operator-issued one-time invitations, bounded admission, multiplexed streams, and official or self-hosted deployment modes.
+- Moved route selection to `ccb update mobile`: choose Tailscale, a validated private LAN address, CCB Relay, or a self-hosted Relay while the phone only scans a QR code or enters a pairing code.
+- Added trusted in-app Android updates that verify canonical GitHub release metadata, APK size, and SHA-256 before handing installation to the operating system.
+- Preserved project identity when a CCB project is moved or renamed, and added system-following light/dark themes across terminal and configuration surfaces.
+- Integrated opt-in Codex reconnect supervision into managed homes, retaining bounded terminal error evidence and refusing unsafe pane or session mismatches.
+- Kept Relay payloads encrypted end to end; Relay operators can observe connection metadata but not task prompts, replies, terminal content, or transferred files.
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - Unified Provider updates, safe cache retirement, and persistent Config UI access</summary>
 
 - Centralized supported Provider upgrades under `ccb update`, with exact version checks, explicit decline/skip choices, and no automatic restart of active panes.

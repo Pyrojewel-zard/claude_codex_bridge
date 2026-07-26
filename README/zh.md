@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.4.0-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.3.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.4.0 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [下载 CCB Mobile v8.4.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.0/ccb-mobile-v8.4.0.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -300,6 +300,18 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.4.0</b> - 加密 Mobile Relay、简化配对、稳定项目身份与 Codex 重连</summary>
+
+- 新增端到端加密的 CCB Mobile Relay，支持运营方签发的一次性邀请码、有边界的接入控制、多路复用流，以及官方或自建 Relay 两种部署方式。
+- 将路由选择收敛到 `ccb update mobile`：电脑端可选 Tailscale、经过校验的局域网私网地址、CCB Relay 或自建 Relay，手机端只需扫码或输入配对码。
+- 新增可信的 Android 应用内更新流程；交给系统安装前，会校验 GitHub 官方 Release 元数据、APK 大小和 SHA-256。
+- CCB 项目移动或改名后仍保持稳定身份，并让终端和配置界面支持跟随系统的浅色/深色主题。
+- 将可选的 Codex reconnect 监督集成到托管 home；保留有边界的终端错误证据，并在 pane 或 session 不匹配时拒绝恢复。
+- Relay 数据保持端到端加密；Relay 运营方只能看到连接元数据，不能读取任务提示、回复、终端内容或传输文件。
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - 统一 Provider 更新、安全回收缓存与持久化 Config UI 访问</summary>
 
 - 将受支持的 Provider 升级统一到 `ccb update`，提供准确版本检查、暂不更新和精确版本跳过，并且不会自动重启运行中的 pane。

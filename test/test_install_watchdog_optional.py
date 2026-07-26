@@ -597,7 +597,8 @@ def test_release_managed_venv_wraps_installed_python_entrypoints(tmp_path: Path)
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
-        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
+        cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
+        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
@@ -646,7 +647,8 @@ def test_release_managed_venv_wrapper_uses_absolute_target_path(tmp_path: Path) 
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
-        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
+        cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
+        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0

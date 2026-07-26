@@ -6,7 +6,7 @@
 **Координируйте Codex, Claude, Gemini и другие CLI Agent в видимых и управляемых процессах, которые можно напрямую взять под контроль**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.4.0-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Детали Mobile App, граница безопасности и исходники</b></summary>
 
-CCB 8.3.1 включает Flutter source CCB Mobile в [`mobile/`](../mobile/) и публикует Android APK через GitHub Releases:
+CCB 8.4.0 включает Flutter source CCB Mobile в [`mobile/`](../mobile/) и публикует Android APK через GitHub Releases:
 
-- [Скачать CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [Скачать CCB Mobile v8.4.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.0/ccb-mobile-v8.4.0.apk)
 - Исходники app: [`mobile/app`](../mobile/app)
 - Исходники server gateway: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,16 @@ CCB поддерживает [Agent Roles Spec](https://github.com/SeemSeam/agen
 ## Release Notes
 
 <details open>
+<summary><b>v8.4.0</b> - Шифрованный Mobile Relay, простое сопряжение, стабильный ID и переподключение Codex</summary>
+
+- Добавляет сквозное шифрование Relay, одноразовые приглашения, мультиплексированные потоки и официальный либо собственный сервер.
+- Переносит выбор Tailscale, private LAN или Relay в `ccb update mobile`; на телефоне остаётся QR или код сопряжения.
+- Проверяет официальные metadata GitHub, размер и SHA-256 перед передачей подписанного APK системе Android.
+- Сохраняет ID после переноса проекта, следует системной теме и интегрирует ограниченный opt-in reconnect для Codex.
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - Единое обновление providers, безопасный вывод кешей и постоянный доступ к Config UI</summary>
 
 - Объединяет поддерживаемые обновления providers в `ccb update`: точная проверка версии, отказ и пропуск конкретной версии без перезапуска активных panes.

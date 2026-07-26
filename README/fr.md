@@ -6,7 +6,7 @@
 **Coordonne Codex, Claude, Gemini et d'autres agents CLI dans des workflows visibles, contrôlables et reprenables directement**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.4.0-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ Cette commande guide l'installation et la configuration.
 <details>
 <summary><b>Détails de l'app mobile, frontière de sécurité et source</b></summary>
 
-CCB 8.3.1 inclut le code source Flutter de CCB Mobile dans [`mobile/`](../mobile/) et publie l'APK Android via GitHub Releases :
+CCB 8.4.0 inclut le code source Flutter de CCB Mobile dans [`mobile/`](../mobile/) et publie l'APK Android via GitHub Releases :
 
-- [Télécharger l'APK CCB Mobile v8.3.1](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [Télécharger l'APK CCB Mobile v8.4.0](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.0/ccb-mobile-v8.4.0.apk)
 - Source de l'app : [`mobile/app`](../mobile/app)
 - Source du gateway serveur : [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,16 @@ Merci à [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) pou
 ## Notes de version
 
 <details open>
+<summary><b>v8.4.0</b> - Relay mobile chiffré, appairage simple, identité stable et reconnexion Codex</summary>
+
+- Ajoute un Relay chiffré de bout en bout, des invitations à usage unique, des flux multiplexés et des modes officiel ou auto-hébergé.
+- Déplace le choix Tailscale, LAN privé ou Relay dans `ccb update mobile` ; le téléphone ne fait que scanner un QR ou saisir un code.
+- Vérifie les métadonnées GitHub officielles, la taille et le SHA-256 avant de confier l'APK signé à Android.
+- Préserve l'identité après déplacement du projet, suit le thème système et intègre une reconnexion Codex optionnelle et bornée.
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - Mises à jour provider unifiées, retrait sûr des caches et accès Config UI persistant</summary>
 
 - Centralise les mises à niveau provider prises en charge dans `ccb update`, avec vérification exacte, refus et saut limité à une version, sans redémarrer les panes actifs.
