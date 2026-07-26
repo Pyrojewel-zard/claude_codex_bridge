@@ -1,14 +1,17 @@
 # Implementation Status
 
-Date: 2026-07-22
+Date: 2026-07-26
 
 ## Current Phase
 
 The Decision 006 tmux refactor is implemented in the standalone working tree
-`/home/bfly/yunwei/codex-reconnect` and installed locally as
-`codex-reconnect 0.3.3`. The tmux watcher, user-level skill, fail-closed input
-guards, and installation lifecycle are deterministic-test and installed-smoke
-complete. Real provider-fault qualification remains the production gate.
+`/home/bfly/workspace/agent_develop/codex-reconnect`, installed locally as
+`codex-reconnect 0.3.3`, and vendored into CCB. CCB now projects the
+`reconnect` skill and command into each managed Codex environment and exposes
+the exact managed pane/session identity needed by the watcher. The tmux
+watcher, fail-closed input guards, installation lifecycle, and isolated
+managed-Codex activation are deterministic-test complete. Real provider-fault
+qualification remains the production gate.
 
 The 0.3.3 tmux refactor was committed and pushed to `origin/main` on
 2026-07-22 as
@@ -18,8 +21,8 @@ compatibility path.
 
 ## Landed
 
-- Public `codex-reconnect on`, `off`, and `status` commands plus a hidden
-  watcher-process entry point.
+- Public skill surface limited to `reconnect on` and `reconnect off`; the CLI
+  retains `status` for diagnostics plus a hidden watcher-process entry point.
 - Direct activation only from an exact tmux/Codex environment; non-tmux `on`
   fails before creating state or a process.
 - Exact thread, Codex home, rollout file, tmux socket, pane id, pane pid, and
@@ -36,8 +39,18 @@ compatibility path.
 - Same-pane thread replacement disables and retires older watcher processes.
 - One automatic continuation per incident and fail-closed recursive-error
   circuit breaker.
-- User-level `reconnect` skill with exact `on/off/status` behavior and disabled
-  implicit invocation.
+- User-level `reconnect` skill with exact `on/off` behavior and disabled
+  implicit invocation; CLI-only `status` remains available for diagnostics.
+- CCB-owned `reconnect` skill projection alongside `ask` and `ccb-clear`,
+  including repair of managed homes that already contain `.system` skills.
+- CCB source-test and installed command entry points for the vendored
+  `codex-reconnect` implementation.
+- Validated CCB session-pointer binding for environments where generic
+  `TMUX`/`TMUX_PANE` are intentionally sanitized.
+- Owner-checked managed `logs_2.sqlite` symlink support and a diagnostic filter
+  that drops ordinary rows while retaining terminal Codex `Turn error` rows.
+- Per-agent reconnect state under the managed provider runtime, preventing
+  collisions between concurrent CCB Codex instances.
 - Atomic user-local application update plus safe ownership-aware command and
   `~/.agents/skills/reconnect` symlink management.
 - Correct `arming` to `armed` transition when empty-input state is learned.
@@ -47,8 +60,17 @@ compatibility path.
 
 ## Verification Evidence
 
-- `python3 -m unittest discover -s tests -v` in the standalone repository — 46
-  passed again as the final release gate on 2026-07-22.
+- `python3 -m unittest discover -s tests -v` in the standalone repository — 51
+  passed on 2026-07-26, including CCB session binding, managed SQLite symlink,
+  lazy SQLite discovery, and exact `/backend-api/codex/responses` failure
+  fixtures.
+- CCB targeted pytest qualification passed for diagnostic filtering,
+  reconnect integration, launch environment, skill projection, installer
+  behavior, source-test shims, and repository hygiene.
+- An isolated source CCB project under `/home/bfly/yunwei/test_ccb2` opened a
+  real managed Codex, projected the skill and command shim, bound a real thread
+  through `CCB_SESSION_FILE`, reached `on -> armed`, accepted `off`, and was
+  cleanly returned to `unmounted`.
 - The SQLite terminal-error plus JSONL completion recovery test passed 10
   consecutive repetitions.
 - The terminal-disconnect/two-probe/injection race test passed 10 consecutive
@@ -115,7 +137,8 @@ compatibility path.
 ## Claim Boundary
 
 The tmux implementation is deterministic-test complete, installed locally,
-and proven end to end against both JSONL and real-shape SQLite fixtures plus
-real network readiness. A real pre-fix transport failure supplied the missing
-event-shape evidence, but post-fix automatic continuation and organic
-service-overload qualification remain open.
+integrated into CCB, and proven end to end against both JSONL and real-shape
+SQLite fixtures plus real network readiness. CCB-managed skill discovery and
+activation are qualified. A real pre-fix transport failure supplied the
+missing event-shape evidence, but post-fix automatic continuation during an
+organic disconnect and organic service-overload qualification remain open.

@@ -1,7 +1,7 @@
 # Codex Reconnect
 
-Date: 2026-07-22
-Status: Tmux primary mode 0.3.3 published; real-fault requalification open
+Date: 2026-07-26
+Status: Tmux primary mode 0.3.3 integrated into CCB; real-fault requalification open
 Mode: Execute ready
 
 ## Plan State
@@ -26,8 +26,10 @@ identity or input safety cannot be proved.
 
 The authoritative product repository is
 [`SeemSeam/codex-reconnect`](https://github.com/SeemSeam/codex-reconnect), with
-the working tree at `/home/bfly/yunwei/codex-reconnect`. CCB and Workbench
-runtime state are not product dependencies.
+the standalone working tree at
+`/home/bfly/workspace/agent_develop/codex-reconnect`. CCB also vendors the
+same implementation and projects its skill into every managed Codex home;
+standalone use does not depend on CCB.
 
 The primary product surface is:
 
@@ -35,13 +37,13 @@ The primary product surface is:
 tmux -> native codex [all normal Codex arguments]
 
 $reconnect on
-$reconnect status
 $reconnect off
 ```
 
 The installed user skill maps those exact invocations to
-`codex-reconnect on/status/off`. `on` outside tmux is an immediate error and
-does not start a watcher.
+`codex-reconnect on/off`. `on` outside tmux or a valid CCB-managed tmux binding
+is an immediate error and does not start a watcher. The CLI retains `status`
+for diagnostics, but it is not part of the skill's user-facing contract.
 
 ## Frozen Scope
 
@@ -68,9 +70,10 @@ Out of scope:
 
 ## Invariants
 
-- Activation requires `TMUX`, `TMUX_PANE`, `CODEX_THREAD_ID`, a resolvable
-  Codex home (`CODEX_HOME` or the normal default), a matching owner-controlled
-  rollout JSONL, and a live matching pane.
+- Activation requires either `TMUX`/`TMUX_PANE` or a validated CCB session
+  pointer, plus `CODEX_THREAD_ID`, a resolvable Codex home (`CODEX_HOME` or the
+  normal default), a matching owner-controlled rollout JSONL, and a live
+  matching pane.
 - The watcher starts at the rollout EOF and SQLite log cursor recorded during
   activation. Historical errors and ordinary conversation text cannot trigger
   it.
@@ -151,7 +154,7 @@ RECOVERY_SENT
 
 ## Qualification Boundary
 
-The 46-test deterministic suite, repeated JSONL/SQLite/input-race regression,
+The 51-test deterministic suite, repeated JSONL/SQLite/input-race regression,
 user-level skill
 discovery, non-tmux failure, atomic real-tmux input smoke, and an installed
 end-to-end tmux watcher smoke with real OpenAI HTTPS readiness probes pass. A
@@ -164,6 +167,11 @@ new `task_started` turn.
 Production qualification still requires an inspectable real Codex network
 interruption and an organically occurring `serverOverloaded` event. Tests must
 not intentionally create real provider pressure.
+
+CCB source integration additionally passes managed-home skill projection,
+source-test command-shim, CCB session-pointer binding, symlinked managed SQLite
+validation, terminal-error retention, and real isolated managed-Codex
+`on -> armed -> off` qualification.
 
 Version 0.3.3 is published on `origin/main` as commit
 [`1134122`](https://github.com/SeemSeam/codex-reconnect/commit/113412276abdea3d42d183477798307000fac307).
