@@ -416,7 +416,8 @@ void main() {
       findsOneWidget,
     );
     await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-    expect(find.byKey(const ValueKey('gateway-url-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('connection-code-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('gateway-url-field')), findsNothing);
 
     tester
         .widget<IconButton>(
@@ -628,7 +629,11 @@ void main() {
         findsOneWidget,
       );
       await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-      expect(find.byKey(const ValueKey('gateway-url-field')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('connection-code-field')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('gateway-url-field')), findsNothing);
     },
   );
 }

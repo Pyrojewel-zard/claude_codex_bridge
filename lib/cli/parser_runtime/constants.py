@@ -12,6 +12,7 @@ SUBCOMMANDS = {
     'watch',
     'pend',
     'queue',
+    'relay',
     'trace',
     'resubmit',
     'retry',

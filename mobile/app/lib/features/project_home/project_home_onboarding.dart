@@ -1,24 +1,16 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_theme.dart';
 import '../../app/background_connection.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
-import '../../transport/route_provider.dart';
 import 'gateway_pairing_panel.dart';
 import 'project_home_update_panel.dart';
 
-const projectHomeTailscaleDownloadUrl = 'https://tailscale.com/download';
-
 class ProjectHomeOnboardingScaffold extends StatelessWidget {
   const ProjectHomeOnboardingScaffold({
-    required this.gatewayUrlController,
-    required this.pairingCodeController,
-    required this.deviceNameController,
-    required this.routeKindListenable,
+    required this.connectionCodeController,
     required this.claiming,
     required this.loadingProfiles,
-    required this.onRouteKindChanged,
     required this.onScan,
     required this.onClaim,
     this.themePreference = CcbThemePreference.system,
@@ -32,17 +24,13 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
     super.key,
   });
 
-  final TextEditingController gatewayUrlController;
-  final TextEditingController pairingCodeController;
-  final TextEditingController deviceNameController;
-  final ValueListenable<RouteProviderKind> routeKindListenable;
+  final TextEditingController connectionCodeController;
   final bool claiming;
   final bool loadingProfiles;
   final CcbThemePreference themePreference;
   final bool backgroundConnectionEnabled;
   final BackgroundConnectionSystemStatus? backgroundConnectionSystemStatus;
   final bool backgroundConnectionSystemStatusLoading;
-  final ValueChanged<RouteProviderKind> onRouteKindChanged;
   final ValueChanged<CcbThemePreference>? onThemePreferenceChanged;
   final ValueChanged<bool>? onBackgroundConnectionEnabledChanged;
   final VoidCallback? onOpenBackgroundConnectionSystemSettings;
@@ -96,12 +84,6 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               _OnboardingStep(
-                icon: Icons.vpn_key_outlined,
-                title: strings.installTailscaleTitle,
-                body: strings.installTailscaleBody,
-                code: projectHomeTailscaleDownloadUrl,
-              ),
-              _OnboardingStep(
                 icon: Icons.terminal,
                 title: strings.runComputerCommandTitle,
                 body: strings.runComputerCommandBody,
@@ -128,20 +110,10 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              ValueListenableBuilder<RouteProviderKind>(
-                valueListenable: routeKindListenable,
-                builder: (context, routeKind, _) {
-                  return GatewayPairingPanel(
-                    gatewayUrlController: gatewayUrlController,
-                    pairingCodeController: pairingCodeController,
-                    deviceNameController: deviceNameController,
-                    routeKind: routeKind,
-                    claiming: claiming,
-                    onRouteKindChanged: onRouteKindChanged,
-                    onScan: onScan,
-                    onClaim: onClaim,
-                  );
-                },
+              GatewayPairingPanel(
+                connectionCodeController: connectionCodeController,
+                claiming: claiming,
+                onClaim: onClaim,
               ),
               const SizedBox(height: 16),
               _ThemePreferenceSection(

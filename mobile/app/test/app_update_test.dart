@@ -21,7 +21,7 @@ void main() {
     expect(compareCcbMobileVersions('8.3', '8.3.0'), 0);
   });
 
-  test('checks a proxy after the official GitHub API fails', () async {
+  test('uses only the direct GitHub manifest after the API fails', () async {
     final calls = <Uri>[];
     final service = CcbMobileUpdateService(
       currentVersion: '8.3.1+8030001',
@@ -32,33 +32,29 @@ void main() {
           throw const SocketException('blocked');
         }
         if (uri.toString() == ccbMobileLatestManifestUrl) {
-          throw const SocketException('github blocked');
-        }
-        if (uri.path.endsWith('.json')) {
           return utf8.encode(jsonEncode(_manifest));
         }
-        return utf8.encode(jsonEncode(_githubRelease));
+        throw StateError('unexpected update source: $uri');
       },
     );
 
     final result = await service.checkForUpdate();
 
     expect(result.release?.version, '9.0.0');
-    expect(calls.first.toString(), ccbMobileReleaseApiUrl);
-    expect(calls[1].toString(), ccbMobileLatestManifestUrl);
-    expect(
-      calls[2].toString(),
-      'https://proxy.example/$ccbMobileLatestManifestUrl',
-    );
+    expect(calls.map((uri) => uri.toString()), [
+      ccbMobileReleaseApiUrl,
+      ccbMobileLatestManifestUrl,
+    ]);
   });
 
   test('does not offer a release with an older Android version code', () async {
     final service = CcbMobileUpdateService(
       currentVersion: '9.0.0+9000001',
       proxyPrefixes: const [],
-      fetchBytes: (uri, _) async => utf8.encode(
-        jsonEncode(uri.path.endsWith('.json') ? _manifest : _githubRelease),
-      ),
+      fetchBytes:
+          (uri, _) async => utf8.encode(
+            jsonEncode(uri.path.endsWith('.json') ? _manifest : _githubRelease),
+          ),
     );
 
     final result = await service.checkForUpdate();
@@ -66,33 +62,25 @@ void main() {
     expect(result.updateAvailable, isFalse);
   });
 
-  test('discovers a tagged manifest through jsDelivr and a proxy', () async {
+  test('never accepts a release manifest from an APK proxy', () async {
     final calls = <Uri>[];
     final service = CcbMobileUpdateService(
       currentVersion: '8.3.1+8030001',
       proxyPrefixes: const ['https://proxy.example/'],
       fetchBytes: (uri, _) async {
         calls.add(uri);
-        if (uri.toString() == ccbMobileJsdelivrVersionsUrl) {
-          return utf8.encode(
-            jsonEncode(<String, Object?>{
-              'versions': <String>['next', '9.0.0', '8.3.0'],
-            }),
-          );
-        }
-        if (uri.toString() == 'https://proxy.example/$_manifestUrl') {
+        if (uri.host == 'proxy.example') {
           return utf8.encode(jsonEncode(_manifest));
         }
         throw const SocketException('blocked');
       },
     );
 
-    final result = await service.checkForUpdate();
-
-    expect(result.release?.version, '9.0.0');
-    expect(calls, contains(Uri.parse(ccbMobileJsdelivrVersionsUrl)));
-    expect(calls, contains(Uri.parse(_manifestUrl)));
-    expect(calls, contains(Uri.parse('https://proxy.example/$_manifestUrl')));
+    await expectLater(
+      service.checkForUpdate(),
+      throwsA(isA<CcbMobileUpdateException>()),
+    );
+    expect(calls.map((uri) => uri.host), everyElement(isNot('proxy.example')));
   });
 
   test('rejects an unsafe version from a fallback manifest', () async {
@@ -116,6 +104,131 @@ void main() {
     );
   });
 
+  test(
+    'rejects release manifest assets outside the pinned repository path',
+    () async {
+      final calls = <Uri>[];
+      final service = CcbMobileUpdateService(
+        proxyPrefixes: const [],
+        fetchBytes: (uri, _) async {
+          calls.add(uri);
+          if (uri.toString() == ccbMobileReleaseApiUrl) {
+            return utf8.encode(
+              jsonEncode(<String, Object?>{
+                ..._githubRelease,
+                'assets': <Object?>[
+                  <String, Object?>{
+                    'name': 'ccb-mobile-v9.0.0.json',
+                    'browser_download_url':
+                        'https://github.com/attacker/repository/releases/download/v9.0.0/ccb-mobile-v9.0.0.json',
+                  },
+                ],
+              }),
+            );
+          }
+          throw const SocketException('blocked');
+        },
+      );
+
+      await expectLater(
+        service.checkForUpdate(),
+        throwsA(isA<CcbMobileUpdateException>()),
+      );
+      expect(calls.map((uri) => uri.toString()), [ccbMobileReleaseApiUrl]);
+    },
+  );
+
+  test('rejects release asset paths containing traversal segments', () async {
+    final calls = <Uri>[];
+    final service = CcbMobileUpdateService(
+      proxyPrefixes: const [],
+      fetchBytes: (uri, _) async {
+        calls.add(uri);
+        return utf8.encode(
+          jsonEncode(<String, Object?>{
+            ..._githubRelease,
+            'assets': <Object?>[
+              <String, Object?>{
+                'name': 'ccb-mobile-v9.0.0.json',
+                'browser_download_url':
+                    'https://github.com/SeemSeam/claude_codex_bridge/releases/download/v9.0.0/../ccb-mobile-v9.0.0.json',
+              },
+            ],
+          }),
+        );
+      },
+    );
+
+    await expectLater(
+      service.checkForUpdate(),
+      throwsA(isA<CcbMobileUpdateException>()),
+    );
+    expect(calls.map((uri) => uri.toString()), [ccbMobileReleaseApiUrl]);
+  });
+
+  test(
+    'rejects a manifest digest that disagrees with GitHub asset evidence',
+    () async {
+      final calls = <Uri>[];
+      final tamperedManifest = <String, Object?>{
+        ..._manifest,
+        'android': <String, Object?>{
+          ...(_manifest['android']! as Map<String, Object?>),
+          'sha256':
+              'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      };
+      final service = CcbMobileUpdateService(
+        proxyPrefixes: const [],
+        fetchBytes: (uri, _) async {
+          calls.add(uri);
+          if (uri.toString() == ccbMobileReleaseApiUrl) {
+            return utf8.encode(jsonEncode(_githubRelease));
+          }
+          if (uri.toString() == _manifestUrl) {
+            return utf8.encode(jsonEncode(tamperedManifest));
+          }
+          throw const SocketException('blocked');
+        },
+      );
+
+      await expectLater(
+        service.checkForUpdate(),
+        throwsA(isA<CcbMobileUpdateException>()),
+      );
+      expect(calls.map((uri) => uri.toString()), [
+        ccbMobileReleaseApiUrl,
+        _manifestUrl,
+      ]);
+    },
+  );
+
+  test('does not fall back after malformed GitHub release metadata', () async {
+    final calls = <Uri>[];
+    final service = CcbMobileUpdateService(
+      proxyPrefixes: const [],
+      fetchBytes: (uri, _) async {
+        calls.add(uri);
+        if (uri.toString() == ccbMobileReleaseApiUrl) {
+          return utf8.encode('{"tag_name":');
+        }
+        return utf8.encode(jsonEncode(_manifest));
+      },
+    );
+
+    await expectLater(
+      service.checkForUpdate(),
+      throwsA(
+        isA<CcbMobileUpdateException>().having(
+          (error) => error.message,
+          'message',
+          contains('Rejected GitHub release metadata'),
+        ),
+      ),
+    );
+    expect(calls.map((uri) => uri.toString()), [ccbMobileReleaseApiUrl]);
+  });
+
   test('rejects a bad APK checksum then downloads from a proxy', () async {
     final temp = await Directory.systemTemp.createTemp('ccb-update-test-');
     addTearDown(() => temp.delete(recursive: true));
@@ -134,9 +247,10 @@ void main() {
       downloadDirectory: () async => temp,
       downloadFile: (uri, target, _) async {
         calls.add(uri);
-        final bytes = uri.host == 'github.com'
-            ? utf8.encode('tampered-apk-data')
-            : apkBytes;
+        final bytes =
+            uri.host == 'github.com'
+                ? utf8.encode('tampered-apk-data')
+                : apkBytes;
         await target.writeAsBytes(bytes);
       },
     );
@@ -145,6 +259,115 @@ void main() {
 
     expect(await file.readAsBytes(), apkBytes);
     expect(calls.map((uri) => uri.host), ['github.com', 'proxy.example']);
+  });
+
+  test('rejects proxy prefixes that contain query configuration', () async {
+    final temp = await Directory.systemTemp.createTemp('ccb-update-test-');
+    addTearDown(() => temp.delete(recursive: true));
+    final apkBytes = utf8.encode('signed-apk-fixture');
+    final release = CcbMobileRelease(
+      version: '9.0.0',
+      versionCode: 9000000,
+      apkDownloadUrl: _apkUrl,
+      sha256: sha256.convert(apkBytes).toString(),
+      sizeBytes: apkBytes.length,
+      releasePageUrl: _releasePageUrl,
+    );
+    final service = CcbMobileUpdateService(
+      proxyPrefixes: const ['https://proxy.example/?url='],
+      downloadDirectory: () async => temp,
+      downloadFile: (uri, target, _) async {
+        if (uri.host == 'github.com') {
+          await target.writeAsBytes(utf8.encode('invalid'));
+          return;
+        }
+        await target.writeAsBytes(apkBytes);
+      },
+    );
+
+    await expectLater(
+      service.downloadApk(release),
+      throwsA(isA<CcbMobileUpdateException>()),
+    );
+  });
+
+  test('rejects proxy prefixes that use a nonstandard port', () async {
+    final temp = await Directory.systemTemp.createTemp('ccb-update-test-');
+    addTearDown(() => temp.delete(recursive: true));
+    final release = CcbMobileRelease(
+      version: '9.0.0',
+      versionCode: 9000000,
+      apkDownloadUrl: _apkUrl,
+      sha256:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      sizeBytes: 10,
+      releasePageUrl: _releasePageUrl,
+    );
+    final service = CcbMobileUpdateService(
+      proxyPrefixes: const ['https://proxy.example:8443/'],
+      downloadDirectory: () async => temp,
+      downloadFile: (uri, target, _) async {
+        await target.writeAsBytes(utf8.encode('invalid'));
+      },
+    );
+
+    await expectLater(
+      service.downloadApk(release),
+      throwsA(isA<CcbMobileUpdateException>()),
+    );
+  });
+
+  test('rejects an unsafe release version before creating a file', () async {
+    var requestedDirectory = false;
+    final release = CcbMobileRelease(
+      version: '../escape',
+      versionCode: 9000000,
+      apkDownloadUrl: _apkUrl,
+      sha256:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      sizeBytes: 10,
+      releasePageUrl: _releasePageUrl,
+    );
+    final service = CcbMobileUpdateService(
+      proxyPrefixes: const [],
+      downloadDirectory: () async {
+        requestedDirectory = true;
+        return Directory.systemTemp;
+      },
+    );
+
+    await expectLater(
+      service.downloadApk(release),
+      throwsA(isA<CcbMobileUpdateException>()),
+    );
+    expect(requestedDirectory, isFalse);
+  });
+
+  test('rejects an APK URL that does not match the release version', () async {
+    var requestedDirectory = false;
+    final release = CcbMobileRelease(
+      version: '9.0.0',
+      versionCode: 9000000,
+      apkDownloadUrl:
+          'https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.0.0/ccb-mobile-v8.0.0.apk',
+      sha256:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      sizeBytes: 10,
+      releasePageUrl: _releasePageUrl,
+    );
+    final service = CcbMobileUpdateService(
+      proxyPrefixes: const [],
+      downloadDirectory: () async {
+        requestedDirectory = true;
+        return Directory.systemTemp;
+      },
+    );
+
+    await expectLater(
+      service.downloadApk(release),
+      throwsA(isA<CcbMobileUpdateException>()),
+    );
+    expect(requestedDirectory, isFalse);
   });
 }
 
@@ -163,6 +386,13 @@ const _githubRelease = <String, Object?>{
       'name': 'ccb-mobile-v9.0.0.json',
       'browser_download_url': _manifestUrl,
     },
+    <String, Object?>{
+      'name': 'ccb-mobile-v9.0.0.apk',
+      'browser_download_url': _apkUrl,
+      'digest':
+          'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'size': 10,
+    },
   ],
 };
 
@@ -174,7 +404,8 @@ const _manifest = <String, Object?>{
     'version_code': 9000000,
     'version_name': '9.0.0',
     'download_url': _apkUrl,
-    'sha256': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'sha256':
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'size_bytes': 10,
   },
 };

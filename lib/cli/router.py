@@ -458,6 +458,41 @@ _COMMAND_HELP = {
             multi-project registry.
           - Stopping the gateway does not stop ccbd, provider panes, or tmux.
     """,
+    "relay": """
+        usage: ccb relay <invite|host> <issue|activate|status|list|revoke>
+
+        Host activation:
+          ccb relay host activate --mode official --invitation-file /path/to/one-time-invitation
+              Use the CCB Official Relay. Request one one-time invitation from
+              the CCB Relay operator; the invitation is consumed on success.
+          ccb relay host activate --mode self-hosted --relay-origin wss://relay.example.com --invitation-file /path/to/one-time-invitation
+              Use an operator-managed Relay with a trusted TLS endpoint.
+          Omitting --mode preserves compatibility: an explicit --relay-origin
+          selects self-hosted mode; otherwise official mode is selected.
+
+        CCB hosted relay operator-local admission:
+          ccb relay invite issue --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json --ttl-seconds 900 --json
+              Create one one-time host invitation. This is the only command
+              that prints the raw invitation, exactly once, to explicit
+              operator output.
+          ccb relay invite status --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <invite_id> [--json]
+          ccb relay invite list --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json [--json]
+          ccb relay invite revoke --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <invite_id> [--reason TEXT] [--json]
+          ccb relay host status --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <host_id> [--json]
+          ccb relay host list --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json [--json]
+          ccb relay host revoke --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <host_id> [--reason TEXT] [--json]
+
+        Safety:
+          - This is not a public HTTP/admin route.
+          - Raw invitation secrets are not stored in logs, audit records, or
+            the SQLite admission database.
+          - Admission HMAC keys must come from --secrets,
+            CCB_RELAY_ADMISSION_SECRETS, or both
+            CCB_RELAY_VERIFIER_KEY_B64 and CCB_RELAY_CAPABILITY_KEY_B64; the
+            same key material is required after restart.
+          - Status/list/revoke output is redacted and never prints an
+            invitation value.
+    """,
     "loop": """
         usage:
           ccb loop capacity <ensure|status|release> ...
@@ -625,6 +660,17 @@ def _build_management_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser("update", help="Update CCB or an optional bundle")
     update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or optional bundle 'rich'/'mobile'")
+    update_parser.add_argument("--listen", default=None)
+    update_parser.add_argument("--public-url", default=None)
+    update_parser.add_argument(
+        "--route-provider",
+        default=None,
+        choices=("lan", "tailnet", "cloudflare_tunnel", "relay"),
+        help=(
+            "mobile route; omit in an interactive terminal to choose Tailscale, "
+            "LAN, official Relay, or self-hosted Relay"
+        ),
+    )
     update_parser.add_argument(
         "--providers",
         choices=("prompt", "check", "all", "none"),

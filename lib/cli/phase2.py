@@ -46,6 +46,7 @@ from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.ps import ps_summary
 from cli.services.queue import queue_target
+from cli.services.relay_operator import relay_operator_command
 from cli.services.reload import reload_config
 from cli.services.restart import restart_agent
 from cli.services.reset_project import reset_project_state
@@ -187,6 +188,7 @@ def _dispatch_services():
         ps_summary=ps_summary,
         question_command=question_command,
         queue_target=queue_target,
+        relay_operator_command=relay_operator_command,
         reload_config=reload_config,
         restart_agent=restart_agent,
         revoke_mobile_device=revoke_mobile_device,

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
-import 'package:ccb_mobile/features/project_home/project_home_onboarding.dart';
 
 import 'support/project_home_test_fakes.dart';
 
@@ -29,8 +28,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Connect CCB Mobile'), findsOneWidget);
-    expect(find.text(projectHomeTailscaleDownloadUrl), findsOneWidget);
     expect(find.text('ccb update mobile'), findsOneWidget);
+    expect(find.text('Enter connection code'), findsOneWidget);
+    expect(find.text('CCB official'), findsNothing);
+    expect(find.text('ccb update mobile --route-provider relay'), findsNothing);
     expect(
       find.byKey(const ValueKey('project-home-update-panel')),
       findsOneWidget,
@@ -203,9 +204,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.byKey(const ValueKey('project-home-onboarding-scan-button')),
+    final scanButton = find.byKey(
+      const ValueKey('project-home-onboarding-scan-button'),
     );
+    await tester.ensureVisible(scanButton);
+    await tester.tap(scanButton);
     await tester.pumpAndSettle();
 
     expect(scanCalls, 1);

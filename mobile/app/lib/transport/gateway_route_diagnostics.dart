@@ -97,7 +97,10 @@ class GatewayRouteDiagnostics {
           message: hasProjects ? 'Projects reachable' : 'No projects returned',
         ),
       );
-      selectedProjectId ??= hasProjects ? projects.first.id : null;
+      if (hasProjects &&
+          !projects.any((project) => project.id == selectedProjectId)) {
+        selectedProjectId = projects.first.id;
+      }
     } catch (error) {
       checks.add(
         GatewayRouteDiagnosticCheck(

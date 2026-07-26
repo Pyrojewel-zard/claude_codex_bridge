@@ -36,6 +36,7 @@ from .handlers_ops import (
     handle_plan_task,
     handle_ps,
     handle_question,
+    handle_relay,
     handle_reload,
     handle_restart,
 )
@@ -73,6 +74,7 @@ _HANDLERS = {
     'ps': handle_ps,
     'question': handle_question,
     'queue': handle_queue,
+    'relay': handle_relay,
     'reload': handle_reload,
     'restart': handle_restart,
     'resubmit': handle_resubmit,

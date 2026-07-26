@@ -19,6 +19,11 @@ class _TtyOutput(StringIO):
         return True
 
 
+class _TtyInput(StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 class _PipeOutput(StringIO):
     def isatty(self) -> bool:
         return False
@@ -1392,7 +1397,8 @@ def test_cmd_update_mobile_runs_onboarding_without_release_lookup(monkeypatch, t
         calls.append(dict(kwargs))
         return _Result()
 
-    def _onboarding(*, start_service_fn):
+    def _onboarding(*, start_service_fn, listen):
+        assert listen == '127.0.0.1:8787'
         service = start_service_fn(
             SimpleNamespace(
                 mobile_serve=(
@@ -1427,6 +1433,184 @@ def test_cmd_update_mobile_runs_onboarding_without_release_lookup(monkeypatch, t
             'rotate_pairing': True,
         }
     ]
+
+
+def test_cmd_update_mobile_interactive_lan_uses_direct_lan_route(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    stdin = _TtyInput("2\n192.168.31.155:8787\n")
+    stdout = _TtyOutput()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime.sys, "stdin", stdin)
+    monkeypatch.setattr(update_runtime.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        update_runtime,
+        "suggest_lan_listen_address",
+        lambda: "192.168.31.20:8787",
+    )
+
+    class _Result:
+        def to_record(self):
+            return {"route_provider": "lan"}
+
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **kwargs: calls.append(dict(kwargs)) or _Result(),
+    )
+
+    def _lan_onboarding(*, start_service_fn, listen):
+        assert listen == "192.168.31.155:8787"
+        assert start_service_fn() == {"route_provider": "lan"}
+        return 0
+
+    monkeypatch.setattr(update_runtime, "run_mobile_lan_onboarding", _lan_onboarding)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_update_onboarding",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("LAN route must not enter Tailscale onboarding")
+        ),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target="mobile"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert calls == [
+        {
+            "script_root": tmp_path / "script-root",
+            "listen": "192.168.31.155:8787",
+            "public_url": None,
+            "route_provider": "lan",
+            "rotate_pairing": True,
+        }
+    ]
+    assert "Choose how this computer connects" in stdout.getvalue()
+
+
+def test_cmd_update_mobile_interactive_official_relay_activates_then_starts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    stdin = _TtyInput("3\n")
+    stdout = _TtyOutput()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime.sys, "stdin", stdin)
+    monkeypatch.setattr(update_runtime.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        update_runtime,
+        "ensure_guided_relay_credentials",
+        lambda **kwargs: (
+            calls.append(
+                {
+                    "credential_mode": kwargs["relay_mode"],
+                    "read_fn": kwargs["read_fn"],
+                }
+            )
+            or SimpleNamespace(ready=True, cancelled=False)
+        ),
+    )
+
+    class _Result:
+        def to_record(self):
+            return {"route_provider": "relay"}
+
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **kwargs: calls.append(dict(kwargs)) or _Result(),
+    )
+
+    def _relay_onboarding(*, start_service_fn):
+        assert start_service_fn() == {"route_provider": "relay"}
+        return 0
+
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_relay_onboarding",
+        _relay_onboarding,
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target="mobile"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert calls[0]["credential_mode"] == "official"
+    assert calls[1]["route_provider"] == "relay"
+
+
+def test_cmd_update_mobile_interactive_cancel_never_starts_gateway(
+    monkeypatch, tmp_path: Path
+) -> None:
+    stdin = _TtyInput("\n")
+    stdout = _TtyOutput()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime.sys, "stdin", stdin)
+    monkeypatch.setattr(update_runtime.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cancelled setup must not touch gateway")
+        ),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target="mobile"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert "no gateway was changed" in stdout.getvalue()
+
+
+def test_cmd_update_mobile_explicit_lan_never_enters_tailscale(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+
+    class _Result:
+        def to_record(self):
+            return {"route_provider": "lan"}
+
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **kwargs: calls.append(dict(kwargs)) or _Result(),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_lan_onboarding",
+        lambda *, start_service_fn, listen: (start_service_fn() and 0),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_update_onboarding",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("explicit LAN must not enter Tailscale")
+        ),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(
+            target="mobile",
+            route_provider="lan",
+            listen="10.0.0.8:8787",
+            public_url=None,
+        ),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert calls[0]["route_provider"] == "lan"
+    assert calls[0]["listen"] == "10.0.0.8:8787"
 
 
 def test_cmd_update_rich_allows_degraded_workbench_status(monkeypatch, tmp_path: Path) -> None:

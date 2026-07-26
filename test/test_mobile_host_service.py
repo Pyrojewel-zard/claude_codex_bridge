@@ -696,6 +696,36 @@ def test_detect_loopback_port_owner_uses_lsof_when_ss_is_missing(monkeypatch: py
     assert owner == PortOwner(pid=444, command='python gateway.py')
 
 
+def test_detect_loopback_port_owner_accepts_specific_private_lan_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def _detect(*, host: str, port: int):
+        calls.append((host, port))
+        return PortOwner(pid=445, command='python lan-gateway.py')
+
+    monkeypatch.setattr(mobile_host, '_detect_loopback_port_owner_ss', _detect)
+
+    owner = detect_loopback_port_owner('192.168.31.155:8787')
+
+    assert owner == PortOwner(pid=445, command='python lan-gateway.py')
+    assert calls == [('192.168.31.155', 8787)]
+
+
+def test_mobile_host_service_rejects_private_listen_for_non_lan_route(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(MobileHostServiceError, match='loopback'):
+        start_or_replace_mobile_host_service(
+            script_root=tmp_path / 'source',
+            listen='192.168.31.155:8787',
+            public_url='https://desktop.tailnet.ts.net:8787',
+            route_provider='tailnet',
+            state_dir=tmp_path / 'mobile',
+        )
+
+
 def test_detect_loopback_port_owner_reports_unknown_when_tools_are_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -752,6 +782,75 @@ def test_mobile_host_serve_removes_current_state_after_server_exits(
 
     assert code == 0
     assert closed == [True]
+    assert not paths.state_path.exists()
+
+
+def test_mobile_host_serve_runs_relay_connector_with_activated_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile-relay'
+    paths = mobile_host_service_paths(state_dir)
+    events: list[str] = []
+    credentials = SimpleNamespace(
+        host_id='host-activated',
+        relay_mode='official',
+    )
+
+    class _Handle:
+        summary = {
+            'host_id': 'host-activated',
+            'listen': '127.0.0.1:8787',
+            'local_gateway_url': 'http://127.0.0.1:8787',
+            'gateway_url': 'http://127.0.0.1:8787',
+            'route_provider': 'relay',
+            'pairing': _pairing_payload(),
+        }
+
+        def serve_forever(self) -> None:
+            state = json.loads(paths.state_path.read_text(encoding='utf-8'))
+            assert state['relay_outbound']['state'] == 'registered'
+            events.append('serve')
+
+        def close(self) -> None:
+            events.append('gateway-stop')
+
+    class _Runtime:
+        def __init__(self, *, credentials, gateway_origin) -> None:
+            assert credentials.host_id == 'host-activated'
+            assert gateway_origin == 'http://127.0.0.1:8787'
+
+        def start(self) -> None:
+            events.append('relay-start')
+
+        def stop(self) -> None:
+            events.append('relay-stop')
+
+        def diagnostics(self) -> dict[str, object]:
+            return {'state': 'registered', 'host_id': 'host-activated'}
+
+    def _prepare(_command, *, host_id, **_kwargs):
+        assert host_id == 'host-activated'
+        return _Handle()
+
+    monkeypatch.setattr(mobile_host, 'load_relay_host_credentials', lambda _path: credentials)
+    monkeypatch.setattr(mobile_host, 'RelayHostConnectorRuntime', _Runtime)
+    monkeypatch.setattr(mobile_host, 'prepare_server_mobile_gateway', _prepare)
+
+    code = run_mobile_host_serve_command(
+        SimpleNamespace(
+            listen='127.0.0.1:8787',
+            public_url=None,
+            route_provider='relay',
+            state_dir=str(state_dir),
+            generation=8,
+            host_id=None,
+        ),
+        script_root=tmp_path / 'source',
+    )
+
+    assert code == 0
+    assert events == ['relay-start', 'serve', 'relay-stop', 'gateway-stop']
     assert not paths.state_path.exists()
 
 

@@ -19,49 +19,42 @@ class CcbMobileLocalizations {
 
   String get connectDescription =>
       isChinese
-          ? '把手机作为电脑上 CCB 项目的实时查看和输入界面。'
-          : 'Use your phone as a live view and input surface for CCB projects running on your computer.';
-
-  String get installTailscaleTitle =>
-      isChinese ? '安装 Tailscale' : 'Install Tailscale';
-
-  String get installTailscaleBody =>
-      isChinese
-          ? '在这台手机上安装 Tailscale，并登录到和电脑相同的 tailnet。'
-          : 'Install Tailscale on this phone and sign in to the same tailnet as your computer.';
+          ? '连接方式由电脑端选择；手机只需扫码或粘贴连接码。'
+          : 'Choose the route on the computer, then scan or paste its connection code.';
 
   String get runComputerCommandTitle =>
       isChinese ? '在电脑上运行一条命令' : 'Run one command on the computer';
 
   String get runComputerCommandBody =>
       isChinese
-          ? '在任意已启用 CCB 的终端运行这条命令。它会启动服务器级网关并打印配对二维码。'
-          : 'In any CCB-enabled terminal, run this command. It starts the server-wide gateway and prints a pairing QR.';
+          ? '命令会让你在电脑端选择连接方式，然后生成二维码和连接码。'
+          : 'Choose the connection route in the computer prompt; it then prints a QR and connection code.';
 
   String get scanQrTitle => isChinese ? '扫描二维码' : 'Scan the QR';
 
   String get scanQrBody =>
       isChinese
-          ? '保持手机上的 Tailscale VPN 开启，然后扫描电脑显示的二维码。'
-          : 'Keep Tailscale VPN enabled on the phone, then scan the QR shown by the computer.';
+          ? '扫描电脑显示的二维码；地址和路由配置已经包含在其中。'
+          : 'Scan the computer QR; it already contains the address and route configuration.';
 
   String get pairing => isChinese ? '正在配对' : 'Pairing';
 
   String get scanComputerQr => isChinese ? '扫描电脑二维码' : 'Scan computer QR';
 
-  String get pairGateway => isChinese ? '配对网关' : 'Pair Gateway';
+  String get enterConnectionCode =>
+      isChinese ? '输入连接码' : 'Enter connection code';
 
-  String get gatewayUrl => isChinese ? '网关地址' : 'Gateway URL';
+  String get connectionCodeSummary =>
+      isChinese ? '无法扫码时使用' : 'Use when scanning is unavailable';
 
-  String get pairingCode => isChinese ? '配对码' : 'Pairing code';
+  String get connectionCode => isChinese ? '连接码' : 'Connection code';
 
-  String get deviceName => isChinese ? '设备名称' : 'Device name';
+  String get connectionCodeHint =>
+      isChinese
+          ? '粘贴电脑端完整输出的 ccb1_ 连接码'
+          : 'Paste the complete ccb1_ code printed by the computer';
 
-  String get route => isChinese ? '路由' : 'Route';
-
-  String get scanQr => isChinese ? '扫码' : 'Scan QR';
-
-  String get claim => isChinese ? '连接' : 'Claim';
+  String get connectWithCode => isChinese ? '使用连接码连接' : 'Connect with code';
 
   String get couldNotLoadProject =>
       isChinese ? '无法加载项目' : 'Could not load project';
@@ -175,7 +168,8 @@ class CcbMobileLocalizations {
 
   String get checkingForUpdates => isChinese ? '正在检查' : 'Checking';
 
-  String get alreadyLatestVersion => isChinese ? '当前已是最新版本。' : 'You are up to date.';
+  String get alreadyLatestVersion =>
+      isChinese ? '当前已是最新版本。' : 'You are up to date.';
 
   String newVersionAvailable(String version) =>
       isChinese ? '发现新版本 $version。' : 'Version $version is available.';
@@ -185,20 +179,29 @@ class CcbMobileLocalizations {
   String get downloadingUpdate => isChinese ? '正在下载' : 'Downloading';
 
   String downloadingVersion(String version) =>
-      isChinese ? '正在下载 $version 并校验安装包…' : 'Downloading and verifying $version…';
+      isChinese
+          ? '正在下载 $version 并校验安装包…'
+          : 'Downloading and verifying $version…';
 
   String get androidInstallerOpened =>
-      isChinese ? '安装包已校验，已打开 Android 安装器。' : 'APK verified. Android installer opened.';
+      isChinese
+          ? '安装包已校验，已打开 Android 安装器。'
+          : 'APK verified. Android installer opened.';
 
   String get updateCheckFailed =>
-      isChinese ? '检查更新失败，请检查网络或打开发布页。' : 'Update check failed. Check your network or open the release page.';
+      isChinese
+          ? '检查更新失败，请检查网络或打开发布页。'
+          : 'Update check failed. Check your network or open the release page.';
 
   String get updateDownloadFailed =>
-      isChinese ? '更新下载或校验失败，请重试或打开发布页。' : 'Update download or verification failed. Retry or open the release page.';
+      isChinese
+          ? '更新下载或校验失败，请重试或打开发布页。'
+          : 'Update download or verification failed. Retry or open the release page.';
 
   String get openReleasePage => isChinese ? '打开发布页' : 'Open release page';
 
-  String get updateAvailableTitle => isChinese ? '发现 CCB Mobile 更新' : 'CCB Mobile update available';
+  String get updateAvailableTitle =>
+      isChinese ? '发现 CCB Mobile 更新' : 'CCB Mobile update available';
 
   String get later => isChinese ? '稍后' : 'Later';
 
