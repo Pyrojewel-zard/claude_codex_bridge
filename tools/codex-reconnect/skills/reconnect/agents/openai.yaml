@@ -1,0 +1,6 @@
+interface:
+  display_name: "Reconnect"
+  short_description: "Toggle recovery for this Codex CLI session"
+  default_prompt: "Use $reconnect on to arm disconnect recovery."
+policy:
+  allow_implicit_invocation: false
