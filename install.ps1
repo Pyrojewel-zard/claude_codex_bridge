@@ -634,7 +634,7 @@ function Install-CodexSkills {
   }
 
   Write-Host "Installing inherited Codex skills (PowerShell SKILL.md template)..."
-  Get-ChildItem -Path $skillsSrc -Directory | ForEach-Object {
+  Get-ChildItem -Path $skillsSrc -Directory | Where-Object { $_.Name -ne "reconnect" } | ForEach-Object {
     $skillName = $_.Name
     $srcDir = $_.FullName
     $dstDir = Join-Path $skillsDst $skillName

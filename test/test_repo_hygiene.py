@@ -88,6 +88,7 @@ def test_inherited_skills_live_under_inherit_skills_only() -> None:
     assert (inherited / "zai_skills" / "ask.md").is_file()
     assert (inherited / "claude_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "codex_skills" / "ccb-clear" / "SKILL.md").is_file()
+    assert (inherited / "codex_skills" / "reconnect" / "SKILL.md").is_file()
 
     assert not (inherited / "claude_skills" / "ccb-config").exists()
     assert not (inherited / "codex_skills" / "ccb-config").exists()
@@ -102,7 +103,7 @@ def test_inherited_skill_set_is_minimal() -> None:
 
     expected = {
         "claude_skills": {"ask", "ccb-clear"},
-        "codex_skills": {"ask", "ccb-clear"},
+        "codex_skills": {"ask", "ccb-clear", "reconnect"},
         "droid_skills": {"ask"},
         "gemini_skills": {"ask"},
         "grok_skills": {"ask", "ccb-clear"},
@@ -128,7 +129,7 @@ def test_install_scripts_current_skill_lists_are_minimal() -> None:
     install_sh = (repo_root / "install.sh").read_text(encoding="utf-8")
     install_ps1 = (repo_root / "install.ps1").read_text(encoding="utf-8")
 
-    assert 'local ccb_skills="ask ccb-config ccb-clear"' in install_sh
+    assert 'local ccb_skills="ask ccb-config ccb-clear reconnect"' in install_sh
     assert 'local legacy_skills="ccb-config ' in install_sh
     assert 'local ccb_skills="ask ping' not in install_sh
     assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear")' in install_ps1

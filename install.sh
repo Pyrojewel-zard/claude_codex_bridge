@@ -321,6 +321,7 @@ SCRIPTS_TO_LINK=(
   bin/ccb-runtime-accelerator
   bin/ccb-rs-helper
   bin/ccb-provider-activity-hook
+  bin/codex-reconnect
   bin/ctx-transfer
   ccb
 )
@@ -2356,6 +2357,11 @@ verify_installed_entrypoints() {
     echo "   Path: $BIN_DIR/ask"
     exit 1
   fi
+  if ! "$BIN_DIR/codex-reconnect" --help >/dev/null 2>&1; then
+    echo "ERROR: installed codex-reconnect entrypoint failed runtime smoke check"
+    echo "   Path: $BIN_DIR/codex-reconnect"
+    exit 1
+  fi
   echo "OK: Installed entrypoints passed runtime smoke check"
 }
 
@@ -3664,7 +3670,7 @@ uninstall_claude_skills() {
 uninstall_codex_skills() {
   local skills_dst
   skills_dst="$(resolve_codex_source_home)/skills"
-  local ccb_skills="ask ccb-config ccb-clear"
+  local ccb_skills="ask ccb-config ccb-clear reconnect"
   local legacy_skills="ccb_config ping pend autonew all-plan file-op"
 
   if [[ ! -d "$skills_dst" ]]; then

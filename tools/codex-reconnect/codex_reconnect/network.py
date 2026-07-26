@@ -9,6 +9,8 @@ from enum import Enum
 from typing import Callable
 from urllib.parse import urlparse
 
+from . import __version__
+
 
 DEFAULT_OPENAI_PROBE_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_PUBLIC_PROBE_URL = "https://www.google.com/generate_204"
@@ -42,7 +44,7 @@ def probe_https(
     request = urllib.request.Request(
         url,
         method="HEAD",
-        headers={"User-Agent": "codex-reconnect/0.2"},
+        headers={"User-Agent": f"codex-reconnect/{__version__}"},
     )
     started = time.monotonic()
     try:

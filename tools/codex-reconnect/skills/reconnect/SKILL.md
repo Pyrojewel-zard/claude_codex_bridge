@@ -1,15 +1,17 @@
 ---
 name: reconnect
-description: Toggle disconnect recovery for the current Codex CLI session. Use only when the user explicitly invokes `$reconnect on` or `$reconnect off` in a codex-reconnect-managed CLI.
+description: Enable or disable tmux-bound disconnect recovery for the current Codex thread. Use only for the explicit invocations `$reconnect on` or `$reconnect off` inside a Codex CLI running in tmux.
 ---
 
 # Reconnect
 
-Treat the exact invocation as a control command already applied by the managed local transport.
+Execute exactly one local command for the matching invocation:
 
-- For `$reconnect on`, reply that reconnect recovery is on for this session.
-- For `$reconnect off`, reply that reconnect recovery is off for this session.
-- For any other argument, reply with the exact usage: `$reconnect on` or `$reconnect off`.
+- `$reconnect on` → run `codex-reconnect on`.
+- `$reconnect off` → run `codex-reconnect off`.
 
-Do not run tools, change files, start a goal, continue normal work, or claim coverage for quota,
-authentication, policy, context-window, or ordinary task-completion conditions.
+Relay the command result concisely. If it fails, report the error and do not claim that recovery is
+enabled. For any other argument, reply with the exact usage: `$reconnect on` or `$reconnect off`.
+
+Do not change files, start a goal, run any other tool, or claim coverage for quota, billing,
+authentication, policy, context-window, approval, or ordinary task-completion failures.

@@ -97,6 +97,11 @@ def test_source_dev_install_links_live_bin_and_ask_skill_asset(tmp_path: Path) -
     assert ask_path.is_symlink()
     assert ask_path.resolve() == (REPO_ROOT / "bin" / "ask").resolve()
 
+    reconnect_path = bin_dir / "codex-reconnect"
+    assert reconnect_path.exists()
+    assert reconnect_path.is_symlink()
+    assert reconnect_path.resolve() == (REPO_ROOT / "bin" / "codex-reconnect").resolve()
+
     ask_skill_md = tmp_path / "codex-home" / "skills" / "ask" / "SKILL.md"
     assert ask_skill_md.is_file()
     assert not ask_skill_md.is_symlink()
@@ -106,6 +111,11 @@ def test_source_dev_install_links_live_bin_and_ask_skill_asset(tmp_path: Path) -
     assert ccb_clear_skill_md.is_file()
     assert not ccb_clear_skill_md.is_symlink()
     assert "name: ccb-clear" in ccb_clear_skill_md.read_text(encoding="utf-8")
+
+    reconnect_skill_md = tmp_path / "codex-home" / "skills" / "reconnect" / "SKILL.md"
+    assert reconnect_skill_md.is_file()
+    assert not reconnect_skill_md.is_symlink()
+    assert "name: reconnect" in reconnect_skill_md.read_text(encoding="utf-8")
 
     skills_dir = tmp_path / "codex-home" / "skills"
     assert not (skills_dir / "ccb-config").exists()

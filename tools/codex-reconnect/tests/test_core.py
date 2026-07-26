@@ -13,7 +13,12 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from codex_reconnect.cli import build_parser
-from codex_reconnect.network import ProbeResult, Readiness, classify_readiness, probe_https
+from codex_reconnect.network import (
+    ProbeResult,
+    Readiness,
+    classify_readiness,
+    probe_https,
+)
 from codex_reconnect.paths import default_state_dir
 from codex_reconnect.policy import codex_error_class, full_jitter_delay
 from codex_reconnect.protocol import JsonlAppServer, ProtocolError
@@ -26,10 +31,27 @@ class NamingTests(unittest.TestCase):
     def test_public_cli_and_state_directory_use_codex_reconnect(self) -> None:
         self.assertEqual(build_parser().prog, "codex-reconnect")
         with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": temporary}):
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_STATE_HOME": temporary},
+                clear=True,
+            ):
                 self.assertEqual(
                     default_state_dir(), Path(temporary) / "codex-reconnect"
                 )
+
+    def test_ccb_runtime_uses_project_scoped_reconnect_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_dir = Path(temporary) / "provider-runtime" / "codex"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "CCB_SESSION_FILE": str(Path(temporary) / ".ccb-session"),
+                    "CODEX_RUNTIME_DIR": str(runtime_dir),
+                },
+                clear=True,
+            ):
+                self.assertEqual(default_state_dir(), runtime_dir / "reconnect")
 
 
 class NetworkTests(unittest.TestCase):
