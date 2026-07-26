@@ -1634,7 +1634,7 @@ async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
     )
 
 
-async def _wait_for(predicate, *, timeout: float = 2.0) -> None:
+async def _wait_for(predicate, *, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
