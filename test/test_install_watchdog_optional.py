@@ -70,6 +70,46 @@ def test_install_tomli_skip_is_successful_and_explicit(tmp_path: Path) -> None:
     assert "done" in completed.stdout
 
 
+def test_install_mobile_relay_dependencies_uses_pinned_manifest(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        mkdir -p "$HOME"
+        fake_requirements="$HOME/mobile-relay-requirements.txt"
+        printf '%s\\n' 'aiohttp==3.13.5' 'cryptography==48.0.0' > "$fake_requirements"
+        relay_ready=0
+        mobile_relay_requirements_path() { printf '%s\\n' "$fake_requirements"; }
+        python_has_mobile_relay_dependencies() { [[ "$relay_ready" == "1" ]]; }
+        pip_install_with_index_fallback() {
+          shift 2
+          printf '%s\\n' "$*" > "$HOME/mobile-relay-pip-argv.txt"
+          relay_ready=1
+        }
+        install_mobile_relay_dependencies_for_python python3
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "Mobile Relay Python dependencies installed" in completed.stdout
+    pip_argv = (tmp_path / "home" / "mobile-relay-pip-argv.txt").read_text(
+        encoding="utf-8"
+    )
+    assert f"--requirement {tmp_path / 'home' / 'mobile-relay-requirements.txt'}" in pip_argv
+
+
+def test_install_mobile_relay_dependencies_skip_is_explicit(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
+        install_mobile_relay_dependencies_for_python python3
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "CCB_INSTALL_MOBILE_RELAY_DEPS=0" in completed.stdout
+
+
 def test_install_requirements_continue_when_optional_watchdog_is_skipped(tmp_path: Path) -> None:
     completed = _run_install_snippet(
         tmp_path,
@@ -532,6 +572,7 @@ def test_install_managed_venv_reuses_healthy_environment(tmp_path: Path) -> None
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_TOMLI=0
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         mkdir -p "$CODEX_INSTALL_PREFIX"
         python3 -m venv "$CODEX_INSTALL_PREFIX/.venv"
         echo keep > "$CODEX_INSTALL_PREFIX/.venv/marker"
@@ -554,6 +595,7 @@ def test_install_managed_venv_refreshes_legacy_pip_when_reused(tmp_path: Path) -
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_TOMLI=0
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         pip_argv_marker="$HOME/pip-refresh-argv.txt"
         mkdir -p "$HOME" "$CODEX_INSTALL_PREFIX"
         python3 -m venv "$CODEX_INSTALL_PREFIX/.venv"
@@ -602,6 +644,7 @@ def test_release_managed_venv_wraps_installed_python_entrypoints(tmp_path: Path)
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         require_python_version >/dev/null
         install_managed_venv
         install_bin_links
@@ -652,6 +695,7 @@ def test_release_managed_venv_wrapper_uses_absolute_target_path(tmp_path: Path) 
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         install_managed_venv
         install_bin_links
         """,
@@ -668,6 +712,7 @@ def test_install_managed_venv_selects_python_when_called_directly(tmp_path: Path
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         install_managed_venv
         echo venv-ok
         """,

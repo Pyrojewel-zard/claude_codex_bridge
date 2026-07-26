@@ -807,6 +807,69 @@ pip_install_with_index_fallback() {
   fi
 }
 
+mobile_relay_requirements_path() {
+  local requirements="$REPO_ROOT/deploy/mobile-relay/requirements.txt"
+  if [[ ! -f "$requirements" ]]; then
+    return 1
+  fi
+  printf '%s\n' "$requirements"
+}
+
+python_has_mobile_relay_dependencies() {
+  local python_cmd="$1"
+  "$python_cmd" -c 'import aiohttp, cryptography' >/dev/null 2>&1
+}
+
+install_mobile_relay_dependencies_for_python() {
+  local python_cmd="$1"
+  if [[ "${CCB_INSTALL_MOBILE_RELAY_DEPS:-1}" == "0" ]]; then
+    echo "INFO: Mobile Relay dependency install skipped by CCB_INSTALL_MOBILE_RELAY_DEPS=0"
+    return 0
+  fi
+  if python_has_mobile_relay_dependencies "$python_cmd"; then
+    echo "OK: Mobile Relay Python dependencies available"
+    return 0
+  fi
+
+  local requirements
+  requirements="$(mobile_relay_requirements_path 2>/dev/null || true)"
+  if [[ -z "$requirements" ]]; then
+    echo "ERROR: Mobile Relay dependency manifest is missing" >&2
+    echo "   Expected: $REPO_ROOT/deploy/mobile-relay/requirements.txt" >&2
+    return 1
+  fi
+
+  local pip_log pip_log_cleanup=0
+  pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-mobile-relay-pip.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-mobile-relay-pip.XXXXXX.log" 2>/dev/null || true)"
+  if [[ -z "$pip_log" ]]; then
+    pip_log="/dev/null"
+  else
+    pip_log_cleanup=1
+  fi
+
+  echo "Installing Mobile Relay Python dependencies"
+  if pip_install_with_index_fallback \
+      "$python_cmd" "$pip_log" --requirement "$requirements" &&
+     python_has_mobile_relay_dependencies "$python_cmd"; then
+    if [[ "$pip_log_cleanup" -eq 1 ]]; then
+      rm -f "$pip_log"
+    fi
+    echo "OK: Mobile Relay Python dependencies installed"
+    return 0
+  fi
+
+  echo "ERROR: Failed to install required Mobile Relay Python dependencies" >&2
+  if [[ "$pip_log_cleanup" -eq 1 && -s "$pip_log" ]]; then
+    tail -20 "$pip_log" | sed 's/^/     /' >&2
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 ]]; then
+    rm -f "$pip_log"
+  fi
+  echo "   Manual install:" >&2
+  echo "   $python_cmd -m pip install --requirement '$requirements'" >&2
+  return 1
+}
+
 tomli_manual_install_command() {
   local use_venv_scope="${1:-0}"
   if [[ "$use_venv_scope" == "1" ]]; then
@@ -1838,6 +1901,7 @@ install_managed_venv() {
   fi
   install_tomli_for_python "$venv_python"
   install_watchdog_for_python "$venv_python"
+  install_mobile_relay_dependencies_for_python "$venv_python"
   echo "OK: Managed Python venv ready"
 }
 
