@@ -316,3 +316,13 @@ The public relay is beta-ready only after every P0 gate in
 [public-relay-android-emulator-acceptance.md](public-relay-android-emulator-acceptance.md)
 passes against the same source commit, APK hash, relay deployment, and real
 server-wide dedicated test project.
+
+## Historical Deployment Preflight (2026-07-22)
+
+The 2026-07-22 read-only preflight identified Alibaba Cloud target
+`47.120.71.142`, confirmed the existing RustDesk-related public port surface,
+and found that the historical local SSH key was no longer authorized. At that
+checkpoint, source still contained only the non-networked local relay harness;
+later implementation status is recorded above. No remote change was made
+during the preflight. See
+[the preflight record](../history/public-relay-aliyun-preflight-20260722.md).
