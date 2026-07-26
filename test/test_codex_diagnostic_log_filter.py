@@ -25,7 +25,9 @@ def _create_logs_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             level TEXT,
-            target TEXT
+            target TEXT,
+            feedback_log_body TEXT,
+            thread_id TEXT
         )
         '''
     )
@@ -55,7 +57,7 @@ def _create_codex_migrated_logs_db(db_path: Path) -> None:
         _create_logs_table(conn)
 
 
-def test_install_codex_diagnostic_log_filter_drops_all_rows(tmp_path: Path) -> None:
+def test_install_codex_diagnostic_log_filter_keeps_only_terminal_turn_errors(tmp_path: Path) -> None:
     codex_home = tmp_path / 'codex-home'
     db_path = _create_logs_db(codex_home)
 
@@ -66,14 +68,34 @@ def test_install_codex_diagnostic_log_filter_drops_all_rows(tmp_path: Path) -> N
         conn.execute("INSERT INTO logs(level, target) VALUES ('debug', 'debug-row')")
         conn.execute("INSERT INTO logs(level, target) VALUES ('INFO', 'info-row')")
         conn.execute("INSERT INTO logs(level, target) VALUES ('ERROR', 'error-row')")
-        rows = conn.execute('SELECT level, target FROM logs ORDER BY id').fetchall()
+        conn.execute(
+            '''
+            INSERT INTO logs(level, target, feedback_log_body, thread_id)
+            VALUES (
+                'ERROR',
+                'codex_core::session::turn',
+                'session_task.run:run_turn: Turn error: stream disconnected before completion',
+                'thread-1'
+            )
+            '''
+        )
+        rows = conn.execute(
+            'SELECT level, target, feedback_log_body, thread_id FROM logs ORDER BY id'
+        ).fetchall()
         trigger = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='trigger' AND name=?",
             (TRIGGER_NAME,),
         ).fetchone()
 
     assert trigger == (TRIGGER_NAME,)
-    assert rows == []
+    assert rows == [
+        (
+            'ERROR',
+            'codex_core::session::turn',
+            'session_task.run:run_turn: Turn error: stream disconnected before completion',
+            'thread-1',
+        )
+    ]
 
 
 def test_install_codex_diagnostic_log_filter_is_schema_noop_when_current(tmp_path: Path) -> None:

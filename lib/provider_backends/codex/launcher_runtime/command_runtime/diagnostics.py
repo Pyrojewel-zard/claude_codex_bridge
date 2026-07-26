@@ -13,6 +13,10 @@ TRIGGER_NAME = 'ccb_drop_diagnostic_logs'
 TRIGGER_SQL = f'''
 CREATE TRIGGER {TRIGGER_NAME}
 BEFORE INSERT ON logs
+WHEN NOT (
+    NEW.target = 'codex_core::session::turn'
+    AND instr(COALESCE(NEW.feedback_log_body, ''), 'Turn error:') > 0
+)
 BEGIN
     SELECT RAISE(IGNORE);
 END
@@ -302,6 +306,8 @@ def _trigger_sql_matches(sql: str | None) -> bool:
     return (
         f'create trigger {TRIGGER_NAME}' in normalized
         and 'before insert on logs' in normalized
+        and "new.target = 'codex_core::session::turn'" in normalized
+        and "'turn error:'" in normalized
         and 'raise(ignore)' in compact
     )
 
