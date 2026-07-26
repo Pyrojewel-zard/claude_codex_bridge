@@ -96,7 +96,7 @@ def print_start_help(*, file=None) -> None:
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
               ccb cleanup --legacy-provider-caches
                                     Also remove caches for project roots that no longer exist.
-              ccb theme [light|dark|+|-]
+              ccb theme [system|dark|light|+|-|PRESET]
                                     Set or show the global CCB UI theme.
 
             Core commands:
@@ -236,12 +236,13 @@ _COMMAND_HELP = {
           create a queued job, send pane keys, substitute providers, or retry.
     """,
     "theme": """
-        usage: ccb theme [dark|light|+|-|solarized|tokyo|gruvbox|rose-pine]
+        usage: ccb theme [system|dark|light|+|-|solarized|tokyo|gruvbox|rose-pine]
 
         CCB UI theme:
           ccb theme          Show current CCB theme preference.
           ccb theme +        Switch to the next CCB theme.
           ccb theme -        Switch to the previous CCB theme.
+          ccb theme system   Follow the operating-system light/dark appearance.
           ccb theme light    Use a light CCB tmux/sidebar theme.
           ccb theme dark     Use the dark CCB tmux/sidebar theme.
 
@@ -250,6 +251,7 @@ _COMMAND_HELP = {
             CCB-owned tmux/sidebar colors.
           - CCB-owned rich WezTerm follows this preference through its
             generated config.
+          - The same preference is available under Appearance in `ccb config ui`.
     """,
     "agent": """
         usage:

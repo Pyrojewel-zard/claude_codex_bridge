@@ -1084,6 +1084,8 @@ def _ensure_dirs(paths: dict[str, Path]) -> None:
 
 def _normalize_workbench_theme(value: str | None) -> str:
     key = str(value or '').strip().lower().replace('_', '-').replace(' ', '-')
+    if key in {'system', 'system-default', 'auto', 'os'}:
+        return 'system'
     if key in {'', 'default', 'dark', 'nord', 'contrast'}:
         return 'dark'
     if key in {'light', 'latte', 'catppuccin-latte'}:
@@ -1104,6 +1106,37 @@ def _ensure_theme_preference(paths: dict[str, Path]) -> None:
         return
     requested = os.environ.get('CCB_WORKBENCH_THEME') or os.environ.get('CCB_TMUX_THEME_PROFILE') or 'dark'
     save_theme_preference(preference_for_theme(requested) or default_theme_preference())
+
+
+def _wezterm_theme_config_candidates(path: Path) -> tuple[str, ...]:
+    candidates = [str(path)]
+    configured = str(
+        os.environ.get('CCB_WORKBENCH_THEME_CONFIG_WINDOWS') or ''
+    ).strip()
+    if configured:
+        candidates.append(configured)
+    elif _is_wsl():
+        wslpath = shutil.which('wslpath')
+        if wslpath:
+            try:
+                completed = subprocess.run(
+                    [wslpath, '-w', str(path)],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            converted = (
+                completed.stdout.strip()
+                if completed is not None and completed.returncode == 0
+                else ''
+            )
+            if converted:
+                candidates.append(converted)
+    return tuple(dict.fromkeys(candidates))
 
 
 def _write_preview_helpers(paths: dict[str, Path]) -> None:
@@ -1365,6 +1398,10 @@ return M
 
 
 def _write_wezterm_config(paths: dict[str, Path]) -> None:
+    theme_config_candidates = '\n'.join(
+        f'  "{_lua_string(candidate)}",'
+        for candidate in _wezterm_theme_config_candidates(paths['theme_config'])
+    )
     paths['wezterm_config'].write_text(
         f'''-- {GENERATED_MARKER}
 local wezterm = require("wezterm")
@@ -1375,7 +1412,18 @@ config.check_for_updates = false
 config.window_close_confirmation = "NeverPrompt"
 config.warn_about_missing_glyphs = false
 config.use_ime = true
-local theme_config_path = "{_lua_string(str(paths['theme_config']))}"
+local theme_config_paths = {{
+{theme_config_candidates}
+}}
+local theme_config_path = theme_config_paths[1]
+for _, candidate in ipairs(theme_config_paths) do
+  local file = io.open(candidate, "r")
+  if file then
+    file:close()
+    theme_config_path = candidate
+    break
+  end
+end
 if wezterm.add_to_config_reload_watch_list then
   wezterm.add_to_config_reload_watch_list(theme_config_path)
 end
@@ -1387,6 +1435,8 @@ end
 local themes = {{
   dark = {{
     tmux_profile = "default",
+    ansi = {{ "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0" }},
+    brights = {{ "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4" }},
     foreground = "#d8dee9",
     background = "#1f2328",
     cursor_bg = "#88c0d0",
@@ -1409,6 +1459,8 @@ local themes = {{
   }},
   latte = {{
     tmux_profile = "light",
+    ansi = {{ "#5c5f77", "#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#8839ef", "#179299", "#acb0be" }},
+    brights = {{ "#6c6f85", "#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#8839ef", "#179299", "#4c4f69" }},
     foreground = "#4c4f69",
     background = "#eff1f5",
     cursor_bg = "#4c4f69",
@@ -1431,6 +1483,8 @@ local themes = {{
   }},
   solarized_light = {{
     tmux_profile = "light",
+    ansi = {{ "#073642", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198", "#eee8d5" }},
+    brights = {{ "#002b36", "#cb4b16", "#586e75", "#657b83", "#839496", "#6c71c4", "#93a1a1", "#fdf6e3" }},
     foreground = "#657b83",
     background = "#fdf6e3",
     cursor_bg = "#586e75",
@@ -1453,6 +1507,8 @@ local themes = {{
   }},
   tokyo_night_light = {{
     tmux_profile = "light",
+    ansi = {{ "#0f0f14", "#8c4351", "#485e30", "#8f5e15", "#34548a", "#5a4a78", "#0f4b6e", "#828594" }},
+    brights = {{ "#9699a3", "#8c4351", "#485e30", "#8f5e15", "#34548a", "#5a4a78", "#0f4b6e", "#343b58" }},
     foreground = "#343b58",
     background = "#d5d6db",
     cursor_bg = "#34548a",
@@ -1475,6 +1531,8 @@ local themes = {{
   }},
   gruvbox_light = {{
     tmux_profile = "light",
+    ansi = {{ "#fbf1c7", "#cc241d", "#98971a", "#d79921", "#458588", "#b16286", "#689d6a", "#7c6f64" }},
+    brights = {{ "#928374", "#9d0006", "#79740e", "#b57614", "#076678", "#8f3f71", "#427b58", "#3c3836" }},
     foreground = "#3c3836",
     background = "#fbf1c7",
     cursor_bg = "#3c3836",
@@ -1497,6 +1555,8 @@ local themes = {{
   }},
   rose_pine_dawn = {{
     tmux_profile = "light",
+    ansi = {{ "#f2e9e1", "#b4637a", "#286983", "#ea9d34", "#56949f", "#907aa9", "#d7827e", "#797593" }},
+    brights = {{ "#9893a5", "#b4637a", "#286983", "#ea9d34", "#56949f", "#907aa9", "#d7827e", "#575279" }},
     foreground = "#575279",
     background = "#faf4ed",
     cursor_bg = "#575279",
@@ -1519,6 +1579,10 @@ local themes = {{
   }},
 }}
 local theme_aliases = {{
+  ["system"] = "system",
+  ["system-default"] = "system",
+  ["auto"] = "system",
+  ["os"] = "system",
   [""] = "dark",
   ["default"] = "dark",
   ["dark"] = "dark",
@@ -1547,6 +1611,22 @@ local function normalize_theme(value)
   local key = string.lower(tostring(value or "")):gsub("%s+", "-")
   return theme_aliases[key] or "dark"
 end
+local function system_theme()
+  if wezterm.gui and wezterm.gui.get_appearance then
+    local ok, appearance = pcall(wezterm.gui.get_appearance)
+    if ok and tostring(appearance):find("Dark") then
+      return "dark"
+    end
+    if ok and tostring(appearance) ~= "" then
+      return "latte"
+    end
+  end
+  local fallback = string.lower(tostring(os.getenv("CCB_SYSTEM_THEME") or ""))
+  if fallback:find("light") then
+    return "latte"
+  end
+  return "dark"
+end
 local function read_theme_file(path)
   local file = io.open(path, "r")
   if not file then
@@ -1572,6 +1652,9 @@ local function read_theme_file(path)
 end
 local requested_theme = read_theme_file(theme_config_path) or os.getenv("CCB_WORKBENCH_THEME") or os.getenv("CCB_TMUX_THEME_PROFILE") or "dark"
 local theme_name = normalize_theme(requested_theme)
+if theme_name == "system" then
+  theme_name = system_theme()
+end
 local theme = themes[theme_name] or themes.dark
 config.font = wezterm.font_with_fallback({{
   "JetBrains Mono",
@@ -1610,6 +1693,8 @@ config.window_frame = {{
   inactive_titlebar_bg = theme.frame_inactive,
 }}
 config.colors = {{
+  ansi = theme.ansi,
+  brights = theme.brights,
   foreground = theme.foreground,
   background = theme.background,
   cursor_bg = theme.cursor_bg,
@@ -1772,6 +1857,7 @@ raise SystemExit(75 if err in (errno.EMFILE, errno.ENFILE) else 0)
 normalize_workbench_theme() {{
   key="$(printf '%s' "${{1:-}}" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | tr ' ' '-')"
   case "$key" in
+    system|system-default|auto|os) printf '%s\\n' system ;;
     ""|default|dark|nord|contrast) printf '%s\\n' dark ;;
     light|latte|catppuccin-latte) printf '%s\\n' latte ;;
     solarized|solarized-light) printf '%s\\n' solarized_light ;;
@@ -1780,6 +1866,48 @@ normalize_workbench_theme() {{
     rose-pine-dawn) printf '%s\\n' rose_pine_dawn ;;
     *) printf '%s\\n' dark ;;
   esac
+}}
+detect_system_workbench_theme() {{
+  explicit="$(printf '%s' "${{CCB_SYSTEM_THEME:-}}" | tr '[:upper:]' '[:lower:]')"
+  case "$explicit" in
+    *light*) printf '%s\\n' latte; return 0 ;;
+    *dark*) printf '%s\\n' dark; return 0 ;;
+  esac
+  case "$(printf '%s' "${{GTK_THEME:-${{QT_STYLE_OVERRIDE:-}}}}" | tr '[:upper:]' '[:lower:]')" in
+    *dark*) printf '%s\\n' dark; return 0 ;;
+  esac
+  if command -v powershell.exe >/dev/null 2>&1; then
+    windows_light="$(powershell.exe -NoProfile -NonInteractive -Command "(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize' -Name AppsUseLightTheme).AppsUseLightTheme" 2>/dev/null | tr -d '\\r\\n ' || true)"
+    case "$windows_light" in
+      0) printf '%s\\n' dark; return 0 ;;
+      1) printf '%s\\n' latte; return 0 ;;
+    esac
+  fi
+  if command -v defaults >/dev/null 2>&1; then
+    if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -qi dark; then
+      printf '%s\\n' dark
+    else
+      printf '%s\\n' latte
+    fi
+    return 0
+  fi
+  if command -v gsettings >/dev/null 2>&1; then
+    system_scheme="$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null || true)"
+    if printf '%s' "$system_scheme" | grep -qi dark; then
+      printf '%s\\n' dark
+      return 0
+    fi
+    gtk_theme="$(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null || true)"
+    if [ -n "$gtk_theme" ]; then
+      if printf '%s' "$gtk_theme" | grep -qi dark; then
+        printf '%s\\n' dark
+      else
+        printf '%s\\n' latte
+      fi
+      return 0
+    fi
+  fi
+  printf '%s\\n' dark
 }}
 theme_config_file={_shell_quote(str(paths['theme_config']))}
 read_workbench_theme_config() {{
@@ -1798,6 +1926,9 @@ if [ -z "$requested_theme" ]; then
   requested_theme="$(read_workbench_theme_config)"
 fi
 workbench_theme="$(normalize_workbench_theme "${{requested_theme:-dark}}")"
+if [ "$workbench_theme" = system ]; then
+  workbench_theme="$(detect_system_workbench_theme)"
+fi
 case "$workbench_theme" in
   dark) workbench_tmux_theme=default ;;
   *) workbench_tmux_theme=light ;;

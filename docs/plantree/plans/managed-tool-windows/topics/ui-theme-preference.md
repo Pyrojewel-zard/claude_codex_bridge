@@ -10,6 +10,7 @@ Define a single user-facing theme command for CCB-owned UI surfaces:
 ccb theme
 ccb theme +
 ccb theme -
+ccb theme system
 ccb theme light
 ccb theme dark
 ```
@@ -34,7 +35,14 @@ terminal dotfiles and can choose the CCB theme that best matches them.
 
 For the CCB-owned rich WezTerm bundle, `ccb theme` also drives the generated
 WezTerm theme because that profile is owned by CCB and launched with an
-isolated `--config-file`.
+isolated `--config-file`. Every selectable theme resolves to a complete
+CCB-owned palette, including ANSI and bright colors; it never imports or
+merges the user's global WezTerm theme.
+
+`ccb config ui` exposes the same user preference under **Appearance**. This is
+an explicit user-preference exception to the panel's normal project-config
+write boundary: the endpoint may write only `theme.json` through the shared
+theme service and may not write another user-global file.
 
 ## Storage Authority
 
@@ -65,10 +73,26 @@ Shape:
 palette key. `tmux_profile` is the coarse CCB/tmux profile consumed by tmux
 and sidebar logic.
 
+System-following shape:
+
+```json
+{
+  "schema_version": 1,
+  "theme": "system",
+  "palette": "system",
+  "tmux_profile": "system"
+}
+```
+
+The stored `system` values preserve intent. Runtime consumers resolve them to
+the effective CCB `dark`/`latte` palette and `default`/`light` tmux profile.
+They do not copy a system terminal application's color scheme.
+
 ## Theme Set
 
 Primary public themes:
 
+- `system`
 - `dark`
 - `light`
 
@@ -81,8 +105,8 @@ Additional accepted aliases may map to richer palettes:
 
 `ccb theme +` cycles through the supported set. `ccb theme -` cycles backward.
 The command output should show the semantic theme, rich palette, tmux profile,
-and config path so support/debugging remains straightforward without exposing
-workbench internals as the primary UX.
+effective theme/palette/profile, and config path so support/debugging remains
+straightforward without exposing workbench internals as the primary UX.
 
 ## Runtime Behavior
 
@@ -90,11 +114,14 @@ When `ccb theme <value>` runs:
 
 1. Normalize `<value>` or cycle from the current saved preference.
 2. Write `theme.json`.
-3. If running inside tmux, update the tmux environment and reapply the CCB
-   tmux UI with the selected `tmux_profile`.
-4. If running inside CCB rich WezTerm, rely on the generated WezTerm config
+3. Resolve `system` from the operating-system light/dark preference. WezTerm
+   uses `wezterm.gui.get_appearance()`; Python consumers use platform settings
+   with a dark fallback for headless/unknown environments.
+4. If running inside tmux, update the tmux environment and reapply the CCB
+   tmux UI with the effective `tmux_profile`.
+5. If running inside CCB rich WezTerm, rely on the generated WezTerm config
    watching `theme.json` and reloading the CCB-owned WezTerm palette.
-5. If not running inside rich WezTerm, do not mutate terminal emulator config.
+6. If not running inside rich WezTerm, do not mutate terminal emulator config.
    The rich WezTerm palette will apply next time the rich bundle is launched.
 
 The old `ccb-workbench theme ...` surface should not be public. The public
@@ -108,7 +135,14 @@ preference internally.
   tmux.
 - `ccb theme dark` restores the dark CCB/tmux profile and clears stale light or
   contrast window styles where needed.
+- `ccb theme system` follows OS appearance while retaining CCB-owned dark/light
+  palettes, with explicit selected and effective values in diagnostics.
+- `ccb config ui` lists all supported themes, saves through the token-guarded
+  local `/api/theme` endpoint, and follows browser system appearance when the
+  saved selection is `system`.
 - In CCB rich WezTerm, generated `wezterm.lua` reloads from `theme.json`.
+- Rich WezTerm defines foreground/background, cursor, selection, tab, ANSI,
+  and bright colors for every preset.
 - In ordinary terminals, CCB never writes user terminal dotfiles.
 - `ccb update rich` preserves the current theme preference and regenerates a
   config that follows it.

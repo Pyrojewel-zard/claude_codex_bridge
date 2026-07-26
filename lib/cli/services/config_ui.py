@@ -36,6 +36,7 @@ from cli.services.config_restart_intent import (
     record_config_restart_intent,
 )
 from cli.services.config_ui_settings import resolve_config_ui_settings
+from cli.services.theme import set_theme_preference, theme_preference_payload
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_model_shortcuts import supported_provider_model_shortcuts
 from provider_profiles import supported_provider_api_shortcuts, validate_provider_runtime_home_uniqueness
@@ -468,6 +469,9 @@ def _handler_for(
             if parsed.path == '/api/capabilities':
                 self._send(HTTPStatus.OK, capabilities_payload, 'application/json; charset=utf-8')
                 return
+            if parsed.path == '/api/theme':
+                self._send_json(HTTPStatus.OK, theme_preference_payload())
+                return
             if parsed.path == '/api/config':
                 try:
                     payload = _config_payload(
@@ -559,6 +563,11 @@ def _handler_for(
                         )
                     self._send_json(HTTPStatus.OK, result)
                     return
+                if parsed.path == '/api/theme':
+                    with mutation_lock:
+                        result = _save_ui_theme(payload)
+                    self._send_json(HTTPStatus.OK, result)
+                    return
                 self._send(HTTPStatus.NOT_FOUND, b'not found\n', 'text/plain; charset=utf-8')
             except _ConfigUiHttpError as exc:
                 self._send_json(exc.status, {'status': 'error', 'error': exc.message})
@@ -618,6 +627,30 @@ class _ConfigUiHttpError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _save_ui_theme(payload: dict[str, object]) -> dict[str, object]:
+    value = payload.get('theme')
+    if not isinstance(value, str) or not value.strip():
+        raise _ConfigUiHttpError(
+            HTTPStatus.BAD_REQUEST,
+            'theme is required',
+        )
+    requested = value.strip().lower()
+    available = set(theme_preference_payload()['available_themes'])
+    if requested not in available:
+        raise _ConfigUiHttpError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            f'unsupported theme: {value}',
+        )
+    try:
+        result = set_theme_preference(requested)
+    except ValueError as exc:
+        raise _ConfigUiHttpError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            str(exc),
+        ) from exc
+    return {'status': 'ok', **result}
 
 
 def _config_payload(

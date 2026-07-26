@@ -270,6 +270,7 @@ def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
     assert "ccb -s" in stdout.getvalue()
     assert "ccb clear [agent...]" in stdout.getvalue()
     assert "ccb maintenance status Show maintenance heartbeat config and stored status." in stdout.getvalue()
+    assert "ccb theme [system|dark|light|+|-|PRESET]" in stdout.getvalue()
     assert "Core commands:" in stdout.getvalue()
     assert "ccb ask <agent> [from <sender>] <message>" in stdout.getvalue()
     assert "ccb doctor" in stdout.getvalue()
@@ -480,6 +481,7 @@ def test_run_cli_entrypoint_prints_theme_help() -> None:
     assert result == 0
     assert "usage: ccb theme" in stdout.getvalue()
     assert "ccb theme +" in stdout.getvalue()
+    assert "ccb theme system" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
 

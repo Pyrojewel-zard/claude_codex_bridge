@@ -161,13 +161,18 @@ user's global `~/.wezterm.lua`.
 Current visual contract:
 
 - use `wezterm.config_builder()` when available;
-- disable auto reload and update prompts for the managed workbench profile;
+- enable managed-config reload so CCB theme changes apply, while disabling
+  WezTerm update prompts for the managed workbench profile;
 - set compact workbench geometry with `initial_cols = 132`,
   `initial_rows = 38`, and tight window padding;
 - keep tab chrome simple with `use_fancy_tab_bar = false` and
   `hide_tab_bar_if_only_one_tab = true`;
-- set a quiet dark workbench palette in the generated config so user global
-  themes do not leak into CCB rich windows;
+- default to the quiet CCB dark workbench palette and expose only the complete
+  CCB-owned presets selected by `ccb theme` or **Appearance** in
+  `ccb config ui`; presets include ANSI/bright colors, and user-global WezTerm
+  themes never leak into CCB rich windows;
+- support an explicit `system` selection that maps OS dark/light appearance to
+  the CCB dark/latte palettes through `wezterm.gui.get_appearance()`;
 - launch with `start --always-new-process --no-auto-connect --cwd "$PWD"` so
   old WezTerm GUI/mux state does not silently reuse user-global or stale rich
   config, and the project directory remains the cwd authority;

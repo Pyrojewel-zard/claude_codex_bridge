@@ -6,7 +6,7 @@ import os
 import shlex
 from typing import Mapping
 
-from terminal_runtime.ui_theme import load_theme_preference
+from terminal_runtime.ui_theme import effective_theme_preference, load_theme_preference
 
 
 @dataclass(frozen=True)
@@ -242,7 +242,9 @@ def tmux_theme_profile(environ: Mapping[str, str] | None = None) -> str:
         return override
     preference = load_theme_preference(env)
     if preference is not None:
-        normalized = _normalize_profile_name(preference.tmux_profile)
+        normalized = _normalize_profile_name(
+            effective_theme_preference(preference, env).tmux_profile
+        )
         if normalized is not None:
             return normalized
     family = detect_terminal_family(env)

@@ -38,10 +38,17 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
 
     assert path.is_file()
     page = path.read_text(encoding='utf-8')
+    assert '<html lang="en" data-theme="dark" data-effective-theme="dark">' in page
     assert '<title>CCB Config Control Panel Demo</title>' in page
     assert 'id="staticDeletePane"' in page
     assert 'id="basicDeletePane"' in page
     assert 'function deleteSelectedPane()' in page
+    assert 'id="themeSelect"' in page
+    assert '<option value="system" data-i18n="themeSystem">System default</option>' in page
+    assert 'async function loadThemePreference()' in page
+    assert 'async function saveThemePreference(theme)' in page
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in page
+    assert 'apiJson("/api/theme"' in page
     assert 'if (result.restart_required)' in page
     assert 'configRestartRequired' in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
@@ -146,6 +153,62 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         with pytest.raises(HTTPError) as exc_info:
             urlopen(f'{parsed.scheme}://{parsed.netloc}/', timeout=2)
         assert exc_info.value.code == 403
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_reads_and_saves_user_theme_preference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-theme'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        'version = 2\nentry_window = "main"\n\n[windows]\nmain = "demo:codex"\n',
+        encoding='utf-8',
+    )
+    config_home = tmp_path / 'config'
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config_home))
+    monkeypatch.setenv('CCB_SYSTEM_THEME', 'light')
+    monkeypatch.delenv('TMUX', raising=False)
+    monkeypatch.delenv('TMUX_PANE', raising=False)
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        token='theme-token',
+        idle_timeout_s=0.3,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        initial = _get_json(handle.url, '/api/theme')
+        assert initial['theme'] == 'dark'
+        assert initial['effective_theme'] == 'dark'
+        assert initial['available_themes'][0] == 'system'
+
+        saved = _post_json(handle.url, '/api/theme', {'theme': 'system'})
+        assert saved['status'] == 'ok'
+        assert saved['theme'] == 'system'
+        assert saved['palette'] == 'system'
+        assert saved['effective_theme'] == 'light'
+        assert saved['effective_palette'] == 'latte'
+        assert saved['effective_tmux_profile'] == 'light'
+        assert saved['tmux_refresh'] == 'skipped'
+
+        theme_path = config_home / 'ccb' / 'theme.json'
+        assert json.loads(theme_path.read_text(encoding='utf-8')) == {
+            'palette': 'system',
+            'schema_version': 1,
+            'theme': 'system',
+            'tmux_profile': 'system',
+        }
+
+        with pytest.raises(HTTPError) as invalid:
+            _post_json(handle.url, '/api/theme', {'theme': 'unknown'})
+        assert invalid.value.code == 422
     finally:
         thread.join(timeout=2)
         handle.close()
