@@ -817,7 +817,11 @@ mobile_relay_requirements_path() {
 
 python_has_mobile_relay_dependencies() {
   local python_cmd="$1"
-  "$python_cmd" -c 'import aiohttp, cryptography' >/dev/null 2>&1
+  "$python_cmd" - <<'PY' >/dev/null 2>&1
+import aiohttp  # noqa: F401
+from cryptography.hazmat.primitives.asymmetric import ed25519, x25519  # noqa: F401
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305  # noqa: F401
+PY
 }
 
 install_mobile_relay_dependencies_for_python() {
@@ -2019,6 +2023,7 @@ write_python_entrypoint_wrapper() {
 if [[ "\${TERM:-}" == "xterm-ghostty" ]]; then
   export TERM=xterm-256color
 fi
+export CCB_PYTHON="$python_path"
 exec "$python_path" "$absolute_source" "\$@"
 EOF
   chmod +x "$destination_path" 2>/dev/null || true
@@ -2072,6 +2077,11 @@ write_ccb_launcher_release_wrapper() {
   else
     launcher_path="$INSTALL_PREFIX/bin/_ccb-python"
     body_path="$INSTALL_PREFIX/$body_name"
+  fi
+  if use_managed_venv; then
+    write_python_entrypoint_wrapper \
+      "$(managed_venv_python)" "$body_path" "$destination_path"
+    return 0
   fi
   mkdir -p "$(dirname "$destination_path")"
   clear_installed_path "$destination_path"
@@ -3348,6 +3358,7 @@ install_requirements() {
   else
     install_tomli
     install_watchdog
+    install_mobile_relay_dependencies_for_python "$PYTHON_BIN"
   fi
   require_terminal_backend
 }
@@ -3490,7 +3501,7 @@ provision_role_packs() {
   if install_uses_live_source; then
     ccb_entry="$(resolve_live_source_root)/ccb"
   else
-    ccb_entry="$INSTALL_PREFIX/ccb"
+    ccb_entry="$BIN_DIR/ccb"
   fi
   if [[ ! -x "$ccb_entry" ]]; then
     echo "WARN: Role Pack provisioning skipped; ccb entrypoint not executable: $ccb_entry"

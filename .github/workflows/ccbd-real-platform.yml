@@ -203,6 +203,8 @@ jobs:
     name: WSL mounted-drive ccbd/ask smoke
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      CCB_PYTHON: /tmp/ccb-ci-py311/bin/python
 
     steps:
       - name: Checkout

@@ -499,14 +499,16 @@ jobs:
 
           test -d "$smoke_root/install/.venv"
           test -x "$smoke_root/install/bin/_ccb-python"
-          "$smoke_root/install/bin/_ccb-python" --resolve >/dev/null
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/ccb"
+          managed_python="$smoke_root/install/.venv/bin/python"
+          CCB_PYTHON="$managed_python" \
+            "$smoke_root/install/bin/_ccb-python" --resolve | grep -F "$managed_python"
+          grep -F "$managed_python" "$smoke_root/bin/ccb"
           grep -F "$smoke_root/install/ccb.py" "$smoke_root/bin/ccb"
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/ask"
+          grep -F "$managed_python" "$smoke_root/bin/ask"
           grep -F "$smoke_root/install/bin/ask.py" "$smoke_root/bin/ask"
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/autonew"
+          grep -F "$managed_python" "$smoke_root/bin/autonew"
           grep -F "$smoke_root/install/bin/autonew.py" "$smoke_root/bin/autonew"
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/ctx-transfer"
+          grep -F "$managed_python" "$smoke_root/bin/ctx-transfer"
           grep -F "$smoke_root/install/bin/ctx-transfer.py" "$smoke_root/bin/ctx-transfer"
           test -x "$smoke_root/bin/ccb"
           test -x "$smoke_root/bin/ask"
@@ -538,6 +540,8 @@ jobs:
   test-wsl:
     name: WSL / Ubuntu 22.04
     runs-on: windows-latest
+    env:
+      CCB_PYTHON: /tmp/ccb-ci-py311/bin/python
 
     steps:
       - name: Checkout

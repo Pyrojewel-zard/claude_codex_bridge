@@ -116,6 +116,7 @@ def test_install_requirements_continue_when_optional_watchdog_is_skipped(tmp_pat
         """
         install_tomli() { echo "tomli stub"; }
         CCB_INSTALL_WATCHDOG=0
+        install_mobile_relay_dependencies_for_python() { echo "relay deps:$1"; }
         require_terminal_backend() { echo "tmux stub"; }
         install_requirements
         echo requirements-ok
@@ -125,6 +126,7 @@ def test_install_requirements_continue_when_optional_watchdog_is_skipped(tmp_pat
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "tomli stub" in completed.stdout
     assert "watchdog auto-install skipped" in completed.stdout
+    assert "relay deps:" in completed.stdout
     assert "tmux stub" in completed.stdout
     assert "requirements-ok" in completed.stdout
 
@@ -134,13 +136,13 @@ def test_install_role_pack_provisioning_runs_by_default_without_prompt(tmp_path:
         tmp_path,
         """
         CCB_SOURCE_KIND=release
-        mkdir -p "$CODEX_INSTALL_PREFIX"
-        cat > "$CODEX_INSTALL_PREFIX/ccb" <<'SH'
+        mkdir -p "$CODEX_INSTALL_PREFIX" "$CODEX_BIN_DIR"
+        cat > "$CODEX_BIN_DIR/ccb" <<'SH'
         #!/usr/bin/env bash
         printf '%s\\n' "$*" >> "$CODEX_INSTALL_PREFIX/ccb-argv.txt"
         exit 0
         SH
-        chmod +x "$CODEX_INSTALL_PREFIX/ccb"
+        chmod +x "$CODEX_BIN_DIR/ccb"
         check_role_pack_dependencies() { echo "deps:$1"; return 0; }
         provision_role_packs
         cat "$CODEX_INSTALL_PREFIX/ccb-argv.txt"

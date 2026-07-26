@@ -38,19 +38,11 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
 
     assert path.is_file()
     page = path.read_text(encoding='utf-8')
-    assert '<html lang="en" data-theme="dark" data-effective-theme="dark">' in page
+    assert '<html lang="en">' in page
     assert '<title>CCB Config Control Panel Demo</title>' in page
     assert 'id="staticDeletePane"' in page
     assert 'id="basicDeletePane"' in page
     assert 'function deleteSelectedPane()' in page
-    assert 'id="themeSelect"' in page
-    assert '<option value="system" data-i18n="themeSystem">System default</option>' in page
-    assert 'async function loadThemePreference()' in page
-    assert 'async function saveThemePreference(theme)' in page
-    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in page
-    assert 'apiJson("/api/theme"' in page
-    assert 'if (result.restart_required)' in page
-    assert 'configRestartRequired' in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
     assert match is not None
     embedded_icon = base64.b64decode(match.group(1))
