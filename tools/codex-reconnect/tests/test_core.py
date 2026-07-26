@@ -32,9 +32,7 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(build_parser().prog, "codex-reconnect")
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(
-                os.environ,
-                {"XDG_STATE_HOME": temporary},
-                clear=True,
+                os.environ, {"XDG_STATE_HOME": temporary}, clear=True
             ):
                 self.assertEqual(
                     default_state_dir(), Path(temporary) / "codex-reconnect"

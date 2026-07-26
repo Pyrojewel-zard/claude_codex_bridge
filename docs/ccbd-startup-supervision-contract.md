@@ -378,6 +378,12 @@ Managed provider startup mutation rules:
   configuration.
   Provider version checks and upgrades belong to the explicit `ccb update`
   flow, never to pane startup or job delivery.
+- managed Codex launch must export the canonical agent-scoped
+  `CCB_SESSION_FILE` path into that Codex process. The value points to the
+  existing project session authority so opt-in tools such as the inherited
+  `reconnect` skill can bind the exact project tmux socket and pane after
+  generic `TMUX` variables are sanitized. It must not be inherited from the
+  caller shell or treated as backend/startup authority.
 - managed Claude startup must use the user-installed Provider executable and
   must not create/copy/hash/link a CCB project-scoped binary cache; recognized
   legacy CCB cache links may be detached during preparation without deleting

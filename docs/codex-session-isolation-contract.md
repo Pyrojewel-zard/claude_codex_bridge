@@ -229,6 +229,9 @@ When `ccb` starts a managed Codex agent:
   stale bound-session fields before launch so Codex cannot auto-continue an
   incompatible conversation from the same home
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
+- it must export the canonical agent-scoped `CCB_SESSION_FILE` path into the
+  managed Codex process; this is a pointer to the same session authority that
+  startup owns, not permission to inherit a caller-shell session binding
 - it must create the canonical runtime `completion/` directory and `bridge.log` before the managed launch is considered bootstrap-ready
 - it must not rely on global `~/.codex/sessions` as the default managed session namespace
 
@@ -247,6 +250,21 @@ Project control-plane isolation rule:
 - those variables belong only to the managed Codex runtime process that was launched for one agent generation
 - a fresh project control-plane subprocess must treat such caller-shell variables as contamination, not startup authority
 - only the managed agent session file and managed provider-state under `.ccb/agents/<agent>/provider-state/codex/` may define restore authority for a project-scoped Codex agent
+
+Opt-in disconnect recovery follows the same boundary:
+
+- the inherited `reconnect` skill may start only the bundled
+  `codex-reconnect` watcher for its current Codex thread
+- when ordinary `TMUX` / `TMUX_PANE` variables are sanitized, the watcher must
+  resolve `tmux_socket_path`, `pane_id`, `codex_home`, and
+  `codex_session_id` from the owner-controlled active `CCB_SESSION_FILE`
+- any conflict between that file, `CODEX_THREAD_ID`, `CODEX_HOME`, or an
+  available `CODEX_TMUX_SESSION` must fail closed before a watcher starts
+- CCB-scoped watcher state belongs under the agent's provider runtime
+  directory and is not provider conversation or backend lifecycle authority
+- the watcher may follow CCB's owner-controlled `logs_2.sqlite` symlink only
+  when both the symlink and its resolved regular-file target are owned by the
+  current user
 
 ## 5. Binding Contract
 

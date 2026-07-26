@@ -297,7 +297,11 @@ Codex diagnostic SQLite guardrails:
   rebuildable diagnostic DB to a temp path. CCB must not create Codex-owned
   SQLite schema in that target; Codex owns its migration path.
 - Trigger installation is a post-migration retry. CCB installs the insert-block
-  trigger only after Codex has created the `logs` table.
+  trigger only after Codex has created the `logs` table. The trigger drops
+  ordinary diagnostic rows but retains exact
+  `codex_core::session::turn` / `Turn error:` terminal rows so bounded
+  disconnect recovery can correlate a real terminal failure without restoring
+  general diagnostic write pressure.
 - Existing `logs_2.sqlite`, `logs_2.sqlite-wal`, and `logs_2.sqlite-shm` files
   are backed up before the symlink redirect is installed. The temp target is
   scoped by Codex home and runtime directory so multiple agents do not share one

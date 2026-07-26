@@ -871,6 +871,43 @@ class _FakeTmux:
 
 
 class WatcherIntegrationTests(unittest.TestCase):
+    def test_lazily_created_sqlite_log_is_discovered_after_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex_home = root / "codex-home"
+            session = _write_session(codex_home)
+            state_path, state = _state(root, session)
+            watcher = SessionWatcher(
+                state_path,
+                state.instance_id,
+                tmux_client=_FakeTmux(),
+                poll_interval=0,
+            )
+            watcher.tracker.observe(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": "failed-turn"},
+                }
+            )
+            watcher.tracker.observe(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "turn_id": "failed-turn"},
+                }
+            )
+            self.assertFalse(watcher._consume_log_errors())
+
+            log_path = _write_log_db(codex_home)
+            _append_log(
+                log_path,
+                turn_id="failed-turn",
+                message="stream disconnected before completion",
+            )
+
+            self.assertTrue(watcher._consume_log_errors())
+            self.assertIsNotNone(watcher.tracker.incident)
+            self.assertEqual(watcher.tracker.incident.turn_id, "failed-turn")
+
     def test_terminal_disconnect_waits_for_two_successes_then_injects_once(
         self,
     ) -> None:

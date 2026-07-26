@@ -678,6 +678,15 @@ The source versions of those two paths may seed a staged local copy. They must
 not be linked to the source home, shared between agents, or used to justify
 replacement of an unmarked target.
 
+Rebuildable diagnostic storage may route to owner-controlled temporary state:
+
+- managed `logs_2.sqlite` may be an agent-scoped symlink to the CCB temporary
+  log root, keyed by managed Codex home and provider runtime directory
+- the default pressure filter drops ordinary diagnostic rows but preserves
+  exact `codex_core::session::turn` rows containing `Turn error:`; these rare
+  rows are bounded failure evidence for reconnect correlation, not session
+  authority or permission to restore general diagnostic logging
+
 Do not share:
 
 - active sessions

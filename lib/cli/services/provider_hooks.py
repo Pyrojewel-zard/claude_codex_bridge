@@ -106,7 +106,7 @@ def prepare_provider_workspace(
     auto_permission: bool = False,
 ) -> ResolvedProviderProfile:
     runtime_dir = layout.agent_provider_runtime_dir(spec.name, spec.provider)
-    _materialize_source_test_ccb_shim(layout.project_root)
+    _materialize_source_test_command_shims(layout.project_root)
     command_policy = ensure_role_command_policy_supported(spec=spec)
     resolved_profile = (
         materialize_provider_profile(
@@ -153,7 +153,7 @@ def prepare_provider_workspace(
     return resolved_profile
 
 
-def _materialize_source_test_ccb_shim(project_root: Path) -> None:
+def _materialize_source_test_command_shims(project_root: Path) -> None:
     if os.environ.get('CCB_TEST_ENTRYPOINT') != '1':
         return
     source_root = Path(__file__).resolve().parents[3]
@@ -162,13 +162,20 @@ def _materialize_source_test_ccb_shim(project_root: Path) -> None:
         return
     bin_dir = Path(project_root) / '.ccb' / 'bin'
     bin_dir.mkdir(parents=True, exist_ok=True)
-    shim = bin_dir / 'ccb'
-    shim.write_text(
-        '#!/usr/bin/env bash\n'
-        f'exec {shlex.quote(str(wrapper))} "$@"\n',
-        encoding='utf-8',
-    )
-    shim.chmod(0o755)
+    shims = {
+        'ccb': f'exec {shlex.quote(str(wrapper))} "$@"\n',
+        'ask': f'exec {shlex.quote(str(wrapper))} ask "$@"\n',
+        'codex-reconnect': (
+            f'exec {shlex.quote(str(source_root / "bin" / "codex-reconnect"))} "$@"\n'
+        ),
+    }
+    for name, command in shims.items():
+        shim = bin_dir / name
+        shim.write_text(
+            '#!/usr/bin/env bash\n' + command,
+            encoding='utf-8',
+        )
+        shim.chmod(0o755)
 
 
 def provider_workspace_path_for_prepare(

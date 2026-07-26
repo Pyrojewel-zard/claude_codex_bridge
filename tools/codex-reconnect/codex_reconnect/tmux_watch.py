@@ -756,7 +756,19 @@ class SessionWatcher:
 
     def _consume_log_errors(self) -> bool:
         if self.log_path is None:
-            return False
+            candidate = Path(self.state.codex_home) / "logs_2.sqlite"
+            if not candidate.exists():
+                return False
+            try:
+                _validate_sqlite_log_path(candidate)
+                self.log_path = candidate.resolve(strict=True)
+            except (OSError, TmuxWatchError):
+                return False
+            self.log_cursor = 0
+            self.audit.write(
+                "sqlite_log_source_discovered",
+                threadId=self.state.thread_id,
+            )
         try:
             cursor, records = self.log_reader(
                 self.log_path, self.state.thread_id, self.log_cursor

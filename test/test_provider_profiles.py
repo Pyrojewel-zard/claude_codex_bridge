@@ -70,6 +70,104 @@ def _latest_agent_event(layout: PathLayout, agent_name: str, event_type: str) ->
     raise AssertionError(f'{event_type} event not found: {events}')
 
 
+def test_source_test_codex_shell_path_prefers_project_command_shims(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    command_dir = project_root / '.ccb' / 'bin'
+    command_dir.mkdir(parents=True)
+    for name in ('ask', 'ccb', 'codex-reconnect'):
+        (command_dir / name).write_text('#!/bin/sh\n', encoding='utf-8')
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'config.toml').write_text(
+        '[shell_environment_policy.set]\nKEEP = "yes"\nPATH = "/user/bin:/usr/bin"\n',
+        encoding='utf-8',
+    )
+    target_home = tmp_path / 'target-home'
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((target_home / 'config.toml').read_text(encoding='utf-8'))
+    configured = config['shell_environment_policy']['set']
+    assert configured['KEEP'] == 'yes'
+    assert configured['PATH'].split(os.pathsep) == [
+        str(command_dir.resolve()),
+        '/user/bin',
+        '/usr/bin',
+    ]
+
+
+def test_source_test_codex_shell_path_supports_missing_user_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    command_dir = project_root / '.ccb' / 'bin'
+    command_dir.mkdir(parents=True)
+    for name in ('ask', 'ccb', 'codex-reconnect'):
+        (command_dir / name).write_text('#!/bin/sh\n', encoding='utf-8')
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'config.toml').write_text('model = "gpt-test"\n', encoding='utf-8')
+    target_home = tmp_path / 'target-home'
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+    monkeypatch.setenv('PATH', '/user/bin:/usr/bin')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((target_home / 'config.toml').read_text(encoding='utf-8'))
+    assert config['shell_environment_policy']['set']['PATH'].split(os.pathsep) == [
+        str(command_dir.resolve()),
+        '/user/bin',
+        '/usr/bin',
+    ]
+
+
+def test_release_codex_shell_path_preserves_user_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    command_dir = project_root / '.ccb' / 'bin'
+    command_dir.mkdir(parents=True)
+    for name in ('ask', 'ccb'):
+        (command_dir / name).write_text('#!/bin/sh\n', encoding='utf-8')
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'config.toml').write_text(
+        '[shell_environment_policy.set]\nPATH = "/user/bin:/usr/bin"\n',
+        encoding='utf-8',
+    )
+    target_home = tmp_path / 'target-home'
+    monkeypatch.delenv('CCB_TEST_ENTRYPOINT', raising=False)
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((target_home / 'config.toml').read_text(encoding='utf-8'))
+    assert config['shell_environment_policy']['set']['PATH'] == '/user/bin:/usr/bin'
+
+
 def _write_codex_plugin_source(
     home: Path,
     *,
@@ -919,6 +1017,10 @@ def test_materialize_codex_home_config_repairs_owned_skills_in_user_asset_dir(tm
     target_home = tmp_path / 'managed-codex-home'
     (source_home / 'skills' / 'ask').mkdir(parents=True, exist_ok=True)
     (source_home / 'skills' / 'ask' / 'SKILL.md').write_text('name: ask\n', encoding='utf-8')
+    (source_home / 'skills' / 'ccb-clear').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'ccb-clear' / 'SKILL.md').write_text('name: ccb-clear\n', encoding='utf-8')
+    (source_home / 'skills' / 'reconnect').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'reconnect' / 'SKILL.md').write_text('name: reconnect\n', encoding='utf-8')
     (target_home / 'skills').mkdir(parents=True, exist_ok=True)
     (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
     (target_home / 'skills' / 'ccb_config').mkdir(parents=True, exist_ok=True)
@@ -940,6 +1042,8 @@ def test_materialize_codex_home_config_repairs_owned_skills_in_user_asset_dir(tm
 
     assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
     assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'name: ask\n'
+    assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').read_text(encoding='utf-8') == 'name: ccb-clear\n'
+    assert (target_home / 'skills' / 'reconnect' / 'SKILL.md').read_text(encoding='utf-8') == 'name: reconnect\n'
     assert not (target_home / 'skills' / 'ccb_config').exists()
     assert not (target_home / 'skills' / 'ccb-config').exists()
     assert not (target_home / 'skills.ccb-projection.json').exists()

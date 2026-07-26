@@ -60,7 +60,7 @@ _CODEX_MANAGED_SKILL_ENTRY_LABEL_PREFIXES = (
     'codex-skill-overlay:',
     'codex-role-skill:',
 )
-_CODEX_OWNED_SKILL_NAMES = ('ask',)
+_CODEX_OWNED_SKILL_NAMES = ('ask', 'ccb-clear', 'reconnect')
 _CODEX_LEGACY_OWNED_SKILL_NAMES = ('ccb_config', 'ccb-config')
 _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('.agents') / 'plugins' / 'marketplace.json',
@@ -243,6 +243,7 @@ def materialize_codex_home_config(
             target_config,
             source_home=source_home,
         )
+    _bind_source_test_command_path(target_config, project_root=project_root)
     record_memory_projection_event(
         memory_result,
         provider='codex',
@@ -251,6 +252,37 @@ def materialize_codex_home_config(
         agent_name=agent_name,
     )
     return target_config
+
+
+def _bind_source_test_command_path(
+    target_config: Path,
+    *,
+    project_root: Path | None,
+) -> None:
+    if os.environ.get('CCB_TEST_ENTRYPOINT') != '1' or project_root is None:
+        return
+    command_dir = Path(project_root).expanduser().resolve() / '.ccb' / 'bin'
+    if not all(
+        (command_dir / name).is_file()
+        for name in ('ask', 'ccb', 'codex-reconnect')
+    ):
+        return
+    payload = _read_source_config_payload(target_config)
+    raw_policy = payload.get('shell_environment_policy')
+    policy = _clone_mapping(raw_policy) if isinstance(raw_policy, dict) else {}
+    raw_configured = policy.get('set')
+    configured = _clone_mapping(raw_configured) if isinstance(raw_configured, dict) else {}
+    inherited_path = str(configured.get('PATH') or os.environ.get('PATH') or '')
+    path_parts = [str(command_dir)]
+    path_parts.extend(
+        item
+        for item in inherited_path.split(os.pathsep)
+        if item and item != str(command_dir)
+    )
+    configured['PATH'] = os.pathsep.join(path_parts)
+    policy['set'] = configured
+    payload['shell_environment_policy'] = policy
+    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
 
 
 def repair_codex_activity_hooks(

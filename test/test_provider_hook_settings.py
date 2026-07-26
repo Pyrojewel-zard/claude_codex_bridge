@@ -46,6 +46,43 @@ def _write_project_memory(project_root: Path, text: str) -> None:
     path.write_text(text, encoding='utf-8')
 
 
+def test_source_test_runtime_materializes_matching_ccb_ask_and_reconnect_shims(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+
+    provider_hooks_module._materialize_source_test_command_shims(project_root)
+
+    ccb_shim = project_root / '.ccb' / 'bin' / 'ccb'
+    ask_shim = project_root / '.ccb' / 'bin' / 'ask'
+    reconnect_shim = project_root / '.ccb' / 'bin' / 'codex-reconnect'
+    assert ccb_shim.is_file()
+    assert ask_shim.is_file()
+    assert reconnect_shim.is_file()
+    assert ccb_shim.read_text(encoding='utf-8').endswith('ccb_test "$@"\n')
+    assert ask_shim.read_text(encoding='utf-8').endswith('ccb_test ask "$@"\n')
+    assert reconnect_shim.read_text(encoding='utf-8').endswith(
+        'bin/codex-reconnect "$@"\n'
+    )
+    assert ccb_shim.stat().st_mode & 0o111
+    assert ask_shim.stat().st_mode & 0o111
+    assert reconnect_shim.stat().st_mode & 0o111
+
+
+def test_release_runtime_does_not_materialize_source_test_command_shims(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    monkeypatch.delenv('CCB_TEST_ENTRYPOINT', raising=False)
+
+    provider_hooks_module._materialize_source_test_command_shims(project_root)
+
+    assert not (project_root / '.ccb' / 'bin').exists()
+
+
 def test_build_hook_command_includes_completion_dir_and_workspace(tmp_path: Path) -> None:
     script_path = tmp_path / 'bin' / 'ccb-provider-finish-hook'
     command = build_hook_command(
