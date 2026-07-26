@@ -540,8 +540,6 @@ jobs:
   test-wsl:
     name: WSL / Ubuntu 22.04
     runs-on: windows-latest
-    env:
-      CCB_PYTHON: /tmp/ccb-ci-py311/bin/python
 
     steps:
       - name: Checkout
@@ -576,18 +574,21 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           source "$HOME/.cargo/env"
           bin/build-ccb-runtime-accelerator
 
       - name: Syntax check in WSL
         shell: wsl-bash {0}
         run: |
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           /tmp/ccb-ci-py311/bin/python -m compileall -q lib bin ccb.py
 
       - name: Smoke ccb startup from /mnt/c in WSL
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
 
           repo="$(pwd)"
           project="/mnt/c/Temp/ccb-wsl-mnt-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
@@ -665,6 +666,7 @@ jobs:
       - name: Run tests in WSL with tmux
         shell: wsl-bash {0}
         run: |
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           export PATH="/tmp/ccb-ci-py311/bin:$PATH"
           python -m pytest test/ -v --tb=short -m "not provider_blackbox"

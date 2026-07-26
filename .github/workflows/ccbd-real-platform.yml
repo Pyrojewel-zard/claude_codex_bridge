@@ -203,8 +203,6 @@ jobs:
     name: WSL mounted-drive ccbd/ask smoke
     runs-on: windows-latest
     timeout-minutes: 60
-    env:
-      CCB_PYTHON: /tmp/ccb-ci-py311/bin/python
 
     steps:
       - name: Checkout
@@ -239,6 +237,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           source "$HOME/.cargo/env"
           bin/build-ccb-runtime-accelerator
 
@@ -246,6 +245,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           PYTHONPATH=lib /tmp/ccb-ci-py311/bin/python - <<'PY'
           import tempfile
           from pathlib import Path
@@ -272,6 +272,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           /tmp/ccb-ci-py311/bin/python -m compileall -q lib bin ccb.py
           bash -n test/system_comm_matrix.sh test/system_linux_soak.sh test/system_fastpath_stress.sh
 
@@ -279,6 +280,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           /tmp/ccb-ci-py311/bin/python -m pytest -q -m ccb_lifecycle_smoke \
             test/test_v2_phase2_entrypoint.py \
@@ -288,6 +290,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           /tmp/ccb-ci-py311/bin/python -m pytest -q \
             test/test_v2_storage_paths.py \
             test/test_wsl_path_utils.py \
@@ -299,6 +302,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           bash test/system_comm_matrix.sh
 
@@ -306,6 +310,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           # The short WSL sample makes nearest-rank p95 equal the maximum.
           CCB_LINUX_SOAK_SECONDS=35 \
@@ -319,6 +324,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           CCB_FASTPATH_STRESS_ASK_COUNT=12 \
           CCB_FASTPATH_STRESS_STUB_DELAY=0.3 \
@@ -330,6 +336,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           smoke_root="/mnt/c/Temp/ccb-storage-cleanup-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
           rm -rf "$smoke_root"
