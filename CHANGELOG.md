@@ -1,5 +1,17 @@
 # Changelog
 
+## v8.4.1 (2026-07-26)
+
+### Release Installer
+
+- **Linux Release Dependencies Are Isolated**: official release installs now
+  create a CCB-managed Python virtual environment on Linux as well as macOS.
+  Mobile Relay dependencies no longer require or modify the system Python's
+  pip installation.
+- **Interrupted Downloads Retry Safely**: transient pip download failures such
+  as `IncompleteRead` and broken connections retry on the same package index
+  when no configured fallback index is available.
+
 ## v8.4.0 (2026-07-26)
 
 ### Mobile Relay And Pairing
