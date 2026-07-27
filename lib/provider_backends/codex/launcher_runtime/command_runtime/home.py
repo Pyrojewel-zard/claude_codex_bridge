@@ -16,6 +16,7 @@ from provider_backends.codex.session_authority import (
 )
 from provider_backends.codex.start_cmd import strip_resume_start_cmd
 from provider_sessions.files import safe_write_session
+from provider_core.inherited_skills import materialize_required_control_skills
 from provider_profiles.codex_home_config import materialize_codex_home_config, repair_codex_activity_hooks
 
 from .diagnostics import ensure_codex_diagnostic_log_filter
@@ -92,6 +93,10 @@ def prepare_codex_home_overrides(
             runtime_dir=runtime_dir,
             workspace_path=workspace_path,
         )
+    materialize_required_control_skills(
+        provider='codex',
+        target_dir=layout.codex_home / 'skills',
+    )
 
     overrides = {
         'CODEX_HOME': str(layout.codex_home),

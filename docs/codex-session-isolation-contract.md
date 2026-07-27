@@ -188,6 +188,10 @@ When `ccb` starts a managed Codex agent:
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart
+- independently of optional skill inheritance, it must verify the packaged
+  `ask`, `ccb-clear`, and Codex-only `reconnect` control skills immediately
+  before process creation; missing or stale named entries are repaired without
+  replacing unrelated skills
 - accepting an already live, identity-proven binding is not a managed launch and
   must not re-project the Codex home underneath that running process; when
   startup must launch or relaunch, it performs the managed-home refresh exactly

@@ -15,6 +15,7 @@ $MESSAGE
 EOF
 ```
 
+- For a user-requested conversation reset, run `command ccb clear` for all configured agents or `command ccb clear "$AGENT"` for named agents. This sends provider-native clear input without deleting `.ccb` state, workspaces, auth, sessions, logs, or project memory.
 - During an active CCB ask task, use `ask --chain` when a child result is needed to finish the current task; use `ask --silence` only for independent no-result-needed work.
 - Finish an inbound CCB task in its current turn. If the original caller is a registered CCB agent, CCB routes that turn's terminal result through the existing lineage; do not open a new `ask` to report completion to the original caller.
 - Direct CLI submitters read terminal results from control output such as `watch` or `trace`.

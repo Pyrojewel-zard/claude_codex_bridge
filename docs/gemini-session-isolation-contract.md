@@ -132,6 +132,9 @@ When `ccb` starts a managed Gemini agent:
   home without treating them as conversation identity
 - managed Gemini home materialization is part of startup preparation, before
   hook/trust installation and before launcher command assembly
+- startup must project the packaged `ask` and `ccb-clear` control skills into
+  the managed `.gemini/skills/` directory independently of optional inherited
+  assets
 - managed `settings.json` projection must treat inherited system settings as the
   baseline and preserve managed runtime sections such as `hooks`
 - when config inheritance and inherited assets are enabled, startup must seed

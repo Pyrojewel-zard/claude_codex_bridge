@@ -78,10 +78,13 @@ def test_inherited_skills_live_under_inherit_skills_only() -> None:
     assert (inherited / "claude_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "codex_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "droid_skills" / "ask" / "SKILL.md").is_file()
+    assert (inherited / "droid_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "gemini_skills" / "ask" / "SKILL.md").is_file()
+    assert (inherited / "gemini_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "grok_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "grok_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "kimi_skills" / "ask" / "SKILL.md").is_file()
+    assert (inherited / "kimi_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "mimo_skills" / "ask.md").is_file()
     assert (inherited / "opencode_skills" / "ask.md").is_file()
     assert (inherited / "qwen_skills" / "ask.md").is_file()
@@ -104,10 +107,10 @@ def test_inherited_skill_set_is_minimal() -> None:
     expected = {
         "claude_skills": {"ask", "ccb-clear"},
         "codex_skills": {"ask", "ccb-clear", "reconnect"},
-        "droid_skills": {"ask"},
-        "gemini_skills": {"ask"},
+        "droid_skills": {"ask", "ccb-clear"},
+        "gemini_skills": {"ask", "ccb-clear"},
         "grok_skills": {"ask", "ccb-clear"},
-        "kimi_skills": {"ask"},
+        "kimi_skills": {"ask", "ccb-clear"},
     }
     for provider_root, expected_names in expected.items():
         skill_root = repo_root / "inherit_skills" / provider_root
@@ -132,10 +135,10 @@ def test_install_scripts_current_skill_lists_are_minimal() -> None:
     assert 'local ccb_skills="ask ccb-config ccb-clear reconnect"' in install_sh
     assert 'local legacy_skills="ccb-config ' in install_sh
     assert 'local ccb_skills="ask ping' not in install_sh
-    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear")' in install_ps1
+    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear", "reconnect")' in install_ps1
     assert '$legacySkills = @("ccb-config",' in install_ps1
     assert '$ccbSkills = @("ask", "ccb-config", "ping"' not in install_ps1
-    assert '$droidSkills = @("ask")' in install_ps1
+    assert '$droidSkills = @("ask", "ccb-clear")' in install_ps1
 
 
 def test_install_sh_excludes_git_worktree_file() -> None:

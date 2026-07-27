@@ -6,12 +6,11 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from provider_core.inherited_skills import inherits_skills, route_packaged_inherited_skills_dir
+from provider_core.inherited_skills import materialize_required_control_skills
 from provider_core.projected_assets import remove_projected_path, route_projected_tree
 from rolepacks.projection import project_role_skills_to_home
 
 
-_KIMI_INHERITED_SKILLS_LABEL = 'kimi-inherited-skills'
 _KIMI_SKILL_OVERLAY_LABEL_PREFIX = 'kimi-skill-overlay:'
 
 
@@ -83,11 +82,9 @@ def materialize_kimi_skills(
 ) -> tuple[Path, ...]:
     inherited_dir, role_dir, overlay_dir = kimi_skill_dirs_for_state_dir(state_dir)
     active_dirs: list[Path] = []
-    if route_packaged_inherited_skills_dir(
+    if materialize_required_control_skills(
         provider='kimi',
         target_dir=inherited_dir,
-        enabled=inherits_skills(profile),
-        label=_KIMI_INHERITED_SKILLS_LABEL,
     ):
         active_dirs.append(inherited_dir)
     project_role_skills_to_home(

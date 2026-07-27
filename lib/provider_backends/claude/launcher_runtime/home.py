@@ -21,6 +21,11 @@ from provider_core.one_way_inheritance import (
     ensure_private_directory,
     ensure_private_inheritance_directory,
 )
+from provider_core.inherited_skills import (
+    materialize_required_control_skills,
+    required_control_skill_names,
+    route_inherited_skill_entries,
+)
 from provider_core.projected_assets import (
     remove_projected_path,
     route_projected_tree,
@@ -128,6 +133,10 @@ def prepare_claude_home_overrides(
             memory_projection_event_path=memory_projection_event_path,
             memory_projection_marker_path=memory_projection_marker_path,
         )
+    materialize_required_control_skills(
+        provider='claude',
+        target_dir=layout.claude_dir / 'skills',
+    )
     overrides = {
         'HOME': str(layout.home_root),
         'CLAUDE_CONFIG_DIR': str(layout.claude_dir),
@@ -390,17 +399,22 @@ def _materialize_inherited_assets(
         enabled=inherited_assets_enabled and _inherits_commands(profile),
         label=_CLAUDE_COMMANDS_PROJECTION_LABEL,
     )
-    _route_inherited_tree(
+    route_inherited_skill_entries(
         source_home / '.claude' / 'skills',
         target_layout.claude_dir / 'skills',
         enabled=inherited_assets_enabled and _inherits_skills(profile),
         label=_CLAUDE_SKILLS_PROJECTION_LABEL,
+        exclude=required_control_skill_names('claude'),
     )
     project_role_skills_to_home(
         project_root=project_root,
         agent_name=agent_name,
         provider='claude',
         target_skills_dir=target_layout.claude_dir / 'skills',
+    )
+    materialize_required_control_skills(
+        provider='claude',
+        target_dir=target_layout.claude_dir / 'skills',
     )
     memory_result = _materialize_claude_memory(
         source_home,

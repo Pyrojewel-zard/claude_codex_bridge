@@ -950,11 +950,63 @@ def test_materialize_codex_home_config_filters_inherited_skills(tmp_path: Path) 
         source_home=source_home,
     )
 
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
     assert not (target_home / 'skills' / 'trellis-check').exists()
     assert not (target_home / 'skills' / 'trellis-start').exists()
     assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_keeps_required_skills_when_optional_tree_has_broken_symlink(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    source_skills = source_home / 'skills'
+    (source_skills / 'custom').mkdir(parents=True)
+    (source_skills / 'custom' / 'SKILL.md').write_text('custom\n', encoding='utf-8')
+    try:
+        (source_skills / 'broken-role-skill').symlink_to(
+            tmp_path / 'missing-role-skill',
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+        assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
+        assert (target_home / 'skills' / f'{skill_name}.ccb-projection.json').is_file()
+    assert (source_skills / 'broken-role-skill').is_symlink()
+
+
+def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is_disabled(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills' / 'optional').mkdir(parents=True)
+    (source_home / 'skills' / 'optional' / 'SKILL.md').write_text('optional\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(
+            inherit_skills=False,
+            inherit_commands=False,
+            inherit_memory=False,
+        ),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills' / 'optional').exists()
+    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+        assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
 
 
 def test_materialize_codex_home_config_restores_full_inherited_skills_after_filter(tmp_path: Path) -> None:
@@ -979,10 +1031,10 @@ def test_materialize_codex_home_config_restores_full_inherited_skills_after_filt
         source_home=source_home,
     )
 
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'trellis-check' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-check\n'
     assert (target_home / 'skills' / 'trellis-start' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-start\n'
-    assert not (target_home / 'skills' / 'ask.ccb-projection.json').exists()
+    assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
     assert (target_home / 'skills.ccb-projection.json').is_file()
 
 
@@ -1011,7 +1063,7 @@ def test_materialize_codex_home_config_projects_skill_overlays(tmp_path: Path) -
         source_home=source_home,
     )
 
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'trellis-check' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-check\n'
     assert (target_home / 'skills' / 'trellis-start' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-start\n'
     assert (target_home / 'skills' / 'trellis-check.ccb-projection.json').is_file()
@@ -1068,15 +1120,18 @@ def test_materialize_codex_home_config_repairs_owned_skills_in_user_asset_dir(tm
     )
 
     assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'name: ask\n'
-    assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').read_text(encoding='utf-8') == 'name: ccb-clear\n'
-    assert (target_home / 'skills' / 'reconnect' / 'SKILL.md').read_text(encoding='utf-8') == 'name: reconnect\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
+    assert 'name: ccb-clear' in (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').read_text(encoding='utf-8')
+    assert 'name: reconnect' in (target_home / 'skills' / 'reconnect' / 'SKILL.md').read_text(encoding='utf-8')
     assert not (target_home / 'skills' / 'ccb_config').exists()
     assert not (target_home / 'skills' / 'ccb-config').exists()
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
-def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_path: Path) -> None:
+def test_materialize_codex_home_config_detaches_user_asset_symlink_without_mutating_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
     user_assets = tmp_path / 'user-skills'
@@ -1090,15 +1145,24 @@ def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_p
     except OSError:
         pytest.skip('symlink creation is not available in this test environment')
 
+    def fail_symlink(*args, **kwargs):
+        raise OSError('symlink disabled')
+
+    monkeypatch.setattr(Path, 'symlink_to', fail_symlink)
+
     codex_home_config.materialize_codex_home_config(
         target_home,
         profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
         source_home=source_home,
     )
 
-    assert (target_home / 'skills').is_symlink()
-    assert (target_home / 'skills').resolve() == user_assets.resolve()
+    assert not (target_home / 'skills').is_symlink()
     assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert (user_assets / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (user_assets / 'ask').exists()
+    assert (target_home / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'reconnect' / 'SKILL.md').is_file()
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
@@ -3175,9 +3239,10 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
         source_home=source_home,
     )
 
-    assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
+    assert 'name: ask' in (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
+    assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'commands' / 'ask.md').read_text(encoding='utf-8') == 'ask command\n'
-    assert (layout.claude_dir / 'skills.ccb-projection.json').is_file()
+    assert (layout.claude_dir / 'skills' / 'ask.ccb-projection.json').is_file()
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
 
 
@@ -3196,6 +3261,11 @@ def test_materialize_claude_home_config_preserves_unmarked_skills_and_commands(t
     (target_claude_dir / 'commands' / 'user.md').write_text('user\n', encoding='utf-8')
 
     layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+    )
+    materialize_claude_home_config(
         target_home,
         profile=ProviderProfileSpec(inherit_memory=False),
         source_home=source_home,
@@ -3329,8 +3399,9 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     materialize_droid_home_config(target_home, source_home=source_home)
 
     assert (target_home / 'sessions').is_dir()
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
+    assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
 
 
 def test_materialize_droid_home_config_preserves_unmarked_inherited_skills(tmp_path: Path) -> None:
@@ -3341,6 +3412,7 @@ def test_materialize_droid_home_config_preserves_unmarked_inherited_skills(tmp_p
     (target_home / 'skills' / 'user-skill').mkdir(parents=True)
     (target_home / 'skills' / 'user-skill' / 'SKILL.md').write_text('user\n', encoding='utf-8')
 
+    materialize_droid_home_config(target_home, source_home=source_home)
     materialize_droid_home_config(target_home, source_home=source_home)
 
     assert (target_home / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
@@ -3839,7 +3911,9 @@ def test_materialize_claude_home_config_respects_inherit_skills_without_disablin
         agent_name='reviewer',
     )
 
-    assert not (layout.claude_dir / 'skills').exists()
+    assert not (layout.claude_dir / 'skills' / 'review').exists()
+    assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     memory_text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
     assert '# CCB Managed Agent Memory' in memory_text
     assert 'claude-md' in memory_text

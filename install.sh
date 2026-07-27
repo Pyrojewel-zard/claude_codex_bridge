@@ -2663,12 +2663,11 @@ install_droid_skills() {
     rm -rf "$skills_dst/$legacy_skill"
   done
 
-  echo "Installing Droid/Factory ask skill..."
+  echo "Installing Droid/Factory control skills..."
   for skill_dir in "$skills_src"/*/; do
     [[ -d "$skill_dir" ]] || continue
     local skill_name
     skill_name=$(basename "$skill_dir")
-    [[ "$skill_name" == "ask" ]] || continue
 
     if [[ ! -f "$skill_dir/SKILL.md" ]]; then
       continue
@@ -3790,7 +3789,7 @@ uninstall_codex_skills() {
 
 uninstall_droid_skills() {
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
-  local ccb_skills="ask"
+  local ccb_skills="ask ccb-clear"
   local legacy_skills="ping pend autonew all-plan"
 
   if [[ ! -d "$skills_dst" ]]; then

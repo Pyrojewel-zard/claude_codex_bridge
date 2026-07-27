@@ -335,6 +335,24 @@ def test_codex_home_overrides_pin_sqlite_and_windows_home(
     assert wslenv[-1] == 'EXISTING/u'
 
 
+def test_codex_home_overrides_repairs_required_skills_without_full_refresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(tmp_path / 'source-home'))
+
+    overrides = prepare_codex_home_overrides_for_test(
+        runtime_dir,
+        None,
+        refresh_home=False,
+    )
+
+    skills_dir = Path(overrides['CODEX_HOME']) / 'skills'
+    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+        assert (skills_dir / skill_name / 'SKILL.md').is_file()
+
+
 def test_claude_home_overrides_share_plugin_seed_but_isolate_writable_caches(tmp_path: Path) -> None:
     source_home = tmp_path / 'source-home'
     seed_root = source_home / '.claude' / 'plugins'
@@ -2510,7 +2528,7 @@ def test_grok_launcher_uses_bypass_permissions_and_allows_ccb_skills_on_normal_s
     assert payload['grok_auto_permission_enabled'] is True
 
 
-def test_grok_launcher_disables_skill_projection_and_rules_when_inheritance_is_off(
+def test_grok_launcher_keeps_control_skills_when_optional_inheritance_is_off(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2536,12 +2554,12 @@ def test_grok_launcher_disables_skill_projection_and_rules_when_inheritance_is_o
 
     visible_parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
 
-    assert '--allow' not in visible_parts
+    assert '--allow' in visible_parts
     assert visible_parts[visible_parts.index('--permission-mode') + 1] == 'bypassPermissions'
-    assert prepared['grok_skill_permissions_enabled'] is False
+    assert prepared['grok_skill_permissions_enabled'] is True
     assert prepared['grok_auto_permission_enabled'] is True
-    assert not (managed_home / '.grok' / 'skills' / 'ask').exists()
-    assert not (managed_home / '.grok' / 'skills' / 'ccb-clear').exists()
+    assert (managed_home / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (managed_home / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
 
 
 def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypatch, tmp_path: Path) -> None:
@@ -3581,7 +3599,7 @@ def test_opencode_workspace_preparation_can_inject_skills_without_memory(tmp_pat
     assert memory_events[0]['skill_sha256']
 
 
-def test_opencode_workspace_preparation_disables_config_when_memory_and_skills_disabled(
+def test_opencode_workspace_preparation_keeps_control_instructions_when_optional_context_is_disabled(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3613,8 +3631,14 @@ def test_opencode_workspace_preparation_disables_config_when_memory_and_skills_d
         prepared_state=prepared,
     )
 
-    assert 'OPENCODE_CONFIG=' not in cmd
-    assert not config_path.exists()
+    assert f'OPENCODE_CONFIG={shlex.quote(str(config_path))}' in cmd
+    config = json.loads(config_path.read_text(encoding='utf-8'))
+    assert config['instructions'] == ['.ccb/runtime/skills/agent1/opencode/ask.md']
+    control_text = (
+        project_root / '.ccb' / 'runtime' / 'skills' / 'agent1' / 'opencode' / 'ask.md'
+    ).read_text(encoding='utf-8')
+    assert '# CCB Ask Skill' in control_text
+    assert '# CCB Clear Skill' in control_text
 
 
 def test_opencode_start_cmd_respects_explicit_session_without_auto_continue(monkeypatch, tmp_path: Path) -> None:

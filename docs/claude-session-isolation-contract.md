@@ -264,16 +264,20 @@ When `ccb` starts a managed Claude agent:
   managed Claude auth env state, stale copied login credential artifacts, or
   stale inherited Claude account metadata in `.claude.json`
 - when skill inheritance is enabled, startup must route inherited Claude
-  `skills/` into the managed home as a CCB projected asset on each managed
-  launch; replacement or cleanup requires its valid same-label CCB marker,
-  while an unmarked or foreign-marker directory is preserved
+  `skills/` into the managed home as independently marked entries on each
+  managed launch; an invalid optional source entry must not suppress other
+  valid entries, while ordinary unmarked entries are preserved
+- independently of optional skill inheritance and restricted-role asset
+  policy, startup must project the packaged `ask` and `ccb-clear` control
+  skills; those two names are CCB-owned and are repaired without replacing
+  unrelated skills
 - when command inheritance is enabled, startup must route inherited Claude
   `commands/` into the managed home as a CCB projected asset on each managed
   launch under the same marker-first rule
-- a legacy markerless Claude skills/commands symlink may be adopted only when
-  it already resolves exactly to the current source; startup writes the marker
-  without replacing the symlink, and preserves all ordinary unmarked
-  directories even when their content matches the source
+- a legacy markerless Claude commands symlink may be adopted only when it
+  already resolves exactly to the current source; a legacy skills symlink is
+  detached inside the managed home when necessary to install the two CCB-owned
+  control entries, without writing through to the external source directory
 - when config inheritance and inherited assets are enabled and the source
   `<source-home>/.claude/plugins/` contains `known_marketplaces.json`, a
   `marketplaces/` directory, or a `cache/` directory, startup must set

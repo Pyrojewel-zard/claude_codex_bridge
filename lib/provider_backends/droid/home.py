@@ -8,7 +8,6 @@ from cli.services.role_command_policy import role_command_policy_disables_inheri
 from provider_core.projected_assets import (
     projected_path_is_owned,
     remove_projected_path,
-    route_projected_tree,
     seed_projected_tree,
 )
 from provider_core.projected_settings import (
@@ -20,6 +19,11 @@ from provider_core.one_way_inheritance import (
     copy_regular_file,
     ensure_private_directory,
     ensure_private_inheritance_directory,
+)
+from provider_core.inherited_skills import (
+    materialize_required_control_skills,
+    required_control_skill_names,
+    route_inherited_skill_entries,
 )
 from provider_core.source_home import current_provider_source_home
 from storage.atomic import atomic_write_text
@@ -59,11 +63,16 @@ def materialize_droid_home_config(
             copy_regular_file(source_home / filename, target_home / filename)
         if inherit_external_keyring:
             _materialize_keyring_v2_as_private_keyfile(source_home, target_home)
-    _route_inherited_tree(
+    route_inherited_skill_entries(
         source_home / 'skills',
         target_home / 'skills',
         enabled=_inherits_skills(profile),
         label=_DROID_SKILLS_PROJECTION_LABEL,
+        exclude=required_control_skill_names('droid'),
+    )
+    materialize_required_control_skills(
+        provider='droid',
+        target_dir=target_home / 'skills',
     )
     inherited_plugins_enabled = (
         _inherits_config(profile)
@@ -103,10 +112,6 @@ def materialize_droid_home_config(
         marker_path=target_home / '.ccb-plugin-settings-projection.json',
     )
     return target_home
-
-
-def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
-    route_projected_tree(source, target, enabled=enabled, label=label)
 
 
 def _system_factory_home() -> Path:

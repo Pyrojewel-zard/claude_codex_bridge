@@ -23,6 +23,7 @@ from provider_core.one_way_inheritance import (
     ensure_private_directory,
     ensure_private_inheritance_directory,
 )
+from provider_core.inherited_skills import materialize_required_control_skills
 from provider_core.projected_assets import (
     copy_projected_tree_to_cache,
     projected_path_is_owned,
@@ -64,6 +65,7 @@ _CODEX_MANAGED_SKILL_ENTRY_LABEL_PREFIXES = (
     f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
     'codex-skill-overlay:',
     'codex-role-skill:',
+    'ccb-required-skill:codex:',
 )
 _CODEX_OWNED_SKILL_NAMES = ('ask', 'ccb-clear', 'reconnect')
 _CODEX_LEGACY_OWNED_SKILL_NAMES = ('ccb_config', 'ccb-config')
@@ -215,6 +217,10 @@ def materialize_codex_home_config(
         agent_name=agent_name,
         provider='codex',
         target_skills_dir=target_home / 'skills',
+    )
+    materialize_required_control_skills(
+        provider='codex',
+        target_dir=target_home / 'skills',
     )
     _route_inherited_tree(
         source_home / 'commands',

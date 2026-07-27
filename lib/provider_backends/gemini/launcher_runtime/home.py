@@ -17,6 +17,7 @@ from provider_core.one_way_inheritance import (
     ensure_private_directory,
     ensure_private_inheritance_directory,
 )
+from provider_core.inherited_skills import materialize_required_control_skills
 from provider_core.projected_assets import seed_projected_tree
 from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
@@ -75,6 +76,10 @@ def prepare_gemini_home_overrides(
             memory_projection_marker_path=memory_projection_marker_path,
             command_policy=command_policy,
         )
+    materialize_required_control_skills(
+        provider='gemini',
+        target_dir=layout.gemini_dir / 'skills',
+    )
     cache_root = _gemini_shared_cache_root()
     overrides = {
         'HOME': str(layout.home_root),
@@ -208,6 +213,10 @@ def materialize_gemini_home_config(
             and not role_command_policy_disables_inherited_assets(command_policy)
         ),
         label=_GEMINI_EXTENSIONS_PROJECTION_LABEL,
+    )
+    materialize_required_control_skills(
+        provider='gemini',
+        target_dir=layout.gemini_dir / 'skills',
     )
     memory_result = _materialize_gemini_memory(
         source_root,

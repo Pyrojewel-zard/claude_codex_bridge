@@ -17,7 +17,7 @@ from provider_core.caller_env import (
     provider_user_session_env,
 )
 from provider_core.contracts import ProviderRuntimeLauncher
-from provider_core.inherited_skills import inherits_skills, packaged_inherited_skill_file
+from provider_core.inherited_skills import packaged_inherited_skill_file
 from provider_core.memory_projection import write_projection_event_and_marker
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
 from provider_profiles import load_resolved_provider_profile
@@ -181,7 +181,7 @@ def materialize_mimo_memory_config(
     skill_bridge = _bridge_mimo_ask_skill(
         project_root=project_root,
         agent_name=agent_name,
-        enabled=inherits_skills(profile),
+        enabled=True,
     )
     if not inherit_memory and not skill_bridge.instruction:
         _remove_file(config_path)
@@ -468,7 +468,8 @@ def _inherits_memory(profile) -> bool:
 
 
 def _inherits_context(profile) -> bool:
-    return _inherits_memory(profile) or inherits_skills(profile)
+    del profile
+    return True
 
 
 def _path_or_none(value: object) -> Path | None:

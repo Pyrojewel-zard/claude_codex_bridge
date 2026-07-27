@@ -77,3 +77,10 @@ EOF
 After the command returns, end the turn. Do not wait for a reply,
 do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
 For `--chain`, report only that delegation was submitted.
+
+# CCB Clear Skill
+
+For `/ccb-clear`, `$ccb-clear`, `$ccb_clear`, or an explicit request to clear
+CCB agent context, run `command ccb clear` for all configured agents or
+`command ccb clear "$AGENT"` for named agents. Report the command output and
+stop. Do not restart agents, delete files, or poll.
