@@ -1,5 +1,34 @@
 # Changelog
 
+## v8.4.2 (2026-07-27)
+
+### Config UI And Appearance
+
+- **Settings Opens With The Managed Runtime**: the sidebar launcher now
+  recovers from stale inherited Python paths and opens Config UI with the
+  release-managed interpreter.
+- **Theme Selection Is Persistent**: Config UI exposes the supported CCB
+  themes, including system-default behavior. The saved preference is
+  authoritative across Rich WezTerm and sidebar restarts instead of being
+  overwritten by stale process environment.
+
+### Mobile Relay And Pairing
+
+- **Relay Terminal Streaming Is Stable**: bounded backpressure, initial
+  snapshot handling, incremental screen updates, and wide-character accounting
+  prevent dropped or corrupted mobile terminal output.
+- **Dense Pairing Codes Stay Scannable**: when a QR payload cannot fit safely
+  in the current terminal, CCB writes an owner-only PNG and prints its path
+  instead of rendering wrapped, unreadable terminal art.
+
+### Provider Updates
+
+- **Package-Manager Ownership Is Preserved**: npm packages update through their
+  detected user or NVM prefix, Bun-owned packages retain their Bun home, and
+  non-writable system installations remain report-only.
+- **Unsafe Registry Metadata Fails Closed**: releases that resolve to local
+  package dependencies are reported but not installed.
+
 ## v8.4.1 (2026-07-26)
 
 ### Release Installer
