@@ -15,6 +15,13 @@ ccb relay host activate --mode official --invitation-file /path/to/ccb-relay.key
 ccb update mobile --route-provider relay
 ```
 
+Relay pairing payloads are high-density QR codes. When the QR cannot be
+rendered safely within the current terminal width, the CLI omits the wrapped
+character preview and writes an owner-only PNG to
+`~/.local/state/ccb/mobile/pairing-qr.png`. Open that image at normal size and
+scan it with CCB Mobile. Set `CCB_MOBILE_PAIRING_QR_OUTPUT` to choose another
+output path.
+
 The invitation is consumed by activation and is never encoded into the phone
 QR. The QR contains the official endpoint, host fingerprint, and a single-use
 pairing bootstrap. Clients reject an arbitrary endpoint labelled `official`.

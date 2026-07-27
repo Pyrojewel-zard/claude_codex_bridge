@@ -13,11 +13,12 @@ import subprocess
 import sys
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from types import SimpleNamespace
 
 from cli.services.mobile import prepare_server_mobile_gateway
-from cli.services.terminal_qr import render_terminal_qr
-from mobile_gateway import parse_listen_address
+from cli.services.terminal_qr import render_terminal_qr, write_terminal_qr_png
+from mobile_gateway import mobile_host_state_dir, parse_listen_address
 
 
 TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download"
@@ -25,6 +26,8 @@ TAILSCALE_LOGIN_URL = "https://login.tailscale.com/start"
 DEFAULT_MOBILE_GATEWAY_LISTEN = "127.0.0.1:8787"
 MOBILE_CONNECTION_CODE_PREFIX = "ccb1_"
 CCB_MOBILE_APP_DOWNLOAD_URL_ENV = "CCB_MOBILE_APP_DOWNLOAD_URL"
+CCB_MOBILE_PAIRING_QR_OUTPUT_ENV = "CCB_MOBILE_PAIRING_QR_OUTPUT"
+MAX_INLINE_TERMINAL_QR_COLUMNS = 100
 DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL = (
     "https://github.com/SeemSeam/claude_codex_bridge/releases/download/"
     "v8.4.1/ccb-mobile-v8.4.1.apk"
@@ -142,16 +145,12 @@ def run_mobile_update_onboarding(
         _print_mobile_app_steps(print_fn, environ=env, qr_ready=True)
         print_fn("")
         print_fn("Scan this QR in CCB Mobile:")
-        use_ansi = (
-            (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
-        )
-        for line in render_terminal_qr(
+        _print_pairing_qr(
             qr_payload,
-            ansi=use_ansi,
-            quiet_zone=2,
-            compact=True,
-        ):
-            print_fn(line)
+            print_fn=print_fn,
+            qr_ansi=qr_ansi,
+            environ=env,
+        )
         print_fn("")
         _print_pairing_fallback(service, print_fn=print_fn)
         print_fn("")
@@ -220,13 +219,12 @@ def run_mobile_update_onboarding(
     _print_mobile_app_steps(print_fn, environ=env, qr_ready=True)
     print_fn("")
     print_fn("Scan this QR in CCB Mobile:")
-    use_ansi = (
-        (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
+    _print_pairing_qr(
+        qr_payload,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+        environ=env,
     )
-    for line in render_terminal_qr(
-        qr_payload, ansi=use_ansi, quiet_zone=2, compact=True
-    ):
-        print_fn(line)
     print_fn("")
     _print_pairing_fallback(handle.summary, print_fn=print_fn)
     if serve_forever:
@@ -282,16 +280,12 @@ def run_mobile_relay_onboarding(
     print_fn(f"   APK: {app_download_url}")
     print_fn("")
     print_fn("Scan this QR in CCB Mobile:")
-    use_ansi = (
-        (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
-    )
-    for line in render_terminal_qr(
+    _print_pairing_qr(
         qr_payload,
-        ansi=use_ansi,
-        quiet_zone=2,
-        compact=True,
-    ):
-        print_fn(line)
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+        environ=env,
+    )
     print_fn("")
     _print_pairing_fallback(service, print_fn=print_fn)
     print_fn(
@@ -406,16 +400,12 @@ def _run_mobile_direct_route_onboarding(
     print_fn(f"   APK: {app_download_url}")
     print_fn("")
     print_fn("Scan this QR in CCB Mobile:")
-    use_ansi = (
-        (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
-    )
-    for line in render_terminal_qr(
+    _print_pairing_qr(
         qr_payload,
-        ansi=use_ansi,
-        quiet_zone=2,
-        compact=True,
-    ):
-        print_fn(line)
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+        environ=env,
+    )
     print_fn("")
     _print_pairing_fallback(service, print_fn=print_fn)
     return 0
@@ -865,6 +855,101 @@ def _print_ready_summary(
 ) -> None:
     print_fn(f"Computer gateway: {summary.get('gateway_url', '')}")
     print_fn(f"Mounted projects available in the app: {summary.get('project_count', 0)}")
+
+
+def _print_pairing_qr(
+    payload: str,
+    *,
+    print_fn: Callable[[str], None],
+    qr_ansi: bool | None,
+    environ: Mapping[str, str],
+    terminal_columns: int | None = None,
+    qr_image_path: str | Path | None = None,
+) -> Path | None:
+    plain_lines = render_terminal_qr(
+        payload,
+        ansi=False,
+        quiet_zone=2,
+        compact=True,
+    )
+    required_columns = max((len(line) for line in plain_lines), default=0)
+    available_columns = (
+        _terminal_columns(print_fn)
+        if terminal_columns is None
+        else max(1, int(terminal_columns))
+    )
+    inline_limit = (
+        min(available_columns, MAX_INLINE_TERMINAL_QR_COLUMNS)
+        if available_columns is not None
+        else None
+    )
+    if inline_limit is not None and required_columns > inline_limit:
+        image_path = Path(qr_image_path).expanduser() if qr_image_path else (
+            _pairing_qr_image_path(environ)
+        )
+        write_terminal_qr_png(
+            image_path,
+            payload,
+            quiet_zone=4,
+            module_size=8,
+        )
+        if required_columns > available_columns:
+            reason = (
+                f"{required_columns} columns required; "
+                f"{available_columns} available"
+            )
+        else:
+            reason = (
+                f"{required_columns} columns exceeds the "
+                f"{MAX_INLINE_TERMINAL_QR_COLUMNS}-column safe inline limit"
+            )
+        print_fn(f"Terminal QR omitted to keep it scannable ({reason}).")
+        print_fn(f"Pairing QR image: {image_path}")
+        print_fn(
+            "Open that owner-only PNG at normal size and scan it with CCB Mobile."
+        )
+        return image_path
+
+    use_ansi = (
+        (
+            print_fn is print
+            and sys.stdout.isatty()
+            and _terminal_supports_ansi(environ)
+        )
+        if qr_ansi is None
+        else qr_ansi
+    )
+    lines = (
+        render_terminal_qr(
+            payload,
+            ansi=True,
+            quiet_zone=2,
+            compact=True,
+        )
+        if use_ansi
+        else plain_lines
+    )
+    for line in lines:
+        print_fn(line)
+    return None
+
+
+def _terminal_columns(print_fn: Callable[[str], None]) -> int | None:
+    if print_fn is not print:
+        return None
+    return max(1, int(shutil.get_terminal_size(fallback=(80, 24)).columns))
+
+
+def _terminal_supports_ansi(environ: Mapping[str, str]) -> bool:
+    terminal = _clean_text(environ.get("TERM")).lower()
+    return terminal not in {"", "dumb"} and "NO_COLOR" not in environ
+
+
+def _pairing_qr_image_path(environ: Mapping[str, str]) -> Path:
+    configured = _clean_text(environ.get(CCB_MOBILE_PAIRING_QR_OUTPUT_ENV))
+    if configured:
+        return Path(configured).expanduser()
+    return mobile_host_state_dir() / "pairing-qr.png"
 
 
 def _pairing_qr_text(summary: Mapping[str, object]) -> str:

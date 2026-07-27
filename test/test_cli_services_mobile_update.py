@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import stat
 import subprocess
 from types import SimpleNamespace
 
@@ -652,6 +653,57 @@ def test_onboarding_managed_service_qr_keeps_full_payload_and_scanner_safe_borde
     assert scanner_safe_area < uncompact_area
     assert scanner_safe_qr[0].strip("█") == ""
     assert scanner_safe_qr[-1].strip("█") == ""
+
+
+def test_high_density_pairing_qr_uses_owner_only_png_in_narrow_terminal(
+    tmp_path,
+) -> None:
+    output: list[str] = []
+    qr_path = tmp_path / "pairing-qr.png"
+
+    result = mobile_update._print_pairing_qr(
+        "x" * 1390,
+        print_fn=output.append,
+        qr_ansi=False,
+        environ={},
+        terminal_columns=80,
+        qr_image_path=qr_path,
+    )
+
+    assert result == qr_path
+    assert qr_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert stat.S_IMODE(qr_path.stat().st_mode) == 0o600
+    assert any("129 columns required; 80 available" in line for line in output)
+    assert any(str(qr_path) in line for line in output)
+    assert not any(
+        line and set(line) <= set(" █▀▄") and any(char in line for char in "█▀▄")
+        for line in output
+    )
+
+    wide_output: list[str] = []
+    wide_path = tmp_path / "wide-pairing-qr.png"
+    mobile_update._print_pairing_qr(
+        "x" * 1390,
+        print_fn=wide_output.append,
+        qr_ansi=False,
+        environ={},
+        terminal_columns=160,
+        qr_image_path=wide_path,
+    )
+
+    assert wide_path.exists()
+    assert any("safe inline limit" in line for line in wide_output)
+
+
+def test_dumb_terminal_disables_ansi_qr_rendering() -> None:
+    assert mobile_update._terminal_supports_ansi({"TERM": "dumb"}) is False
+    assert mobile_update._terminal_supports_ansi({"TERM": "xterm-256color"}) is True
+    assert (
+        mobile_update._terminal_supports_ansi(
+            {"TERM": "xterm-256color", "NO_COLOR": "1"}
+        )
+        is False
+    )
 
 
 def test_onboarding_reports_non_mapping_mobile_service_result() -> None:
