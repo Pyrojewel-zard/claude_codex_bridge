@@ -10,6 +10,7 @@ import struct
 import subprocess
 import termios
 import time
+import unicodedata
 from typing import Mapping
 
 
@@ -43,6 +44,7 @@ class TerminalAttachTarget:
     geometry: TerminalGeometry
     target_summary: dict[str, object]
     tmux_binary: str = 'tmux'
+    include_history: bool = True
 
     @property
     def command(self) -> list[str]:
@@ -151,15 +153,25 @@ class TmuxTerminalSession:
         self._geometry = target.geometry
         self._closed = False
         self._last_snapshot: bytes | None = None
+        self._initial_read_complete = False
         if not target.pane_id:
             raise RuntimeError('terminal target pane evidence is required')
 
     def read(self, timeout_seconds: float = 0.1) -> bytes | None:
         if self._closed:
             return None
-        if self._last_snapshot is not None:
+        if self._initial_read_complete:
             time.sleep(max(0.0, min(float(timeout_seconds), 0.25)))
-        if self._last_snapshot is None:
+        if not self._initial_read_complete:
+            self._initial_read_complete = True
+            if not self.target.include_history:
+                snapshot = _capture_tmux_terminal_pane(
+                    self.target,
+                    self._geometry,
+                    include_history=False,
+                )
+                self._last_snapshot = snapshot
+                return _render_terminal_snapshot(snapshot, clear_scrollback=True)
             history = _capture_tmux_terminal_pane(
                 self.target,
                 self._geometry,
@@ -172,6 +184,14 @@ class TmuxTerminalSession:
             )
             self._last_snapshot = snapshot
             return _render_terminal_snapshot(history, clear_scrollback=True)
+        if self._last_snapshot is None:
+            snapshot = _capture_tmux_terminal_pane(
+                self.target,
+                self._geometry,
+                include_history=False,
+            )
+            self._last_snapshot = snapshot
+            return _render_terminal_snapshot(snapshot)
         snapshot = _capture_tmux_terminal_pane(
             self.target,
             self._geometry,
@@ -179,8 +199,14 @@ class TmuxTerminalSession:
         )
         if snapshot == self._last_snapshot:
             return b''
+        previous = self._last_snapshot
         self._last_snapshot = snapshot
-        return _render_terminal_snapshot(snapshot)
+        return _render_terminal_delta(
+            previous,
+            snapshot,
+            columns=self._geometry.columns,
+            rows=self._geometry.rows,
+        )
 
     def write(self, data: bytes) -> None:
         if not data:
@@ -343,6 +369,70 @@ def _render_terminal_snapshot(
     rendered = text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n')
     clear = b'\x1b[3J' if clear_scrollback else b''
     return b'\x1b[?25l' + clear + b'\x1b[H\x1b[2J' + rendered.encode('utf-8')
+
+
+def _render_terminal_delta(
+    previous: bytes,
+    snapshot: bytes,
+    *,
+    columns: int,
+    rows: int,
+) -> bytes:
+    previous_lines = _terminal_snapshot_lines(previous)
+    snapshot_lines = _terminal_snapshot_lines(snapshot)
+    first_changed = _first_changed_terminal_line(previous_lines, snapshot_lines)
+    if first_changed is None:
+        return b''
+    previous_visual_rows = _terminal_visual_rows(previous_lines, columns)
+    snapshot_visual_rows = _terminal_visual_rows(snapshot_lines, columns)
+    if previous_visual_rows > rows or snapshot_visual_rows > rows:
+        return _render_terminal_snapshot(snapshot, clear_scrollback=True)
+    start_row = _terminal_visual_rows(previous_lines[:first_changed], columns) + 1
+    suffix = '\r\n'.join(snapshot_lines[first_changed:]).encode('utf-8')
+    return (
+        b'\x1b[?25l\x1b[0m'
+        + f'\x1b[{start_row};1H\x1b[0J'.encode('ascii')
+        + suffix
+        + b'\x1b[0m'
+    )
+
+
+def _terminal_snapshot_lines(snapshot: bytes) -> list[str]:
+    text = snapshot.decode('utf-8', errors='replace')
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n').rstrip('\n')
+    return normalized.split('\n') if normalized else []
+
+
+def _first_changed_terminal_line(
+    previous_lines: list[str],
+    snapshot_lines: list[str],
+) -> int | None:
+    for index, (before, after) in enumerate(zip(previous_lines, snapshot_lines)):
+        if before != after:
+            return index
+    if len(previous_lines) != len(snapshot_lines):
+        return min(len(previous_lines), len(snapshot_lines))
+    return None
+
+
+def _terminal_visual_rows(lines: list[str], columns: int) -> int:
+    width = max(1, int(columns))
+    rows = 0
+    for line in lines:
+        display_width = _terminal_display_width(_strip_ansi(line))
+        rows += max(1, (display_width + width - 1) // width)
+    return rows
+
+
+def _terminal_display_width(text: str) -> int:
+    width = 0
+    for character in text:
+        if unicodedata.combining(character):
+            continue
+        if unicodedata.category(character).startswith('C'):
+            continue
+        width += 2 if unicodedata.east_asian_width(character) in {'F', 'W'} else 1
+    return width
 
 
 def _select_tmux_terminal_pane(target: TerminalAttachTarget) -> None:

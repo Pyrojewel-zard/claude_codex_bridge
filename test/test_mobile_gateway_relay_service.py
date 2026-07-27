@@ -36,7 +36,11 @@ from mobile_gateway.relay_admission import (
     host_public_key_b64,
     sign_host_session_proof,
 )
-from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
+from mobile_gateway.relay_service import (
+    ProductionRelayConfig,
+    ProductionRelayService,
+    _PeerEndpoint,
+)
 from mobile_gateway.relay_host_credentials import (
     CCB_OFFICIAL_RELAY_ORIGIN,
     RELAY_MODE_OFFICIAL,
@@ -567,8 +571,56 @@ def test_heartbeat_and_bounded_peer_queue_backpressure(tmp_path: Path) -> None:
     asyncio.run(_heartbeat_and_bounded_peer_queue_backpressure(tmp_path))
 
 
+def test_peer_queue_absorbs_transient_writer_backpressure() -> None:
+    asyncio.run(_peer_queue_absorbs_transient_writer_backpressure())
+
+
+async def _peer_queue_absorbs_transient_writer_backpressure() -> None:
+    release_writer = asyncio.Event()
+    writer_started = asyncio.Event()
+    slow_consumers: list[object] = []
+
+    class _DelayedWebSocket:
+        closed = False
+
+        async def send_str(self, _payload: str) -> None:
+            writer_started.set()
+            await release_writer.wait()
+
+        async def close(self, *, code: int, message: bytes) -> None:
+            self.closed = True
+
+    endpoint = _PeerEndpoint(
+        role='phone',
+        websocket=_DelayedWebSocket(),
+        queue_limit=1,
+        write_timeout=0.5,
+    )
+    endpoint.start_writer(slow_consumers.append)
+    try:
+        await endpoint.send_frame({'seq': 1})
+        await writer_started.wait()
+        await endpoint.send_frame({'seq': 2})
+        pending = asyncio.create_task(endpoint.send_frame({'seq': 3}))
+        await asyncio.sleep(0.05)
+        assert not pending.done()
+
+        release_writer.set()
+        await asyncio.wait_for(pending, timeout=0.5)
+
+        assert slow_consumers == []
+        assert endpoint.closed is False
+    finally:
+        await endpoint.close()
+
+
 async def _heartbeat_and_bounded_peer_queue_backpressure(tmp_path: Path) -> None:
-    service, issued = await _started_service(tmp_path, idle_timeout=0.5, peer_queue_limit=1)
+    service, issued = await _started_service(
+        tmp_path,
+        idle_timeout=0.5,
+        peer_queue_limit=1,
+        write_timeout=0.1,
+    )
     try:
         async with _client_session() as client:
             host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
@@ -1012,6 +1064,7 @@ async def _started_service(
     max_frame_bytes: int = 4096,
     websocket_max_msg_bytes: int | None = None,
     peer_queue_limit: int = 4,
+    write_timeout: float = 1.0,
     idle_timeout: float = 5.0,
     unauth_rate_limit: int = 100,
     unauth_rate_limit_window: float = 60.0,
@@ -1045,7 +1098,7 @@ async def _started_service(
         max_frame_bytes=max_frame_bytes,
         websocket_max_msg_bytes=websocket_max_msg_bytes,
         peer_queue_limit=peer_queue_limit,
-        write_timeout=1.0,
+        write_timeout=write_timeout,
         idle_timeout=idle_timeout,
         heartbeat_interval=heartbeat_interval,
         unauth_rate_limit=unauth_rate_limit,

@@ -4210,6 +4210,7 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         assert 'attach-session' not in sessions[0].target.command
         assert sessions[0].target.geometry.columns == 100
         assert sessions[0].target.geometry.rows == 30
+        assert sessions[0].target.include_history is True
 
         _websocket_send_json(sock, {'type': 'input', 'seq': 1, 'bytes_b64': base64.b64encode(b'a').decode('ascii')})
         _wait_for(lambda: sessions[0].writes == [b'a'])
@@ -4307,6 +4308,7 @@ def test_terminal_websocket_resumes_after_transport_disconnect_with_matching_cur
         second_output = _websocket_read_until(resumed_sock, 'output')
         assert second_output['seq'] == 2
         assert len(sessions) == 2
+        assert sessions[1].target.include_history is False
         _wait_for(
             lambda: '"last_output_seq": 2'
             in (tmp_path / 'mobile' / 'terminal-tokens.jsonl').read_text(encoding='utf-8')
@@ -4386,6 +4388,7 @@ def test_terminal_websocket_accepts_stale_output_resume_cursor(tmp_path: Path) -
         output = _websocket_read_until(stale_sock, 'output')
         assert output['seq'] == 2
         assert len(sessions) == 2
+        assert sessions[1].target.include_history is False
         stored_after_resume = (tmp_path / 'mobile' / 'terminal-tokens.jsonl').read_text(encoding='utf-8')
         assert '"last_resume_cursor": 0' in stored_after_resume
         assert '"last_resume_gap": 1' in stored_after_resume

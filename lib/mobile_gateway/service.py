@@ -1429,12 +1429,16 @@ class MobileGatewayService:
                 close_reason = 'invalid_open'
                 return
             terminal_token = str(open_frame.get('token') or '')
+            resume_cursor = _optional_int(open_frame.get('resume_cursor'))
             record = store.authenticate_terminal_token(
                 terminal_id=terminal_id,
                 terminal_token=terminal_token,
-                resume_cursor=_optional_int(open_frame.get('resume_cursor')),
+                resume_cursor=resume_cursor,
             )
-            attach_target = self._terminal_attach_target(record)
+            attach_target = self._terminal_attach_target(
+                record,
+                include_history=resume_cursor is None,
+            )
             session = self._terminal_session_factory(attach_target)
             connection.send_json(
                 {
@@ -2058,7 +2062,12 @@ class MobileGatewayService:
             future.cancel()
             raise MobileGatewayError('project activity unavailable', status_code=503) from exc
 
-    def _terminal_attach_target(self, record: dict[str, object]) -> TerminalAttachTarget:
+    def _terminal_attach_target(
+        self,
+        record: dict[str, object],
+        *,
+        include_history: bool,
+    ) -> TerminalAttachTarget:
         project = self._require_project(str(record.get('project_id') or ''))
         view_payload = self._request_project_view(project)
         view = _map(view_payload.get('view'))
@@ -2083,6 +2092,7 @@ class MobileGatewayService:
             pane_id=pane_id,
             geometry=TerminalGeometry.from_mapping(record.get('geometry')),
             target_summary=target_summary,
+            include_history=include_history,
         )
 
     def _handle_terminal_frame(

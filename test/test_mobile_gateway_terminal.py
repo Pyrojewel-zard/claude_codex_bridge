@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,7 @@ from mobile_gateway.terminal import (
 )
 
 
-def _target() -> TerminalAttachTarget:
+def _target(*, include_history: bool = True) -> TerminalAttachTarget:
     return TerminalAttachTarget(
         terminal_id='term-test',
         socket_path='/tmp/ccb-test/tmux.sock',
@@ -24,6 +25,7 @@ def _target() -> TerminalAttachTarget:
         pane_id='%42',
         geometry=TerminalGeometry(),
         target_summary={'project_id': 'proj-test', 'agent': 'lead', 'pane_id': '%42'},
+        include_history=include_history,
     )
 
 
@@ -116,7 +118,117 @@ def test_terminal_session_repaints_visible_pane_without_reappending_history(
         b'\x1b[?25l\x1b[3J\x1b[H\x1b[2J'
         b'real history\r\npane only\r\nprompt$ '
     )
-    assert second == b'\x1b[?25l\x1b[H\x1b[2Jpane changed\r\nprompt$ '
+    assert second == (
+        b'\x1b[?25l\x1b[0m'
+        b'\x1b[1;1H\x1b[0Jpane changed\r\nprompt$ '
+        b'\x1b[0m'
+    )
+    assert b'\x1b[2J' not in second
+    assert sum(command.count('-S') > 1 for command in calls) == 1
+    assert len(calls) == 3
+
+
+def test_terminal_delta_accounts_for_client_side_line_wrapping(monkeypatch) -> None:
+    visible_outputs = iter(
+        (
+            b'12345678\nbefore',
+            b'12345678\nafter',
+        )
+    )
+
+    def fake_run(command, **kwargs):
+        output = (
+            b'12345678\nbefore'
+            if command.count('-S') > 1
+            else next(visible_outputs)
+        )
+        return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+    target = replace(
+        _target(),
+        geometry=TerminalGeometry(columns=4, rows=10),
+    )
+    session = TmuxTerminalSession(target)
+
+    session.read(0)
+    output = session.read(0)
+
+    assert output == (
+        b'\x1b[?25l\x1b[0m'
+        b'\x1b[3;1H\x1b[0Jafter'
+        b'\x1b[0m'
+    )
+
+
+def test_terminal_delta_uses_full_repaint_when_wrapped_content_exceeds_viewport(
+    monkeypatch,
+) -> None:
+    visible_outputs = iter(
+        (
+            b'12345678\nbefore',
+            b'12345678\nafter',
+        )
+    )
+
+    def fake_run(command, **kwargs):
+        output = (
+            b'12345678\nbefore'
+            if command.count('-S') > 1
+            else next(visible_outputs)
+        )
+        return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+    target = replace(
+        _target(),
+        geometry=TerminalGeometry(columns=4, rows=2),
+    )
+    session = TmuxTerminalSession(target)
+
+    session.read(0)
+    output = session.read(0)
+
+    assert output == b'\x1b[?25l\x1b[3J\x1b[H\x1b[2J12345678\r\nafter'
+
+
+def test_terminal_resumed_session_repaints_visible_pane_without_history(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return SimpleNamespace(returncode=0, stdout=b'current pane\nprompt$ ', stderr=b'')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+
+    output = TmuxTerminalSession(_target(include_history=False)).read(0)
+
+    assert output == b'\x1b[?25l\x1b[3J\x1b[H\x1b[2Jcurrent pane\r\nprompt$ '
+    assert len(calls) == 1
+    assert calls[0].count('-S') == 1
+
+
+def test_terminal_resize_repaints_visible_pane_without_replaying_history(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    visible_outputs = iter((b'pane before\nprompt$ ', b'pane after\nprompt$ '))
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        output = (
+            b'history\npane before\nprompt$ '
+            if command.count('-S') > 1
+            else next(visible_outputs)
+        )
+        return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+    session = TmuxTerminalSession(_target())
+
+    session.read(0)
+    session.resize(TerminalGeometry(columns=100, rows=30))
+    output = session.read(0)
+
+    assert output == b'\x1b[?25l\x1b[H\x1b[2Jpane after\r\nprompt$ '
     assert sum(command.count('-S') > 1 for command in calls) == 1
     assert len(calls) == 3
 

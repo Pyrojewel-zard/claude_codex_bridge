@@ -212,8 +212,11 @@ class _PeerEndpoint:
         if self.closed:
             raise MobileRelayError('relay peer is closed')
         try:
-            self.queue.put_nowait(dict(frame))
-        except asyncio.QueueFull as exc:
+            await asyncio.wait_for(
+                self.queue.put(dict(frame)),
+                timeout=self.write_timeout,
+            )
+        except asyncio.TimeoutError as exc:
             raise MobileRelayError('relay peer queue full') from exc
 
     async def close(self, *, code: int = 1000, message: str = '') -> None:
