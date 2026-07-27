@@ -620,6 +620,7 @@ async def _heartbeat_and_bounded_peer_queue_backpressure(tmp_path: Path) -> None
         idle_timeout=0.5,
         peer_queue_limit=1,
         write_timeout=0.1,
+        heartbeat_interval=5.0,
     )
     try:
         async with _client_session() as client:
