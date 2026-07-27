@@ -137,7 +137,17 @@ Managed update:
   skipping records only the exact available version.
 - A newer provider version clears the older muted-version state.
 - npm updates use the npm executable adjacent to the resolved provider command
-  when available, preserving NVM/version-manager ownership.
+  when available and always pin the global prefix derived from the resolved
+  package path, preserving user-prefix and NVM/version-manager ownership even
+  when only a system npm executable is on `PATH`.
+- A detected npm prefix that is not writable by the current user is reported
+  without attempting an update or invoking privilege escalation.
+- Bun global packages are updated with the Bun executable belonging to the
+  detected Bun home, with that exact `BUN_INSTALL` preserved; the generic
+  `node_modules` path check must not misclassify them as npm packages.
+- A detected Bun home that is not writable by the current user is report-only.
+- A registry release containing non-published local runtime dependencies is
+  shown as available but report-only until the publisher replaces the release.
 - Snap, Windows interop, custom wrapper, and unsupported native owners are
   reported without mutation.
 - Successful provider updates are version-verified and do not automatically

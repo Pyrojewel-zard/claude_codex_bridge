@@ -130,8 +130,20 @@ Responsibilities:
 - Run provider update discovery only when the parent `ccb update` explicitly
   authorizes the internal provider-update flow.
 - Resolve provider executables from the real user environment, identify npm,
-  Homebrew, native, Snap, or custom-wrapper ownership, and update only when a
-  safe owner-specific command exists.
+  Bun, Homebrew, native, Snap, or custom-wrapper ownership, and update only
+  when a safe owner-specific command exists.
+- For npm-owned providers, derive the global install prefix from the resolved
+  package path and pass that exact prefix to npm. A system npm executable must
+  not redirect a user-prefix Provider into `/usr/local`; a non-writable
+  detected prefix is report-only with an actionable ownership message.
+- Treat packages under `<BUN_INSTALL>/install/global/node_modules` as
+  Bun-owned rather than npm-owned. Use the matching Bun executable, preserve
+  the detected `BUN_INSTALL` during execution, and keep a non-writable Bun home
+  report-only.
+- Treat an npm registry release that declares `file:`, `link:`, or `workspace:`
+  runtime dependencies as non-installable from the registry. Report that exact
+  version without executing npm or Bun, so a malformed upstream publication
+  cannot repeatedly damage an existing Provider installation.
 - Use a provider-native read-only latest check only when the CLI exposes a
   documented non-mutating check (currently `droid update --check`); never run
   a mutating updater merely to discover whether an update exists.
