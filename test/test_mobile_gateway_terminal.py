@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -231,6 +232,51 @@ def test_terminal_resize_repaints_visible_pane_without_replaying_history(monkeyp
     assert output == b'\x1b[?25l\x1b[H\x1b[2Jpane after\r\nprompt$ '
     assert sum(command.count('-S') > 1 for command in calls) == 1
     assert len(calls) == 3
+
+
+def test_terminal_resize_during_capture_repaints_without_snapshot_race(
+    monkeypatch,
+) -> None:
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    visible_reads = iter((b'pane before\nprompt$ ', b'pane after\nprompt$ '))
+
+    def fake_capture(target, geometry, *, include_history):
+        if include_history:
+            return b'history\npane before\nprompt$ '
+        output = next(visible_reads)
+        if output.startswith(b'pane after'):
+            capture_started.set()
+            assert release_capture.wait(timeout=2)
+        return output
+
+    monkeypatch.setattr(
+        'mobile_gateway.terminal._capture_tmux_terminal_pane',
+        fake_capture,
+    )
+    session = TmuxTerminalSession(_target())
+    session.read(0)
+    result: dict[str, object] = {}
+
+    def read_after_resize() -> None:
+        try:
+            result['output'] = session.read(0)
+        except Exception as exc:  # pragma: no cover - assertion reports detail
+            result['error'] = exc
+
+    reader = threading.Thread(target=read_after_resize)
+    reader.start()
+    assert capture_started.wait(timeout=2)
+
+    session.resize(TerminalGeometry(columns=100, rows=30))
+    release_capture.set()
+    reader.join(timeout=2)
+
+    assert reader.is_alive() is False
+    assert result.get('error') is None
+    assert result.get('output') == (
+        b'\x1b[?25l\x1b[H\x1b[2Jpane after\r\nprompt$ '
+    )
 
 
 def test_terminal_open_selects_target_pane_before_attach(monkeypatch) -> None:

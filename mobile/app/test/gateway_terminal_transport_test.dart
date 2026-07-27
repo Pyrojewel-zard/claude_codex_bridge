@@ -280,6 +280,40 @@ void main() {
     await subscription.cancel();
   });
 
+  test(
+    'gateway terminal renews handle after terminal output failure',
+    () async {
+      final gateway = _FakeGatewayTransport();
+      final session = await GatewayTerminalTransport(transport: gateway).open(
+        TerminalOpenRequest.gateway(
+          target: CcbTerminalTarget.agent(
+            projectId: 'proj-demo',
+            namespaceEpoch: 4,
+            agent: 'mobile',
+            scopes: {CcbScope.view, CcbScope.terminalInput},
+          ),
+        ),
+      );
+      final errors = <Object>[];
+      final subscription = session.output.listen((_) {}, onError: errors.add);
+
+      gateway.emit(GatewayTerminalFrame.error('terminal_output_error'));
+      await _waitFor(
+        () =>
+            gateway.openRequests.length == 2 &&
+            gateway.resumeCursors.length == 2,
+      );
+
+      expect(gateway.resumeCursors, [null, null]);
+      expect(gateway.frameHandles.last.terminalId, 'term_demo_mobile_2');
+      expect(errors, isEmpty);
+
+      await session.writeBytes([0x61]);
+      expect(gateway.sentFrameHandles.last.terminalId, 'term_demo_mobile_2');
+      await subscription.cancel();
+    },
+  );
+
   test('gateway terminal renews handle when resume cursor is stale', () async {
     final gateway = _FakeGatewayTransport();
     final session = await GatewayTerminalTransport(transport: gateway).open(

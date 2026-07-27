@@ -9,6 +9,7 @@ import select
 import struct
 import subprocess
 import termios
+import threading
 import time
 import unicodedata
 from typing import Mapping
@@ -154,59 +155,85 @@ class TmuxTerminalSession:
         self._closed = False
         self._last_snapshot: bytes | None = None
         self._initial_read_complete = False
+        self._snapshot_generation = 0
+        self._state_lock = threading.Lock()
         if not target.pane_id:
             raise RuntimeError('terminal target pane evidence is required')
 
     def read(self, timeout_seconds: float = 0.1) -> bytes | None:
-        if self._closed:
-            return None
-        if self._initial_read_complete:
+        with self._state_lock:
+            if self._closed:
+                return None
+            initial_read_complete = self._initial_read_complete
+        if initial_read_complete:
             time.sleep(max(0.0, min(float(timeout_seconds), 0.25)))
-        if not self._initial_read_complete:
-            self._initial_read_complete = True
+        with self._state_lock:
+            if self._closed:
+                return None
+            initial_read = not self._initial_read_complete
+            if initial_read:
+                self._initial_read_complete = True
+            geometry = self._geometry
+            previous = self._last_snapshot
+            snapshot_generation = self._snapshot_generation
+        if initial_read:
             if not self.target.include_history:
                 snapshot = _capture_tmux_terminal_pane(
                     self.target,
-                    self._geometry,
+                    geometry,
                     include_history=False,
                 )
-                self._last_snapshot = snapshot
+                with self._state_lock:
+                    if self._closed:
+                        return None
+                    self._last_snapshot = snapshot
                 return _render_terminal_snapshot(snapshot, clear_scrollback=True)
             history = _capture_tmux_terminal_pane(
                 self.target,
-                self._geometry,
+                geometry,
                 include_history=True,
             )
             snapshot = _capture_tmux_terminal_pane(
                 self.target,
-                self._geometry,
+                geometry,
                 include_history=False,
             )
-            self._last_snapshot = snapshot
+            with self._state_lock:
+                if self._closed:
+                    return None
+                self._last_snapshot = snapshot
             return _render_terminal_snapshot(history, clear_scrollback=True)
-        if self._last_snapshot is None:
+        if previous is None:
             snapshot = _capture_tmux_terminal_pane(
                 self.target,
-                self._geometry,
+                geometry,
                 include_history=False,
             )
-            self._last_snapshot = snapshot
+            with self._state_lock:
+                if self._closed:
+                    return None
+                self._last_snapshot = snapshot
             return _render_terminal_snapshot(snapshot)
         snapshot = _capture_tmux_terminal_pane(
             self.target,
-            self._geometry,
+            geometry,
             include_history=False,
         )
-        if snapshot == self._last_snapshot:
-            return b''
-        previous = self._last_snapshot
-        self._last_snapshot = snapshot
-        return _render_terminal_delta(
-            previous,
-            snapshot,
-            columns=self._geometry.columns,
-            rows=self._geometry.rows,
-        )
+        with self._state_lock:
+            if self._closed:
+                return None
+            if snapshot_generation != self._snapshot_generation:
+                self._last_snapshot = snapshot
+                return _render_terminal_snapshot(snapshot)
+            if snapshot == previous:
+                return b''
+            self._last_snapshot = snapshot
+            return _render_terminal_delta(
+                previous,
+                snapshot,
+                columns=geometry.columns,
+                rows=geometry.rows,
+            )
 
     def write(self, data: bytes) -> None:
         if not data:
@@ -223,11 +250,14 @@ class TmuxTerminalSession:
         self.write(str(text).encode('utf-8'))
 
     def resize(self, geometry: TerminalGeometry) -> None:
-        self._geometry = geometry
-        self._last_snapshot = None
+        with self._state_lock:
+            self._geometry = geometry
+            self._last_snapshot = None
+            self._snapshot_generation += 1
 
     def close(self) -> None:
-        self._closed = True
+        with self._state_lock:
+            self._closed = True
 
     def _resize(self, geometry: TerminalGeometry) -> None:
         rows = max(1, int(geometry.rows))
