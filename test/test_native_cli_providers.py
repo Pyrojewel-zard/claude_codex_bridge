@@ -650,8 +650,13 @@ def test_native_crush_projects_provider_api_state_into_private_data_dir(
 
 
 def test_native_kiro_snapshots_auth_database_one_way_without_history(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(
+        "provider_backends.native_cli_support.home.platform.system",
+        lambda: "Linux",
+    )
     source_home = tmp_path / "source-home"
     target_home = tmp_path / "managed-home"
     target_data = tmp_path / "provider-state" / "data"

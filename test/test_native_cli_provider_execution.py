@@ -176,6 +176,14 @@ def test_qoderclicn_headless_command_does_not_repeat_explicit_options(
 
 
 def _install_stub(monkeypatch, provider: str, *, mode: str = "") -> None:
+    if provider == "kiro":
+        # Kiro's managed storage contract intentionally fails closed on
+        # macOS. These generic adapter tests exercise the supported private
+        # file-store path; the macOS rejection has dedicated coverage.
+        monkeypatch.setattr(
+            "provider_backends.native_cli_support.home.platform.system",
+            lambda: "Linux",
+        )
     stub = Path("test/stubs/provider_stub.py").resolve()
     monkeypatch.setenv(f"{provider.upper()}_START_CMD", f"{sys.executable} {stub} --provider {provider}")
     if mode:

@@ -2128,6 +2128,13 @@ def test_native_cli_launcher_builds_provider_state_payload(
     default_executable: str,
     home_env: str | None,
 ) -> None:
+    if provider == 'kiro':
+        # Exercise Kiro's supported private file-store launch path on every
+        # CI host. macOS fail-closed behavior is covered separately.
+        monkeypatch.setattr(
+            'provider_backends.native_cli_support.home.platform.system',
+            lambda: 'Linux',
+        )
     monkeypatch.delenv(f'{provider.upper()}_START_CMD', raising=False)
     project_root = tmp_path / f'repo-{provider}-launcher'
     (project_root / '.ccb').mkdir(parents=True)
@@ -4602,6 +4609,10 @@ def test_claude_launcher_build_start_cmd_preserves_managed_auth_when_system_home
 def test_claude_launcher_build_start_cmd_projects_official_login_auth_into_managed_home(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(
+        'provider_backends.claude.launcher_runtime.home.platform.system',
+        lambda: 'Linux',
+    )
     project_root = tmp_path / 'repo-claude-login-auth'
     runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
     runtime_dir.mkdir(parents=True, exist_ok=True)

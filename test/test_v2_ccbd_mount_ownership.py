@@ -1502,14 +1502,23 @@ def test_ccbd_heartbeat_keeps_backend_mounted_on_background_supervision_failure(
     monkeypatch.setattr(app.job_heartbeat, 'tick', lambda dispatcher: ())
     monkeypatch.setattr('ccbd.app_runtime.lifecycle.full_heartbeat_due', lambda app, started: True)
 
-    app.heartbeat()
+    expected_failure = 'heartbeat:runtime_supervision: RuntimeError: tmux boom'
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        app.heartbeat()
+        lifecycle = app.lifecycle_store.load()
+        if lifecycle is not None and lifecycle.last_failure_reason == expected_failure:
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError('ccbd did not record the background supervision failure')
 
     inspection = app.ownership_guard.inspect()
     assert inspection.health is LeaseHealth.HEALTHY
     lifecycle = app.lifecycle_store.load()
     assert lifecycle is not None
     assert lifecycle.phase == 'mounted'
-    assert lifecycle.last_failure_reason == 'heartbeat:runtime_supervision: RuntimeError: tmux boom'
+    assert lifecycle.last_failure_reason == expected_failure
 
     app.request_shutdown()
     server_thread.join(timeout=3.0)

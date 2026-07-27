@@ -1523,6 +1523,10 @@ def test_prepare_provider_workspace_uses_account_home_when_current_home_is_manag
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        'provider_backends.claude.launcher_runtime.home.platform.system',
+        lambda: 'Linux',
+    )
     project_root = tmp_path / 'repo'
     workspace = project_root / 'workspace'
     system_home = tmp_path / 'system-home'

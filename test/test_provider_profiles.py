@@ -2411,7 +2411,11 @@ def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path
     assert trust['customApiKeyResponses']['approved'] == ['system-api-key']
 
 
-def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(tmp_path: Path) -> None:
+def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_credentials = source_home / '.claude' / '.credentials.json'
@@ -4111,7 +4115,11 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     assert not layout.credentials_path.exists()
 
 
-def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(tmp_path: Path) -> None:
+def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.claude' / 'settings.json'
