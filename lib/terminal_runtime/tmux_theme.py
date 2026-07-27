@@ -237,9 +237,6 @@ def _normalize_profile_name(value: str | None) -> str | None:
 
 def tmux_theme_profile(environ: Mapping[str, str] | None = None) -> str:
     env = _env(environ)
-    override = _normalize_profile_name(env.get('CCB_TMUX_THEME_PROFILE'))
-    if override is not None:
-        return override
     preference = load_theme_preference(env)
     if preference is not None:
         normalized = _normalize_profile_name(
@@ -247,6 +244,9 @@ def tmux_theme_profile(environ: Mapping[str, str] | None = None) -> str:
         )
         if normalized is not None:
             return normalized
+    bootstrap = _normalize_profile_name(env.get('CCB_TMUX_THEME_PROFILE'))
+    if bootstrap is not None:
+        return bootstrap
     family = detect_terminal_family(env)
     return 'contrast' if family in _CONTRAST_TERMINAL_FAMILIES else 'default'
 

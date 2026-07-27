@@ -46,10 +46,7 @@ DEFAULT_IDLE_TIMEOUT_S = 30 * 60
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
 _BROWSER_OPEN_CONFIRM_TIMEOUT_S = 2.0
 _PROFILE_NAME_PATTERN = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]{0,63}$')
-_PROTOTYPE_RELATIVE_PATH = Path(
-    'docs/plantree/plans/agentic-loop-workflow/'
-    'prototypes/v2-static-config-panel-demo/index.html'
-)
+_CONFIG_UI_RELATIVE_PATH = Path('assets/config_ui/index.html')
 
 
 @dataclass
@@ -211,7 +208,7 @@ def _is_wsl_environment() -> bool:
 
 
 def config_ui_asset_path() -> Path:
-    return Path(__file__).resolve().parents[3] / _PROTOTYPE_RELATIVE_PATH
+    return Path(__file__).resolve().parents[3] / _CONFIG_UI_RELATIVE_PATH
 
 
 def config_ui_provider_capabilities(

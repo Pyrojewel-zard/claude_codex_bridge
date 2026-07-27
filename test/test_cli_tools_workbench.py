@@ -184,6 +184,8 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert 'detect_system_workbench_theme()' in workbench
     assert 'theme_config_file=' in workbench
     assert 'read_workbench_theme_config()' in workbench
+    assert 'requested_theme="$(read_workbench_theme_config)"' in workbench
+    assert 'requested_theme="${CCB_WORKBENCH_THEME:-${CCB_TMUX_THEME_PROFILE:-}}"' in workbench
     assert 'available_themes: dark latte solarized_light tokyo_night_light gruvbox_light rose_pine_dawn' not in workbench
     assert 'ccb-tmux-on.sh >/dev/null 2>&1 || true' not in workbench
     assert 'CCB_WORKBENCH_THEME="$workbench_theme"' in workbench
@@ -469,7 +471,10 @@ def test_workbench_launch_detaches_outer_tmux_environment(tmp_path: Path, monkey
     assert 'CCB_TMUX_SOCKET_PATH' not in env
 
 
-def test_workbench_terminal_starts_managed_wezterm_when_current_window_is_not_ccb_rich(tmp_path: Path, monkeypatch) -> None:
+def test_workbench_terminal_uses_saved_theme_instead_of_stale_inherited_theme(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     fake_bin = _prepare_env(tmp_path, monkeypatch)
     workbench_tools.provision_workbench(profile='rich')
     project_root = tmp_path / 'project'
@@ -513,9 +518,10 @@ def test_workbench_terminal_starts_managed_wezterm_when_current_window_is_not_cc
     assert str(project_root) in argv
     assert '-u' in argv
     assert 'TMUX' in argv
-    assert 'CCB_WORKBENCH_THEME=gruvbox_light' in argv
-    assert 'CCB_TMUX_THEME_PROFILE=light' in argv
-    assert 'CCB_SIDEBAR_THEME_PROFILE=light' in argv
+    assert 'CCB_WORKBENCH_THEME=dark' in argv
+    assert 'CCB_TMUX_THEME_PROFILE=default' in argv
+    assert 'CCB_SIDEBAR_THEME_PROFILE=default' in argv
+    assert 'CCB_WORKBENCH_THEME=gruvbox_light' not in argv
     assert 'CCB_WORKBENCH_FORCE_RICH=1' in argv
     assert argv[-3:] == ['/bin/sh', '-lc', 'echo rich']
 

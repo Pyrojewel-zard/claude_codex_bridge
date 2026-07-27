@@ -35,7 +35,9 @@ def _context(project_root: Path):
 
 def test_config_ui_asset_is_packaged_source_content() -> None:
     path = config_ui_asset_path()
+    repo_root = Path(__file__).resolve().parents[1]
 
+    assert path == repo_root / 'assets' / 'config_ui' / 'index.html'
     assert path.is_file()
     page = path.read_text(encoding='utf-8')
     assert '<html lang="en">' in page
@@ -43,11 +45,17 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert 'id="staticDeletePane"' in page
     assert 'id="basicDeletePane"' in page
     assert 'function deleteSelectedPane()' in page
+    assert 'id="themeSelect"' in page
+    assert 'data-i18n="appearance"' in page
+    assert 'function loadThemePreference()' in page
+    assert 'function saveThemePreference(value)' in page
+    assert 'apiJson("/api/theme"' in page
+    assert 'document.documentElement.dataset.ccbTheme = rendered' in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
     assert match is not None
     embedded_icon = base64.b64decode(match.group(1))
     mobile_icon = (
-        path.parents[6]
+        repo_root
         / 'mobile'
         / 'app'
         / 'android'

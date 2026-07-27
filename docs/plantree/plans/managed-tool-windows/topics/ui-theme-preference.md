@@ -88,6 +88,11 @@ The stored `system` values preserve intent. Runtime consumers resolve them to
 the effective CCB `dark`/`latte` palette and `default`/`light` tmux profile.
 They do not copy a system terminal application's color scheme.
 
+The persisted preference is authoritative. Theme profile environment variables
+are launch-time bootstrap values for processes that have no readable
+`theme.json`; a value inherited from an older daemon or terminal must not
+override a newer saved preference.
+
 ## Theme Set
 
 Primary public themes:
@@ -119,10 +124,16 @@ When `ccb theme <value>` runs:
    with a dark fallback for headless/unknown environments.
 4. If running inside tmux, update the tmux environment and reapply the CCB
    tmux UI with the effective `tmux_profile`.
-5. If running inside CCB rich WezTerm, rely on the generated WezTerm config
+5. The sidebar rechecks `theme.json` on its normal ProjectView refresh and
+   updates its palette without treating its launch-time environment as
+   persistent authority.
+6. If running inside CCB rich WezTerm, rely on the generated WezTerm config
    watching `theme.json` and reloading the CCB-owned WezTerm palette.
-6. If not running inside rich WezTerm, do not mutate terminal emulator config.
+7. If not running inside rich WezTerm, do not mutate terminal emulator config.
    The rich WezTerm palette will apply next time the rich bundle is launched.
+8. Generated workbench launchers read `theme.json` before inherited
+   `CCB_WORKBENCH_THEME` or `CCB_TMUX_THEME_PROFILE` values, so a terminal
+   opened before the preference changed cannot overwrite the new choice.
 
 The old `ccb-workbench theme ...` surface should not be public. The public
 entry is `ccb theme ...`; the workbench wrapper may consume the same
@@ -164,8 +175,8 @@ preference internally.
 - Added public `ccb theme` handling before project discovery.
 - Added user-level theme preference storage at
   `$XDG_CONFIG_HOME/ccb/theme.json`.
-- Made tmux theme selection read the saved preference when no environment
-  override is present.
+- Made tmux theme selection treat the saved preference as authoritative and
+  environment values as bootstrap fallback only.
 - Made generated rich WezTerm config watch and parse `theme.json`.
 - Removed the temporary public `ccb-workbench theme` path from the generated
   wrapper; workbench now consumes the global preference internally.

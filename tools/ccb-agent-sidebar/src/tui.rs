@@ -32,7 +32,7 @@ use crate::model::{
     row_targets,
 };
 use crate::status::{activity_color_with_theme, activity_symbol};
-use crate::theme::SidebarTheme;
+use crate::theme::{RuntimeThemeResolver, SidebarTheme};
 
 const PROJECT_VIEW_REFRESH_MIN_MS: u64 = 100;
 const PROJECT_VIEW_REFRESH_MAX_MS: u64 = 5000;
@@ -71,13 +71,12 @@ fn run_tui(args: &Args) -> io::Result<ExitAction> {
     let mut terminal = Terminal::new(backend)?;
     let client = CcbdClient::new(args.ccbd_socket.clone());
     let ccb_program = ccb_program();
-    let mut app = SidebarApp::with_theme(
-        args.pane_window.clone(),
-        SidebarTheme::from_profile(&args.theme),
-    );
+    let mut theme_resolver = RuntimeThemeResolver::new(&args.theme);
+    let mut app = SidebarApp::with_theme(args.pane_window.clone(), theme_resolver.theme());
 
     loop {
         if app.needs_refresh() {
+            app.set_theme(theme_resolver.refresh());
             match client.project_view() {
                 Ok(response) => app.apply_response(response),
                 Err(err) => app.set_error(err),
@@ -366,6 +365,10 @@ impl SidebarApp {
 
     fn theme(&self) -> SidebarTheme {
         self.theme
+    }
+
+    fn set_theme(&mut self, theme: SidebarTheme) {
+        self.theme = theme;
     }
 
     pub fn apply_response(&mut self, response: ProjectViewResponse) {

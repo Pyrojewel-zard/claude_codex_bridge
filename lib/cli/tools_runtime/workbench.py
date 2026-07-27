@@ -1921,9 +1921,9 @@ read_workbench_theme_config() {{
   fi
   sed -n 's/.*"theme"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$theme_config_file" 2>/dev/null | sed -n '1p'
 }}
-requested_theme="${{CCB_WORKBENCH_THEME:-${{CCB_TMUX_THEME_PROFILE:-}}}}"
+requested_theme="$(read_workbench_theme_config)"
 if [ -z "$requested_theme" ]; then
-  requested_theme="$(read_workbench_theme_config)"
+  requested_theme="${{CCB_WORKBENCH_THEME:-${{CCB_TMUX_THEME_PROFILE:-}}}}"
 fi
 workbench_theme="$(normalize_workbench_theme "${{requested_theme:-dark}}")"
 if [ "$workbench_theme" = system ]; then
