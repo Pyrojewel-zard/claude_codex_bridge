@@ -1946,7 +1946,15 @@ def test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart(tmp_pat
     assert start.returncode == 0, start.stderr
 
     ask = _run_ccb(
-        ['ask', '--task-id', 'fake;latency_ms=1500', 'demo', 'from', 'user', 'resume after restart'],
+        [
+            'ask',
+            '--task-id',
+            'fake;script=[{"t":0,"type":"anchor_seen"},{"t":12000,"type":"result"}]',
+            'demo',
+            'from',
+            'user',
+            'resume after restart',
+        ],
         cwd=project_root,
     )
     assert ask.returncode == 0, ask.stderr
@@ -1956,6 +1964,14 @@ def test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart(tmp_pat
     assert f'job_id: {job_id}' in running.stdout
     execution_path = project_root / '.ccb' / 'ccbd' / 'executions' / f'{job_id}.json'
     _wait_for_path(execution_path)
+    _wait_for_ccbd_lines(
+        project_root,
+        (
+            'active_execution_count: 1',
+            'recoverable_execution_count: 1',
+            'pending_items_count: 0',
+        ),
+    )
 
     lease_path = project_root / '.ccb' / 'ccbd' / 'lease.json'
     lease = json.loads(lease_path.read_text(encoding='utf-8'))
@@ -1983,7 +1999,7 @@ def test_ccb_fake_provider_recovers_running_execution_after_ccbd_restart(tmp_pat
     assert 'ccbd_last_restore_restored_execution_count: 1' in doctor.stdout
     assert 'ccbd_last_restore_results_text: demo/fake:restored(provider_resumed)' in doctor.stdout
 
-    completed = _wait_for_status(project_root, job_id, 'completed', timeout=5.0)
+    completed = _wait_for_status(project_root, job_id, 'completed', timeout=20.0)
     assert 'reply: FAKE[demo] resume after restart' in completed.stdout
     assert not execution_path.exists()
 
