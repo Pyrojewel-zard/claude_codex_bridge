@@ -1222,7 +1222,7 @@ def test_prepare_provider_workspace_materializes_copilot_installed_plugins(
                         'cache_path': str(source_plugin),
                     }
                 ],
-                'loggedInUsers': [{'login': 'must-not-copy'}],
+                'loggedInUsers': [{'login': 'source-user'}],
             },
             indent=2,
         )
@@ -1247,7 +1247,7 @@ def test_prepare_provider_workspace_materializes_copilot_installed_plugins(
     target_plugin = target_home / 'installed-plugins' / 'fixture-marketplace' / 'fixture-plugin'
     config_text = (target_home / 'config.json').read_text(encoding='utf-8')
     payload = json.loads(config_text[config_text.index('{'):])
-    assert 'loggedInUsers' not in payload
+    assert payload['loggedInUsers'] == [{'login': 'source-user'}]
     assert payload['installedPlugins'][0]['cache_path'] == str(target_plugin)
     assert (target_plugin / 'skill.md').read_text(encoding='utf-8') == 'source plugin\n'
     assert (target_home / '.ccb-installed-plugins-projection.json').is_file()

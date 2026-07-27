@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.4.2-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.4.3-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.4.2 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.4.3 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.4.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.2/ccb-mobile-v8.4.2.apk)
+- [下载 CCB Mobile v8.4.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.3/ccb-mobile-v8.4.3.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -300,6 +300,30 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.4.3</b> - Provider 认证隔离、必备控制技能与可靠的 Mobile 配对和终端恢复</summary>
+
+- 将可变认证、账号、session 和存储状态隔离到每个托管 Provider 的私有 home，visible 与 headless 执行使用同一边界。
+- 外部凭据只作为单向继承来源，托管 Provider 的刷新或退出不会改写用户 shell、IDE、其他 Agent 或其他项目的登录态。
+- 即使关闭可选 skill 继承，也会为受支持的托管 Agent 提供内置 `ask` 与 `ccb-clear`；托管 Codex 还会保留 `reconnect`。
+- 可选 skill 改为逐项投影，一个损坏的外部条目不会阻断 CCB 控制技能或其他有效 skill。
+- 新增经过校验的紧凑 Relay 配对二维码，可放入 97 列终端，同时保留仅所有者可读的 PNG 兜底。
+- 通过同步 snapshot、完整重绘和自动更新 terminal handle，修复 Mobile 终端 resize 与流错误恢复竞态。
+
+</details>
+
+<details>
+<summary><b>v8.4.2</b> - Config UI 主题持久化、Relay 终端稳定传输与安全 Provider 更新</summary>
+
+- 即使 sidebar 继承到失效 Python 路径，也会使用正式版受管解释器打开 Config UI。
+- 新增可持久化的 CCB 主题选择，包括跟随系统，并在 Config UI、Rich WezTerm 与 sidebar 重启后保持一致。
+- 通过有界背压、稳定快照、增量更新和宽字符计算加固 Relay 终端流。
+- 密集配对内容无法在当前终端安全显示时，生成仅所有者可读的 PNG 二维码。
+- Provider 更新保持 npm/NVM 与 Bun 的包管理器所有权。
+- 对不可写系统安装和解析到本地依赖的异常 Registry 版本只报告、不更新。
+
+</details>
+
+<details>
 <summary><b>v8.4.0</b> - 加密 Mobile Relay、简化配对、稳定项目身份与 Codex 重连</summary>
 
 - 新增端到端加密的 CCB Mobile Relay，支持运营方签发的一次性邀请码、有边界的接入控制、多路复用流，以及官方或自建 Relay 两种部署方式。

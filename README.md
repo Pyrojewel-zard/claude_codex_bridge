@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.4.2-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.4.3-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.4.2 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.4.3 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.4.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.2/ccb-mobile-v8.4.2.apk)
+- [Download CCB Mobile v8.4.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.3/ccb-mobile-v8.4.3.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,6 +309,30 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.4.3</b> - Isolated Provider auth, guaranteed control skills, and reliable Mobile pairing and terminal recovery</summary>
+
+- Isolated mutable authentication, account, session, and storage state inside each managed Provider home for visible and headless execution.
+- Made external credentials one-way inheritance input, so managed refresh or logout cannot modify the user's shell, IDE, another Agent, or another project.
+- Guaranteed packaged `ask` and `ccb-clear` controls for supported managed Agents even when optional skill inheritance is disabled; managed Codex also keeps `reconnect`.
+- Projected optional skills independently so one broken external entry cannot suppress CCB controls or unrelated valid skills.
+- Added a compact, validated Relay pairing QR that fits a 97-column terminal while retaining the owner-only PNG fallback.
+- Made Mobile terminal resize and stream recovery race-safe with synchronized snapshots, clean repaint, and automatic handle renewal.
+
+</details>
+
+<details>
+<summary><b>v8.4.2</b> - Persistent Config UI themes, stable Relay terminal streaming, and safe Provider updates</summary>
+
+- Opened Config UI with the release-managed interpreter even when the sidebar inherited a stale Python path.
+- Added persistent CCB theme selection, including system-default behavior, across Config UI, Rich WezTerm, and sidebar restarts.
+- Stabilized Relay terminal snapshots and incremental updates with bounded backpressure and correct wide-character accounting.
+- Generated owner-only PNG pairing codes when dense payloads cannot render safely in the current terminal.
+- Preserved npm/NVM and Bun package-manager ownership during Provider updates.
+- Reported non-writable system installs and unsafe local registry dependencies without attempting an update.
+
+</details>
+
+<details>
 <summary><b>v8.4.0</b> - Encrypted Mobile Relay, simpler pairing, stable project identity, and Codex reconnect</summary>
 
 - Added end-to-end encrypted CCB Mobile Relay transport with operator-issued one-time invitations, bounded admission, multiplexed streams, and official or self-hosted deployment modes.

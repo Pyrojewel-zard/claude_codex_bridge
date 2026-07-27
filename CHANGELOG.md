@@ -1,5 +1,39 @@
 # Changelog
 
+## v8.4.3 (2026-07-27)
+
+### Managed Provider Authentication
+
+- **Authentication Is One-Way And Agent-Private**: managed visible and
+  headless provider processes now use private HOME, XDG, provider, session,
+  storage, and credential roots. Safe external credentials are inherited into
+  ordinary agent-local files without writable aliases back to user state.
+- **Global Credentials Stay Read-Only**: managed refresh and logout operations
+  cannot rewrite the user's shell, IDE, another agent, or another project's
+  authentication. Unsupported or ambiguous credential backends fail closed
+  instead of escaping the managed boundary.
+
+### Managed Control Skills
+
+- **Required CCB Controls Are Always Present**: packaged `ask` and `ccb-clear`
+  controls are projected for supported managed agents even when optional skill
+  inheritance is disabled. Managed Codex also retains its required `reconnect`
+  control.
+- **Broken Optional Skills Stay Isolated**: optional skills are projected per
+  entry, so a broken external skill cannot suppress CCB-owned controls or
+  unrelated valid skills.
+
+### Mobile Pairing And Terminal
+
+- **Relay Pairing Fits Narrow Terminals**: Relay pairing can render a compact
+  signed-capability QR that fits a 97-column terminal while retaining the
+  owner-only PNG fallback. The Mobile app validates and reconstructs the full
+  pairing payload from the compact form.
+- **Terminal Resize And Recovery Are Race-Safe**: synchronized snapshot
+  generations prevent resize/read races, resize triggers a clean repaint, and
+  the Mobile client renews terminal handles after closed, output, or stream
+  failures.
+
 ## v8.4.2 (2026-07-27)
 
 ### Config UI And Appearance
