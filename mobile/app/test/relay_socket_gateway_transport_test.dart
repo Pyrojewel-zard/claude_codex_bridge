@@ -371,7 +371,7 @@ void main() {
   );
 
   test(
-    'default relay pairing replaces one-time bootstrap with access',
+    'compact relay QR pairing replaces one-time bootstrap with access',
     () async {
       final hostSeed = List<int>.generate(32, (index) => index + 101);
       final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
@@ -385,28 +385,33 @@ void main() {
       addTearDown(relay.stop);
       final secureStore = _RelayMemorySecureStore();
       final store = GatewayHostProfileStore(secureStore: secureStore);
-      final pairing = GatewayPairingPayload.fromJson({
-        'pairing_code': 'pair-once-secret',
-        'claim_endpoint': 'https://relay.invalid/v1/pairing/claim',
-        'route_provider': 'relay',
-        'gateway_url': 'https://relay.invalid',
-        'host_id': 'rhost-demo',
-        'websocket_url': relay.origin.toString(),
-        'server_fingerprint': hostFingerprint,
-        'relay_session_id': 'relay-session-demo',
-        'relay_client_private_key_b64': _b64(
-          List<int>.generate(32, (index) => index + 1),
+      final clientPrivateKeyB64 = _b64(
+        List<int>.generate(32, (index) => index + 1),
+      );
+      final phoneNonceB64 = _b64(utf8.encode('fresh phone nonce'));
+      final capabilityPayload = _b64(
+        utf8.encode(
+          jsonEncode({
+            'typ': 'ccb-relay-rv-v1',
+            'host_id': 'rhost-demo',
+            'session_id': 'relay-session-demo',
+            'phone_nonce_b64': phoneNonceB64,
+            'aud': relay.origin.toString(),
+            'exp':
+                DateTime.now()
+                    .toUtc()
+                    .add(const Duration(minutes: 5))
+                    .millisecondsSinceEpoch ~/
+                Duration.millisecondsPerSecond,
+          }),
         ),
-        'relay_phone_nonce_b64': _b64(utf8.encode('fresh phone nonce')),
-        'relay_rendezvous_capability': 'ccb-relay-rv-v1.fake',
-        'relay_bootstrap_expires_at':
-            DateTime.now()
-                .toUtc()
-                .add(const Duration(minutes: 5))
-                .toIso8601String(),
-        'relay_bootstrap_single_use': true,
-        'scopes': ['view', 'notify', 'terminal_input'],
-      });
+      );
+      final rendezvousCapability = 'header.$capabilityPayload.signature';
+      final pairing = GatewayPairingPayload.fromQrText(
+        '$gatewayCompactRelayQrPrefix'
+        'pair-once-secret|$clientPrivateKeyB64|$hostFingerprint|s|'
+        '$rendezvousCapability',
+      );
 
       final paired = await defaultPairingClaimAndStore(
         pairing: pairing,
@@ -438,7 +443,7 @@ void main() {
       expect(persisted, contains('ccb-relay-access-v1.test.test'));
       expect(persisted, isNot(contains('pair-once-secret')));
       expect(persisted, isNot(contains('relay-session-demo')));
-      expect(persisted, isNot(contains('ccb-relay-rv-v1.fake')));
+      expect(persisted, isNot(contains(rendezvousCapability)));
     },
   );
 

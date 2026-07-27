@@ -237,6 +237,98 @@ void main() {
     },
   );
 
+  test('parses compact Relay terminal QR from signed capability fields', () {
+    const expiresAtSeconds = 1785124800;
+    final capabilityPayload = base64Url
+        .encode(
+          utf8.encode(
+            jsonEncode({
+              'typ': 'ccb-relay-rv-v1',
+              'schema_version': 2,
+              'host_id': 'relay-host-compact',
+              'session_id': 'relay-session-compact',
+              'phone_nonce_b64': 'phone-nonce-compact',
+              'aud': 'wss://47.120.71.142',
+              'exp': expiresAtSeconds,
+            }),
+          ),
+        )
+        .replaceAll('=', '');
+    final capability = 'header.$capabilityPayload.signature';
+    final compactQr =
+        '$gatewayCompactRelayQrPrefix'
+        'pair-code|client-private|sha256:host-fingerprint|o|$capability';
+
+    final pairing = GatewayPairingPayload.fromQrText(compactQr);
+
+    expect(pairing.pairingCode, 'pair-code');
+    expect(pairing.routeProvider, RouteProviderKind.relay);
+    expect(pairing.relayMode, RelayDeploymentMode.official);
+    expect(pairing.gatewayUrl, Uri.parse('https://47.120.71.142'));
+    expect(
+      pairing.claimEndpoint,
+      Uri.parse('https://47.120.71.142/v1/pairing/claim'),
+    );
+    expect(pairing.websocketUrl, Uri.parse('wss://47.120.71.142'));
+    expect(pairing.hostId, 'relay-host-compact');
+    expect(pairing.hostFingerprint, 'sha256:host-fingerprint');
+    expect(pairing.scopes, isEmpty);
+    expect(pairing.relayBootstrap?.sessionId, 'relay-session-compact');
+    expect(pairing.relayBootstrap?.clientPrivateKeyB64, 'client-private');
+    expect(pairing.relayBootstrap?.phoneNonceB64, 'phone-nonce-compact');
+    expect(pairing.relayBootstrap?.rendezvousCapability, capability);
+    expect(
+      pairing.relayBootstrapExpiresAt,
+      DateTime.fromMillisecondsSinceEpoch(
+        expiresAtSeconds * Duration.millisecondsPerSecond,
+        isUtc: true,
+      ),
+    );
+    expect(pairing.relayBootstrapSingleUse, isTrue);
+  });
+
+  test('rejects malformed or spoofed compact Relay terminal QR', () {
+    String capabilityFor(String audience) {
+      final payload = base64Url
+          .encode(
+            utf8.encode(
+              jsonEncode({
+                'typ': 'ccb-relay-rv-v1',
+                'host_id': 'relay-host',
+                'session_id': 'relay-session',
+                'phone_nonce_b64': 'phone-nonce',
+                'aud': audience,
+                'exp': 1785124800,
+              }),
+            ),
+          )
+          .replaceAll('=', '');
+      return 'header.$payload.signature';
+    }
+
+    expect(
+      () => GatewayPairingPayload.fromQrText(
+        '${gatewayCompactRelayQrPrefix}too|few|fields',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromQrText(
+        '$gatewayCompactRelayQrPrefix'
+        'code|private|fingerprint|x|${capabilityFor('wss://47.120.71.142')}',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromQrText(
+        '$gatewayCompactRelayQrPrefix'
+        'code|private|fingerprint|o|'
+        '${capabilityFor('wss://relay.example.test')}',
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('connection parser retains raw QR JSON compatibility', () {
     final rawJson = jsonEncode({
       'pairing_code': 'lan-code',

@@ -695,6 +695,76 @@ def test_high_density_pairing_qr_uses_owner_only_png_in_narrow_terminal(
     assert any("safe inline limit" in line for line in wide_output)
 
 
+def test_relay_pairing_qr_compacts_to_fit_97_column_terminal(tmp_path) -> None:
+    payload = json.dumps(
+        {
+            "pairing_code": "p" * 24,
+            "claim_endpoint": "https://47.120.71.142/v1/pairing/claim",
+            "route_provider": "relay",
+            "gateway_url": "https://47.120.71.142",
+            "scopes": [
+                "ask",
+                "content",
+                "file_download",
+                "file_upload",
+                "focus",
+                "lifecycle",
+                "message_submit",
+                "notify",
+                "terminal_input",
+                "view",
+            ],
+            "host_id": "h" * 28,
+            "relay_mode": "official",
+            "websocket_url": "wss://47.120.71.142",
+            "server_fingerprint": "f" * 50,
+            "relay_session_id": "s" * 29,
+            "relay_client_private_key_b64": "k" * 43,
+            "relay_phone_nonce_b64": "n" * 32,
+            "relay_rendezvous_capability":
+                f"{'a' * 15}.{'b' * 467}.{'c' * 86}",
+            "relay_bootstrap_expires_at": "2026-07-27T12:00:00Z",
+            "relay_bootstrap_single_use": True,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    compact_payload = mobile_update.build_compact_relay_qr_payload(payload)
+
+    assert compact_payload is not None
+    assert compact_payload.startswith(mobile_update.MOBILE_COMPACT_RELAY_QR_PREFIX)
+    compact_lines = render_terminal_qr(
+        compact_payload,
+        ansi=False,
+        quiet_zone=2,
+        compact=True,
+    )
+    assert max(map(len, compact_lines)) == 93
+
+    output: list[str] = []
+    qr_path = tmp_path / "relay-pairing-qr.png"
+    result = mobile_update._print_pairing_qr(
+        payload,
+        print_fn=output.append,
+        qr_ansi=False,
+        environ={},
+        terminal_columns=97,
+        qr_image_path=qr_path,
+    )
+
+    assert result == qr_path
+    assert qr_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert any("Compact Relay QR shown in 93 columns" in line for line in output)
+    assert any(
+        len(line) == 93
+        and set(line) <= set(" █▀▄")
+        and any(char in line for char in "█▀▄")
+        for line in output
+    )
+    assert not any("Terminal QR omitted" in line for line in output)
+    assert any(str(qr_path) in line for line in output)
+
+
 def test_dumb_terminal_disables_ansi_qr_rendering() -> None:
     assert mobile_update._terminal_supports_ansi({"TERM": "dumb"}) is False
     assert mobile_update._terminal_supports_ansi({"TERM": "xterm-256color"}) is True

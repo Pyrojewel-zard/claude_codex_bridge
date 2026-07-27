@@ -25,6 +25,7 @@ TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download"
 TAILSCALE_LOGIN_URL = "https://login.tailscale.com/start"
 DEFAULT_MOBILE_GATEWAY_LISTEN = "127.0.0.1:8787"
 MOBILE_CONNECTION_CODE_PREFIX = "ccb1_"
+MOBILE_COMPACT_RELAY_QR_PREFIX = "ccbr1_"
 CCB_MOBILE_APP_DOWNLOAD_URL_ENV = "CCB_MOBILE_APP_DOWNLOAD_URL"
 CCB_MOBILE_PAIRING_QR_OUTPUT_ENV = "CCB_MOBILE_PAIRING_QR_OUTPUT"
 MAX_INLINE_TERMINAL_QR_COLUMNS = 100
@@ -866,6 +867,7 @@ def _print_pairing_qr(
     terminal_columns: int | None = None,
     qr_image_path: str | Path | None = None,
 ) -> Path | None:
+    display_payload = payload
     plain_lines = render_terminal_qr(
         payload,
         ansi=False,
@@ -883,7 +885,22 @@ def _print_pairing_qr(
         if available_columns is not None
         else None
     )
+    image_path: Path | None = None
     if inline_limit is not None and required_columns > inline_limit:
+        compact_payload = build_compact_relay_qr_payload(payload)
+        if compact_payload is not None:
+            compact_lines = render_terminal_qr(
+                compact_payload,
+                ansi=False,
+                quiet_zone=2,
+                compact=True,
+            )
+            compact_columns = max((len(line) for line in compact_lines), default=0)
+            if compact_columns <= inline_limit:
+                display_payload = compact_payload
+                plain_lines = compact_lines
+                required_columns = compact_columns
+
         image_path = Path(qr_image_path).expanduser() if qr_image_path else (
             _pairing_qr_image_path(environ)
         )
@@ -893,22 +910,28 @@ def _print_pairing_qr(
             quiet_zone=4,
             module_size=8,
         )
-        if required_columns > available_columns:
-            reason = (
-                f"{required_columns} columns required; "
-                f"{available_columns} available"
+        if required_columns > inline_limit:
+            if required_columns > available_columns:
+                reason = (
+                    f"{required_columns} columns required; "
+                    f"{available_columns} available"
+                )
+            else:
+                reason = (
+                    f"{required_columns} columns exceeds the "
+                    f"{MAX_INLINE_TERMINAL_QR_COLUMNS}-column safe inline limit"
+                )
+            print_fn(f"Terminal QR omitted to keep it scannable ({reason}).")
+            print_fn(f"Pairing QR image: {image_path}")
+            print_fn(
+                "Open that owner-only PNG at normal size and scan it with CCB Mobile."
             )
-        else:
-            reason = (
-                f"{required_columns} columns exceeds the "
-                f"{MAX_INLINE_TERMINAL_QR_COLUMNS}-column safe inline limit"
-            )
-        print_fn(f"Terminal QR omitted to keep it scannable ({reason}).")
-        print_fn(f"Pairing QR image: {image_path}")
+            return image_path
+
         print_fn(
-            "Open that owner-only PNG at normal size and scan it with CCB Mobile."
+            f"Compact Relay QR shown in {required_columns} columns; "
+            "the complete compatibility QR is also saved below."
         )
-        return image_path
 
     use_ansi = (
         (
@@ -921,7 +944,7 @@ def _print_pairing_qr(
     )
     lines = (
         render_terminal_qr(
-            payload,
+            display_payload,
             ansi=True,
             quiet_zone=2,
             compact=True,
@@ -931,7 +954,40 @@ def _print_pairing_qr(
     )
     for line in lines:
         print_fn(line)
-    return None
+    if image_path is not None:
+        print_fn(f"Pairing QR image: {image_path}")
+        print_fn(
+            "The PNG keeps the complete legacy-compatible payload and is owner-only."
+        )
+    return image_path
+
+
+def build_compact_relay_qr_payload(pairing_payload: str) -> str | None:
+    try:
+        payload = json.loads(str(pairing_payload or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    if _clean_text(payload.get("route_provider")).lower() != "relay":
+        return None
+    mode = _clean_text(payload.get("relay_mode")).lower().replace("-", "_")
+    mode_code = {
+        "official": "o",
+        "self_hosted": "s",
+    }.get(mode)
+    if mode_code is None:
+        return None
+    fields = (
+        _clean_text(payload.get("pairing_code")),
+        _clean_text(payload.get("relay_client_private_key_b64")),
+        _clean_text(payload.get("server_fingerprint")),
+        mode_code,
+        _clean_text(payload.get("relay_rendezvous_capability")),
+    )
+    if not all(fields) or any("|" in value for value in fields):
+        return None
+    return f"{MOBILE_COMPACT_RELAY_QR_PREFIX}{'|'.join(fields)}"
 
 
 def _terminal_columns(print_fn: Callable[[str], None]) -> int | None:

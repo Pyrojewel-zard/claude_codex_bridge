@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../transport/route_provider.dart';
 
 const gatewayPairingConnectionCodePrefix = 'ccb1_';
+const gatewayCompactRelayQrPrefix = 'ccbr1_';
 const _maxGatewayPairingTextLength = 16 * 1024;
 
 class GatewayPairingException implements Exception {
@@ -99,6 +100,9 @@ class GatewayPairingPayload {
     if (trimmed.length > _maxGatewayPairingTextLength) {
       throw const FormatException('connection code is too large');
     }
+    if (trimmed.startsWith(gatewayCompactRelayQrPrefix)) {
+      return _compactRelayPairingPayload(trimmed);
+    }
     var payloadText = trimmed;
     if (trimmed.startsWith(gatewayPairingConnectionCodePrefix)) {
       final encoded = trimmed.substring(
@@ -154,6 +158,102 @@ class GatewayPairingPayload {
       if (relayBootstrapSingleUse) 'relay_bootstrap_single_use': true,
     };
   }
+}
+
+GatewayPairingPayload _compactRelayPairingPayload(String text) {
+  final fields = text.substring(gatewayCompactRelayQrPrefix.length).split('|');
+  if (fields.length != 5 || fields.any((value) => value.trim().isEmpty)) {
+    throw const FormatException('compact relay QR is incomplete');
+  }
+  final [
+    pairingCode,
+    clientPrivateKeyB64,
+    hostFingerprint,
+    modeCode,
+    rendezvousCapability,
+  ] = fields;
+  final relayMode = switch (modeCode) {
+    'o' => RelayDeploymentMode.official,
+    's' => RelayDeploymentMode.selfHosted,
+    _ => throw const FormatException('compact relay QR mode is invalid'),
+  };
+  final capability = _relayCapabilityPayload(rendezvousCapability);
+  if (_optionalText(capability['typ']) != 'ccb-relay-rv-v1') {
+    throw const FormatException('compact relay QR capability type is invalid');
+  }
+  final websocketUrl = _requiredUri(
+    capability['aud'],
+    'relay capability audience',
+  );
+  if ((websocketUrl.scheme != 'wss' && websocketUrl.scheme != 'ws') ||
+      !websocketUrl.hasAuthority ||
+      websocketUrl.userInfo.isNotEmpty ||
+      (websocketUrl.path.isNotEmpty && websocketUrl.path != '/') ||
+      websocketUrl.hasQuery ||
+      websocketUrl.hasFragment) {
+    throw const FormatException('compact relay QR audience is invalid');
+  }
+  final gatewayUrl = Uri(
+    scheme: websocketUrl.scheme == 'wss' ? 'https' : 'http',
+    host: websocketUrl.host,
+    port: websocketUrl.hasPort ? websocketUrl.port : null,
+  );
+  final expiresAt = _relayCapabilityExpiry(capability['exp']);
+  return GatewayPairingPayload.fromJson({
+    'pairing_code': pairingCode,
+    'claim_endpoint': gatewayUrl.resolve('/v1/pairing/claim').toString(),
+    'route_provider': RouteProviderKind.relay.wireName,
+    'gateway_url': gatewayUrl.toString(),
+    'scopes': const <String>[],
+    'host_id': _requiredText(capability['host_id'], 'relay capability host_id'),
+    'websocket_url': websocketUrl.toString(),
+    'relay_mode': relayMode.wireName,
+    'server_fingerprint': hostFingerprint,
+    'relay_session_id': _requiredText(
+      capability['session_id'],
+      'relay capability session_id',
+    ),
+    'relay_client_private_key_b64': clientPrivateKeyB64,
+    'relay_phone_nonce_b64': _requiredText(
+      capability['phone_nonce_b64'],
+      'relay capability phone_nonce_b64',
+    ),
+    'relay_rendezvous_capability': rendezvousCapability,
+    'relay_bootstrap_expires_at': expiresAt.toIso8601String(),
+    'relay_bootstrap_single_use': true,
+  });
+}
+
+Map<String, Object?> _relayCapabilityPayload(String capability) {
+  final segments = capability.split('.');
+  if (segments.length != 3 || segments.any((segment) => segment.isEmpty)) {
+    throw const FormatException('compact relay QR capability is invalid');
+  }
+  try {
+    final bytes = base64Url.decode(base64Url.normalize(segments[1]));
+    final decoded = jsonDecode(utf8.decode(bytes, allowMalformed: false));
+    if (decoded is Map) {
+      return {
+        for (final entry in decoded.entries) entry.key.toString(): entry.value,
+      };
+    }
+  } on FormatException {
+    // Report one stable pairing error without exposing capability contents.
+  }
+  throw const FormatException('compact relay QR capability is invalid');
+}
+
+DateTime _relayCapabilityExpiry(Object? value) {
+  if (value is! num ||
+      !value.isFinite ||
+      value <= 0 ||
+      value != value.truncateToDouble()) {
+    throw const FormatException('compact relay QR expiry is invalid');
+  }
+  return DateTime.fromMillisecondsSinceEpoch(
+    value.toInt() * Duration.millisecondsPerSecond,
+    isUtc: true,
+  );
 }
 
 class GatewayPairedHost {
