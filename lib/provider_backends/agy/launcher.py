@@ -11,6 +11,12 @@ import urllib.parse
 from pathlib import Path
 
 from provider_core.source_home import current_provider_source_home
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    ensure_private_descendant_directory,
+    ensure_private_directory,
+    ensure_private_inheritance_directory,
+)
 
 from agents.models import AgentSpec
 from cli.context import CliContext
@@ -23,15 +29,30 @@ from provider_core.caller_env import (
 )
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
+from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
 
 
 _YOLO_FLAG = '--dangerously-skip-permissions'
 _WSL_POWERSHELL = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
 _WSL_CMD = '/mnt/c/Windows/System32/cmd.exe'
-_AGY_CREDENTIAL_DIRS = ('.gemini', '.antigravity')
 _AGY_NTFS_HOMES_DIRNAME = '.ccb_agy_homes'
 _AGY_CONVERSATIONS_REL = Path('.gemini') / 'antigravity-cli' / 'conversations'
+_AGY_AUTH_FILES = (
+    Path('.gemini') / '.env',
+    Path('.gemini') / 'google_accounts.json',
+    Path('.gemini') / 'oauth_creds.json',
+    Path('.antigravity') / 'auth.json',
+    Path('.antigravity') / 'google_accounts.json',
+    Path('.antigravity') / 'oauth_creds.json',
+)
+_AGY_CONFIG_FILES = (
+    Path('.gemini') / 'settings.json',
+    Path('.gemini') / 'config' / 'config.json',
+    Path('.gemini') / 'config' / 'mcp_config.json',
+    Path('.antigravity') / 'config.json',
+    Path('.antigravity') / 'settings.json',
+)
 
 
 def _log_warn(msg: str) -> None:
@@ -123,12 +144,9 @@ def _resolve_managed_home(runtime_dir: Path) -> Path:
     """Pick where agy's managed HOME lives for this runtime_dir.
 
     Preferred: NTFS subdir under %USERPROFILE%/.ccb_agy_homes/<runtime-id>.
-    NTFS placement is required so we can use directory junctions for
-    credential dirs (.gemini, .antigravity). Junctions are the only mount
-    kind that present Attributes=Directory,ReparsePoint to Windows go
-    binaries — WSL 9p symlinks present only ReparsePoint, which makes
-    agy.exe's MkdirAll crash with "file already exists" during
-    setUpInstallationID.
+    NTFS placement lets a Windows agy executable treat the managed directory
+    as a normal Windows home.  Login/config files are copied into it; source
+    credential directories are never linked or mounted.
 
     Fallback: runtime_dir / 'home' on WSL ext4. agy.exe will likely crash
     on launch in this mode; the fallback exists only for environments
@@ -141,36 +159,22 @@ def _resolve_managed_home(runtime_dir: Path) -> Path:
     return root / runtime_id
 
 
-def _ensure_directory_junction(link: Path, target: Path) -> bool:
-    """Create an NTFS directory junction at `link` pointing at `target`.
-
-    Both paths must reside on NTFS (mounted via /mnt/<drive>). Junctions
-    do not require admin rights (unlike symlinks via `mklink /D`).
-    Returns True on success or if `link` already exists.
-    """
-    if link.is_symlink() or link.exists():
-        return True
+def _remove_windows_junction(path: Path) -> bool:
+    """Remove a legacy NTFS junction without traversing its target."""
     try:
-        link_win = subprocess.run(
-            ['wslpath', '-w', str(link)],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        ).stdout.strip()
-        target_win = subprocess.run(
-            ['wslpath', '-w', str(target)],
+        path_win = subprocess.run(
+            ['wslpath', '-w', str(path)],
             capture_output=True,
             text=True,
             check=True,
             timeout=5,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
-        _log_warn(f'wslpath conversion failed for junction {link} -> {target}: {exc}')
+        _log_warn(f'wslpath conversion failed for legacy junction {path}: {exc}')
         return False
     try:
         subprocess.run(
-            [_WSL_CMD, '/c', 'mklink', '/J', link_win, target_win],
+            [_WSL_CMD, '/c', 'rmdir', path_win],
             capture_output=True,
             text=True,
             errors='replace',
@@ -178,9 +182,57 @@ def _ensure_directory_junction(link: Path, target: Path) -> bool:
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        _log_warn(f'mklink /J {link_win} -> {target_win} failed: {exc}')
+        _log_warn(f'failed to remove legacy junction {path_win}: {exc}')
         return False
     return True
+
+
+def _detach_legacy_credential_link(target: Path, source: Path) -> bool:
+    """Detach a link/junction that aliases the external credential directory."""
+    try:
+        if target.is_symlink():
+            target.unlink()
+            return True
+        if not target.exists():
+            return True
+        if not source.exists() or not os.path.samefile(target, source):
+            return True
+        if str(target).startswith('/mnt/') and Path(_WSL_CMD).exists():
+            return _remove_windows_junction(target)
+        # On platforms where a directory junction is represented as a normal
+        # directory entry, rmdir removes the entry and never its contents.
+        target.rmdir()
+        return True
+    except OSError as exc:
+        _log_warn(f'failed to detach legacy credential link {target}: {exc}')
+        return False
+
+
+def _sync_private_file(source: Path, target: Path) -> None:
+    try:
+        copy_regular_file(source, target)
+    except OSError as exc:
+        _log_warn(f'failed to inherit {source} into managed home: {exc}')
+
+
+def _materialize_private_credentials(
+    source_home: Path,
+    managed_home: Path,
+    *,
+    profile,
+) -> None:
+    """Project auth/config source -> managed home without any reverse path."""
+    for dirname in ('.gemini', '.antigravity'):
+        if not _detach_legacy_credential_link(managed_home / dirname, source_home / dirname):
+            return
+        ensure_private_descendant_directory(managed_home, Path(dirname))
+    ensure_private_descendant_directory(managed_home, Path('.gemini') / 'config')
+    if profile is None or bool(getattr(profile, 'inherit_auth', True)):
+        for relative in _AGY_AUTH_FILES:
+            _sync_private_file(source_home / relative, managed_home / relative)
+    if profile is None or bool(getattr(profile, 'inherit_config', True)):
+        for relative in _AGY_CONFIG_FILES:
+            _sync_private_file(source_home / relative, managed_home / relative)
 
 
 def _wslpath_to_windows(wsl_path: Path) -> str | None:
@@ -340,15 +392,18 @@ def build_start_cmd(
 ) -> str:
     runtime_dir = Path(runtime_dir)
     managed_home = _resolve_managed_home(runtime_dir)
-    managed_home.mkdir(parents=True, exist_ok=True)
     credential_home = _resolve_credential_source_home() or current_provider_source_home()
-    managed_on_ntfs = str(managed_home).startswith('/mnt/')
+    if not _detach_legacy_credential_link(managed_home, credential_home):
+        raise RuntimeError(f'agy managed home aliases external credential home: {managed_home}')
+    managed_home = ensure_private_inheritance_directory(managed_home, credential_home)
+    profile = load_resolved_provider_profile(runtime_dir)
+    _materialize_private_credentials(credential_home, managed_home, profile=profile)
 
     cmd_parts = provider_start_parts('agy')
     if command.auto_permission and _YOLO_FLAG not in cmd_parts and _YOLO_FLAG not in spec.startup_args:
         cmd_parts.append(_YOLO_FLAG)
     if command.restore and not _has_restore_arg(cmd_parts) and not _has_restore_arg(spec.startup_args):
-        resume_uuid = _resolve_resume_uuid(credential_home, prepared_state)
+        resume_uuid = _resolve_resume_uuid(managed_home, prepared_state)
         if resume_uuid:
             cmd_parts.extend(['--conversation', resume_uuid])
         else:
@@ -356,40 +411,28 @@ def build_start_cmd(
     cmd_parts.extend(spec.startup_args)
     cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
     cmd = apply_provider_command_template(cmd, spec.provider_command_template)
-    env_prefix = join_env_prefix(
-        export_env_clause(provider_user_session_env()),
-        export_env_clause(spec.env),
-        export_env_clause(
-            caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
-        ),
-    )
-
-    for cred_dir in _AGY_CREDENTIAL_DIRS:
-        src = credential_home / cred_dir
-        tgt = managed_home / cred_dir
-        if tgt.is_symlink() or tgt.exists():
-            continue
-        if not src.exists():
-            _log_warn(f'credential source missing, skipping link: {src}')
-            continue
-        if managed_on_ntfs and str(src).startswith('/mnt/'):
-            _ensure_directory_junction(tgt, src)
-        else:
-            try:
-                tgt.symlink_to(src, target_is_directory=True)
-            except OSError as exc:
-                _log_warn(f'failed to symlink {tgt} -> {src}: {exc}')
-
     overrides = {'HOME': str(managed_home), 'USERPROFILE': str(managed_home)}
     if "WSL_DISTRO_NAME" in os.environ:
-        wslenv_additions = "HOME/p:USERPROFILE/p"
+        appdata_root = ensure_private_directory(managed_home / 'AppData')
+        roaming_dir = ensure_private_directory(appdata_root / 'Roaming')
+        local_dir = ensure_private_directory(appdata_root / 'Local')
+        overrides['APPDATA'] = str(roaming_dir)
+        overrides['LOCALAPPDATA'] = str(local_dir)
+        wslenv_additions = "HOME/p:USERPROFILE/p:APPDATA/p:LOCALAPPDATA/p"
         existing_wslenv = os.environ.get("WSLENV", "")
         if existing_wslenv:
             overrides['WSLENV'] = f"{wslenv_additions}:{existing_wslenv}"
         else:
             overrides['WSLENV'] = wslenv_additions
-    override_exports = ' '.join(f"{k}={shlex.quote(v)}" for k, v in overrides.items())
-    env_prefix = f"export {override_exports}; {env_prefix}" if env_prefix else f"export {override_exports}"
+    env_prefix = join_env_prefix(
+        export_env_clause(provider_user_session_env()),
+        export_env_clause(spec.env),
+        # Private roots must win over inherited/user environment values.
+        export_env_clause(overrides),
+        export_env_clause(
+            caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
+        ),
+    )
 
     if env_prefix:
         return f'{env_prefix}; {cmd}'

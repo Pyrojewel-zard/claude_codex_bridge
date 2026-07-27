@@ -18,6 +18,11 @@ from provider_core.memory_projection import (
     memory_projection_result,
     record_memory_projection_event,
 )
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    ensure_private_directory,
+    ensure_private_inheritance_directory,
+)
 from provider_core.projected_assets import (
     copy_projected_tree_to_cache,
     projected_path_is_owned,
@@ -123,11 +128,13 @@ def materialize_codex_home_config(
 ) -> Path:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
-    target_home.mkdir(parents=True, exist_ok=True)
-    (target_home / 'sessions').mkdir(parents=True, exist_ok=True)
+    target_home = ensure_private_inheritance_directory(target_home, source_home)
+    ensure_private_directory(target_home / 'sessions')
 
     target_config = target_home / 'config.toml'
     source_config = source_home / 'config.toml'
+    if target_config.is_symlink():
+        target_config.unlink()
     authority = codex_api_authority(profile)
     inherited_assets_enabled = not _role_command_policy_disables_inherited_assets(command_policy)
 
@@ -949,13 +956,25 @@ def _sync_auth_file(source: Path, target: Path, *, profile) -> None:
     if not source.is_file():
         target.unlink(missing_ok=True)
         return
-    _sync_file(source, target)
+    try:
+        copied = copy_regular_file(source, target)
+    except OSError:
+        copied = False
+    if copied:
+        try:
+            os.chmod(target, 0o600)
+        except Exception:
+            pass
 
 
 def _write_auth_file(target: Path, api_key: str) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(target.parent)
     payload = json.dumps({'OPENAI_API_KEY': api_key}, ensure_ascii=False, separators=(',', ':'))
-    target.write_text(f'{payload}\n', encoding='utf-8')
+    atomic_write_text(target, f'{payload}\n')
+    try:
+        os.chmod(target, 0o600)
+    except Exception:
+        pass
 
 
 def _materialize_auth_sidecars(
@@ -990,8 +1009,7 @@ def _materialize_auth_sidecars(
     for name in sorted(requested_sidecars):
         source = source_home / name
         target = target_home / name
-        if source.is_file():
-            _sync_secret_file(source, target)
+        if _sync_secret_file(source, target):
             projected.append(name)
         elif name in previous_sidecars:
             target.unlink(missing_ok=True)
@@ -1029,20 +1047,21 @@ def _is_safe_codex_auth_sidecar_name(name: str) -> bool:
     return lower.endswith('.config.toml') or any(token in lower for token in ('auth', 'credential', 'key', 'token'))
 
 
-def _sync_secret_file(source: Path, target: Path) -> None:
+def _sync_secret_file(source: Path, target: Path) -> bool:
     source = Path(source).expanduser()
     target = Path(target).expanduser()
-    if _same_path(source, target):
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    if not copy_regular_file(source, target):
+        return False
     try:
         os.chmod(target, 0o600)
     except Exception:
         pass
+    return True
 
 
 def _valid_codex_auth_file(path: Path) -> bool:
+    if Path(path).is_symlink():
+        return False
     try:
         payload = json.loads(Path(path).read_text(encoding='utf-8'))
     except Exception:
@@ -1053,9 +1072,11 @@ def _valid_codex_auth_file(path: Path) -> bool:
 def _atomic_sync_secret_file(source: Path, target: Path) -> None:
     source = Path(source).expanduser()
     target = Path(target).expanduser()
-    if _same_path(source, target):
+    if Path(os.path.abspath(source)) == Path(os.path.abspath(target)):
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if not source.is_file() or source.is_symlink():
+        raise ValueError(f'Codex auth source must be a regular file: {source}')
+    ensure_private_directory(target.parent)
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{target.name}.ccb-auth-', dir=str(target.parent))
     os.close(fd)
     tmp_path = Path(tmp_name)

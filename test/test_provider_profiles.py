@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,9 @@ from agents.models import (
 from cli.services.role_command_policy import RoleCommandPolicy
 import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
+import provider_backends.droid.home as droid_home_runtime
 from provider_backends.droid.home import materialize_droid_home_config
+import provider_backends.gemini.launcher_runtime.home as gemini_home_runtime
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 from provider_backends.qwen.home import materialize_qwen_home_config
 import provider_core.projected_assets as projected_assets
@@ -328,6 +331,30 @@ def test_refresh_codex_auth_projection_preserves_target_when_source_is_invalid(
     assert result.refreshed is False
     assert 'missing or invalid' in result.detail
     assert (target_home / 'auth.json').read_text(encoding='utf-8') == target_auth
+
+
+def test_refresh_codex_auth_projection_rejects_symlink_source(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    external_home = tmp_path / 'external'
+    source_home.mkdir()
+    target_home.mkdir()
+    external_home.mkdir()
+    external_auth = external_home / 'auth.json'
+    external_auth.write_text('{"tokens":{"refresh_token":"external"}}\n', encoding='utf-8')
+    (source_home / 'auth.json').symlink_to(external_auth)
+    target_auth = '{"tokens":{"refresh_token":"agent-local"}}\n'
+    (target_home / 'auth.json').write_text(target_auth, encoding='utf-8')
+
+    result = codex_home_config.refresh_codex_auth_projection(
+        target_home,
+        source_home=source_home,
+    )
+
+    assert result.refreshed is False
+    assert 'missing or invalid' in result.detail
+    assert (target_home / 'auth.json').read_text(encoding='utf-8') == target_auth
+    assert external_auth.read_text(encoding='utf-8') == '{"tokens":{"refresh_token":"external"}}\n'
 
 
 def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monkeypatch) -> None:
@@ -1094,16 +1121,17 @@ def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_p
     assert (target_home / 'skills.ccb-projection.json').is_file()
 
 
-def test_materialize_codex_home_config_leaves_source_home_assets_in_place(tmp_path: Path) -> None:
+def test_materialize_codex_home_config_rejects_source_home_as_writable_target(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     (source_home / 'skills').mkdir(parents=True, exist_ok=True)
     (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
 
-    codex_home_config.materialize_codex_home_config(
-        source_home,
-        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
-        source_home=source_home,
-    )
+    with pytest.raises(ValueError, match='inheritance target must differ from source'):
+        codex_home_config.materialize_codex_home_config(
+            source_home,
+            profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+            source_home=source_home,
+        )
 
     assert not (source_home / 'skills').is_symlink()
     assert (source_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
@@ -2596,14 +2624,25 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
     calls: list[list[str]] = []
 
     class Result:
-        returncode = 0
-        stdout = json.dumps({'claudeAiOauth': {'refreshToken': 'keychain-refresh-token'}})
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
 
     def fake_run(argv, **kwargs):
         calls.append([str(part) for part in argv])
         assert kwargs['capture_output'] is True
         assert kwargs['text'] is True
-        return Result()
+        command = str(argv[1])
+        service = str(argv[argv.index('-s') + 1])
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            return Result(
+                0,
+                json.dumps({'claudeAiOauth': {'refreshToken': 'keychain-refresh-token'}}),
+            )
+        if command == 'add-generic-password':
+            return Result(0)
+        return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
@@ -2623,9 +2662,21 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         'Claude Code-credentials',
         '-w',
     ]
+    managed_service = claude_home_runtime._managed_macos_keychain_service(layout)
+    assert managed_service != 'Claude Code-credentials'
+    assert any(
+        call[1] == 'add-generic-password'
+        and call[call.index('-s') + 1] == managed_service
+        for call in calls
+    )
+    assert not any(
+        call[1] in {'add-generic-password', 'delete-generic-password'}
+        and call[call.index('-s') + 1] == 'Claude Code-credentials'
+        for call in calls
+    )
 
 
-def test_materialize_claude_home_config_projects_macos_keychain_preferences(
+def test_materialize_claude_home_config_does_not_project_macos_keychain_preferences(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2643,10 +2694,11 @@ def test_materialize_claude_home_config_projects_macos_keychain_preferences(
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
-    assert target_plist.read_text(encoding='utf-8') == source_plist.read_text(encoding='utf-8')
+    assert not target_plist.exists()
+    assert source_plist.is_file()
 
 
-def test_materialize_claude_home_config_projects_macos_keychains_when_preferences_absent(
+def test_materialize_claude_home_config_never_links_macos_keychains_when_preferences_absent(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2660,8 +2712,29 @@ def test_materialize_claude_home_config_projects_macos_keychains_when_preference
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_keychains = target_home / 'Library' / 'Keychains'
-    assert target_keychains.is_symlink()
-    assert target_keychains.resolve() == source_keychains.resolve()
+    assert not target_keychains.exists()
+    assert not target_keychains.is_symlink()
+
+
+def test_materialize_claude_home_config_detaches_legacy_macos_keychains_link(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_keychains = source_home / 'Library' / 'Keychains'
+    target_keychains = target_home / 'Library' / 'Keychains'
+    source_keychains.mkdir(parents=True, exist_ok=True)
+    target_keychains.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(source_keychains, target_keychains)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert not target_keychains.exists()
+    assert not target_keychains.is_symlink()
+    assert source_keychains.is_dir()
 
 
 def test_materialize_claude_home_config_does_not_copy_keychain_preferences_on_non_darwin(
@@ -2748,8 +2821,11 @@ def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_serv
     def fake_run(argv, **kwargs):
         calls.append([str(part) for part in argv])
         service = calls[-1][calls[-1].index('-s') + 1]
-        if service == 'Claude Code':
+        command = str(argv[1])
+        if command == 'find-generic-password' and service == 'Claude Code':
             return Result(0, json.dumps({'claudeAiOauth': {'refreshToken': 'legacy-refresh-token'}}))
+        if command == 'add-generic-password':
+            return Result(0)
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
@@ -2761,8 +2837,13 @@ def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_serv
 
     payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
     assert payload['claudeAiOauth']['refreshToken'] == 'legacy-refresh-token'
-    queried_services = [call[call.index('-s') + 1] for call in calls]
-    assert queried_services == ['Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code']
+    queried_services = [
+        call[call.index('-s') + 1]
+        for call in calls
+        if call[1] == 'find-generic-password'
+    ]
+    assert queried_services[:3] == ['Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code']
+    assert queried_services[3] == claude_home_runtime._managed_macos_keychain_service(layout)
     assert all('-a' in call for call in calls)
 
 
@@ -2806,8 +2887,11 @@ def test_materialize_claude_home_config_reads_explicit_macos_keychain_override(
     def fake_run(argv, **_kwargs):
         calls.append([str(part) for part in argv])
         service = calls[-1][calls[-1].index('-s') + 1]
-        if service == 'Claude Code-credentials-account-a':
+        command = str(argv[1])
+        if command == 'find-generic-password' and service == 'Claude Code-credentials-account-a':
             return Result(0, json.dumps({'claudeAiOauth': {'refreshToken': 'override-refresh-token'}}))
+        if command == 'add-generic-password':
+            return Result(0)
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
@@ -2821,6 +2905,12 @@ def test_materialize_claude_home_config_reads_explicit_macos_keychain_override(
     payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
     assert payload['claudeAiOauth']['refreshToken'] == 'override-refresh-token'
     assert calls[0][calls[0].index('-s') + 1] == 'Claude Code-credentials-account-a'
+    assert any(
+        call[1] == 'add-generic-password'
+        and call[call.index('-s') + 1]
+        == claude_home_runtime._managed_macos_keychain_service(layout)
+        for call in calls
+    )
 
 
 def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(tmp_path: Path) -> None:
@@ -3258,6 +3348,104 @@ def test_materialize_droid_home_config_preserves_unmarked_inherited_skills(tmp_p
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
+def test_materialize_droid_home_config_copies_auth_without_linking_source(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-factory'
+    target_home = tmp_path / 'managed-factory'
+    source_home.mkdir(parents=True)
+    (source_home / 'auth.encrypted').write_text('source-auth\n', encoding='utf-8')
+    (source_home / 'auth.v2.file').write_text('source-v2-auth\n', encoding='utf-8')
+    (source_home / 'auth.v2.key').write_text('source-v2-key\n', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    target_auth = target_home / 'auth.encrypted'
+    assert target_auth.read_text(encoding='utf-8') == 'source-auth\n'
+    target_auth.write_text('managed-auth\n', encoding='utf-8')
+    assert (source_home / 'auth.encrypted').read_text(encoding='utf-8') == 'source-auth\n'
+    assert (target_home / 'auth.v2.file').read_text(encoding='utf-8') == 'source-v2-auth\n'
+    assert (target_home / 'auth.v2.key').read_text(encoding='utf-8') == 'source-v2-key\n'
+
+
+def test_materialize_droid_home_config_reads_current_factory_home_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_os_home = tmp_path / 'source-os-home'
+    source_factory_home = source_os_home / '.factory'
+    target_factory_home = tmp_path / 'managed-os-home' / '.factory'
+    source_factory_home.mkdir(parents=True)
+    (source_factory_home / 'auth.encrypted').write_text(
+        'source-auth\n',
+        encoding='utf-8',
+    )
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.delenv('FACTORY_HOME', raising=False)
+    monkeypatch.delenv('FACTORY_ROOT', raising=False)
+    monkeypatch.setenv('FACTORY_HOME_OVERRIDE', str(source_os_home))
+
+    materialize_droid_home_config(target_factory_home)
+
+    assert (target_factory_home / 'auth.encrypted').read_text(encoding='utf-8') == (
+        'source-auth\n'
+    )
+
+
+def test_materialize_droid_home_config_converts_read_only_keyring_auth_to_private_files(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'source-factory'
+    target_home = tmp_path / 'managed-factory'
+    source_ciphertext = source_home / 'auth.v2.keyring'
+    source_ciphertext.parent.mkdir(parents=True)
+    source_ciphertext.write_text('source-keyring-ciphertext\n', encoding='utf-8')
+    key_text = base64.b64encode(b'k' * 32).decode('ascii')
+    keyring_calls: list[tuple[str, str]] = []
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(droid_home_runtime, '_system_factory_home', lambda: source_home)
+
+    def fake_read(service: str, account: str, **_kwargs) -> str:
+        keyring_calls.append((service, account))
+        return key_text
+
+    monkeypatch.setattr(droid_home_runtime, 'read_keyring_password', fake_read)
+
+    materialize_droid_home_config(target_home)
+
+    assert keyring_calls == [('Factory CLI', 'auth-encryption-key')]
+    assert (target_home / 'auth.v2.file').read_text(encoding='utf-8') == (
+        'source-keyring-ciphertext\n'
+    )
+    assert (target_home / 'auth.v2.key').read_text(encoding='utf-8').strip() == key_text
+    assert source_ciphertext.read_text(encoding='utf-8') == 'source-keyring-ciphertext\n'
+    (target_home / 'auth.v2.file').unlink()
+    assert source_ciphertext.is_file()
+
+
+def test_materialize_droid_home_config_rejects_invalid_keyring_key(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'source-factory'
+    target_home = tmp_path / 'managed-factory'
+    source_home.mkdir(parents=True)
+    (source_home / 'auth.v2.keyring').write_text('ciphertext\n', encoding='utf-8')
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(droid_home_runtime, '_system_factory_home', lambda: source_home)
+    monkeypatch.setattr(
+        droid_home_runtime,
+        'read_keyring_password',
+        lambda *_args, **_kwargs: 'not-a-factory-key',
+    )
+
+    materialize_droid_home_config(target_home)
+
+    assert not (target_home / 'auth.v2.file').exists()
+    assert not (target_home / 'auth.v2.key').exists()
+
+
 def test_materialize_droid_home_config_seeds_agent_local_plugins_and_rebases_registry_paths(
     tmp_path: Path,
 ) -> None:
@@ -3394,6 +3582,24 @@ def test_materialize_qwen_home_config_seeds_isolated_extensions(tmp_path: Path) 
         source_home=source_home,
     )
     assert not second_extensions.exists()
+
+
+def test_materialize_qwen_home_config_copies_login_state_one_way(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-qwen'
+    target_home = tmp_path / 'managed-qwen'
+    source_home.mkdir(parents=True)
+    (source_home / 'oauth_creds.json').write_text(
+        '{"refresh_token":"source"}\n',
+        encoding='utf-8',
+    )
+    (source_home / 'settings.json').write_text('{"authType":"oauth"}\n', encoding='utf-8')
+
+    materialize_qwen_home_config(target_home, source_home=source_home)
+
+    target_auth = target_home / 'oauth_creds.json'
+    target_auth.unlink()
+    assert (source_home / 'oauth_creds.json').is_file()
+    assert not target_home.is_symlink()
 
 
 def test_provider_extension_projections_remove_owned_state_for_hard_role_policy(
@@ -4053,6 +4259,84 @@ def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_aut
     assert payload['security']['auth']['selectedType'] == 'oauth-personal'
     assert json.loads((layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
     assert json.loads((layout.gemini_dir / 'google_accounts.json').read_text(encoding='utf-8'))['active'] == 'user@example.test'
+
+
+def test_materialize_gemini_home_config_imports_system_keyring_oauth_one_way(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_settings.parent.mkdir(parents=True)
+    source_settings.write_text(
+        json.dumps(
+            {'security': {'auth': {'selectedType': 'oauth-personal'}}},
+            ensure_ascii=False,
+        ),
+        encoding='utf-8',
+    )
+    stored = json.dumps(
+        {
+            'serverName': 'main-account',
+            'token': {
+                'accessToken': 'source-access-token',
+                'refreshToken': 'source-refresh-token',
+                'tokenType': 'Bearer',
+                'scope': 'scope-a scope-b',
+                'expiresAt': 1234567890,
+            },
+        }
+    )
+    keyring_calls: list[tuple[str, str]] = []
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(gemini_home_runtime, '_system_home_root', lambda: source_home)
+
+    def fake_read(service: str, account: str, **_kwargs) -> str:
+        keyring_calls.append((service, account))
+        return stored
+
+    monkeypatch.setattr(gemini_home_runtime, 'read_keyring_password', fake_read)
+
+    layout = materialize_gemini_home_config(target_home)
+
+    assert keyring_calls == [('gemini-cli-oauth', 'main-account')]
+    projected = json.loads(
+        (layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8')
+    )
+    assert projected == {
+        'access_token': 'source-access-token',
+        'refresh_token': 'source-refresh-token',
+        'token_type': 'Bearer',
+        'scope': 'scope-a scope-b',
+        'expiry_date': 1234567890,
+    }
+    (layout.gemini_dir / 'oauth_creds.json').unlink()
+    assert source_settings.is_file()
+
+
+def test_materialize_gemini_home_config_does_not_query_keyring_for_fixture_source(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'fixture-home'
+    target_home = tmp_path / 'managed-home'
+    settings = source_home / '.gemini' / 'settings.json'
+    settings.parent.mkdir(parents=True)
+    settings.write_text(
+        '{"security":{"auth":{"selectedType":"oauth-personal"}}}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        gemini_home_runtime,
+        'read_keyring_password',
+        lambda *_args, **_kwargs: pytest.fail('explicit fixture must not query OS keyring'),
+    )
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    assert not (layout.gemini_dir / 'oauth_creds.json').exists()
 
 
 def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_when_auth_not_inherited(tmp_path: Path) -> None:

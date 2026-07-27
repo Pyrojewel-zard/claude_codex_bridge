@@ -195,6 +195,10 @@ Rules:
   `config.json.installedPlugins` entries plus installed plugin trees are
   `PROJECTED_CONFIG`, while their remaining contents are provider-owned
   session/auth/cache evidence rather than project worktree content
+- Droid uses
+  `.ccb/agents/<agent>/provider-state/droid/home/` as its private OS home and
+  the `.factory/` child as its Factory state root; auth, sessions, plugins, and
+  settings must not escape that pair
 - sharing is allowed only after content-addressed whole-bundle storage and
   atomic replacement are implemented
 - default behavior remains per-agent/per-home storage
@@ -227,6 +231,13 @@ isolated provider startup work. Immutable inherited assets may use a symlink
 or a content-addressed shared-cache route when the target is confirmed to be a
 CCB-managed projection. If symlinks are unavailable, startup may fall back to a
 marked copy.
+
+Authentication and login-state projection is stricter than ordinary immutable
+asset projection. It follows
+[docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md):
+credential and account paths are one-way ordinary copies into the managed home
+and must never be symlinks, junctions, mounts, hard links, or reverse-synced
+aliases to user state.
 
 Examples:
 
@@ -282,10 +293,17 @@ Examples:
 - Claude `.config/claude-code/auth.json`
 - Gemini `.gemini/oauth_creds.json`
 - Gemini `.gemini/google_accounts.json`
+- Gemini `.gemini/gemini-credentials.json` and provider OAuth token files
+- Droid `.factory/auth.v2.file`, `.factory/auth.v2.key`, and alternate auth
+  records
+- Cursor platform-specific `auth.json`
+- OpenCode `auth.json` and `account.json`
+- Kiro's filtered `data.sqlite3`, because it still contains auth rows
+- auth-bearing mixed records such as DeepSeek `settings.json`, Kimi
+  `config.toml`, Crush `providers.json`, and Z.ai `user-settings.json`
 - API key material
 - OAuth credential files
 - macOS Keychain-derived Claude credentials
-- macOS Claude `Library/Keychains` fallback symlink
 - `.env` files containing provider credentials
 - Copilot `config.json`, because installed-plugin metadata shares that file
   with authentication and application state, plus Copilot `mcp-secrets/` and
@@ -411,10 +429,13 @@ Rules:
 - If runtime state is relocated on WSL-mounted filesystems, profile/runtime
   state that affects startup should follow the same effective runtime state root
   unless the user explicitly opts into an external path.
-- macOS Keychain-derived credentials must remain inside agent-scoped managed
-  homes and must not be shared. When `com.apple.security.plist` is absent,
-  the managed Claude `Library/Keychains` fallback symlink is also secret auth
-  compatibility state and must not be treated as cache or unknown residue.
+- macOS Keychain-derived credentials must remain agent-scoped and must not be
+  shared. Converted Gemini, Cursor, and Droid credentials live only in managed
+  homes. Managed Claude must not copy
+  `com.apple.security.plist` or link its `Library/Keychains` path to the user's
+  Keychain; its only writable Keychain target is an agent-derived namespaced
+  service. Recognized legacy links/preferences are detached or removed without
+  traversing the source.
 
 ## 5. Code-Level Changes
 
@@ -711,7 +732,6 @@ Must remain secret and agent-local:
 - `.claude.json`
 - `.claude/.credentials.json`
 - `.config/claude-code/auth.json`
-- `Library/Keychains` macOS fallback symlink
 
 Legacy rebuildable cache:
 
@@ -750,6 +770,14 @@ Must remain secret and agent-local:
 
 - `.gemini/oauth_creds.json`
 - `.gemini/google_accounts.json`
+- `.gemini/gemini-credentials.json`
+- `.gemini/mcp-oauth-tokens.json`
+- `.gemini/a2a-oauth-tokens.json`
+
+Managed Gemini must force both supported file-storage modes. An existing
+external `gemini-cli-oauth` entry may be read only to seed a private managed
+file; the managed process must never select, update, or delete that external
+credential.
 
 User-scoped rebuildable cache:
 
@@ -824,9 +852,15 @@ WSL:
 
 macOS:
 
-- Claude Keychain-derived credentials must remain per managed home
-- the managed Claude `Library/Keychains` fallback symlink must remain
-  agent-local, classified as secret, and never followed into diagnostics bundles
+- Claude Keychain-derived credentials must remain per managed home; the
+  writable secure-storage record is an agent-derived namespaced service, never
+  an ordinary source service
+- managed Claude must remove a recognized legacy `Library/Keychains` link
+  without following it and must not create a replacement
+- Cursor and Gemini Keychain entries are read-only inheritance sources whose
+  converted files remain inside the managed home
+- Kiro must fail closed while the installed CLI cannot select a private
+  credential backend
 - shared binary/cache logic must not move or export Keychain-derived auth files
 - cleanup must handle symlink metadata conservatively
 
@@ -1078,8 +1112,11 @@ Implemented:
   boundary total and identify the user-scoped Provider cache without
   recursively scanning it, so legacy external cache is no longer invisible
   beside `.ccb` totals without slowing normal diagnostics.
-- managed Claude startup exports `DISABLE_AUTOUPDATER=1`, consumes the
-  user-installed executable, and does not create a CCB binary cache.
+- managed Claude startup exports `DISABLE_AUTOUPDATER=1`,
+  `DISABLE_LOGIN_COMMAND=1`, and `DISABLE_LOGOUT_COMMAND=1`, consumes the
+  user-installed executable, and does not create a CCB binary cache or writable
+  alias to the user's ordinary Keychain services. On macOS, the only writable
+  secure-storage target is an agent-derived namespaced service.
 - managed Gemini startup disables update checks and routes npm/XDG cache to one
   user-scoped `~/.cache/ccb/provider-cache/gemini/` tree without recursive
   cache nesting.

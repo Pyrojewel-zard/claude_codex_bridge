@@ -20,6 +20,11 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".pi-session",
             command_builder=_build_command,
             env_builder=_build_env,
+            private_path_env_names=(
+                "PI_CODING_AGENT_DIR",
+                "PI_CODING_AGENT_SESSION_DIR",
+            ),
+            private_raw_env_names=("PI_SKIP_VERSION_CHECK", "PI_TELEMETRY"),
             observer=observe_pi_json_output,
             output_kind="jsonl",
             mode="pi_run",

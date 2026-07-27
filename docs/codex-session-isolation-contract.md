@@ -17,6 +17,8 @@ This document complements, but does not replace, the project startup contract in
 Storage class naming, diagnostics classification, shared-cache eligibility, and
 cleanup sequencing for managed Codex files are defined by
 [docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md).
+Authentication projection and logout isolation must also satisfy
+[docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
 
 Detailed implementation sequencing lives in
 [docs/codex-managed-home-isolation-plan.md](/home/bfly/yunwei/ccb_source/docs/codex-managed-home-isolation-plan.md).
@@ -175,7 +177,11 @@ When `ccb` starts a managed Codex agent:
 
 - it must explicitly set the effective `CODEX_HOME`
 - it must explicitly set the effective `CODEX_SESSION_ROOT`
+- it must explicitly set `CODEX_SQLITE_HOME == CODEX_HOME`
 - it must ensure `CODEX_SESSION_ROOT == CODEX_HOME/sessions`
+- on WSL, it must explicitly set `USERPROFILE == CODEX_HOME` and forward the
+  managed Codex roots through `WSLENV`; it must not inherit a Windows-side
+  global Codex home
 - it must create the managed home and session root before launching Codex
 - it must materialize required Codex config, credential, and credential-sidecar
   projections into the managed home without treating them as session identity

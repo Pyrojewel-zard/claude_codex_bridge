@@ -18,6 +18,7 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".omp-session",
             command_builder=_build_command,
             env_builder=_build_env,
+            private_path_env_names=("PI_CODING_AGENT_SESSION_DIR",),
             observer=observe_pi_json_output,
             output_kind="jsonl",
             mode="omp_run",

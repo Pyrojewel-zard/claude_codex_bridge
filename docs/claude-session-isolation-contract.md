@@ -20,6 +20,8 @@ cleanup sequencing for managed Claude files are defined by
 [docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md).
 Claude binary/version cache specifics are further narrowed by
 [docs/claude-binary-cache-dedup-plan.md](/home/bfly/yunwei/ccb_source/docs/claude-binary-cache-dedup-plan.md).
+Authentication projection and logout isolation must also satisfy
+[docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
 
 ## 2. Identity Model
 
@@ -71,13 +73,12 @@ Inside that home, the managed Claude state is:
   - only when inherited Claude Code login auth is projected into the managed home
   - on macOS, this may be materialized from the user's Claude Code Keychain
     entry when that entry can be read during startup
-- `.ccb/agents/<agent>/provider-state/claude/home/Library/Preferences/com.apple.security.plist`
-  - on macOS, copied as Keychain preference compatibility state when the source
-    preference exists
-- `.ccb/agents/<agent>/provider-state/claude/home/Library/Keychains`
-  - on macOS, a symlink to the user's `~/Library/Keychains` only when
-    `com.apple.security.plist` is absent and auth inheritance is enabled
-  - this link is auth compatibility state, not project evidence or cache
+- `Claude Code-credentials-<agent-home-hash>` in macOS Keychain, or the
+  equivalent custom-OAuth prefix
+  - only when the current Claude release requires secure storage in addition to
+    the private credential file
+  - the suffix is derived from the agent-private `.claude` path and must never
+    equal an ordinary external Claude service name
 - `.ccb/agents/<agent>/provider-state/claude/home/.config/claude-code/auth.json`
   - copied only for compatibility with older or alternate Claude Code login
     cache layouts
@@ -153,10 +154,19 @@ credentials.
 When `ccb` starts a managed Claude agent:
 
 - it must explicitly set the effective `HOME`
+- it must explicitly set `CLAUDE_CONFIG_DIR == <claude_home>/.claude`
+- it must explicitly set
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR == <claude_home>/.claude`
 - it must explicitly set the effective `CLAUDE_PROJECTS_ROOT`
 - it must ensure `CLAUDE_PROJECTS_ROOT == <claude_home>/.claude/projects`
+- it must explicitly set
+  `CLAUDE_SESSION_ENV_ROOT == <claude_home>/.claude/session-env`
 - it must use the user-installed Claude executable, disable Claude self-update
-  in the managed pane, and must not create a project-scoped CCB binary cache
+  and both provider login/logout commands in the managed pane, and must not
+  create a project-scoped CCB binary cache
+- it must export `DISABLE_LOGIN_COMMAND=1` and `DISABLE_LOGOUT_COMMAND=1` so a
+  managed Claude command cannot replace or remove ambient macOS Keychain login
+  state
 - it may detach only recognized CCB-owned legacy binary-cache symlinks from the
   managed home; it must preserve foreign symlinks and defer cache-payload
   deletion to explicit stopped-project cleanup
@@ -203,11 +213,15 @@ When `ccb` starts a managed Claude agent:
   read the user's Claude Code Keychain item and materialize the equivalent
   managed `.claude/.credentials.json` cache; projected secret material remains
   provider state and must be excluded from diagnostics
-- if `~/Library/Preferences/com.apple.security.plist` does not exist on macOS,
-  managed login-auth projection may instead link the managed
-  `Library/Keychains` path to the user's `~/Library/Keychains`; this link must
-  be removed when auth inheritance is disabled and must be classified as secret
-  auth state by storage diagnostics
+- when the installed Claude release requires Keychain-backed secure storage,
+  startup may seed only the agent-derived namespaced service selected from
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR`; refresh and cleanup may mutate only that
+  service, while ordinary source Claude services remain read-only
+- managed login-auth projection must not copy
+  `~/Library/Preferences/com.apple.security.plist` or link the managed
+  `Library/Keychains` path to the user's Keychains; startup must remove a
+  recognized legacy managed link and legacy copied preference without
+  traversing the user's Keychain
 - managed login-auth projection may also synchronize older or alternate Claude
   Code credential cache artifacts such as `.config/claude-code/auth.json` when
   they exist in the source home
@@ -433,6 +447,5 @@ Diagnostics export should include:
   home
 
 Diagnostics export must exclude copied credential files and projected trust/auth
-state such as `.claude/.credentials.json`, `.config/claude-code/auth.json`,
-`.claude.json`, and the macOS `Library/Keychains` fallback link. Support
-bundles must not follow that symlink.
+state such as `.claude/.credentials.json`, `.config/claude-code/auth.json`, and
+`.claude.json`. Support bundles must not follow any legacy Keychain link.

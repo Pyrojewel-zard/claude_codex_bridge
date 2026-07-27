@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    ensure_private_directory,
+    ensure_private_inheritance_directory,
+)
 from provider_core.source_home import current_provider_source_home
 
 from .skills import materialize_grok_skills
@@ -24,15 +28,15 @@ def materialize_grok_home(
 ) -> Path:
     target = Path(target_home).expanduser()
     source = Path(source_home).expanduser() if source_home is not None else current_provider_source_home()
-    target.mkdir(parents=True, exist_ok=True)
-    (target / '.grok').mkdir(parents=True, exist_ok=True)
+    target = ensure_private_inheritance_directory(target, source)
+    ensure_private_directory(target / '.grok')
 
     if _inherits_auth(profile):
         for relative in _GROK_AUTH_FILES:
-            _sync_file(source / relative, target / relative)
+            copy_regular_file(source / relative, target / relative)
     if _inherits_config(profile):
         for relative in _GROK_CONFIG_FILES:
-            _sync_file(source / relative, target / relative)
+            copy_regular_file(source / relative, target / relative)
     materialize_grok_skills(target, profile=profile)
     return target
 
@@ -43,18 +47,5 @@ def _inherits_auth(profile) -> bool:
 
 def _inherits_config(profile) -> bool:
     return bool(getattr(profile, 'inherit_config', True))
-
-
-def _sync_file(source: Path, target: Path) -> None:
-    if not source.is_file():
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if target.is_symlink() or target.exists():
-            target.unlink()
-    except FileNotFoundError:
-        pass
-    shutil.copy2(source, target)
-
 
 __all__ = ['materialize_grok_home']

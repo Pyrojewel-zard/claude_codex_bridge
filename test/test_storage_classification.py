@@ -181,6 +181,39 @@ def test_provider_home_classifier_preserves_secret_precedence_and_unknowns(tmp_p
     assert unknown.provider == 'unknownai'
 
 
+@pytest.mark.parametrize(
+    ('provider', 'remainder'),
+    (
+        ('deepseek', ('.deepcode', 'settings.json')),
+        ('kimi', ('.kimi-code', 'config.toml')),
+        ('kiro', ('data', 'kiro-cli', 'data.sqlite3')),
+        ('mimo', ('.mimocode', 'token.json')),
+        ('opencode', ('data', 'opencode', 'account.json')),
+        ('crush', ('data', 'providers.json')),
+        ('zai', ('.zai', 'user-settings.json')),
+    ),
+)
+def test_auth_bearing_mixed_provider_files_are_secret(
+    tmp_path: Path,
+    provider: str,
+    remainder: tuple[str, ...],
+) -> None:
+    path = tmp_path.joinpath(*remainder)
+
+    entry = classify_provider_home(
+        path,
+        f'agents/agent1/provider-state/{provider}/home/{"/".join(remainder)}',
+        provider,
+        'agent1',
+        remainder,
+        size=3,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == 'secret'
+    assert entry.reason == 'provider_mixed_auth_state'
+
+
 @pytest.mark.parametrize('provider', ('qoder', 'qoderclicn'))
 def test_qoder_config_auth_root_is_secret_and_cache_is_rebuildable(
     tmp_path: Path,
@@ -233,6 +266,7 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     kiro_state = ccb / 'agents' / 'agent11' / 'provider-state' / 'kiro'
     pi_state = ccb / 'agents' / 'agent12' / 'provider-state' / 'pi'
     grok_state = ccb / 'agents' / 'agent13' / 'provider-state' / 'grok'
+    droid_state = ccb / 'agents' / 'agent14' / 'provider-state' / 'droid'
 
     _write(ccb / 'ccb.config', 'agent1:codex\n')
     _write(ccb / 'ccb_memory.md', '# shared memory\n')
@@ -309,6 +343,9 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     _write(grok_state / 'home' / '.grok' / 'sessions' / 'session.jsonl', '{}\n')
     _write(grok_state / 'home' / '.grok' / 'skills' / 'ask' / 'SKILL.md', '# ask\n')
     _write(grok_state / 'home' / '.grok' / 'skills' / 'help' / 'SKILL.md', '# help\n')
+    _write(droid_state / 'home' / '.factory' / 'auth.v2.file', 'ciphertext\n')
+    _write(droid_state / 'home' / '.factory' / 'auth.v2.key', 'key\n')
+    _write(droid_state / 'home' / '.factory' / 'sessions' / 'session.jsonl', '{}\n')
 
     payload = summarize_storage(PathLayout(project_root))
     records = _records_by_suffix(payload)
@@ -414,6 +451,9 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     assert records['agents/agent13/provider-state/grok/home/.grok/sessions/session.jsonl']['reason'] == 'native_cli_provider_state'
     assert records['agents/agent13/provider-state/grok/home/.grok/skills/ask/SKILL.md']['storage_class'] == 'projected_config'
     assert records['agents/agent13/provider-state/grok/home/.grok/skills/help/SKILL.md']['storage_class'] == 'session'
+    assert records['agents/agent14/provider-state/droid/home/.factory/auth.v2.file']['storage_class'] == 'secret'
+    assert records['agents/agent14/provider-state/droid/home/.factory/auth.v2.key']['storage_class'] == 'secret'
+    assert records['agents/agent14/provider-state/droid/home/.factory/sessions/session.jsonl']['storage_class'] == 'session'
 
 
 def test_storage_summary_rust_inventory_path_matches_python_path(

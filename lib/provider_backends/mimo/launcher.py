@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 import shlex
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from project_memory import materialize_runtime_memory_bundle
 from project_memory.hashing import sha256_text
 from storage.atomic import atomic_write_text
 from workspace.models import WorkspacePlan
+
+from .home import materialize_mimo_home
 
 
 def build_runtime_launcher() -> ProviderRuntimeLauncher:
@@ -71,12 +74,19 @@ def build_start_cmd(
     if mimo_home is None:
         raise RuntimeError("MiMo launch requires prepare_launch_context before build_start_cmd")
     profile = load_resolved_provider_profile(runtime_dir)
+    materialize_mimo_home(mimo_home, profile=profile)
     mimo_env = {
+        "HOME": str(mimo_home),
         "MIMOCODE_HOME": str(mimo_home),
         "MIMOCODE_DISABLE_AUTOUPDATE": "true",
         "MIMOCODE_ENABLE_ANALYSIS": "false",
         **_mimo_config_env(_path_or_none(launch_context.get("mimo_config_path")), profile),
     }
+    if "WSL_DISTRO_NAME" in os.environ:
+        mimo_env["USERPROFILE"] = str(mimo_home)
+        additions = "HOME/p:USERPROFILE/p:MIMOCODE_HOME/p"
+        existing = os.environ.get("WSLENV", "")
+        mimo_env["WSLENV"] = f"{additions}:{existing}" if existing else additions
     cmd_parts = provider_start_parts("mimo")
     if command.restore:
         cmd_parts.append("--continue")

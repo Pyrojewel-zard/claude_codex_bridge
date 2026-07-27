@@ -8,6 +8,7 @@ import shlex
 import sys
 
 from agents.models import RuntimeMode
+from provider_core.one_way_inheritance import ensure_private_directory
 from provider_core.source_home import current_provider_source_home
 from provider_backends.claude.launcher_runtime.legacy_binary_cache import detach_legacy_claude_binary_cache
 from provider_backends.claude.launcher_runtime import materialize_claude_home_config, resolve_claude_home_layout
@@ -254,8 +255,11 @@ def _materialize_provider_home(
         )
         return
     if provider == 'droid':
+        droid_home = ensure_private_directory(
+            layout.agent_provider_state_dir(spec.name, 'droid') / 'home'
+        )
         materialize_droid_home_config(
-            layout.agent_provider_state_dir(spec.name, 'droid') / 'home',
+            droid_home / '.factory',
             profile=resolved_profile,
             command_policy=command_policy,
         )

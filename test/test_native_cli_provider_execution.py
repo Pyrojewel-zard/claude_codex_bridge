@@ -17,7 +17,11 @@ from provider_backends.grok.execution import (
     observe_grok_output,
 )
 from provider_backends.copilot.execution import _build_env as build_copilot_env
-from provider_backends.native_cli_support import NativeCliExecutionRequest
+from provider_backends.native_cli_support import (
+    NativeCliExecutionConfig,
+    NativeCliExecutionRequest,
+)
+from provider_backends.native_cli_support.execution import _native_cli_env
 from provider_backends.qoder.execution import (
     _build_command as build_qoder_command,
     _qoder_session_id_for_job,
@@ -215,9 +219,66 @@ def test_copilot_headless_execution_uses_agent_local_home_and_cache(tmp_path: Pa
     assert env == {
         'COPILOT_HOME': str(state_dir / 'home'),
         'COPILOT_CACHE_HOME': str(state_dir / 'data' / 'cache'),
+        'COPILOT_DISABLE_KEYTAR': '1',
     }
     assert (state_dir / 'home').is_dir()
     assert (state_dir / 'data' / 'cache').is_dir()
+
+
+def test_native_headless_env_overrides_global_home_and_detaches_legacy_link(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    managed_home = tmp_path / "managed-home"
+    managed_home.symlink_to(outside, target_is_directory=True)
+    request = NativeCliExecutionRequest(
+        provider="qwen",
+        job=_job("qwen", work_dir),
+        work_dir=work_dir,
+        session_data={"qwen_home": str(managed_home)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+    config = NativeCliExecutionConfig(
+        provider="qwen",
+        session_filename=".qwen-session",
+        command_builder=lambda _request: ["qwen"],
+        env_builder=lambda _request: {"HOME": str(tmp_path / "global-home")},
+    )
+
+    env = _native_cli_env(config, request)
+
+    assert env["HOME"] == str(managed_home)
+    assert env["XDG_CONFIG_HOME"] == str(managed_home / ".config")
+    assert env["XDG_DATA_HOME"] == str(managed_home.parent / "data")
+    assert env["XDG_STATE_HOME"] == str(managed_home / ".local" / "state")
+    assert env["XDG_CACHE_HOME"] == str(managed_home / ".cache")
+    assert managed_home.is_dir() and not managed_home.is_symlink()
+    assert not any(outside.iterdir())
+
+
+def test_cursor_headless_disables_os_credential_store(tmp_path: Path) -> None:
+    from provider_backends.cursor.execution import _build_env as build_cursor_env
+
+    work_dir = tmp_path / "repo-cursor"
+    work_dir.mkdir()
+    managed_home = tmp_path / "managed-cursor"
+    request = NativeCliExecutionRequest(
+        provider="cursor",
+        job=_job("cursor", work_dir),
+        work_dir=work_dir,
+        session_data={"cursor_home": str(managed_home)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+
+    env = build_cursor_env(request)
+
+    assert env["HOME"] == str(managed_home)
+    assert env["AGENT_CLI_CREDENTIAL_STORE"] == "file"
 
 
 def test_qoder_headless_command_uses_documented_print_mode_and_uuid(tmp_path: Path) -> None:
@@ -473,6 +534,13 @@ def test_grok_provider_adapter_projects_system_login_and_uses_uuid_session(
     managed_home = work_dir / ".ccb" / "agents" / "grok1" / "provider-state" / "grok" / "home"
     assert (managed_home / ".grok" / "auth.json").read_text(encoding="utf-8") == '{"token":"system-login"}\n'
     assert (managed_home / ".grok" / "config.toml").read_text(encoding="utf-8") == 'model = "grok-test"\n'
+    (managed_home / ".grok" / "auth.json").write_text(
+        '{"token":"managed-login"}\n',
+        encoding="utf-8",
+    )
+    assert (source_grok / "auth.json").read_text(encoding="utf-8") == (
+        '{"token":"system-login"}\n'
+    )
     grok_session_id = _grok_session_id_for_job(job.job_id)
     assert grok_session_id != job.job_id
     assert str(uuid.UUID(grok_session_id)) == grok_session_id

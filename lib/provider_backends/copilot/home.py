@@ -15,6 +15,11 @@ from provider_core.projected_assets import (
     tree_content_fingerprint,
     write_projected_marker,
 )
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    copy_regular_tree,
+    ensure_private_inheritance_directory,
+)
 from provider_core.source_home import current_provider_source_home
 from storage.atomic import atomic_write_text
 
@@ -28,6 +33,14 @@ _PLUGIN_MANIFEST_PATHS = (
     Path('plugin.json'),
     Path('.github/plugin/plugin.json'),
     Path('.claude-plugin/plugin.json'),
+)
+_AUTH_CONFIG_KEYS = (
+    'loggedInUsers',
+    'copilotTokens',
+    'githubToken',
+    'oauth',
+    'authentication',
+    'credentials',
 )
 
 
@@ -68,10 +81,8 @@ def materialize_copilot_home_config(
     command_policy=None,
 ) -> Path:
     target_home = Path(target_home).expanduser()
-    if target_home.is_symlink():
-        return target_home
     source_home = Path(source_home).expanduser() if source_home is not None else _system_copilot_home()
-    target_home.mkdir(parents=True, exist_ok=True)
+    target_home = ensure_private_inheritance_directory(target_home, source_home)
     _project_installed_plugins(
         source_home,
         target_home,
@@ -80,7 +91,43 @@ def materialize_copilot_home_config(
             and not role_command_policy_disables_inherited_assets(command_policy)
         ),
     )
+    _project_auth_state(
+        source_home,
+        target_home,
+        enabled=_inherits_auth(profile),
+    )
     return target_home
+
+
+def _project_auth_state(source_home: Path, target_home: Path, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    source_document = _read_copilot_config(source_home / 'config.json')
+    if source_document is not None:
+        source_payload, _ = source_document
+        target_document = _read_copilot_config(target_home / 'config.json')
+        if target_document is None:
+            target_payload, target_prefix = {}, _CONFIG_HEADER
+        else:
+            target_payload, target_prefix = target_document
+        updated = _clone_json_object(target_payload)
+        changed = False
+        for key in _AUTH_CONFIG_KEYS:
+            if key not in source_payload:
+                continue
+            value = _clone_json_value(source_payload[key])
+            if updated.get(key) != value:
+                updated[key] = value
+                changed = True
+        if changed:
+            atomic_write_text(
+                target_home / 'config.json',
+                _copilot_config_text(updated, prefix=target_prefix),
+            )
+    for filename in ('auth.json', 'credentials.json'):
+        copy_regular_file(source_home / filename, target_home / filename)
+    for dirname in ('mcp-secrets', 'mcp-oauth-config'):
+        copy_regular_tree(source_home / dirname, target_home / dirname)
 
 
 def _project_installed_plugins(source_home: Path, target_home: Path, *, enabled: bool) -> bool:
@@ -818,6 +865,10 @@ def _system_copilot_home() -> Path:
 
 def _inherits_config(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_config', True))
+
+
+def _inherits_auth(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_auth', True))
 
 
 def _looks_like_ccb_provider_home(path: Path) -> bool:

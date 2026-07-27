@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 
@@ -9,6 +10,12 @@ from provider_core.memory_projection import (
     materialize_provider_memory_file,
     memory_projection_result,
     record_memory_projection_event,
+)
+from provider_core.keyring_read import read_keyring_password
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    ensure_private_directory,
+    ensure_private_inheritance_directory,
 )
 from provider_core.projected_assets import seed_projected_tree
 from provider_core.source_home import current_provider_source_home
@@ -19,7 +26,15 @@ from storage.paths import ensure_provider_user_cache_dir
 from ..home_layout import GeminiHomeLayout, gemini_layout_for_home, gemini_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
-_GEMINI_LOGIN_AUTH_FILENAMES = ('oauth_creds.json', 'google_accounts.json')
+_GEMINI_LOGIN_AUTH_FILENAMES = (
+    'oauth_creds.json',
+    'google_accounts.json',
+    # Gemini uses this encrypted file when OS keychain access is disabled.
+    'gemini-credentials.json',
+    # Preserve existing MCP/A2A authorization only as private ordinary files.
+    'mcp-oauth-tokens.json',
+    'a2a-oauth-tokens.json',
+)
 _GEMINI_EXTENSIONS_PROJECTION_LABEL = 'gemini-inherited-extensions'
 
 
@@ -61,14 +76,32 @@ def prepare_gemini_home_overrides(
             command_policy=command_policy,
         )
     cache_root = _gemini_shared_cache_root()
-    return {
+    overrides = {
         'HOME': str(layout.home_root),
         'GEMINI_CLI_HOME': str(layout.home_root),
         'GEMINI_ROOT': str(layout.tmp_root),
         'NPM_CONFIG_CACHE': str(cache_root / 'npm'),
         'npm_config_cache': str(cache_root / 'npm'),
         'XDG_CACHE_HOME': str(cache_root / 'xdg'),
+        # Gemini's supported file-storage switch prevents managed MCP/OAuth
+        # refresh or logout from mutating the user's OS keychain.
+        'GEMINI_FORCE_FILE_STORAGE': 'true',
+        'GEMINI_FORCE_ENCRYPTED_FILE_STORAGE': 'true',
     }
+    if "WSL_DISTRO_NAME" in os.environ:
+        overrides['USERPROFILE'] = str(layout.home_root)
+        wslenv_additions = (
+            "HOME/p:USERPROFILE/p:GEMINI_CLI_HOME/p:GEMINI_ROOT/p:"
+            "NPM_CONFIG_CACHE/p:npm_config_cache/p:XDG_CACHE_HOME/p:"
+            "GEMINI_FORCE_FILE_STORAGE:GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"
+        )
+        existing_wslenv = os.environ.get("WSLENV", "")
+        overrides['WSLENV'] = (
+            f"{wslenv_additions}:{existing_wslenv}"
+            if existing_wslenv
+            else wslenv_additions
+        )
+    return overrides
 
 
 def _profile_runtime_home(profile) -> Path | None:
@@ -125,19 +158,18 @@ def _normalize_path(value: object) -> Path | None:
             return None
 
 
-def _prepare_managed_home(layout: GeminiHomeLayout) -> None:
-    layout.home_root.mkdir(parents=True, exist_ok=True)
-    layout.gemini_dir.mkdir(parents=True, exist_ok=True)
-    layout.tmp_root.mkdir(parents=True, exist_ok=True)
+def _prepare_managed_home(layout: GeminiHomeLayout, *, source_home: Path) -> None:
+    ensure_private_inheritance_directory(layout.home_root, source_home)
+    ensure_private_directory(layout.gemini_dir)
+    ensure_private_directory(layout.tmp_root)
     _ensure_json_file(layout.settings_path)
     _ensure_json_file(layout.trusted_folders_path)
 
 
 def _ensure_json_file(path: Path) -> None:
-    if path.exists():
+    if path.exists() and not path.is_symlink():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{}\n', encoding='utf-8')
+    atomic_write_text(path, '{}\n')
 
 
 def materialize_gemini_home_config(
@@ -153,35 +185,38 @@ def materialize_gemini_home_config(
     command_policy=None,
 ) -> GeminiHomeLayout:
     layout = gemini_layout_for_home(target_home)
-    _prepare_managed_home(layout)
-    source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
-    memory_result = memory_projection_result(
-        status='skipped',
-        reason='source_home_is_target_home',
-        path=layout.gemini_dir / 'GEMINI.md',
+    inherit_external_keyring = (
+        source_home is None
+        and not os.environ.get('CCB_SOURCE_HOME')
     )
-    if layout.home_root != source_root:
-        _materialize_settings(source_root, layout, profile=profile)
-        _materialize_env_file(source_root, layout, profile=profile)
-        _materialize_trusted_folders(source_root, layout)
-        _materialize_auth(source_root, layout, profile=profile)
-        seed_projected_tree(
-            source_root / '.gemini' / 'extensions',
-            layout.gemini_dir / 'extensions',
-            enabled=(
-                _inherits_config(profile)
-                and not role_command_policy_disables_inherited_assets(command_policy)
-            ),
-            label=_GEMINI_EXTENSIONS_PROJECTION_LABEL,
-        )
-        memory_result = _materialize_gemini_memory(
-            source_root,
-            layout,
-            profile=profile,
-            project_root=project_root,
-            agent_name=agent_name,
-            workspace_path=workspace_path,
-        )
+    source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
+    _prepare_managed_home(layout, source_home=source_root)
+    _materialize_settings(source_root, layout, profile=profile)
+    _materialize_env_file(source_root, layout, profile=profile)
+    _materialize_trusted_folders(source_root, layout)
+    _materialize_auth(
+        source_root,
+        layout,
+        profile=profile,
+        inherit_external_keyring=inherit_external_keyring,
+    )
+    seed_projected_tree(
+        source_root / '.gemini' / 'extensions',
+        layout.gemini_dir / 'extensions',
+        enabled=(
+            _inherits_config(profile)
+            and not role_command_policy_disables_inherited_assets(command_policy)
+        ),
+        label=_GEMINI_EXTENSIONS_PROJECTION_LABEL,
+    )
+    memory_result = _materialize_gemini_memory(
+        source_root,
+        layout,
+        profile=profile,
+        project_root=project_root,
+        agent_name=agent_name,
+        workspace_path=workspace_path,
+    )
     record_memory_projection_event(
         memory_result,
         provider='gemini',
@@ -219,13 +254,81 @@ def _materialize_env_file(source_home: Path, layout: GeminiHomeLayout, *, profil
     _write_env_file(target_env, env_payload)
 
 
-def _materialize_auth(source_home: Path, layout: GeminiHomeLayout, *, profile) -> None:
+def _materialize_auth(
+    source_home: Path,
+    layout: GeminiHomeLayout,
+    *,
+    profile,
+    inherit_external_keyring: bool,
+) -> None:
     if not _should_project_login_auth(source_home / '.gemini' / 'settings.json', profile=profile):
         for filename in _GEMINI_LOGIN_AUTH_FILENAMES:
             _remove_file(layout.gemini_dir / filename)
         return
     for filename in _GEMINI_LOGIN_AUTH_FILENAMES:
-        _sync_file(source_home / '.gemini' / filename, layout.gemini_dir / filename)
+        source = source_home / '.gemini' / filename
+        target = layout.gemini_dir / filename
+        if not source.is_file() or source.is_symlink():
+            _remove_file(target)
+            continue
+        try:
+            copy_regular_file(source, target)
+        except OSError:
+            pass
+    if inherit_external_keyring:
+        _materialize_external_keyring_oauth(layout)
+
+
+def _materialize_external_keyring_oauth(layout: GeminiHomeLayout) -> None:
+    if any(
+        (layout.gemini_dir / filename).is_file()
+        for filename in ('oauth_creds.json', 'gemini-credentials.json')
+    ):
+        return
+    raw = read_keyring_password(
+        'gemini-cli-oauth',
+        'main-account',
+        command_name='gemini',
+        module_names=('@github/keytar', 'keytar'),
+    )
+    payload = _gemini_keyring_oauth_payload(raw)
+    if payload is None:
+        return
+    # Current Gemini migrates this legacy OAuth shape into its encrypted file
+    # backend inside the already-private managed HOME.  The source keychain is
+    # read only and is never selected by the managed process.
+    _write_json_object(layout.gemini_dir / 'oauth_creds.json', payload)
+
+
+def _gemini_keyring_oauth_payload(raw: str | None) -> dict[str, object] | None:
+    if not raw:
+        return None
+    try:
+        stored = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(stored, dict):
+        return None
+    token = stored.get('token')
+    if not isinstance(token, dict):
+        return None
+    access_token = token.get('accessToken')
+    refresh_token = token.get('refreshToken')
+    if not str(access_token or '').strip() and not str(refresh_token or '').strip():
+        return None
+    field_map = (
+        ('accessToken', 'access_token'),
+        ('refreshToken', 'refresh_token'),
+        ('tokenType', 'token_type'),
+        ('scope', 'scope'),
+        ('expiresAt', 'expiry_date'),
+    )
+    payload = {
+        target: token[source]
+        for source, target in field_map
+        if token.get(source) is not None
+    }
+    return payload or None
 
 
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
@@ -307,8 +410,7 @@ def _read_json_object(path: Path) -> dict[str, object] | None:
 
 
 def _write_json_object(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + '\n')
 
 
 def _projected_dotenv_payload(source_env_path: Path, *, profile) -> dict[str, str]:
@@ -368,9 +470,8 @@ def _is_env_key(value: str) -> bool:
 
 
 def _write_env_file(path: Path, payload: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f'{key}={_quote_env_value(value)}' for key, value in sorted(payload.items())]
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(lines) + '\n')
     try:
         path.chmod(0o600)
     except Exception:

@@ -96,6 +96,9 @@ def prepare_codex_home_overrides(
     overrides = {
         'CODEX_HOME': str(layout.codex_home),
         'CODEX_SESSION_ROOT': str(layout.session_root),
+        # Some Codex builds consult this independently from CODEX_HOME.
+        # Pin it as well so SQLite state never falls back to the caller's home.
+        'CODEX_SQLITE_HOME': str(layout.codex_home),
     }
     ensure_codex_diagnostic_log_filter(layout.codex_home, runtime_dir=runtime_dir)
 
@@ -103,7 +106,7 @@ def prepare_codex_home_overrides(
         # We are running inside WSL. The target executable might be a Windows binary (via interop).
         # Set USERPROFILE to the same isolated path and instruct WSLENV to automatically translate paths.
         overrides['USERPROFILE'] = str(layout.codex_home)
-        wslenv_additions = "CODEX_HOME/p:CODEX_SESSION_ROOT/p:USERPROFILE/p"
+        wslenv_additions = "CODEX_HOME/p:CODEX_SESSION_ROOT/p:CODEX_SQLITE_HOME/p:USERPROFILE/p"
         existing_wslenv = os.environ.get("WSLENV", "")
         if existing_wslenv:
             overrides['WSLENV'] = f"{wslenv_additions}:{existing_wslenv}"

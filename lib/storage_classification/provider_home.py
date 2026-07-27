@@ -9,10 +9,23 @@ _SECRET_FILENAMES = {
     '.ccb-auth-projection.json',
     '.credentials.json',
     '.env',
+    'a2a-oauth-tokens.json',
+    'auth.encrypted',
     'auth.json',
+    'auth.v2.file',
+    'auth.v2.key',
+    'auth.v2.keyring',
+    'auth.v2.loginkeychain',
     'company-codex-api-key',
     'company-codex.config.toml',
+    'credentials.json',
+    'extension-secrets-v1.json',
+    'gemini-credentials.json',
     'google_accounts.json',
+    'mcp-oauth-tokens-v2.json',
+    'mcp-oauth-tokens.json',
+    'mcp-oauth.v2.file',
+    'mcp-oauth.v2.key',
     'oauth_creds.json',
 }
 _CLAUDE_PROJECTED_NAMES = {'settings.json', 'CLAUDE.md'}
@@ -38,6 +51,15 @@ _NATIVE_CLI_SESSION_ROOTS = {
     'session',
     'sessions',
     'state',
+}
+_PROVIDER_MIXED_SECRET_NAMES = {
+    'deepseek': {'settings.json'},
+    'kimi': {'config.toml', 'device_id', 'kimi.json'},
+    'kiro': {'data.sqlite3'},
+    'mimo': {'token.json'},
+    'opencode': {'account.json'},
+    'crush': {'hyper.json', 'providers.json'},
+    'zai': {'user-settings.json'},
 }
 _CODEX_SESSION_NAMES = {
     '.ccb-session-namespace.json',
@@ -67,6 +89,17 @@ def classify_provider_home(
     name = remainder[-1]
     if name in _SECRET_FILENAMES:
         return _entry(path, relative_path, StorageClass.SECRET, size, provider=provider, agent=agent, reason='provider_secret', root_kind=root_kind)
+    if name in _PROVIDER_MIXED_SECRET_NAMES.get(provider, set()):
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.SECRET,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='provider_mixed_auth_state',
+            root_kind=root_kind,
+        )
     if name.endswith('.ccb-projection.json'):
         return _entry(
             path,
@@ -305,9 +338,11 @@ def _classify_droid_home(
     agent: str,
     root_kind: str,
 ) -> StorageEntry:
+    if remainder[0] == '.factory' and len(remainder) > 1:
+        remainder = remainder[1:]
     if remainder[0] == 'sessions':
         return _entry(path, relative_path, StorageClass.SESSION, size, provider=provider, agent=agent, root_kind=root_kind)
-    if remainder[0] == 'skills':
+    if remainder[0] in {'skills', 'plugins'}:
         return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
     return _entry(path, relative_path, StorageClass.UNKNOWN, size, provider=provider, agent=agent, root_kind=root_kind)
 

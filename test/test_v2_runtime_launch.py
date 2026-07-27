@@ -233,12 +233,17 @@ def _codex_start_cmd(command, spec: AgentSpec, runtime_dir: Path, launch_session
 
 def _opencode_prepared_state(runtime_dir: Path, *, agent_name: str = 'agent1') -> dict[str, object]:
     project_root = _launch_project_root(runtime_dir)
+    state_dir = project_root / '.ccb' / 'agents' / agent_name / 'provider-state' / 'opencode'
     return {
         'agent_name': agent_name,
         'project_root': project_root,
         'workspace_path': project_root,
         'agent_events_path': project_root / '.ccb' / 'agents' / agent_name / 'events.jsonl',
-        'opencode_config_path': project_root / '.ccb' / 'agents' / agent_name / 'provider-state' / 'opencode' / 'opencode.json',
+        'opencode_state_dir': state_dir,
+        'opencode_config_path': state_dir / 'opencode.json',
+        'opencode_data_home': state_dir / 'data',
+        'opencode_storage_root': state_dir / 'data' / 'opencode' / 'storage',
+        'opencode_log_root': state_dir / 'data' / 'opencode' / 'log',
     }
 
 
@@ -280,11 +285,21 @@ def test_claude_home_overrides_wsl_exports_paths_and_api_env_names(
     overrides = prepare_claude_home_overrides_for_test(runtime_dir, None, refresh_home=False)
 
     assert overrides['USERPROFILE'] == overrides['HOME']
+    assert overrides['CLAUDE_CONFIG_DIR'] == str(runtime_dir / 'claude-home' / '.claude')
+    assert overrides['CLAUDE_SECURESTORAGE_CONFIG_DIR'] == str(
+        runtime_dir / 'claude-home' / '.claude'
+    )
+    assert overrides['CLAUDE_SESSION_ENV_ROOT'] == str(
+        runtime_dir / 'claude-home' / '.claude' / 'session-env'
+    )
     wslenv = overrides['WSLENV'].split(':')
     assert 'HOME/p' in wslenv
     assert 'USERPROFILE/p' in wslenv
+    assert 'CLAUDE_CONFIG_DIR/p' in wslenv
+    assert 'CLAUDE_SECURESTORAGE_CONFIG_DIR/p' in wslenv
     assert 'CLAUDE_PROJECTS_ROOT/p' in wslenv
     assert 'CLAUDE_PROJECT_ROOT/p' in wslenv
+    assert 'CLAUDE_SESSION_ENV_ROOT/p' in wslenv
     assert 'CLAUDE_CODE_PLUGIN_SEED_DIR/p' in wslenv
     assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR/p' in wslenv
     assert 'ANTHROPIC_AUTH_TOKEN' in wslenv
@@ -293,6 +308,30 @@ def test_claude_home_overrides_wsl_exports_paths_and_api_env_names(
     assert 'ANTHROPIC_AUTH_TOKEN/p' not in wslenv
     assert 'ANTHROPIC_API_KEY/p' not in wslenv
     assert 'ANTHROPIC_BASE_URL/p' not in wslenv
+    assert wslenv[-1] == 'EXISTING/u'
+
+
+def test_codex_home_overrides_pin_sqlite_and_windows_home(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSLENV', 'EXISTING/u')
+
+    overrides = prepare_codex_home_overrides_for_test(
+        runtime_dir,
+        None,
+        refresh_home=False,
+    )
+
+    assert overrides['CODEX_SQLITE_HOME'] == overrides['CODEX_HOME']
+    assert overrides['USERPROFILE'] == overrides['CODEX_HOME']
+    wslenv = overrides['WSLENV'].split(':')
+    assert 'CODEX_HOME/p' in wslenv
+    assert 'CODEX_SESSION_ROOT/p' in wslenv
+    assert 'CODEX_SQLITE_HOME/p' in wslenv
+    assert 'USERPROFILE/p' in wslenv
     assert wslenv[-1] == 'EXISTING/u'
 
 
@@ -1243,7 +1282,9 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     assert f'workspace_path: {resume_dir.resolve()}' in managed_memory.read_text(encoding='utf-8')
     assert payload['start_cmd'].startswith('unset ANTHROPIC_BASE_URL; ')
     assert 'export DISABLE_AUTOUPDATER=1' in payload['start_cmd']
+    assert 'DISABLE_LOGOUT_COMMAND=1' in payload['start_cmd']
     assert f'HOME={shlex.quote(str(expected_claude_home))}' in payload['start_cmd']
+    assert f'CLAUDE_CONFIG_DIR={shlex.quote(str(expected_claude_home / ".claude"))}' in payload['start_cmd']
     assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(expected_claude_home / ".claude" / "projects"))}' in payload['start_cmd']
     _assert_caller_env_exports(
         payload['start_cmd'],
@@ -1302,7 +1343,11 @@ def test_ensure_agent_runtime_launches_named_opencode_session(monkeypatch, tmp_p
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
     assert payload['pane_title_marker'].startswith('CCB-builder-')
     config_path = ctx.paths.agent_provider_state_dir('builder', 'opencode') / 'opencode.json'
+    state_dir = config_path.parent
     assert f'OPENCODE_CONFIG={shlex.quote(str(config_path))}' in payload['start_cmd']
+    assert f'XDG_DATA_HOME={shlex.quote(str(state_dir / "data"))}' in payload['start_cmd']
+    assert f'OPENCODE_STORAGE_ROOT={shlex.quote(str(state_dir / "data" / "opencode" / "storage"))}' in payload['start_cmd']
+    assert payload['opencode_storage_root'] == str(state_dir / 'data' / 'opencode' / 'storage')
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='builder',
@@ -1551,6 +1596,8 @@ def test_ensure_agent_runtime_launches_named_droid_session(monkeypatch, tmp_path
     monkeypatch.setattr('cli.services.runtime_launch.shutil.which', lambda name: f'/usr/bin/{name}')
     monkeypatch.setattr('cli.services.runtime_launch.TmuxBackend', FakeTmuxBackend)
     monkeypatch.setenv('DROID_START_CMD', 'droid')
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSLENV', 'EXISTING/u')
 
     result = ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
 
@@ -1561,12 +1608,18 @@ def test_ensure_agent_runtime_launches_named_droid_session(monkeypatch, tmp_path
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
     assert payload['pane_title_marker'].startswith('CCB-mobile-')
     expected_home = ctx.paths.agent_provider_state_dir('mobile', 'droid') / 'home'
+    expected_factory_home = expected_home / '.factory'
     assert payload['droid_home'] == str(expected_home)
-    assert payload['factory_home'] == str(expected_home)
-    assert payload['droid_sessions_root'] == str(expected_home / 'sessions')
-    assert (expected_home / 'sessions').is_dir()
-    assert f'FACTORY_HOME={shlex.quote(str(expected_home))}' in payload['start_cmd']
-    assert f'DROID_SESSIONS_ROOT={shlex.quote(str(expected_home / "sessions"))}' in payload['start_cmd']
+    assert payload['factory_home'] == str(expected_factory_home)
+    assert payload['droid_sessions_root'] == str(expected_factory_home / 'sessions')
+    assert (expected_factory_home / 'sessions').is_dir()
+    assert f'FACTORY_HOME_OVERRIDE={shlex.quote(str(expected_home))}' in payload['start_cmd']
+    assert f'FACTORY_HOME={shlex.quote(str(expected_factory_home))}' in payload['start_cmd']
+    assert 'FACTORY_DISABLE_KEYRING=true' in payload['start_cmd']
+    assert f'DROID_SESSIONS_ROOT={shlex.quote(str(expected_factory_home / "sessions"))}' in payload['start_cmd']
+    assert 'FACTORY_HOME_OVERRIDE/p' in payload['start_cmd']
+    assert 'FACTORY_DISABLE_KEYRING' in payload['start_cmd']
+    assert 'EXISTING/u' in payload['start_cmd']
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='mobile',
@@ -2089,10 +2142,16 @@ def test_native_cli_launcher_builds_provider_state_payload(
     assert payload[f'{provider}_home'] == str(state_dir / 'home')
     assert payload[f'{provider}_data_dir'] == str(state_dir / 'data')
     assert payload[f'{provider}_session_id'] == 'sess-native'
+    assert f'HOME={shlex.quote(str(state_dir / "home"))}' in start_cmd
+    assert f'XDG_CONFIG_HOME={shlex.quote(str(state_dir / "home" / ".config"))}' in start_cmd
+    assert f'XDG_DATA_HOME={shlex.quote(str(state_dir / "data"))}' in start_cmd
+    assert f'XDG_STATE_HOME={shlex.quote(str(state_dir / "home" / ".local" / "state"))}' in start_cmd
+    assert f'XDG_CACHE_HOME={shlex.quote(str(state_dir / "home" / ".cache"))}' in start_cmd
     if home_env:
         assert f'{home_env}={shlex.quote(str(state_dir / "home"))}' in start_cmd
     if provider == 'copilot':
         assert f'COPILOT_CACHE_HOME={shlex.quote(str(state_dir / "data" / "cache"))}' in start_cmd
+        assert 'COPILOT_DISABLE_KEYTAR=1' in start_cmd
     visible_cmd = start_cmd.rsplit('; ', 1)[-1]
     visible_parts = shlex.split(visible_cmd)
     if provider == 'crush':
@@ -2140,6 +2199,9 @@ def test_native_cli_launcher_builds_provider_state_payload(
             str(plan.workspace_path),
             '--demo',
         ]
+    elif provider == 'cursor':
+        assert 'AGENT_CLI_CREDENTIAL_STORE=file' in start_cmd
+        assert visible_parts == [default_executable, '--demo']
     elif provider == 'qoderclicn':
         assert visible_parts == [
             default_executable,
@@ -3377,6 +3439,76 @@ def test_opencode_workspace_preparation_writes_memory_config(tmp_path: Path, mon
     assert 'shared ask memory' in bundle_text
     assert 'project opencode memory' not in bundle_text
     assert (project_root / '.ccb' / 'runtime' / 'skills' / 'builder' / 'opencode' / 'ask.md').is_file()
+
+
+def test_opencode_launcher_inherits_auth_into_private_data_home_one_way(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-opencode-auth'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'builder' / 'provider-runtime' / 'opencode'
+    runtime_dir.mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    source_auth = source_home / '.local' / 'share' / 'opencode' / 'auth.json'
+    source_auth.parent.mkdir(parents=True)
+    source_auth.write_text('{"github":{"token":"source"}}\n', encoding='utf-8')
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.setenv('OPENCODE_START_CMD', 'opencode')
+    spec = _spec('builder', provider='opencode')
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('builder',),
+        restore=False,
+        auto_permission=False,
+    )
+    prepared = _prepare_opencode_workspace_for_test(spec, runtime_dir)
+
+    cmd = opencode_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'opencode-auth',
+        prepared_state=prepared,
+    )
+
+    target_auth = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'builder'
+        / 'provider-state'
+        / 'opencode'
+        / 'data'
+        / 'opencode'
+        / 'auth.json'
+    )
+    assert target_auth.read_text(encoding='utf-8') == '{"github":{"token":"source"}}\n'
+    assert f'XDG_DATA_HOME={shlex.quote(str(target_auth.parent.parent))}' in cmd
+    target_auth.unlink()
+    assert source_auth.is_file()
+
+
+def test_opencode_auth_inheritance_honors_external_xdg_data_home(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    source_data = tmp_path / 'external-xdg-data'
+    source_auth = source_data / 'opencode' / 'auth.json'
+    source_auth.parent.mkdir(parents=True)
+    source_auth.write_text('{"github":{"token":"source"}}\n', encoding='utf-8')
+    target_root = tmp_path / 'managed' / 'data' / 'opencode'
+    target_root.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(source_home))
+    monkeypatch.setenv('XDG_DATA_HOME', str(source_data))
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+
+    opencode_launcher._materialize_opencode_auth(target_root, profile=None)
+
+    target_auth = target_root / 'auth.json'
+    assert target_auth.read_text(encoding='utf-8') == source_auth.read_text(encoding='utf-8')
+    target_auth.write_text('{"github":{"token":"managed"}}\n', encoding='utf-8')
+    assert source_auth.read_text(encoding='utf-8') == '{"github":{"token":"source"}}\n'
 
 
 def test_opencode_workspace_preparation_records_memory_projection_once(tmp_path: Path, monkeypatch) -> None:

@@ -12,6 +12,11 @@ def build_runtime_launcher() -> ProviderRuntimeLauncher:
             provider="pi",
             visible_args_builder=_pi_visible_args,
             visible_env_builder=_pi_visible_env,
+            visible_path_env_names=(
+                "PI_CODING_AGENT_DIR",
+                "PI_CODING_AGENT_SESSION_DIR",
+            ),
+            visible_raw_env_names=("PI_SKIP_VERSION_CHECK", "PI_TELEMETRY"),
         )
     )
 

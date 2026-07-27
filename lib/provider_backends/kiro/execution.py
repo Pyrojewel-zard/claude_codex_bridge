@@ -18,6 +18,7 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".kiro-session",
             command_builder=_build_command,
             env_builder=_build_env,
+            private_path_env_names=("KIRO_HOME",),
             observer=observe_stdout_output,
             output_kind="stdout",
             mode="kiro_run",
@@ -46,7 +47,10 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
 def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     kiro_home = _state_path(request, "kiro_home", fallback="home")
     kiro_home.mkdir(parents=True, exist_ok=True)
-    return {"HOME": str(kiro_home)}
+    return {
+        "HOME": str(kiro_home),
+        "KIRO_HOME": str(kiro_home / ".kiro"),
+    }
 
 
 def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:

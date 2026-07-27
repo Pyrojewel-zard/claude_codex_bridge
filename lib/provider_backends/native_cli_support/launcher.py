@@ -16,7 +16,10 @@ from provider_core.caller_env import (
 )
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
+from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
+
+from .home import build_native_private_env, materialize_native_login_state
 
 
 VisibleArgsBuilder = Callable[[dict[str, object]], tuple[str, ...]]
@@ -30,6 +33,8 @@ class NativeCliLaunchConfig:
     visible_args: tuple[str, ...] = ()
     visible_args_builder: VisibleArgsBuilder | None = None
     visible_env_builder: VisibleEnvBuilder | None = None
+    visible_path_env_names: tuple[str, ...] = ()
+    visible_raw_env_names: tuple[str, ...] = ()
 
 
 def build_native_cli_runtime_launcher(config: NativeCliLaunchConfig) -> ProviderRuntimeLauncher:
@@ -109,7 +114,15 @@ def build_start_cmd(
     if state_dir is None or home_dir is None:
         raise RuntimeError(f"{provider} launch requires prepare_launch_context before build_start_cmd")
     state_dir.mkdir(parents=True, exist_ok=True)
-    home_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = state_dir / "data"
+    private_env = _provider_home_env(config, home_dir, data_dir=data_dir)
+    materialize_native_login_state(
+        provider,
+        home_dir,
+        profile=load_resolved_provider_profile(runtime_dir),
+        data_dir=data_dir,
+        config_dir=Path(private_env["XDG_CONFIG_HOME"]),
+    )
 
     cmd_parts = [
         *provider_start_parts(provider),
@@ -122,7 +135,7 @@ def build_start_cmd(
     env_prefix = join_env_prefix(
         export_env_clause(provider_user_session_env()),
         export_env_clause(spec.env),
-        export_env_clause(_provider_home_env(config, home_dir)),
+        export_env_clause(private_env),
         export_env_clause(_dynamic_visible_env(config, launch_context)),
         export_env_clause(
             caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
@@ -179,10 +192,29 @@ def _provider(config: NativeCliLaunchConfig) -> str:
     return provider
 
 
-def _provider_home_env(config: NativeCliLaunchConfig, home_dir: Path) -> dict[str, str]:
-    if not config.home_env:
-        return {}
-    return {config.home_env: str(home_dir)}
+def _provider_home_env(
+    config: NativeCliLaunchConfig,
+    home_dir: Path,
+    *,
+    data_dir: Path | None = None,
+) -> dict[str, str]:
+    # HOME is the last-resort write boundary for native CLIs.  Provider-
+    # specific roots remain explicit, but an unannounced new state file must
+    # still land in the managed home rather than the user's account home.
+    extra_names = tuple(
+        name
+        for name in (config.home_env, *config.visible_path_env_names)
+        if name
+    )
+    env = build_native_private_env(
+        home_dir,
+        data_dir=data_dir,
+        extra_path_env_names=extra_names,
+        extra_raw_env_names=config.visible_raw_env_names,
+    )
+    if config.home_env:
+        env[config.home_env] = str(home_dir)
+    return env
 
 
 def _dynamic_visible_args(config: NativeCliLaunchConfig, launch_context: dict[str, object]) -> tuple[str, ...]:

@@ -92,8 +92,22 @@ def _install_provider_stubs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
         "CCB_CALLER_PROJECT_ID",
         "CCB_CALLER_PROJECT_ROOT",
         "CCB_CALLER_RUNTIME_DIR",
+        "CCB_SESSION_FILE",
         "CCB_SESSION_ID",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_PROJECTS_ROOT",
+        "CLAUDE_PROJECT_ROOT",
+        "CLAUDE_SESSION_ENV_ROOT",
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        "CODEX_HOME",
         "CODEX_RUNTIME_DIR",
+        "CODEX_SESSION_ROOT",
+        "CODEX_SQLITE_HOME",
+        "GEMINI_CLI_HOME",
+        "GEMINI_ROOT",
+        "OPENCODE_LOG_ROOT",
+        "OPENCODE_RUNTIME_DIR",
+        "OPENCODE_STORAGE_ROOT",
     ):
         monkeypatch.delenv(name, raising=False)
 
