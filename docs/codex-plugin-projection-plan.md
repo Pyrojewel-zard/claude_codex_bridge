@@ -65,6 +65,11 @@ source skill tree contains a broken entry. If Codex has already created an
 unmarked `skills/` directory for system or user assets, startup repairs only
 those named CCB-owned entries and preserves every unrelated entry.
 
+Optional source-home skills use the common per-entry projection contract rather
+than a whole-root copy. This keeps the managed `skills/` directory local while
+valid ordinary skills and the nested `.system` collection follow their source
+through independent symlink-first, marker-owned entries.
+
 Rejected designs:
 
 - copy all of `~/.codex`

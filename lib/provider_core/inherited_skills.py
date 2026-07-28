@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 from pathlib import Path
 import shutil
@@ -18,13 +19,21 @@ _REQUIRED_CONTROL_SKILLS = {
     'gemini': ('ask', 'ccb-clear'),
     'grok': ('ask', 'ccb-clear'),
     'kimi': ('ask', 'ccb-clear'),
+    'qoder': ('ask', 'ccb-clear'),
+    'qoderclicn': ('ask', 'ccb-clear'),
+}
+_PACKAGED_SKILL_PROVIDER_ALIASES = {
+    # Both released Qoder provider keys consume the same CCB control contract.
+    # Keep qoderclicn stable rather than adopting PR #280's incompatible rename.
+    'qoderclicn': 'qoder',
 }
 _REQUIRED_SKILL_LABEL_PREFIX = 'ccb-required-skill:'
 
 
 def packaged_inherited_skills_dir(provider: str) -> Path:
     normalized = str(provider or '').strip().lower()
-    return _repo_root() / 'inherit_skills' / f'{normalized}_skills'
+    packaged = _PACKAGED_SKILL_PROVIDER_ALIASES.get(normalized, normalized)
+    return _repo_root() / 'inherit_skills' / f'{packaged}_skills'
 
 
 def packaged_inherited_skill_file(provider: str, relative_path: str) -> Path:
@@ -119,11 +128,15 @@ def route_inherited_skill_entries(
     enabled: bool,
     label: str,
     exclude: tuple[str, ...] = (),
+    include_patterns: tuple[str, ...] = (),
+    exclude_patterns: tuple[str, ...] = (),
+    special_entries: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Route optional skills per entry so one broken source cannot drop all skills."""
     source_root = Path(source_dir).expanduser()
     target_root = Path(target_dir).expanduser()
     excluded = frozenset(str(name or '').strip() for name in exclude)
+    special = frozenset(str(name or '').strip() for name in special_entries)
 
     # Migrate the old whole-tree projection before creating entry projections.
     accepts_projection = _skill_root_accepts_entry_projection(target_root, label=label)
@@ -139,10 +152,15 @@ def route_inherited_skill_entries(
         for source in sorted(source_root.iterdir(), key=lambda item: item.name):
             skill_name = source.name
             if (
-                skill_name.startswith('.')
+                (skill_name.startswith('.') and skill_name not in special)
                 or skill_name in excluded
                 or not source.is_dir()
-                or not (source / 'SKILL.md').is_file()
+                or (skill_name not in special and not (source / 'SKILL.md').is_file())
+                or (
+                    include_patterns
+                    and not any(fnmatch.fnmatchcase(skill_name, pattern) for pattern in include_patterns)
+                )
+                or any(fnmatch.fnmatchcase(skill_name, pattern) for pattern in exclude_patterns)
             ):
                 continue
             entry_label = f'{label}:{skill_name}'
@@ -255,24 +273,13 @@ def _skill_root_accepts_entry_projection(target_root: Path, *, label: str) -> bo
         return True
     if projected_path_is_owned(target_root, label=label):
         return True
-    if target_root.is_symlink() or not target_root.is_dir():
+    marker = Path(f'{target_root}.ccb-projection.json')
+    if marker.exists() or marker.is_symlink():
         return False
-    entries = tuple(
-        entry
-        for entry in target_root.iterdir()
-        if not entry.name.endswith('.ccb-projection.json')
-    )
-    if not entries:
-        return True
-    for entry in entries:
-        marker = Path(f'{entry}.ccb-projection.json')
-        try:
-            payload = json.loads(marker.read_text(encoding='utf-8'))
-        except Exception:
-            return False
-        if not isinstance(payload, dict) or payload.get('record_type') != 'ccb_projected_asset':
-            return False
-    return True
+    # A local skills directory may contain provider-created or user-created
+    # entries.  Per-entry routing is safe there because unmarked conflicts are
+    # never replaced and stale cleanup only removes CCB-owned markers.
+    return target_root.is_dir()
 
 
 def _remove_exact_skill_entry(path: Path) -> None:

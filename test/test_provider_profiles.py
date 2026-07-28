@@ -377,7 +377,8 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     (source_home / 'company-codex-api-key').write_text('company-key\n', encoding='utf-8')
     (source_home / 'company-codex.config.toml').write_text('profile = "company"\n', encoding='utf-8')
     (source_home / 'company-extra-token').write_text('extra-token\n', encoding='utf-8')
-    (source_home / 'skills' / 'demo.md').write_text('demo skill\n', encoding='utf-8')
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('demo skill\n', encoding='utf-8')
     (source_home / 'commands' / 'demo.md').write_text('demo command\n', encoding='utf-8')
     _write_codex_plugin_source(source_home)
     monkeypatch.setenv('CODEX_HOME', str(source_home))
@@ -438,7 +439,8 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
         workspace_path=project_root,
     )
     assert (runtime_home / 'company-codex-api-key').read_text(encoding='utf-8') == 'company-key-v2\n'
-    assert (runtime_home / 'skills' / 'demo.md').is_file()
+    assert (runtime_home / 'skills' / 'demo' / 'SKILL.md').is_file()
+    assert (runtime_home / 'skills' / 'demo.ccb-projection.json').is_file()
     assert not (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'commands').is_symlink()
@@ -930,7 +932,9 @@ def test_materialize_codex_home_config_falls_back_to_marked_copy_when_symlink_fa
 
     assert not (target_home / 'skills').is_symlink()
     assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'demo skill\n'
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert not (target_home / 'skills' / 'demo').is_symlink()
+    assert (target_home / 'skills' / 'demo.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
 def test_materialize_codex_home_config_filters_inherited_skills(tmp_path: Path) -> None:
@@ -1009,6 +1013,27 @@ def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
 
 
+def test_materialize_codex_home_config_projects_system_skill_collection_as_one_entry(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    system_skill = source_home / 'skills' / '.system' / 'skill-creator'
+    system_skill.mkdir(parents=True)
+    (system_skill / 'SKILL.md').write_text('system skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    target_system = target_home / 'skills' / '.system'
+    assert target_system.is_symlink()
+    assert (target_system / 'skill-creator' / 'SKILL.md').read_text(encoding='utf-8') == 'system skill\n'
+    assert (target_home / 'skills' / '.system.ccb-projection.json').is_file()
+
+
 def test_materialize_codex_home_config_restores_full_inherited_skills_after_filter(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
@@ -1035,7 +1060,9 @@ def test_materialize_codex_home_config_restores_full_inherited_skills_after_filt
     assert (target_home / 'skills' / 'trellis-check' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-check\n'
     assert (target_home / 'skills' / 'trellis-start' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-start\n'
     assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'trellis-check.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'trellis-start.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
 def test_materialize_codex_home_config_projects_skill_overlays(tmp_path: Path) -> None:
@@ -1074,8 +1101,8 @@ def test_materialize_codex_home_config_projects_skill_overlays(tmp_path: Path) -
 def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
-    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
-    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('source skill\n', encoding='utf-8')
     (target_home / 'skills').mkdir(parents=True, exist_ok=True)
     (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
 
@@ -1087,7 +1114,9 @@ def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path:
 
     assert not (target_home / 'skills').is_symlink()
     assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
-    assert not (target_home / 'skills' / 'demo.md').exists()
+    assert (target_home / 'skills' / 'demo').is_symlink()
+    assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert (target_home / 'skills' / 'demo.ccb-projection.json').is_file()
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
@@ -1169,10 +1198,25 @@ def test_materialize_codex_home_config_detaches_user_asset_symlink_without_mutat
 def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
-    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
-    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
-    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
-    (target_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    source_skill = source_home / 'skills' / 'demo'
+    target_skill = target_home / 'skills' / 'demo'
+    source_skill.mkdir(parents=True, exist_ok=True)
+    target_skill.mkdir(parents=True, exist_ok=True)
+    (source_skill / 'SKILL.md').write_text('source skill\n', encoding='utf-8')
+    (target_skill / 'SKILL.md').write_text('source skill\n', encoding='utf-8')
+    (target_home / 'skills.ccb-projection.json').write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_projected_asset',
+                'label': 'codex-inherited-skills',
+                'source': str(source_home / 'skills'),
+                'mode': 'copy',
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
 
     codex_home_config.materialize_codex_home_config(
         target_home,
@@ -1181,8 +1225,10 @@ def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_p
     )
 
     assert not (target_home / 'skills').is_symlink()
-    assert (target_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'demo').is_symlink()
+    assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert (target_home / 'skills' / 'demo.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
 def test_materialize_codex_home_config_rejects_source_home_as_writable_target(tmp_path: Path) -> None:
@@ -2443,7 +2489,7 @@ def test_materialize_claude_home_config_refreshes_login_metadata_without_replaci
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_trust = source_home / '.claude.json'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     source_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     source_trust.write_text(
@@ -2488,6 +2534,67 @@ def test_materialize_claude_home_config_refreshes_login_metadata_without_replaci
     assert 'primaryApiKey' not in payload
 
 
+def test_materialize_claude_home_config_migrates_843_legacy_trust_state(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_trust = source_home / '.claude.json'
+    legacy_trust = target_home / '.claude.json'
+    active_trust = target_home / '.claude' / '.claude.json'
+    source_trust.parent.mkdir(parents=True, exist_ok=True)
+    legacy_trust.parent.mkdir(parents=True, exist_ok=True)
+    active_trust.parent.mkdir(parents=True, exist_ok=True)
+    source_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'source@example.test'},
+                'hasCompletedOnboarding': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    legacy_trust.write_text(
+        json.dumps(
+            {
+                'projects': {
+                    '/legacy/workspace': {
+                        'hasTrustDialogAccepted': True,
+                        'allowedTools': ['Bash'],
+                    },
+                },
+                'legacyOnly': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    active_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'partial@example.test'},
+                'projects': {
+                    '/active/workspace': {'hasTrustDialogAccepted': True},
+                },
+                'activeOnly': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert layout.trust_path == active_trust
+    assert layout.legacy_trust_path == legacy_trust
+    assert not legacy_trust.exists()
+    assert payload['oauthAccount']['emailAddress'] == 'source@example.test'
+    assert payload['hasCompletedOnboarding'] is True
+    assert payload['legacyOnly'] is True
+    assert payload['activeOnly'] is True
+    assert payload['projects']['/legacy/workspace']['allowedTools'] == ['Bash']
+    assert payload['projects']['/active/workspace']['hasTrustDialogAccepted'] is True
+
+
 def test_materialize_claude_home_config_projects_mcp_config_into_managed_workspace(
     tmp_path: Path,
 ) -> None:
@@ -2496,7 +2603,7 @@ def test_materialize_claude_home_config_projects_mcp_config_into_managed_workspa
     project_root = tmp_path / 'repo'
     workspace = project_root / '.ccb' / 'workspaces' / 'clauder'
     source_trust = source_home / '.claude.json'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     source_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     project_root.mkdir(parents=True, exist_ok=True)
@@ -2592,7 +2699,7 @@ def test_materialize_claude_home_config_strips_mcp_config_when_config_not_inheri
     target_home = tmp_path / 'managed-home'
     workspace = tmp_path / 'repo' / '.ccb' / 'workspaces' / 'clauder'
     source_trust = source_home / '.claude.json'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     source_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -2653,7 +2760,7 @@ def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inhe
 ) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.write_text(
         json.dumps(
@@ -3277,7 +3384,8 @@ def test_materialize_claude_home_config_preserves_unmarked_skills_and_commands(t
 
     assert (layout.claude_dir / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
     assert (layout.claude_dir / 'commands' / 'user.md').read_text(encoding='utf-8') == 'user\n'
-    assert not (layout.claude_dir / 'skills' / 'source-skill').exists()
+    assert (layout.claude_dir / 'skills' / 'source-skill').is_symlink()
+    assert (layout.claude_dir / 'skills' / 'source-skill.ccb-projection.json').is_file()
     assert not (layout.claude_dir / 'commands' / 'source.md').exists()
     assert not (layout.claude_dir / 'skills.ccb-projection.json').exists()
     assert not (layout.claude_dir / 'commands.ccb-projection.json').exists()
@@ -3351,7 +3459,8 @@ def test_materialize_claude_home_config_removes_stale_profile_disabled_mcp_witho
     target_home = tmp_path / 'managed-home'
     source_home.mkdir(parents=True, exist_ok=True)
     target_home.mkdir(parents=True, exist_ok=True)
-    (target_home / '.claude.json').write_text(
+    (target_home / '.claude' / '.claude.json').parent.mkdir(parents=True, exist_ok=True)
+    (target_home / '.claude' / '.claude.json').write_text(
         json.dumps(
             {
                 'mcpServers': {
@@ -3420,7 +3529,8 @@ def test_materialize_droid_home_config_preserves_unmarked_inherited_skills(tmp_p
     materialize_droid_home_config(target_home, source_home=source_home)
 
     assert (target_home / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
-    assert not (target_home / 'skills' / 'source-skill').exists()
+    assert (target_home / 'skills' / 'source-skill').is_symlink()
+    assert (target_home / 'skills' / 'source-skill.ccb-projection.json').is_file()
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 

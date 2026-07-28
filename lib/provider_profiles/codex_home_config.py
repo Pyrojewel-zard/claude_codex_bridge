@@ -23,7 +23,11 @@ from provider_core.one_way_inheritance import (
     ensure_private_directory,
     ensure_private_inheritance_directory,
 )
-from provider_core.inherited_skills import materialize_required_control_skills
+from provider_core.inherited_skills import (
+    materialize_required_control_skills,
+    required_control_skill_names,
+    route_inherited_skill_entries,
+)
 from provider_core.projected_assets import (
     copy_projected_tree_to_cache,
     projected_path_is_owned,
@@ -61,13 +65,6 @@ _CODEX_AUTH_SIDECAR_REF_RE = re.compile(
     r'|~/\.codex'
     r')/(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{0,127})'
 )
-_CODEX_MANAGED_SKILL_ENTRY_LABEL_PREFIXES = (
-    f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
-    'codex-skill-overlay:',
-    'codex-role-skill:',
-    'ccb-required-skill:codex:',
-)
-_CODEX_OWNED_SKILL_NAMES = ('ask', 'ccb-clear', 'reconnect')
 _CODEX_LEGACY_OWNED_SKILL_NAMES = ('ccb_config', 'ccb-config')
 _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('.agents') / 'plugins' / 'marketplace.json',
@@ -1207,84 +1204,22 @@ def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: s
     route_projected_tree(source, target, label=label)
 
 
-def _copy_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
-    source = Path(source).expanduser()
-    target = Path(target).expanduser()
-    if not enabled:
-        remove_projected_path(target, label=label)
-        return
-    if not source.is_dir():
-        remove_projected_path(target, label=label)
-        return
-    if _same_path(source, target):
-        return
-    marker = Path(f'{target}.ccb-projection.json')
-    if (target.exists() or target.is_symlink()) and not marker.is_file():
-        if _is_managed_skill_projection_dir(target):
-            _remove_path(target)
-        elif target.is_symlink():
-            _repair_owned_codex_skill_entries(source, target)
-            return
-        elif not target.is_dir() or tree_content_fingerprint(target) != tree_content_fingerprint(source):
-            _repair_owned_codex_skill_entries(source, target)
-            return
-    if copy_projected_tree_to_cache(source, target, label=label):
-        return
-    remove_projected_path(target, label=label)
-
-
-def _is_managed_skill_projection_dir(target: Path) -> bool:
-    if not target.is_dir() or target.is_symlink():
-        return False
-    marker_labels: dict[str, str] = {}
-    try:
-        entries = tuple(target.iterdir())
-    except Exception:
-        return False
-    for entry in entries:
-        if not entry.name.endswith('.ccb-projection.json'):
-            continue
-        try:
-            payload = json.loads(entry.read_text(encoding='utf-8'))
-        except Exception:
-            return False
-        if not isinstance(payload, dict) or payload.get('record_type') != 'ccb_projected_asset':
-            return False
-        label = str(payload.get('label') or '')
-        if not any(label.startswith(prefix) for prefix in _CODEX_MANAGED_SKILL_ENTRY_LABEL_PREFIXES):
-            return False
-        marker_labels[entry.stem.removesuffix('.ccb-projection')] = label
-    for entry in entries:
-        if entry.name.endswith('.ccb-projection.json'):
-            continue
-        if entry.name not in marker_labels:
-            return False
-    return bool(entries)
-
-
 def _materialize_inherited_skills(source: Path, target: Path, *, profile, enabled: bool = True) -> None:
     include = _profile_skill_patterns(profile, 'inherited_skill_include')
     exclude = _profile_skill_patterns(profile, 'inherited_skill_exclude')
-    if not include and not exclude:
-        _copy_inherited_tree(
-            source,
-            target,
-            enabled=_inherits_skills(profile) and enabled,
-            label=_CODEX_SKILLS_PROJECTION_LABEL,
-        )
-        _remove_stale_skill_projection_markers(
-            target,
-            label_prefix=f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
-            desired_labels=set(),
-        )
-        return
-    _route_filtered_skill_entries(
+    for legacy_name in _CODEX_LEGACY_OWNED_SKILL_NAMES:
+        _remove_path(Path(target).expanduser() / legacy_name)
+    route_inherited_skill_entries(
         source,
         target,
         enabled=_inherits_skills(profile) and enabled,
-        include=include,
-        exclude=exclude,
-        label_prefix=f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
+        label=_CODEX_SKILLS_PROJECTION_LABEL,
+        exclude=required_control_skill_names('codex'),
+        include_patterns=include,
+        exclude_patterns=exclude,
+        # Codex owns a nested system-skill collection without a top-level
+        # SKILL.md.  Treat it as one immutable projection entry.
+        special_entries=('.system',),
     )
 
 
@@ -1294,41 +1229,6 @@ def _role_command_policy_disables_inherited_assets(command_policy) -> bool:
     mode = str(getattr(command_policy, 'mode', '') or '').strip()
     enforcement = str(getattr(command_policy, 'enforcement', '') or '').strip()
     return mode == 'deny_all_except' and enforcement == 'required'
-
-
-def _route_filtered_skill_entries(
-    source: Path,
-    target: Path,
-    *,
-    enabled: bool,
-    include: tuple[str, ...],
-    exclude: tuple[str, ...],
-    label_prefix: str,
-) -> None:
-    source = Path(source).expanduser()
-    target = Path(target).expanduser()
-    remove_projected_path(target, label=_CODEX_SKILLS_PROJECTION_LABEL)
-    if not enabled or not source.is_dir():
-        _remove_stale_skill_projection_markers(target, label_prefix=label_prefix, desired_labels=set())
-        return
-    desired_labels: set[str] = set()
-    target.mkdir(parents=True, exist_ok=True)
-    for entry in sorted(source.iterdir(), key=lambda item: item.name):
-        if not entry.is_dir():
-            continue
-        skill_name = entry.name
-        if not _matches_skill_patterns(skill_name, include=include, exclude=exclude):
-            continue
-        label = f'{label_prefix}{skill_name}'
-        desired_labels.add(label)
-        route_projected_tree(
-            entry,
-            target / skill_name,
-            enabled=True,
-            label=label,
-            allow_unmarked_replace=False,
-        )
-    _remove_stale_skill_projection_markers(target, label_prefix=label_prefix, desired_labels=desired_labels)
 
 
 def _materialize_skill_overlays(target: Path, *, profile, project_root: Path | None) -> None:
@@ -1416,23 +1316,6 @@ def _remove_stale_skill_projection_markers(target: Path, *, label_prefix: str, d
             label=label,
             marker_path=marker,
         )
-
-
-def _repair_owned_codex_skill_entries(source: Path, target: Path) -> None:
-    if not target.is_dir() or target.is_symlink():
-        return
-    for legacy_name in _CODEX_LEGACY_OWNED_SKILL_NAMES:
-        _remove_path(target / legacy_name)
-    for skill_name in _CODEX_OWNED_SKILL_NAMES:
-        source_skill = source / skill_name
-        if not source_skill.is_dir():
-            continue
-        target_skill = target / skill_name
-        _remove_path(target_skill)
-        try:
-            shutil.copytree(source_skill, target_skill)
-        except Exception:
-            _remove_path(target_skill)
 
 
 def _sync_codex_plugin_projection(

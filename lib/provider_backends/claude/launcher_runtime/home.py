@@ -562,13 +562,23 @@ def _materialize_trust(
     if (
         source_trust.is_file()
         or target_layout.trust_path.exists()
+        or target_layout.legacy_trust_path.exists()
         or profile_servers
         or auto_permission
         or _env_value_present(custom_api_key)
     ):
+        # CCB 8.4.3 exported CLAUDE_CONFIG_DIR but continued writing this state
+        # at HOME/.claude.json.  Claude writes its own partial state at
+        # CLAUDE_CONFIG_DIR/.claude.json, so merge both authorities during the
+        # migration.  The active CLI state wins on conflicts while missing
+        # onboarding, trust, and MCP fields survive from the legacy file.
+        existing = _merge_json_objects(
+            _read_json_object(target_layout.legacy_trust_path),
+            _read_json_object(target_layout.trust_path),
+        )
         merged = _projected_claude_json_payload(
             _read_json_object(source_trust) if source_trust.is_file() else {},
-            existing=_read_json_object(target_layout.trust_path),
+            existing=existing,
             profile=profile,
             project_root=project_root,
             workspace_path=workspace_path,
@@ -582,7 +592,22 @@ def _materialize_trust(
             )
         _approve_claude_custom_api_key(merged, custom_api_key)
         _write_json_object(target_layout.trust_path, merged)
+        _remove_file(target_layout.legacy_trust_path)
     _ensure_trust_file(target_layout.trust_path)
+
+
+def _merge_json_objects(
+    base: dict[str, object],
+    overlay: dict[str, object],
+) -> dict[str, object]:
+    merged = {key: _clone_jsonish(value) for key, value in base.items()}
+    for key, value in overlay.items():
+        previous = merged.get(key)
+        if isinstance(previous, dict) and isinstance(value, dict):
+            merged[key] = _merge_json_objects(previous, value)
+        else:
+            merged[key] = _clone_jsonish(value)
+    return merged
 
 
 def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:

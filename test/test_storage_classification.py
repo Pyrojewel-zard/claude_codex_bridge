@@ -250,6 +250,26 @@ def test_qoder_config_auth_root_is_secret_and_cache_is_rebuildable(
     assert cache.storage_class.value == 'rebuildable_cache'
 
 
+@pytest.mark.parametrize('provider', ('qoder', 'qoderclicn'))
+def test_qoder_config_skills_are_projected(
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    path = tmp_path / 'home' / 'skills' / 'ask' / 'SKILL.md'
+    entry = classify_provider_home(
+        path,
+        f'agents/agent1/provider-state/{provider}/home/skills/ask/SKILL.md',
+        provider,
+        'agent1',
+        ('skills', 'ask', 'SKILL.md'),
+        size=2,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == 'projected_config'
+    assert entry.reason == 'qoder_skill_projection'
+
+
 def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     ccb = project_root / '.ccb'
@@ -303,6 +323,7 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
             + '\n',
         )
 
+    _write(claude_home / '.claude' / '.claude.json', '{}\n')
     _write(claude_home / '.claude.json', '{}\n')
     _write(claude_home / '.claude' / '.credentials.json', '{}\n')
     _write(claude_home / '.config' / 'claude-code' / 'auth.json', '{}\n')
@@ -386,8 +407,12 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     )
     assert records['agents/agent1/provider-state/codex/home/.tmp/plugins.sha']['storage_class'] == 'startup_authority_bundle'
 
+    assert records['agents/agent2/provider-state/claude/home/.claude/.claude.json']['storage_class'] == 'secret'
+    assert (
+        records['agents/agent2/provider-state/claude/home/.claude/.claude.json']['reason']
+        == 'claude_trust_mcp_authority'
+    )
     assert records['agents/agent2/provider-state/claude/home/.claude.json']['storage_class'] == 'secret'
-    assert records['agents/agent2/provider-state/claude/home/.claude.json']['reason'] == 'claude_trust_mcp_authority'
     assert records['agents/agent2/provider-state/claude/home/.claude/.credentials.json']['storage_class'] == 'secret'
     assert records['agents/agent2/provider-state/claude/home/.config/claude-code/auth.json']['storage_class'] == 'secret'
     if hasattr(os, 'symlink'):

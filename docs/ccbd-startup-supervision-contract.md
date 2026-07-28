@@ -32,6 +32,9 @@ Managed Codex conversation isolation rules live in [docs/codex-session-isolation
 
 Managed Claude conversation isolation rules live in [docs/claude-session-isolation-contract.md](/home/bfly/yunwei/ccb_source/docs/claude-session-isolation-contract.md). Startup behavior must honor that provider-state contract rather than inferring Claude identity from shared `work_dir` or global `~/.claude`.
 
+Common provider asset projection and effective-root rules live in
+[docs/provider-asset-projection-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-asset-projection-contract.md).
+
 ## 2. Problem Statement
 
 The current codebase already contains pieces of the required behavior:
@@ -438,6 +441,13 @@ Managed provider startup mutation rules:
   and set `COPILOT_CACHE_HOME` to the agent-local
   `.ccb/agents/<agent>/provider-state/copilot/data/cache/`
 - managed Qwen, Cursor, Copilot, Crush, Grok, Kiro, Pi, and Z.ai startup uses the shared native CLI launcher shape: provider state under `.ccb/agents/<agent>/provider-state/<provider>/`, session payloads that record `<provider>_state_dir`, `<provider>_home`, and `<provider>_data_dir`, managed `HOME` for visible and headless processes, and start-command overrides through `QWEN_START_CMD`, `CURSOR_START_CMD`, `COPILOT_START_CMD`, `CRUSH_START_CMD`, `GROK_START_CMD`, `KIRO_START_CMD`, `PI_START_CMD`, and `ZAI_START_CMD`; known login files are allowlisted one-way projections into those homes, while unknown formats require login inside the private managed home rather than a writable fallback to global provider state; managed Grok startup may project system `.grok/auth.json` and `.grok/config.toml` into the agent-scoped Grok home when inheritance is enabled, while Grok sessions and runtime output remain under the managed home; Grok asks use provider-native headless output and must tolerate both streaming JSON events and aggregated JSON output, with optional model/effort overrides from session data or `CCB_GROK_MODEL` / `CCB_GROK_EFFORT`; Grok success requires a provider-native terminal event such as streaming `type=end` with `stopReason=EndTurn` or the documented compatible native turn-end shape, and a zero process exit without native terminal evidence must close as `incomplete/grok_native_terminal_missing`, never as completed; `CCB_REQ_ID` remains request-attribution metadata, while model-printed `CCB_DONE`, CCB turn-end text, process exit, and the normalized internal `TURN_BOUNDARY` item are not Grok completion authority
+- managed Qoder and Qoder CLI CN startup must resolve the final explicit or
+  managed `--config-dir` before projecting skills; optional system skills, Role
+  skills, and packaged `ask`/`ccb-clear` controls target that same effective
+  root for both visible and headless execution. The released provider key
+  `qoderclicn` remains stable. An explicit config root equal to the source
+  account's `.qoder` or `.qoder-cn` root remains external user authority and
+  must not be mutated by CCB projection.
 - managed AGY must use private agent-local `.gemini` and `.antigravity`
   directories. It may copy allowlisted authentication/config files from the
   user's Windows provider home, but it must not symlink or junction either

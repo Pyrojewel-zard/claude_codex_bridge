@@ -286,7 +286,12 @@ def _ensure_bypass_permission_acceptance(home_overrides: dict[str, str], *, proj
     home = str(home_overrides.get('HOME') or '').strip()
     if not home:
         return
-    path = Path(home).expanduser() / '.claude.json'
+    config_dir = str(home_overrides.get('CLAUDE_CONFIG_DIR') or '').strip()
+    path = (
+        Path(config_dir).expanduser() / '.claude.json'
+        if config_dir
+        else Path(home).expanduser() / '.claude.json'
+    )
     payload = {}
     if path.is_file():
         try:

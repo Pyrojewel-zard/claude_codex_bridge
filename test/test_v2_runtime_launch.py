@@ -2192,6 +2192,8 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert payload['qoder_auto_permission_enabled'] is False
         assert payload['qoder_headless_permission_mode'] == 'dont_ask'
         assert 'QODER_HOME=' not in start_cmd
+        assert (state_dir / 'home' / 'skills' / 'ask' / 'SKILL.md').is_file()
+        assert (state_dir / 'home' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     elif provider == 'grok':
         assert visible_parts == [
             default_executable,
@@ -2240,6 +2242,8 @@ def test_native_cli_launcher_builds_provider_state_payload(
         settings = json.loads((state_dir / 'home' / 'settings.json').read_text(encoding='utf-8'))
         assert settings['general']['enableAutoUpdate'] is False
         assert settings['general']['enableAutoUpdateNotification'] is False
+        assert (state_dir / 'home' / 'skills' / 'ask' / 'SKILL.md').is_file()
+        assert (state_dir / 'home' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     else:
         assert visible_parts == [default_executable, '--demo']
 
@@ -2296,6 +2300,8 @@ def test_qoder_launcher_respects_explicit_config_and_permission_options(
     assert payload['qoder_config_dir'] == str(plan.workspace_path / 'custom-qoder')
     assert payload['qoder_auto_permission_enabled'] is True
     assert payload['qoder_headless_permission_mode'] == 'plan'
+    assert (plan.workspace_path / 'custom-qoder' / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (plan.workspace_path / 'custom-qoder' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
 
 
 def test_qoderclicn_launcher_uses_one_managed_root_and_merges_update_settings(
@@ -2422,6 +2428,9 @@ def test_qoderclicn_launcher_does_not_duplicate_explicit_config_or_permissions(
     )
     assert payload['qoderclicn_headless_permission_mode'] == 'plan'
     assert not (plan.workspace_path / 'custom-qoderclicn' / 'settings.json').exists()
+    assert (
+        plan.workspace_path / 'custom-qoderclicn' / 'skills' / 'ask' / 'SKILL.md'
+    ).is_file()
 
 
 def test_grok_launcher_fullscreen_startup_arg_overrides_default_minimal(
@@ -3040,6 +3049,12 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
     )
     settings_payload = json.loads((runtime_dir / 'claude-settings.json').read_text(encoding='utf-8'))
     assert settings_payload['skipDangerousModePermissionPrompt'] is True
+    managed_home = runtime_dir / 'claude-home'
+    trust_payload = json.loads(
+        (managed_home / '.claude' / '.claude.json').read_text(encoding='utf-8')
+    )
+    assert trust_payload['bypassPermissionsModeAccepted'] is True
+    assert not (managed_home / '.claude.json').exists()
     assert json.loads(_claude_settings_arg(start_cmd)) == settings_payload
     assert start_cmd.endswith(
         f'claude --setting-sources user,project,local --settings {shlex.quote(json.dumps(settings_payload, ensure_ascii=False))} '

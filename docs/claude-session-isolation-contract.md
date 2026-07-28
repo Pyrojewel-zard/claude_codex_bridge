@@ -22,6 +22,8 @@ Claude binary/version cache specifics are further narrowed by
 [docs/claude-binary-cache-dedup-plan.md](/home/bfly/yunwei/ccb_source/docs/claude-binary-cache-dedup-plan.md).
 Authentication projection and logout isolation must also satisfy
 [docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
+Common asset routing, effective-root resolution, and marker ownership follow
+[docs/provider-asset-projection-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-asset-projection-contract.md).
 
 ## 2. Identity Model
 
@@ -109,7 +111,7 @@ Inside that home, the managed Claude state is:
   - provider-native rules directories such as `~/.claude/rules/` are not CCB
     generated-memory inputs
   - removed when `inherit_memory = false`
-- `.ccb/agents/<agent>/provider-state/claude/home/.claude.json`
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/.claude.json`
   - contains managed workspace trust plus selected inherited Claude account
     metadata required for official login reuse
   - when config inheritance is enabled, also contains inherited global Claude
@@ -227,8 +229,13 @@ When `ccb` starts a managed Claude agent:
   they exist in the source home
 - managed `.claude.json` projection must refresh inherited Claude account
   metadata such as `oauthAccount` and onboarding state from the source
-  `.claude.json` on each launch, while preserving managed workspace trust
-  records already written under the private managed home
+  `<source-home>/.claude.json` into the active managed
+  `<claude-home>/.claude/.claude.json` on each launch, while preserving managed
+  workspace trust records already written there
+- startup must migrate the CCB 8.4.3 legacy
+  `<claude-home>/.claude.json` path by recursively merging it with the active
+  file, giving active Claude-written fields precedence; it may remove the
+  legacy file only after atomically writing the active path
 - managed `.claude.json` projection must also refresh source-home global
   `mcpServers` and selected MCP fields for the current project/workspace
   record, including `mcpServers`, `enabledMcpjsonServers`,
@@ -262,7 +269,8 @@ When `ccb` starts a managed Claude agent:
   logged out
 - when auth inheritance is disabled, startup must not silently keep stale
   managed Claude auth env state, stale copied login credential artifacts, or
-  stale inherited Claude account metadata in `.claude.json`
+  stale inherited Claude account metadata in the active
+  `.claude/.claude.json`
 - when skill inheritance is enabled, startup must route inherited Claude
   `skills/` into the managed home as independently marked entries on each
   managed launch; an invalid optional source entry must not suppress other
@@ -452,4 +460,5 @@ Diagnostics export should include:
 
 Diagnostics export must exclude copied credential files and projected trust/auth
 state such as `.claude/.credentials.json`, `.config/claude-code/auth.json`, and
-`.claude.json`. Support bundles must not follow any legacy Keychain link.
+`.claude/.claude.json`. Support bundles must not follow any legacy Keychain
+link.

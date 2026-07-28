@@ -329,7 +329,7 @@ def test_install_claude_hooks_trusts_workspace_in_managed_home(tmp_path: Path) -
         command=command,
     )
 
-    trust_path = home_root / '.claude.json'
+    trust_path = home_root / '.claude' / '.claude.json'
     trust_data = json.loads(trust_path.read_text(encoding='utf-8'))
     assert trust_data[str(workspace.resolve())]['hasTrustDialogAccepted'] is True
     assert trust_data['projects'][str(workspace.resolve())]['hasTrustDialogAccepted'] is True
@@ -418,7 +418,17 @@ def test_prepare_provider_workspace_materializes_claude_mcp_from_source_home(
         refresh_profile=True,
     )
 
-    trust_path = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'claude' / 'home' / '.claude.json'
+    trust_path = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'agent1'
+        / 'provider-state'
+        / 'claude'
+        / 'home'
+        / '.claude'
+        / '.claude.json'
+    )
     payload = json.loads(trust_path.read_text(encoding='utf-8'))
     assert payload['mcpServers']['global-tool']['command'] == 'global-mcp'
     assert payload['projects'][target_project_key]['mcpServers']['project-tool']['command'] == 'project-mcp'

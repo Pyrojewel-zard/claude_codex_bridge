@@ -19,6 +19,8 @@ cleanup sequencing for managed Codex files are defined by
 [docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md).
 Authentication projection and logout isolation must also satisfy
 [docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
+Common asset routing, effective-root resolution, and marker ownership follow
+[docs/provider-asset-projection-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-asset-projection-contract.md).
 
 Detailed implementation sequencing lives in
 [docs/codex-managed-home-isolation-plan.md](/home/bfly/yunwei/ccb_source/docs/codex-managed-home-isolation-plan.md).
@@ -188,6 +190,10 @@ When `ccb` starts a managed Codex agent:
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart
+- optional source-home skills must be projected as independently marked
+  symlink-first entries inside a local managed `skills/` container; unmarked
+  conflicts are preserved, symlink failure falls back to a marked copy, and
+  Codex's nested `.system` collection is projected as one entry
 - independently of optional skill inheritance, it must verify the packaged
   `ask`, `ccb-clear`, and Codex-only `reconnect` control skills immediately
   before process creation; missing or stale named entries are repaired without
