@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import shlex
 import subprocess
 import textwrap
@@ -11,7 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 
 
-def _run_install_snippet(tmp_path: Path, body: str) -> subprocess.CompletedProcess[str]:
+def _run_install_snippet(
+    tmp_path: Path,
+    body: str,
+    *,
+    install_sh: Path = INSTALL_SH,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
         {
@@ -25,7 +31,7 @@ def _run_install_snippet(tmp_path: Path, body: str) -> subprocess.CompletedProce
     command = textwrap.dedent(
         f"""
         set -euo pipefail
-        source {shlex.quote(str(INSTALL_SH))}
+        source {shlex.quote(str(install_sh))}
         {body}
         """
     )
@@ -129,6 +135,25 @@ def test_install_requirements_continue_when_optional_watchdog_is_skipped(tmp_pat
     assert "relay deps:" in completed.stdout
     assert "tmux stub" in completed.stdout
     assert "requirements-ok" in completed.stdout
+
+
+def test_resolve_source_kind_recognizes_linked_git_worktree(tmp_path: Path) -> None:
+    worktree_root = tmp_path / "linked-worktree"
+    worktree_root.mkdir()
+    linked_install = worktree_root / "install.sh"
+    shutil.copy2(INSTALL_SH, linked_install)
+    (worktree_root / ".git").write_text(
+        "gitdir: /tmp/example.git/worktrees/linked\n",
+        encoding="utf-8",
+    )
+    completed = _run_install_snippet(
+        tmp_path,
+        "resolve_source_kind",
+        install_sh=linked_install,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.strip() == "source"
 
 
 def test_install_role_pack_provisioning_runs_by_default_without_prompt(tmp_path: Path) -> None:

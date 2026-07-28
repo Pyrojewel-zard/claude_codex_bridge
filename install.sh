@@ -1335,7 +1335,7 @@ resolve_source_kind() {
     echo "$build_info_source_kind"
     return
   fi
-  if [[ -d "$REPO_ROOT/.git" ]]; then
+  if [[ -d "$REPO_ROOT/.git" || -f "$REPO_ROOT/.git" ]]; then
     echo "source"
   else
     echo "release"
