@@ -857,7 +857,7 @@ def test_project_view_claude_pane_active_overrides_idle_activity(tmp_path: Path)
     assert agent['provider_runtime_status']['pane_state'] == 'tool_running'
 
 
-def test_project_view_claude_stale_active_terminal_summary_becomes_free(tmp_path: Path) -> None:
+def test_project_view_claude_idle_prompt_overrides_stale_active_hook(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-claude-pane-terminal-summary'
     project_root.mkdir()
     layout = PathLayout(project_root)
@@ -936,17 +936,20 @@ def test_project_view_claude_stale_active_terminal_summary_becomes_free(tmp_path
     current_time[0] = '2026-05-20T12:01:01Z'
     stale = service.build_response()['view']['agents'][1]
 
-    assert first['provider_runtime_status']['state'] == 'tool_running'
-    assert first['provider_runtime_status']['pane_state'] == 'terminal_summary'
-    assert before_threshold['provider_runtime_status']['state'] == 'tool_running'
+    assert first['activity_state'] == 'idle'
+    assert first['activity_source'] == 'claude_runtime'
+    assert first['activity_reason'] == 'claude_pane_idle_prompt'
+    assert first['provider_runtime_status']['state'] == 'free'
+    assert first['provider_runtime_status']['source'] == 'pane'
+    assert first['provider_runtime_status']['pane_state'] == 'free'
+    assert before_threshold['provider_runtime_status']['state'] == 'free'
     assert stale['activity_state'] == 'idle'
     assert stale['activity_source'] == 'claude_runtime'
-    assert stale['activity_reason'] == 'claude_pane_no_active_stale_no_progress'
+    assert stale['activity_reason'] == 'claude_pane_idle_prompt'
     assert stale['activity_symbol'] == '◇'
     assert stale['provider_runtime_status']['state'] == 'free'
-    assert stale['provider_runtime_status']['source'] == 'stabilizer'
-    assert stale['provider_runtime_status']['pane_state'] == 'terminal_summary'
-    assert 'raw_state=tool_running' in stale['provider_runtime_status']['notes']
+    assert stale['provider_runtime_status']['source'] == 'pane'
+    assert stale['provider_runtime_status']['pane_state'] == 'free'
 
 
 def test_project_view_codex_runtime_status_overrides_sidebar_presentation(tmp_path: Path) -> None:

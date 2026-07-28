@@ -41,10 +41,14 @@ class PaneChatSendException implements Exception {
 }
 
 class PaneChatController {
-  PaneChatController({required TerminalTransport transport})
-    : _transport = transport;
+  PaneChatController({
+    required TerminalTransport transport,
+    Duration operationTimeout = const Duration(seconds: 8),
+  }) : _transport = transport,
+       _operationTimeout = operationTimeout;
 
   final TerminalTransport _transport;
+  final Duration _operationTimeout;
   final _events = StreamController<PaneChatEvent>.broadcast();
   final _sessions = <String, TerminalSession>{};
   final _outputStreams = <String, StreamSubscription<Uint8List>>{};
@@ -81,7 +85,10 @@ class PaneChatController {
     }
     late final TerminalSession session;
     try {
-      session = await _sessionFor(agent: agent, view: view);
+      session = await _sessionFor(
+        agent: agent,
+        view: view,
+      ).timeout(_operationTimeout);
     } catch (error) {
       throw PaneChatSendException(
         stage: PaneChatSendFailureStage.open,
@@ -99,7 +106,7 @@ class PaneChatController {
     }
     try {
       try {
-        await session.paste(body);
+        await session.paste(body).timeout(_operationTimeout);
       } catch (error) {
         throw PaneChatSendException(
           stage: PaneChatSendFailureStage.paste,
@@ -108,7 +115,7 @@ class PaneChatController {
         );
       }
       try {
-        await session.writeBytes(submitBytes);
+        await session.writeBytes(submitBytes).timeout(_operationTimeout);
       } catch (error) {
         throw PaneChatSendException(
           stage: PaneChatSendFailureStage.enter,
@@ -120,6 +127,7 @@ class PaneChatController {
       if (pendingEcho != null) {
         _consumePendingEcho(agent.name, pendingEcho);
       }
+      _discardSession(agent.name, session);
       rethrow;
     }
   }
@@ -163,7 +171,10 @@ class PaneChatController {
     }
     late final TerminalSession session;
     try {
-      session = await _sessionFor(agent: agent, view: view);
+      session = await _sessionFor(
+        agent: agent,
+        view: view,
+      ).timeout(_operationTimeout);
     } catch (error) {
       throw PaneChatSendException(
         stage: PaneChatSendFailureStage.open,
@@ -172,8 +183,9 @@ class PaneChatController {
       );
     }
     try {
-      await session.writeBytes(bytes);
+      await session.writeBytes(bytes).timeout(_operationTimeout);
     } catch (error) {
+      _discardSession(agent.name, session);
       throw PaneChatSendException(
         stage: PaneChatSendFailureStage.enter,
         cause: error,
@@ -197,7 +209,10 @@ class PaneChatController {
     }
     late final TerminalSession session;
     try {
-      session = await _sessionFor(agent: agent, view: view);
+      session = await _sessionFor(
+        agent: agent,
+        view: view,
+      ).timeout(_operationTimeout);
     } catch (error) {
       throw PaneChatSendException(
         stage: PaneChatSendFailureStage.open,
@@ -215,7 +230,7 @@ class PaneChatController {
     }
     try {
       try {
-        await session.paste(body);
+        await session.paste(body).timeout(_operationTimeout);
       } catch (error) {
         throw PaneChatSendException(
           stage: PaneChatSendFailureStage.paste,
@@ -224,7 +239,7 @@ class PaneChatController {
         );
       }
       try {
-        await session.writeBytes(bytes);
+        await session.writeBytes(bytes).timeout(_operationTimeout);
       } catch (error) {
         throw PaneChatSendException(
           stage: PaneChatSendFailureStage.enter,
@@ -236,6 +251,7 @@ class PaneChatController {
       if (pendingEcho != null) {
         _consumePendingEcho(agent.name, pendingEcho);
       }
+      _discardSession(agent.name, session);
       rethrow;
     }
   }
@@ -388,6 +404,18 @@ class PaneChatController {
       _outputStreams.remove(agentName);
     }
     unawaited(subscription.cancel());
+    unawaited(_closeSession(session));
+  }
+
+  void _discardSession(String agentName, TerminalSession session) {
+    if (identical(_sessions[agentName], session)) {
+      _sessions.remove(agentName);
+      _pendingEchoes.remove(agentName);
+    }
+    final subscription = _outputStreams.remove(agentName);
+    if (subscription != null) {
+      unawaited(subscription.cancel());
+    }
     unawaited(_closeSession(session));
   }
 

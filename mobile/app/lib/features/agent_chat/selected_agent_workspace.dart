@@ -24,6 +24,8 @@ import 'agent_local_message_store.dart';
 import 'agent_message_submit_coordinator.dart';
 import 'agent_pane_event_coordinator.dart';
 import 'agent_pane_message_submitter.dart';
+import 'agent_submission_semantics.dart';
+import 'agent_turn_sync_tracker.dart';
 import 'pane_chat_controller.dart';
 import 'selected_agent_workspace_model.dart';
 import 'selected_agent_workspace_view.dart';
@@ -136,9 +138,9 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   final Map<String, String> _downloadedAttachmentPaths = {};
   final Map<String, double> _preExpansionTimelineOffsets = {};
   final Map<String, GlobalKey> _expandedTimelineItemKeys = {};
-  final Set<String> _awaitingPaneResponseAgentNames = {};
-  final Map<String, _AwaitingReplyBaseline> _awaitingReplyBaselines = {};
-  final Set<String> _sourceWorkingAgentNames = {};
+  final AgentTurnSyncTracker _turnSyncTracker = AgentTurnSyncTracker();
+  final Map<String, int> _awaitingTurnGenerations = {};
+  final Map<String, Timer> _startObservationTimers = {};
   final Set<String> _localExceptionStatusAgentNames = {};
   final Map<String, String> _recentPaneOutputText = {};
   final Set<String> _pendingClearNewMessageAgents = {};
@@ -182,10 +184,18 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         _restoreConversationSnapshot();
       }
       _loadSelectedAgentConversation();
-    } else if (_selectedAgentActivitySignature(oldWidget.agent) !=
-        _selectedAgentActivitySignature(widget.agent)) {
+    } else {
       final agent = widget.agent;
-      if (agent != null) {
+      final activityChanged =
+          agentActivitySignature(oldWidget.agent) !=
+          agentActivitySignature(agent);
+      final viewAdvanced =
+          agent != null &&
+          _turnSyncTracker.isAwaiting(agent.name) &&
+          AgentViewWatermark.fromView(
+            widget.view,
+          ).isNewerThan(AgentViewWatermark.fromView(oldWidget.view));
+      if (agent != null && (activityChanged || viewAdvanced)) {
         _syncLocalExecutionStateFromView(
           view: widget.view,
           agentName: agent.name,
@@ -205,6 +215,10 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     WidgetsBinding.instance.removeObserver(this);
     _observedDraftFocusNode?.removeListener(_handleDraftFocusChanged);
     widget.controller?._detachRefreshLatest();
+    for (final timer in _startObservationTimers.values) {
+      timer.cancel();
+    }
+    _startObservationTimers.clear();
     unawaited(_paneMessageSubmitter.closeSessions());
     _uiControllers.dispose();
     super.dispose();
@@ -367,6 +381,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     _syncLocalExecutionStateFromView(
       view: view,
       agentName: conversation.agentName,
+      conversationReconciled: true,
     );
   }
 
@@ -542,10 +557,11 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       return;
     }
     final controller = _draftController(agent.name);
+    final body = controller.text;
     final attachments = _draftAttachments(agent.name);
     await _messageSubmitCoordinator.send(
       agent: agent,
-      body: controller.text,
+      body: body,
       attachments: attachments,
       view: widget.view,
       repository: widget.repository,
@@ -558,9 +574,14 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         _localExceptionStatusAgentNames.remove(agent.name);
         _recentPaneOutputText.remove(agent.name);
         widget.onProjectActivity?.call();
-        if (widget.usePaneInputForMessages) {
-          _markAwaitingPaneResponse(agent.name);
-        }
+      },
+      onDeliveryUpdated: (replacement) {
+        _handleMessageDeliveryUpdated(
+          agent: agent,
+          body: body,
+          hasAttachments: attachments.isNotEmpty,
+          replacement: replacement,
+        );
       },
     );
     // A successful pane write retains the single placeholder until an
@@ -620,8 +641,15 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         _uiControllers.clearDraftAttachments(agent.name);
         _localExceptionStatusAgentNames.remove(agent.name);
         _recentPaneOutputText.remove(agent.name);
-        _markAwaitingPaneResponse(agent.name);
         widget.onProjectActivity?.call();
+      },
+      onDeliveryUpdated: (replacement) {
+        _handleMessageDeliveryUpdated(
+          agent: agent,
+          body: body,
+          hasAttachments: attachments.isNotEmpty,
+          replacement: replacement,
+        );
       },
     );
   }
@@ -882,6 +910,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   }
 
   Future<void> _retryMessage(CcbConversationItem item) async {
+    final agent = widget.view.agentByName(item.agentName);
     await _messageSubmitCoordinator.retry(
       item: item,
       view: widget.view,
@@ -889,6 +918,22 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       terminalTransport: widget.terminalTransport,
       usePaneInput: widget.usePaneInputForMessages,
       refreshView: widget.onRefreshView,
+      onAccepted: () {
+        if (agent != null) {
+          _localExceptionStatusAgentNames.remove(agent.name);
+        }
+      },
+      onDeliveryUpdated: (replacement) {
+        if (agent == null) {
+          return;
+        }
+        _handleMessageDeliveryUpdated(
+          agent: agent,
+          body: item.body,
+          hasAttachments: item.attachments.isNotEmpty,
+          replacement: replacement,
+        );
+      },
     );
   }
 
@@ -921,9 +966,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       });
       return;
     }
-    final wasAwaiting = _awaitingPaneResponseAgentNames.contains(
-      event.agentName,
-    );
+    final wasAwaiting = _turnSyncTracker.isAwaiting(event.agentName);
     _clearAwaitingPaneResponse(event.agentName);
     final changed = _paneEventCoordinator.apply(event);
     if (wasAwaiting && mounted && !changed) {
@@ -963,6 +1006,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   _ExecutionSyncResult _syncLocalExecutionStateFromView({
     required CcbProjectView view,
     required String agentName,
+    bool conversationReconciled = false,
   }) {
     final refreshedAgent = view.agentByName(agentName);
     if (refreshedAgent == null) {
@@ -972,27 +1016,27 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       agent: refreshedAgent,
       isAwaitingAgentResponse: false,
     );
+    final decision = _turnSyncTracker.observe(
+      agentName: agentName,
+      sourceState: status.state,
+      conversation: _chatController.remoteConversationFor(agentName),
+      view: view,
+      agent: refreshedAgent,
+      conversationReconciled: conversationReconciled,
+    );
     if (status.state == 'working') {
-      _sourceWorkingAgentNames.add(agentName);
+      _cancelStartObservationTimeout(agentName);
       _localExceptionStatusAgentNames.remove(agentName);
       return _ExecutionSyncResult.pending;
     }
-    if (status.state == 'idle') {
-      final wasAwaiting = _awaitingPaneResponseAgentNames.contains(agentName);
-      final observedWorking = _sourceWorkingAgentNames.contains(agentName);
-      final replyProgress = _awaitingReplyProgress(agentName);
-      if (wasAwaiting) {
-        if (!replyProgress.hasReplyProgress) {
-          return _ExecutionSyncResult.pending;
-        }
-        if (replyProgress.hasRunningReply) {
-          return _ExecutionSyncResult.pending;
-        }
-      }
-      _clearAwaitingPaneResponse(agentName);
-      _sourceWorkingAgentNames.remove(agentName);
+    if (status.state == 'exception') {
+      return _ExecutionSyncResult.pending;
+    }
+    if (status.state == 'idle' && decision.settled) {
       _localExceptionStatusAgentNames.remove(agentName);
-      if (wasAwaiting && observedWorking) {
+      if (decision.isCompleted &&
+          decision.hadPendingTurn &&
+          decision.observedSourceWorking) {
         _showSnack(
           CcbMobileLocalizations.of(context).agentCompleted(agentName),
         );
@@ -1003,40 +1047,148 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     return _ExecutionSyncResult.pending;
   }
 
-  void _markAwaitingPaneResponse(String agentName) {
-    _awaitingPaneResponseAgentNames.add(agentName);
-    _awaitingReplyBaselines.putIfAbsent(
-      agentName,
-      () => _awaitingReplyBaselineFor(
-        _chatController.remoteConversationFor(agentName),
-      ),
+  void _updateAwaitingForSubmission({
+    required CcbAgent agent,
+    required String body,
+    required bool hasAttachments,
+  }) {
+    if (!agentSubmissionExpectsAssistantReply(
+      agent: agent,
+      body: body,
+      hasAttachments: hasAttachments,
+    )) {
+      _clearAwaitingPaneResponse(agent.name);
+      return;
+    }
+    _turnSyncTracker.markSubmitted(
+      agentName: agent.name,
+      conversation: _chatController.remoteConversationFor(agent.name),
     );
+    _awaitingTurnGenerations[agent.name] =
+        (_awaitingTurnGenerations[agent.name] ?? 0) + 1;
   }
 
   void _clearAwaitingPaneResponse(String agentName) {
-    _awaitingPaneResponseAgentNames.remove(agentName);
-    _awaitingReplyBaselines.remove(agentName);
+    _cancelStartObservationTimeout(agentName);
+    _awaitingTurnGenerations[agentName] =
+        (_awaitingTurnGenerations[agentName] ?? 0) + 1;
+    _turnSyncTracker.clear(agentName);
   }
 
-  _AwaitingReplyProgress _awaitingReplyProgress(String agentName) {
-    final baseline = _awaitingReplyBaselines[agentName];
-    if (baseline == null) {
-      return const _AwaitingReplyProgress(
-        hasReplyProgress: false,
-        hasRunningReply: false,
+  void _handleMessageDeliveryUpdated({
+    required CcbAgent agent,
+    required String body,
+    required bool hasAttachments,
+    required CcbConversationItem replacement,
+  }) {
+    final agentName = agent.name;
+    if (replacement.state == CcbConversationDeliveryState.sent) {
+      _updateAwaitingForSubmission(
+        agent: agent,
+        body: body,
+        hasAttachments: hasAttachments,
       );
+      if (!_turnSyncTracker.isAwaiting(agentName)) {
+        return;
+      }
+      _syncLocalExecutionStateFromView(view: widget.view, agentName: agentName);
+      _scheduleIdleReconciliation(agentName);
+      _scheduleStartObservationTimeout(
+        agentName: agentName,
+        localMessageId: replacement.id,
+      );
+      return;
     }
-    final current = _awaitingReplySnapshotFor(
-      _chatController.remoteConversationFor(agentName),
+    _mutateChatState(() {
+      _clearAwaitingPaneResponse(agentName);
+    });
+  }
+
+  void _scheduleStartObservationTimeout({
+    required String agentName,
+    required String localMessageId,
+  }) {
+    _cancelStartObservationTimeout(agentName);
+    final generation = _awaitingTurnGenerations[agentName] ?? 0;
+    _startObservationTimers[agentName] = Timer(
+      agentTurnStartObservationTimeout,
+      () {
+        _startObservationTimers.remove(agentName);
+        unawaited(
+          _handleStartObservationTimeout(
+            agentName: agentName,
+            localMessageId: localMessageId,
+            generation: generation,
+          ),
+        );
+      },
     );
-    final hasReplyProgress =
-        current.replyCount > baseline.replyCount ||
-        (current.latestReplySignature != null &&
-            current.latestReplySignature != baseline.latestReplySignature);
-    return _AwaitingReplyProgress(
-      hasReplyProgress: hasReplyProgress,
-      hasRunningReply: hasReplyProgress && current.latestReplyRunning,
-    );
+  }
+
+  Future<void> _handleStartObservationTimeout({
+    required String agentName,
+    required String localMessageId,
+    required int generation,
+  }) async {
+    if (!mounted ||
+        widget.agent?.name != agentName ||
+        !_turnSyncTracker.isAwaiting(agentName) ||
+        _awaitingTurnGenerations[agentName] != generation ||
+        _turnSyncTracker.hasObservedSourceWorking(agentName)) {
+      return;
+    }
+    final agent = widget.agent;
+    if (agent == null) {
+      return;
+    }
+    await _refreshLatestForAgent(agent, refreshViewFirst: true);
+    if (!mounted ||
+        widget.agent?.name != agentName ||
+        !_turnSyncTracker.isAwaiting(agentName) ||
+        _awaitingTurnGenerations[agentName] != generation ||
+        _turnSyncTracker.hasObservedSourceWorking(agentName)) {
+      return;
+    }
+    _mutateChatState(() {
+      final localItems = _chatController.localMessagesFor(agentName);
+      for (final item in localItems) {
+        if (item.id != localMessageId) {
+          continue;
+        }
+        _chatController.replaceLocalMessage(
+          agentName,
+          localMessageId,
+          item.copyWith(state: CcbConversationDeliveryState.unconfirmed),
+        );
+        break;
+      }
+      _localExceptionStatusAgentNames.add(agentName);
+      _clearAwaitingPaneResponse(agentName);
+    });
+  }
+
+  void _cancelStartObservationTimeout(String agentName) {
+    _startObservationTimers.remove(agentName)?.cancel();
+  }
+
+  void _scheduleIdleReconciliation(String agentName) {
+    if (!AgentViewWatermark.fromView(widget.view).hasValue) {
+      return;
+    }
+    final generation = _awaitingTurnGenerations[agentName] ?? 0;
+    Future<void>.delayed(agentTurnInitialReconciliationDelay, () async {
+      if (!mounted ||
+          widget.agent?.name != agentName ||
+          !_turnSyncTracker.isAwaiting(agentName) ||
+          _awaitingTurnGenerations[agentName] != generation) {
+        return;
+      }
+      final agent = widget.agent;
+      if (agent == null) {
+        return;
+      }
+      await _refreshLatestForAgent(agent, refreshViewFirst: true);
+    });
   }
 
   bool _isTimelineNearEnd(String agentName) {
@@ -1146,9 +1298,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       view: widget.view,
       agent: selectedAgent,
       chatController: _chatController,
-      isAwaitingAgentResponse: _awaitingPaneResponseAgentNames.contains(
-        selectedAgent.name,
-      ),
+      isAwaitingAgentResponse: _turnSyncTracker.isAwaiting(selectedAgent.name),
       hasLocalExecutionException: _localExceptionStatusAgentNames.contains(
         selectedAgent.name,
       ),
@@ -1166,9 +1316,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       view: widget.view,
       agent: selectedAgent,
       chatController: _chatController,
-      isAwaitingAgentResponse: _awaitingPaneResponseAgentNames.contains(
-        selectedAgent.name,
-      ),
+      isAwaitingAgentResponse: _turnSyncTracker.isAwaiting(selectedAgent.name),
       hasLocalExecutionException: _localExceptionStatusAgentNames.contains(
         selectedAgent.name,
       ),
@@ -1280,23 +1428,6 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   }
 }
 
-String _selectedAgentActivitySignature(CcbAgent? agent) {
-  if (agent == null) {
-    return '';
-  }
-  return [
-    agent.name,
-    agent.active,
-    agent.queueDepth,
-    agent.runtimeHealth,
-    agent.activityState,
-    agent.activitySource,
-    agent.activityReason,
-    agent.activitySymbol,
-    agent.activityColor,
-  ].join('|');
-}
-
 String? _mimeTypeForExtension(String? extension) {
   return switch (extension?.toLowerCase()) {
     'jpg' || 'jpeg' => 'image/jpeg',
@@ -1394,78 +1525,6 @@ class _ExecutionSyncResult {
 
   final bool settled;
   final bool isCompleted;
-}
-
-class _AwaitingReplyBaseline {
-  const _AwaitingReplyBaseline({
-    required this.replyCount,
-    required this.latestReplySignature,
-  });
-
-  final int replyCount;
-  final String? latestReplySignature;
-}
-
-class _AwaitingReplySnapshot {
-  const _AwaitingReplySnapshot({
-    required this.replyCount,
-    required this.latestReplySignature,
-    required this.latestReplyRunning,
-  });
-
-  final int replyCount;
-  final String? latestReplySignature;
-  final bool latestReplyRunning;
-}
-
-class _AwaitingReplyProgress {
-  const _AwaitingReplyProgress({
-    required this.hasReplyProgress,
-    required this.hasRunningReply,
-  });
-
-  final bool hasReplyProgress;
-  final bool hasRunningReply;
-}
-
-_AwaitingReplyBaseline _awaitingReplyBaselineFor(
-  CcbAgentConversation? conversation,
-) {
-  final snapshot = _awaitingReplySnapshotFor(conversation);
-  return _AwaitingReplyBaseline(
-    replyCount: snapshot.replyCount,
-    latestReplySignature: snapshot.latestReplySignature,
-  );
-}
-
-_AwaitingReplySnapshot _awaitingReplySnapshotFor(
-  CcbAgentConversation? conversation,
-) {
-  var replyCount = 0;
-  CcbConversationItem? latestReply;
-  for (final item in conversation?.items ?? const <CcbConversationItem>[]) {
-    if (item.kind != CcbConversationItemKind.agentReply) {
-      continue;
-    }
-    replyCount += 1;
-    latestReply = item;
-  }
-  return _AwaitingReplySnapshot(
-    replyCount: replyCount,
-    latestReplySignature:
-        latestReply == null ? null : _awaitingReplySignature(latestReply),
-    latestReplyRunning: latestReply != null && latestReply.completedAt == null,
-  );
-}
-
-String _awaitingReplySignature(CcbConversationItem item) {
-  return [
-    item.id,
-    item.startedAt?.microsecondsSinceEpoch.toString() ?? '',
-    item.completedAt?.microsecondsSinceEpoch.toString() ?? '',
-    item.body,
-    item.attachments.length.toString(),
-  ].join('|');
 }
 
 String _safeFileName(String fileName) {

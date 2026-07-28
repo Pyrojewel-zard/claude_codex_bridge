@@ -91,7 +91,11 @@ class PaneMessageTarget:
     tmux_binary: str = 'tmux'
 
 
-def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, object]:
+def capture_tmux_pane_text(
+    target: TerminalHistoryTarget,
+    *,
+    timeout: float = 2.0,
+) -> str:
     target = _with_compatible_tmux(target)
     cp = subprocess.run(
         target.command,
@@ -99,13 +103,17 @@ def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, obj
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
-        timeout=2.0,
+        timeout=max(0.05, float(timeout)),
         env=_terminal_client_env(),
     )
     if cp.returncode != 0:
         message = (cp.stderr or '').strip() or 'tmux capture-pane failed'
         raise RuntimeError(message)
-    text = _strip_ansi(cp.stdout or '')
+    return _strip_ansi(cp.stdout or '')
+
+
+def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, object]:
+    text = capture_tmux_pane_text(target)
     return {
         'agent': target.agent,
         'history_scope': 'tmux_scrollback',

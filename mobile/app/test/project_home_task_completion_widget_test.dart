@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -497,6 +498,60 @@ void main() {
     expect(localNotifications.shown, isEmpty);
   });
 
+  testWidgets(
+    'agent activity invalidation settles the visible working agent to idle',
+    (tester) async {
+      final streamClient = _FakeTaskCompletionStreamClient();
+      final repository = _ActivityTransitionGatewayRepository();
+      final profileStore = await _profileStoreWith([
+        _pairedHost(scopes: const {'view', 'focus', 'notify'}),
+      ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: FakeMobileCcbRepository.demo(),
+            profileStore: profileStore,
+            autoActivateStoredProfile: true,
+            gatewayRepositoryFactory: (_) => repository,
+            gatewayTerminalTransportFactory:
+                (_) => RecordingTerminalTransport(),
+            taskNotificationStreamClient: streamClient,
+            taskCompletionLocalNotifications:
+                _FakeTaskCompletionLocalNotifications(),
+            taskCompletionSeenStore: TaskCompletionSeenDedupeStore(
+              secureStore: MemorySecureStore(),
+            ),
+            taskCompletionUnreadStore: TaskCompletionUnreadStore(
+              secureStore: MemorySecureStore(),
+            ),
+            invalidationCursorStore: _cursorStore(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('project-open-proj-demo')));
+      await tester.pumpAndSettle();
+      await _pumpUntilSubscribeCalls(tester, streamClient, 2);
+
+      expect(find.text('Working...'), findsOneWidget);
+      final callsBefore = repository.getProjectViewCalls;
+      streamClient.add(
+        _invalidationEvent(
+          kind: TaskCompletionNotificationEvent.agentActivityChangedKind,
+          projectId: 'proj-demo',
+          agent: 'mobile',
+          activityState: 'idle',
+        ),
+      );
+      await _pumpNotificationEvent(tester);
+
+      expect(repository.getProjectViewCalls, greaterThan(callsBefore));
+      expect(repository.idle, isFalse);
+      expect(find.text('Working...'), findsNothing);
+    },
+  );
+
   testWidgets('visible target completion is consumed without notification', (
     tester,
   ) async {
@@ -933,6 +988,46 @@ class _ResyncRecordingGatewayRepository extends RecordingGatewayRepository {
   }
 }
 
+class _ActivityTransitionGatewayRepository extends RecordingGatewayRepository {
+  var getProjectViewCalls = 0;
+  var idle = false;
+
+  @override
+  Future<CcbProjectView> getProjectView(String projectId) async {
+    getProjectViewCalls += 1;
+    final payload =
+        jsonDecode(jsonEncode(demoPayloadWithEpoch(4))) as Map<String, Object?>;
+    final view = payload['view']! as Map<String, Object?>;
+    final agents = view['agents']! as List<Object?>;
+    final mobile = agents
+        .map((item) => item! as Map<String, Object?>)
+        .firstWhere((agent) => agent['name'] == 'mobile');
+    mobile['activity_state'] = idle ? 'idle' : 'active';
+    mobile['activity_source'] = 'claude_runtime';
+    mobile['activity_reason'] =
+        idle ? 'claude_pane_idle_prompt' : 'claude_pane_tool_running';
+    return CcbProjectView.fromProjectViewPayload(payload);
+  }
+
+  @override
+  Future<CcbAgentConversation> getAgentConversation({
+    required String projectId,
+    required String agent,
+    required int namespaceEpoch,
+    int limit = 50,
+    String? cursor,
+  }) async {
+    conversationCalls.add((projectId, agent, namespaceEpoch));
+    return CcbAgentConversation(
+      projectId: projectId,
+      agentName: agent,
+      namespaceEpoch: namespaceEpoch,
+      items: const [],
+      generatedAt: DateTime.utc(2026, 7, 28),
+    );
+  }
+}
+
 TaskCompletionNotificationEvent _completionEvent({
   required String dedupeKey,
   required String agent,
@@ -949,14 +1044,20 @@ TaskCompletionNotificationEvent _completionEvent({
   );
 }
 
-TaskCompletionNotificationEvent _invalidationEvent({required String kind}) {
+TaskCompletionNotificationEvent _invalidationEvent({
+  required String kind,
+  String projectId = '',
+  String agent = '',
+  String? activityState,
+}) {
   return TaskCompletionNotificationEvent(
     id: 'event-$kind',
     kind: kind,
-    projectId: '',
+    projectId: projectId,
     projectShortName: '',
-    agent: '',
+    agent: agent,
     completedAt: DateTime.utc(2099),
     dedupeKey: 'invalidation:$kind',
+    activityState: activityState,
   );
 }

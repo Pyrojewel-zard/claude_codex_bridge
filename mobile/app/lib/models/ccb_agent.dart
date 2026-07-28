@@ -31,6 +31,32 @@ class CcbAgent {
   final String? activityReason;
   final String? lastProgressAt;
 
+  CcbAgent copyWith({
+    String? activityState,
+    String? activitySymbol,
+    String? activityColor,
+    String? activitySource,
+    String? activityReason,
+    String? lastProgressAt,
+  }) {
+    return CcbAgent(
+      name: name,
+      provider: provider,
+      window: window,
+      order: order,
+      active: active,
+      queueDepth: queueDepth,
+      paneId: paneId,
+      runtimeHealth: runtimeHealth,
+      activityState: activityState ?? this.activityState,
+      activitySymbol: activitySymbol ?? this.activitySymbol,
+      activityColor: activityColor ?? this.activityColor,
+      activitySource: activitySource ?? this.activitySource,
+      activityReason: activityReason ?? this.activityReason,
+      lastProgressAt: lastProgressAt ?? this.lastProgressAt,
+    );
+  }
+
   factory CcbAgent.fromJson(Map<String, Object?> json) {
     return CcbAgent(
       name: _text(json['name']),

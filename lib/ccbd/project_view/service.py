@@ -1080,7 +1080,7 @@ def _claude_runtime_status(
     generated_at: str,
     progress_tracker: _ClaudePaneProgressTracker | None = None,
 ) -> ClaudeRuntimeStatus:
-    activity_status = claude_activity_status(provider_activity)
+    activity_status = claude_activity_status(provider_activity, now=generated_at)
     session_status = read_claude_session_status(
         _claude_transcript_path(runtime),
         min_mtime_s=_job_updated_epoch_for_session_floor(current_job),

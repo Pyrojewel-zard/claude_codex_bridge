@@ -57,6 +57,7 @@ class TaskCompletionNotificationEvent {
     required this.dedupeKey,
     this.namespaceEpoch,
     this.scope,
+    this.activityState,
   });
 
   static const taskCompletedKind = 'task_completed';
@@ -74,6 +75,7 @@ class TaskCompletionNotificationEvent {
   final String dedupeKey;
   final int? namespaceEpoch;
   final String? scope;
+  final String? activityState;
 
   bool get isTaskCompleted => kind == taskCompletedKind;
 
@@ -111,6 +113,7 @@ class TaskCompletionNotificationEvent {
       dedupeKey: _requiredText(json['dedupe_key'], 'dedupe_key'),
       namespaceEpoch: _optionalInt(json['namespace_epoch']),
       scope: _optionalText(json['scope']),
+      activityState: _optionalText(json['activity_state']),
     );
   }
 
@@ -125,6 +128,7 @@ class TaskCompletionNotificationEvent {
       'dedupe_key': dedupeKey,
       if (namespaceEpoch != null) 'namespace_epoch': namespaceEpoch,
       if (scope != null) 'scope': scope,
+      if (activityState != null) 'activity_state': activityState,
     };
   }
 }

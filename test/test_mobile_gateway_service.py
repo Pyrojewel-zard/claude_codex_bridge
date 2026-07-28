@@ -1890,6 +1890,31 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
                     ],
                 },
             },
+            {
+                'uuid': 'local-clear',
+                'timestamp': '2026-06-25T12:00:03.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': (
+                        '<command-name>/clear</command-name>\n'
+                        '<command-message>clear</command-message> '
+                        '<command-args></command-args>'
+                    ),
+                },
+            },
+            {
+                'uuid': 'local-caveat',
+                'timestamp': '2026-06-25T12:00:04.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': (
+                        '<local-command-caveat>Local command metadata. '
+                        'Do not respond.</local-command-caveat>'
+                    ),
+                },
+            },
         ],
     )
 
@@ -1952,6 +1977,8 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
     assert 'hidden thinking' not in public_json
     assert 'CCB_REQ_ID' not in public_json
     assert 'CCB reply guidance' not in public_json
+    assert '<command-name>' not in public_json
+    assert '<local-command-caveat>' not in public_json
     assert 'stale ask snapshot' not in public_json
     assert 'stale claude pane prompt' not in public_json
     assert 'stale claude pane answer' not in public_json

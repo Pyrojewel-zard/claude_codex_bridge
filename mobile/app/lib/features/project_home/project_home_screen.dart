@@ -135,6 +135,18 @@ class ProjectHomeScreen extends StatelessWidget {
   }
 }
 
+class _GatewayAgentActivityOverride {
+  const _GatewayAgentActivityOverride({
+    required this.namespaceEpoch,
+    required this.state,
+    required this.observedAt,
+  });
+
+  final int? namespaceEpoch;
+  final String state;
+  final DateTime observedAt;
+}
+
 class _ProjectHomeView extends StatefulWidget {
   const _ProjectHomeView({
     required this.repository,
@@ -238,6 +250,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
   String? _visibleTaskCompletionAgentName;
   final Map<String, bool> _knownProjectWorkingAgents = {};
   final Map<String, DateTime> _optimisticProjectActivityAt = {};
+  final Map<String, _GatewayAgentActivityOverride> _agentActivityOverrides = {};
   List<TaskCompletionUnreadItem> _unreadTaskCompletions = const [];
 
   late final ProjectHomeProfileBootstrapper _profileBootstrapper =
@@ -418,7 +431,11 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         if (error != null) {
           return _buildProjectLoadError(error);
         }
-        final view = snapshot.data;
+        final snapshotView = snapshot.data;
+        final view =
+            snapshotView == null
+                ? null
+                : _applyGatewayAgentActivityOverride(snapshotView);
         final selectedAgent = view == null ? null : _selectedAgentFor(view);
         if (view == null) {
           _setVisibleTaskCompletionTarget(projectId: null, agentName: null);
@@ -1932,6 +1949,10 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       return;
     }
     if (event.projectId == _activeProjectId) {
+      if (event.kind ==
+          TaskCompletionNotificationEvent.agentActivityChangedKind) {
+        _recordGatewayAgentActivityOverride(event);
+      }
       await _scheduleInvalidationRefresh(
         conversationChanged:
             event.kind ==
@@ -1966,6 +1987,81 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         );
       }
     }
+  }
+
+  void _recordGatewayAgentActivityOverride(
+    TaskCompletionNotificationEvent event,
+  ) {
+    final state = event.activityState?.trim().toLowerCase();
+    if (event.agent.trim().isEmpty ||
+        !const {'active', 'idle', 'failed'}.contains(state)) {
+      return;
+    }
+    final key = _agentActivityOverrideKey(
+      projectId: event.projectId,
+      agent: event.agent,
+    );
+    _agentActivityOverrides[key] = _GatewayAgentActivityOverride(
+      namespaceEpoch: event.namespaceEpoch,
+      state: state!,
+      observedAt: event.completedAt.toUtc(),
+    );
+    while (_agentActivityOverrides.length > 128) {
+      _agentActivityOverrides.remove(_agentActivityOverrides.keys.first);
+    }
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  CcbProjectView _applyGatewayAgentActivityOverride(CcbProjectView view) {
+    var changed = false;
+    final agents = <CcbAgent>[];
+    for (final agent in view.agents) {
+      final override =
+          _agentActivityOverrides[_agentActivityOverrideKey(
+            projectId: view.project.id,
+            agent: agent.name,
+          )];
+      final namespaceMatches =
+          override?.namespaceEpoch == null ||
+          override?.namespaceEpoch == view.namespaceEpoch;
+      final snapshotPredatesEvent =
+          view.generatedAt == null ||
+          (override != null && view.generatedAt!.isBefore(override.observedAt));
+      if (override == null || !namespaceMatches || !snapshotPredatesEvent) {
+        agents.add(agent);
+        continue;
+      }
+      changed = true;
+      agents.add(
+        agent.copyWith(
+          activityState: override.state,
+          activitySymbol: switch (override.state) {
+            'active' => '◉',
+            'failed' => '!',
+            _ => '◇',
+          },
+          activityColor: switch (override.state) {
+            'active' => 'blue',
+            'failed' => 'red',
+            _ => 'gray',
+          },
+          activitySource: 'mobile_invalidation',
+          activityReason: 'mobile_agent_activity_changed',
+          lastProgressAt: override.observedAt.toIso8601String(),
+        ),
+      );
+    }
+    return changed ? view.copyWith(agents: agents) : view;
+  }
+
+  String _agentActivityOverrideKey({
+    required String projectId,
+    required String agent,
+  }) {
+    final hostId = _selectedProfile?.profile.hostId ?? '';
+    return '$hostId\u0000$projectId\u0000${agent.trim()}';
   }
 
   Future<CcbProjectView?> _focusWindow(

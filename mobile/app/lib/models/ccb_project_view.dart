@@ -21,6 +21,9 @@ class CcbProjectView {
     required this.contentItems,
     required this.notifications,
     required this.terminalHistories,
+    this.generatedAt,
+    this.sequence,
+    this.ttlMs,
   });
 
   final CcbProject project;
@@ -35,10 +38,34 @@ class CcbProjectView {
   final List<CcbContentItem> contentItems;
   final List<CcbNotification> notifications;
   final Map<String, ReadableTerminalHistory> terminalHistories;
+  final DateTime? generatedAt;
+  final int? sequence;
+  final int? ttlMs;
+
+  CcbProjectView copyWith({List<CcbAgent>? agents}) {
+    return CcbProjectView(
+      project: project,
+      namespaceEpoch: namespaceEpoch,
+      tmuxSocketPath: tmuxSocketPath,
+      tmuxSessionName: tmuxSessionName,
+      activeWindow: activeWindow,
+      activePaneId: activePaneId,
+      windows: windows,
+      agents: agents ?? this.agents,
+      comms: comms,
+      contentItems: contentItems,
+      notifications: notifications,
+      terminalHistories: terminalHistories,
+      generatedAt: generatedAt,
+      sequence: sequence,
+      ttlMs: ttlMs,
+    );
+  }
 
   factory CcbProjectView.fromProjectViewPayload(Map<String, Object?> payload) {
     final view = _map(payload['view']);
     final source = view.isEmpty ? payload : view;
+    final cache = _map(payload['cache']);
     final namespace = _map(source['namespace']);
     final project = CcbProject.fromJson(_map(source['project']));
     final agents = [
@@ -69,6 +96,9 @@ class CcbProjectView {
         comms: source['comms'],
       ),
       terminalHistories: _terminalHistories(source['terminal_history']),
+      generatedAt: _optionalDateTime(cache['generated_at']),
+      sequence: _optionalInt(cache['sequence']),
+      ttlMs: _optionalInt(cache['ttl_ms']),
     );
   }
 
@@ -374,6 +404,11 @@ String? _optionalText(Object? value) {
 }
 
 int? _optionalInt(Object? value) => int.tryParse((value ?? '').toString());
+
+DateTime? _optionalDateTime(Object? value) {
+  final text = _optionalText(value);
+  return text == null ? null : DateTime.tryParse(text)?.toUtc();
+}
 
 String? _firstText(Iterable<String?> values) {
   for (final value in values) {

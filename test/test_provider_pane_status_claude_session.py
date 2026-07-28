@@ -59,6 +59,42 @@ def test_claude_session_status_reports_latest_user_as_working(tmp_path: Path) ->
     assert status.reason == "claude_session_user_turn"
 
 
+def test_claude_session_status_treats_local_clear_as_free(tmp_path: Path) -> None:
+    session = tmp_path / "session.jsonl"
+    _append_jsonl(
+        session,
+        {"type": "user", "message": {"role": "user", "content": "real prompt"}},
+        _assistant_entry(stop_reason="end_turn"),
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": (
+                    "<command-name>/clear</command-name>\n"
+                    "<command-message>clear</command-message> "
+                    "<command-args></command-args>"
+                ),
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": (
+                    "<local-command-caveat>Local command metadata. "
+                    "Do not respond.</local-command-caveat>"
+                ),
+            },
+        },
+    )
+
+    status = read_claude_session_status(session)
+
+    assert status.state == "free"
+    assert status.reason == "claude_session_local_control"
+    assert status.matched_patterns == ("local_control",)
+
+
 def test_claude_session_status_reports_tool_use_as_tool_running(tmp_path: Path) -> None:
     session = tmp_path / "session.jsonl"
     _append_jsonl(
@@ -170,7 +206,95 @@ def test_claude_runtime_status_uses_pane_active_over_idle_activity() -> None:
     assert status.pane_state == "tool_running"
 
 
-def test_claude_runtime_status_keeps_terminal_summary_observational() -> None:
+def test_claude_runtime_status_uses_idle_prompt_over_stale_active_activity() -> None:
+    activity = claude_activity_status(
+        SimpleNamespace(
+            state="active",
+            reason="provider_PreToolUse",
+            event_name="PreToolUse",
+            diagnostics={"tool_name": "Bash"},
+        )
+    )
+    session = read_claude_session_status(None)
+    pane = parse_claude_pane_status("Finished previous task\n\n❯\n")
+
+    status = compose_claude_runtime_status(
+        activity,
+        session,
+        job_running=False,
+        pane_status=pane,
+    )
+
+    assert status.state == "free"
+    assert status.reason == "claude_pane_idle_prompt"
+    assert status.source == "pane"
+    assert status.activity_state == "active"
+    assert status.pane_state == "free"
+
+
+def test_claude_runtime_status_uses_real_footer_idle_prompt_over_notification() -> None:
+    activity = claude_activity_status(
+        SimpleNamespace(
+            state="pending",
+            reason="provider_Notification",
+            event_name="Notification",
+            diagnostics={},
+        )
+    )
+    session = read_claude_session_status(None)
+    pane = parse_claude_pane_status(
+        "● hello from the previous turn\n"
+        "✻ Cogitated for 2s\n"
+        "────────────────────────────────────────\n"
+        "❯\u00a0\n"
+        "────────────────────────────────────────\n"
+        "⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    )
+
+    status = compose_claude_runtime_status(
+        activity,
+        session,
+        job_running=False,
+        pane_status=pane,
+    )
+
+    assert pane.state == "free"
+    assert status.state == "free"
+    assert status.reason == "claude_pane_idle_prompt"
+    assert status.source == "pane"
+    assert status.activity_state == "pending"
+
+
+def test_claude_pane_idle_prompt_supersedes_old_error_and_summary_text() -> None:
+    pane = parse_claude_pane_status(
+        "API error: old request failed\n"
+        "Thought for 9s, ran 1 shell command\n"
+        "────────────────────────────────────────\n"
+        "❯\n"
+        "────────────────────────────────────────\n"
+        "⏵⏵ bypass permissions on\n"
+    )
+
+    assert pane.state == "free"
+    assert pane.reason == "claude_pane_idle_prompt"
+
+
+def test_claude_activity_status_discards_stale_active_hook() -> None:
+    status = claude_activity_status(
+        SimpleNamespace(
+            state="active",
+            reason="provider_PreToolUse",
+            event_name="PreToolUse",
+            diagnostics={"tool_name": "Bash"},
+            updated_at="2026-07-01T00:00:00Z",
+        ),
+        now="2026-07-01T00:03:01Z",
+    )
+
+    assert status is None
+
+
+def test_claude_runtime_status_treats_terminal_summary_with_prompt_as_free() -> None:
     activity = claude_activity_status(
         SimpleNamespace(
             state="active",
@@ -184,8 +308,8 @@ def test_claude_runtime_status_keeps_terminal_summary_observational() -> None:
 
     status = compose_claude_runtime_status(activity, session, job_running=False, pane_status=pane)
 
-    assert status.state == "tool_running"
-    assert status.reason == "claude_activity_tool_running"
-    assert status.source == "activity"
-    assert status.pane_state == "terminal_summary"
-    assert status.pane_reason == "claude_pane_terminal_summary"
+    assert status.state == "free"
+    assert status.reason == "claude_pane_idle_prompt"
+    assert status.source == "pane"
+    assert status.pane_state == "free"
+    assert status.pane_reason == "claude_pane_idle_prompt"
