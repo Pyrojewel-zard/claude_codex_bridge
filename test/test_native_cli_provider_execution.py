@@ -785,8 +785,8 @@ def test_native_cli_structured_tool_event_does_not_terminalize_before_final(tmp_
     assert terminal.decision is not None
     assert terminal.decision.status is CompletionStatus.INCOMPLETE
     expected_reason = (
-        "grok_native_terminal_missing"
-        if provider == "grok"
+        f"{provider}_native_terminal_missing"
+        if provider in {"grok", "pi", "omp"}
         else f"{provider}_run_finished:tool_calls"
     )
     assert terminal.decision.reason == expected_reason

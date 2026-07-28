@@ -35,7 +35,21 @@ from .session import load_native_project_session
 
 _RUN_PROCS: dict[str, subprocess.Popen] = {}
 _MAX_STDERR_CHARS = 4000
-_STOP_REASONS = {"stop", "end_turn", "turn_end", "completed", "complete", "done", "finished", "success", "ok"}
+_STOP_REASONS = {
+    "stop",
+    "end_turn",
+    "turn_end",
+    "agent_settled",
+    "agent_end_terminal",
+    "completed",
+    "complete",
+    "done",
+    "finished",
+    "success",
+    "ok",
+}
+_FAILED_OUTCOME_REASONS = {"error", "failed", "failure"}
+_SUCCESS_OUTCOME_REASONS = {"stop", "end_turn", "yield"}
 
 
 @dataclass(frozen=True)
@@ -47,6 +61,8 @@ class NativeCliObservation:
     completed_at: object | None = None
     error: str = ""
     intermediate: bool = False
+    outcome_reason: str = ""
+    protocol_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,8 +99,12 @@ class NativeCliExecutionConfig:
     process_exit_complete_reason: str = ""
     missing_terminal_reason: str = ""
     timeout_reason: str = ""
+    invalid_protocol_reason: str = ""
+    missing_outcome_reason: str = ""
     run_timeout_s: float = 900.0
     terminal_on_process_exit: bool = True
+    terminal_requires_process_exit: bool = False
+    require_outcome_reason: bool = False
 
     def reason(self, name: str) -> str:
         explicit = str(getattr(self, name) or "").strip()
@@ -354,7 +374,8 @@ def _terminal_result_if_ready(
 ) -> ProviderPollResult | None:
     provider = str(config.provider or submission.provider)
     reply = str(state.get("reply_buffer") or clean_native_reply(observation.text or "", str(state.get("request_anchor") or submission.job_id))).strip()
-    if observation.error:
+    wait_for_process_exit = config.terminal_requires_process_exit and returncode is None
+    if observation.error and not wait_for_process_exit:
         return _terminal(
             config,
             submission,
@@ -365,7 +386,12 @@ def _terminal_result_if_ready(
             reason=config.reason("run_error_reason"),
             reply=reply,
             confidence=CompletionConfidence.DEGRADED,
-            diagnostics_extra={"error": observation.error},
+            diagnostics_extra={
+                "error": observation.error,
+                "finish_reason": observation.finish_reason,
+                "outcome_reason": observation.outcome_reason,
+                "returncode": returncode,
+            },
         )
 
     timeout_s = _state_float(state, "run_timeout_s", config.run_timeout_s)
@@ -407,9 +433,46 @@ def _terminal_result_if_ready(
             },
         )
 
+    if wait_for_process_exit:
+        return None
+
+    if observation.protocol_error:
+        return _terminal(
+            config,
+            submission,
+            state,
+            items,
+            now,
+            status=CompletionStatus.INCOMPLETE,
+            reason=config.reason("invalid_protocol_reason"),
+            reply=reply,
+            confidence=CompletionConfidence.DEGRADED,
+            diagnostics_extra={
+                "protocol_error": observation.protocol_error,
+                "finish_reason": observation.finish_reason,
+                "outcome_reason": observation.outcome_reason,
+                "returncode": returncode,
+                "stdout_path": str(state.get("stdout_path") or ""),
+                "stderr_path": str(state.get("stderr_path") or ""),
+            },
+        )
+
     if observation.finished:
         reason = _normalized_reason(observation.finish_reason)
-        if reason and reason not in _STOP_REASONS:
+        outcome_reason = _normalized_reason(observation.outcome_reason)
+        if config.require_outcome_reason and not outcome_reason:
+            status = CompletionStatus.INCOMPLETE
+            terminal_reason = config.reason("missing_outcome_reason")
+            confidence = CompletionConfidence.DEGRADED
+        elif outcome_reason in _FAILED_OUTCOME_REASONS:
+            status = CompletionStatus.FAILED
+            terminal_reason = config.reason("run_error_reason")
+            confidence = CompletionConfidence.OBSERVED
+        elif outcome_reason and outcome_reason not in _SUCCESS_OUTCOME_REASONS:
+            status = CompletionStatus.INCOMPLETE
+            terminal_reason = f"{provider}_run_finished:{outcome_reason}"
+            confidence = CompletionConfidence.OBSERVED
+        elif reason and reason not in _STOP_REASONS:
             status = CompletionStatus.INCOMPLETE
             terminal_reason = f"{provider}_run_finished:{reason}"
             confidence = CompletionConfidence.OBSERVED
@@ -434,6 +497,7 @@ def _terminal_result_if_ready(
             confidence=confidence,
             diagnostics_extra={
                 "finish_reason": observation.finish_reason,
+                "outcome_reason": observation.outcome_reason,
                 "stdout_path": str(state.get("stdout_path") or ""),
                 "stderr_path": str(state.get("stderr_path") or ""),
                 "returncode": returncode,

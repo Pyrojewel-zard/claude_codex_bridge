@@ -1336,6 +1336,7 @@ def _handle_native_cli_run(provider: str, argv: list[str], delay_s: float) -> in
             ),
             flush=True,
         )
+        print(json.dumps({"type": "agent_start"}, ensure_ascii=True), flush=True)
         if mode in {"tool", "tool_then_final"}:
             print(
                 json.dumps(
@@ -1372,6 +1373,7 @@ def _handle_native_cli_run(provider: str, argv: list[str], delay_s: float) -> in
                     "message": {
                         "id": f"msg-{req_id}",
                         "role": "assistant",
+                        "stopReason": "stop",
                         "content": ([{"type": "text", "text": reply}] if reply else []),
                     },
                     "toolResults": [],
@@ -1381,23 +1383,39 @@ def _handle_native_cli_run(provider: str, argv: list[str], delay_s: float) -> in
             ),
             flush=True,
         )
-        print(
-            json.dumps(
+        agent_end = {
+            "type": "agent_end",
+            "messages": [
                 {
-                    "type": "agent_end",
-                    "messages": [
-                        {
-                            "id": f"msg-{req_id}",
-                            "role": "assistant",
-                            "content": ([{"type": "text", "text": reply}] if reply else []),
-                        }
-                    ],
-                },
-                ensure_ascii=True,
-            ),
+                    "id": f"msg-{req_id}",
+                    "role": "assistant",
+                    "stopReason": "stop",
+                    "content": ([{"type": "text", "text": reply}] if reply else []),
+                }
+            ],
+        }
+        if provider == "pi":
+            agent_end["willRetry"] = False
+        else:
+            agent_end["isTerminal"] = mode != "no_terminal"
+        print(
+            json.dumps(agent_end, ensure_ascii=True),
             flush=True,
         )
-        return 0
+        if provider == "pi" and mode != "no_terminal":
+            print(json.dumps({"type": "agent_settled"}, ensure_ascii=True), flush=True)
+        post_terminal_barrier = os.environ.get("STUB_POST_TERMINAL_BARRIER", "").strip()
+        if post_terminal_barrier and mode != "no_terminal":
+            barrier_path = Path(post_terminal_barrier)
+            barrier_deadline = time.monotonic() + float(
+                os.environ.get("STUB_POST_TERMINAL_BARRIER_TIMEOUT", "10")
+            )
+            while not barrier_path.exists() and time.monotonic() < barrier_deadline:
+                time.sleep(0.01)
+        post_terminal_sleep = float(os.environ.get("STUB_POST_TERMINAL_SLEEP", "0"))
+        if post_terminal_sleep > 0 and mode != "no_terminal":
+            time.sleep(post_terminal_sleep)
+        return int(os.environ.get("STUB_POST_TERMINAL_EXIT_CODE", "0"))
     if provider == "zai":
         print(json.dumps({"role": "user", "content": prompt}, ensure_ascii=True), flush=True)
         if reply:

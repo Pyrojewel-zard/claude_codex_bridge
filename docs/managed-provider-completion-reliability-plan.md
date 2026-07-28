@@ -24,8 +24,12 @@ This plan applies to:
 - managed `codex`
 - managed `claude`
 - managed `gemini`
+- managed `pi`
+- managed `omp`
 
-in pane-backed mode only.
+in pane-backed mode. Pi and OMP asks use per-job structured one-shot
+subprocesses owned by their managed pane-backed agents; their completion
+authority is covered here even though reply execution itself is headless.
 
 This document does not replace:
 
@@ -740,6 +744,49 @@ authentication failures, non-normal result reasons, nonzero exit, and a clean
 process exit without a result envelope all fail or remain incomplete; they may
 not be returned as successful assistant text.
 
+### 10.6 Pi And OMP Latest Structured Streams
+
+The supported completion contract intentionally targets the current provider
+protocols only:
+
+- Pi `0.82.1`
+- OMP `17.1.6`
+
+Pi and OMP must have separate observers. Similar JSON event names do not make
+their lifecycle semantics interchangeable.
+
+Pi completion authority is the final `agent_settled` event. `turn_end` is one
+model/tool turn and `agent_end` is one low-level run; either may be followed by
+automatic retry, compaction retry, or queued continuation. A later
+`agent_start` invalidates an earlier settled observation until another
+`agent_settled` arrives.
+
+OMP completion authority is an `agent_end` event carrying
+`isTerminal=true`. An `agent_end` with `isTerminal=false`, or without the field,
+is progress only. A later `agent_start` likewise invalidates any earlier
+terminal observation. A successful terminal `yield` tool result is a valid
+final outcome and its structured `details.data` is the reply source.
+
+For both providers, semantic completion is necessary but not sufficient:
+
+- the one-shot process must exit before CCB terminalizes the job, so stdout is
+  closed and late retry/advisor events cannot be truncated
+- process exit code must be zero
+- the final assistant outcome must be successful (`stop`, or OMP terminal
+  `yield`)
+- the reply must be non-empty
+- every complete JSONL record must parse; an unterminated trailing record is a
+  truncated stream
+
+A clean process exit without the provider-specific semantic event closes as
+`incomplete/<provider>_native_terminal_missing`. A semantic event without a
+final outcome closes as `incomplete/<provider>_native_outcome_missing`.
+Malformed or truncated output closes as
+`incomplete/<provider>_native_protocol_invalid`. Nonzero exit and final
+provider error remain failures. Older Pi streams that stop at `agent_end` and
+older OMP streams without `isTerminal` deliberately fail closed; CCB does not
+guess legacy completion.
+
 ## 11. Placement In Code
 
 ### 11.1 Completion Manifest Layer
@@ -859,6 +906,21 @@ Add execution-layer tests for:
 - active job cannot remain `running` forever without primary completion evidence
 - reliability timeout is provider-manifest-driven
 - degraded fallback decision is persisted and restorable
+
+### 12.7 Pi And OMP
+
+Add tests for:
+
+- Pi `turn_end` / `agent_end` followed by retry and final `agent_settled`
+- OMP nonterminal `agent_end`, delayed continuation, and final
+  `agent_end.isTerminal=true`
+- a semantic terminal event while the one-shot process is still alive
+- a semantic terminal event whose process never closes converging to run timeout
+- clean exit without semantic terminal evidence
+- semantic terminal followed by nonzero exit
+- final `error`, `aborted`, and `length` outcomes
+- OMP terminal structured `yield`
+- missing final outcome, malformed JSONL, and an unterminated trailing record
 
 ## 13. Rollout Phases
 

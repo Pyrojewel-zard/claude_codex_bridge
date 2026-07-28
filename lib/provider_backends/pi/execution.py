@@ -4,13 +4,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from provider_core.runtime_shared import provider_start_parts
+
 from provider_backends.native_cli_support import (
     NativeCliExecutionConfig,
     NativeCliExecutionRequest,
     NativeCliObservation,
     NativeCliSubprocessAdapter,
 )
-from provider_core.runtime_shared import provider_start_parts
 
 
 def build_execution_adapter() -> NativeCliSubprocessAdapter:
@@ -34,7 +35,13 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             run_error_reason="pi_run_error",
             complete_reason="pi_run_stop",
             process_exit_complete_reason="pi_run_exit",
+            missing_terminal_reason="pi_native_terminal_missing",
             timeout_reason="pi_run_timeout",
+            invalid_protocol_reason="pi_native_protocol_invalid",
+            missing_outcome_reason="pi_native_outcome_missing",
+            terminal_on_process_exit=False,
+            terminal_requires_process_exit=True,
+            require_outcome_reason=True,
         )
     )
 
@@ -75,60 +82,103 @@ def observe_pi_json_output(path: Path) -> NativeCliObservation:
     finish_reason = ""
     turn_ref: str | None = None
     completed_at: object | None = None
-    error = ""
+    outcome_reason = ""
+    outcome_error = ""
+    protocol_error = ""
     intermediate = False
-    delta_chunks: list[str] = []
+    current_delta_chunks: list[str] = []
     latest_message_text = ""
-    final_text = ""
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        raw_output = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return NativeCliObservation(error=f"read_stdout_failed:{exc}")
 
-    for line in lines:
+    lines = raw_output.splitlines(keepends=True)
+    for index, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
+            continue
+        if index == len(lines) - 1 and not line.endswith(("\n", "\r")):
+            protocol_error = f"unterminated_jsonl_record:{index + 1}"
             continue
         try:
             event = json.loads(stripped)
         except json.JSONDecodeError:
+            protocol_error = protocol_error or f"invalid_jsonl_record:{index + 1}"
             continue
         if not isinstance(event, dict):
+            protocol_error = protocol_error or f"non_object_jsonl_record:{index + 1}"
             continue
         event_type = str(event.get("type") or "").strip().lower().replace("-", "_")
-        if "error" in event_type or "failed" in event_type:
-            error = _pi_text(event) or event_type
+        if event_type == "agent_start":
+            if finished:
+                intermediate = True
+            finished = False
+            finish_reason = ""
+            outcome_reason = ""
+            outcome_error = ""
+            latest_message_text = ""
+            current_delta_chunks = []
+            turn_ref = None
+            completed_at = None
             continue
         if "tool" in event_type:
             intermediate = True
-            finish_reason = finish_reason or "tool_calls"
             continue
         message = event.get("message")
         if isinstance(message, dict) and _pi_message_role(message) == "assistant":
-            message_text = _pi_message_text(message)
-            if message_text:
-                latest_message_text = message_text
-                turn_ref = turn_ref or _pi_ref(message)
-                completed_at = completed_at or _pi_time(event)
+            latest_message_text, outcome_reason, outcome_error = _update_pi_assistant(
+                message,
+                latest_text=latest_message_text,
+                outcome_reason=outcome_reason,
+                outcome_error=outcome_error,
+            )
+            turn_ref = _pi_ref(message) or turn_ref
+            completed_at = _pi_time(event) or completed_at
+            if event_type in {"message_start", "message_end"}:
+                current_delta_chunks = []
         assistant_event = event.get("assistantMessageEvent")
         if isinstance(assistant_event, dict):
             delta = str(assistant_event.get("delta") or "")
             if delta:
-                delta_chunks.append(delta)
+                current_delta_chunks.append(delta)
         if event_type == "turn_end":
-            finished = True
-            finish_reason = "turn_end"
-            final_text = _pi_message_text(message) if isinstance(message, dict) else latest_message_text
-            turn_ref = turn_ref or _pi_ref(event)
-            completed_at = completed_at or _pi_time(event)
+            intermediate = True
+            turn_ref = _pi_ref(event) or turn_ref
+            completed_at = _pi_time(event) or completed_at
         elif event_type == "agent_end":
+            intermediate = True
+            assistant_message = _last_assistant_message(event.get("messages"))
+            if assistant_message is not None:
+                latest_message_text, outcome_reason, outcome_error = (
+                    _update_pi_assistant(
+                        assistant_message,
+                        latest_text=latest_message_text,
+                        outcome_reason=outcome_reason,
+                        outcome_error=outcome_error,
+                    )
+                )
+                turn_ref = _pi_ref(assistant_message) or turn_ref
+            completed_at = _pi_time(event) or completed_at
+        elif event_type == "agent_settled":
             finished = True
-            finish_reason = finish_reason or "agent_end"
-            final_text = final_text or _last_assistant_message_text(event.get("messages")) or latest_message_text
-            turn_ref = turn_ref or _pi_ref(event)
-            completed_at = completed_at or _pi_time(event)
+            finish_reason = "agent_settled"
+            completed_at = _pi_time(event) or completed_at
+        elif event_type in {
+            "auto_retry_start",
+            "auto_retry_end",
+            "compaction_start",
+            "compaction_end",
+            "summarization_retry_scheduled",
+            "summarization_retry_attempt_start",
+            "summarization_retry_finished",
+            "queue_update",
+            "extension_error",
+        }:
+            intermediate = True
 
-    text = final_text or latest_message_text or "".join(delta_chunks)
+    text = latest_message_text or "".join(current_delta_chunks)
+    error = outcome_error if finished and outcome_reason == "error" else ""
     return NativeCliObservation(
         text=text,
         finished=finished,
@@ -137,6 +187,8 @@ def observe_pi_json_output(path: Path) -> NativeCliObservation:
         completed_at=completed_at,
         error=error,
         intermediate=intermediate,
+        outcome_reason=outcome_reason,
+        protocol_error=protocol_error,
     )
 
 
@@ -144,26 +196,70 @@ def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) 
     raw = str(request.session_data.get(key) or "").strip()
     if raw:
         return Path(raw).expanduser()
-    state_dir = Path(str(request.session_data.get("pi_state_dir") or request.work_dir / ".ccb" / "pi")).expanduser()
+    state_dir = Path(
+        str(
+            request.session_data.get("pi_state_dir") or request.work_dir / ".ccb" / "pi"
+        )
+    ).expanduser()
     return state_dir / fallback
 
 
 def _pi_message_role(message: dict[str, Any]) -> str:
-    return str(message.get("role") or message.get("sender") or message.get("author") or "").strip().lower()
+    return (
+        str(message.get("role") or message.get("sender") or message.get("author") or "")
+        .strip()
+        .lower()
+    )
 
 
 def _pi_message_text(message: dict[str, Any]) -> str:
     return _pi_text(message.get("content"))
 
 
-def _last_assistant_message_text(messages: object) -> str:
+def _last_assistant_message(messages: object) -> dict[str, Any] | None:
     if not isinstance(messages, list):
-        return ""
+        return None
     for message in reversed(messages):
         if isinstance(message, dict) and _pi_message_role(message) == "assistant":
-            text = _pi_message_text(message)
-            if text:
-                return text
+            return message
+    return None
+
+
+def _update_pi_assistant(
+    message: dict[str, Any],
+    *,
+    latest_text: str,
+    outcome_reason: str,
+    outcome_error: str,
+) -> tuple[str, str, str]:
+    message_text = _pi_message_text(message)
+    stop_reason = _pi_stop_reason(message)
+    error_message = _pi_error_message(message)
+    return (
+        message_text if message_text or stop_reason else latest_text,
+        stop_reason or outcome_reason,
+        error_message
+        or ("" if stop_reason and stop_reason != "error" else outcome_error),
+    )
+
+
+def _pi_stop_reason(message: dict[str, Any]) -> str:
+    for key in ("stopReason", "stop_reason", "finishReason", "finish_reason"):
+        raw = message.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        normalized = raw.strip().lower().replace("-", "_")
+        if normalized == "tooluse":
+            return "tool_use"
+        return normalized
+    return ""
+
+
+def _pi_error_message(message: dict[str, Any]) -> str:
+    for key in ("errorMessage", "error_message", "error"):
+        raw = message.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
     return ""
 
 
