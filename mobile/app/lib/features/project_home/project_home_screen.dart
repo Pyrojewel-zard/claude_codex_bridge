@@ -1200,9 +1200,6 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         _serverProjectsFuture = SynchronousFuture(projects);
       }
     });
-    if (record?.isStale == true) {
-      _showSnack('Showing cached project list while reconnecting');
-    }
     // The cached list is only a startup frame. Authoritative data replaces it
     // in the background without requiring a user tap.
     try {
@@ -1241,9 +1238,6 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       _selectedAgentName ??=
           snapshot.agents.isEmpty ? null : snapshot.agents.first.name;
     });
-    if (record?.isStale == true) {
-      _showSnack('Showing cached snapshot while reconnecting');
-    }
     unawaited(_refreshActiveView());
   }
 
@@ -1765,8 +1759,9 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
               GatewayInvalidationConnectionState.reconnecting;
           _gatewayReconnectRetryIn ??= const Duration(seconds: 1);
         });
+      } else {
+        _showSnack(outcome.snackMessage!);
       }
-      _showSnack(outcome.snackMessage!);
     }
     return null;
   }
