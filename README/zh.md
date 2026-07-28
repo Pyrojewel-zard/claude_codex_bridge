@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.4.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.0-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.4.3 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.0 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.4.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.3/ccb-mobile-v8.4.3.apk)
+- [下载 CCB Mobile v8.5.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.0/ccb-mobile-v8.5.0.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -300,6 +300,18 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.0</b> - 精确 Pi/OMP 终止、自修复 npm 运行时、同步 Mobile 活动与更安全的托管资源</summary>
+
+- 将 Pi 完成信号绑定到最新的 `agent_settled`，将 OMP 完成信号绑定到 `agent_end.isTerminal=true`，并在进程退出且输出关闭后才进入终态。
+- 对缺少原生终止证据、缺少最终结果、JSONL 损坏或截断、Provider 错误和非零退出安全拒绝；OMP 的终态 `yield` 仍作为受支持的成功结果。
+- 安装时自动创建并修复 npm 托管 Python 环境，正式版运行依赖不再依靠不完整的系统 Python 兜底；linked Git worktree 仍会被正确识别为源码安装。
+- 让 sidebar 设置入口能够恢复正式版受管运行时，并可靠打开 Config UI。
+- 将 Mobile 的 ask/Provider 活动与服务端精确状态同步，稳定完成通知，并隐藏自动重连过程中的无意义提示。
+- 收紧托管 Provider 资源的单向投影边界，并加入内置 Qoder 控制技能，托管侧不会获得改写用户全局状态的通道。
+
+</details>
+
+<details>
 <summary><b>v8.4.3</b> - Provider 认证隔离、必备控制技能与可靠的 Mobile 配对和终端恢复</summary>
 
 - 将可变认证、账号、session 和存储状态隔离到每个托管 Provider 的私有 home，visible 与 headless 执行使用同一边界。

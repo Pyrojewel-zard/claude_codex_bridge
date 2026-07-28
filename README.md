@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.4.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.0-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.4.3 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.0 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.4.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.4.3/ccb-mobile-v8.4.3.apk)
+- [Download CCB Mobile v8.5.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.0/ccb-mobile-v8.5.0.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,6 +309,18 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.0</b> - Exact Pi/OMP completion, self-healing npm runtime, synchronized Mobile activity, and safer managed assets</summary>
+
+- Bound Pi completion to the latest `agent_settled` event and OMP completion to `agent_end.isTerminal=true`, while waiting for process exit and output closure before terminalizing.
+- Failed closed on missing native terminal evidence, missing final outcomes, malformed or truncated JSONL, provider errors, and nonzero exits; terminal OMP `yield` remains a supported successful result.
+- Bootstrapped and repaired the npm-managed Python environment during install, so release runtime dependencies no longer depend on an incomplete system Python fallback; linked Git worktrees remain correctly classified as source installs.
+- Made the sidebar settings launcher recover its release-managed runtime and reliably open Config UI.
+- Synchronized Mobile ask/provider activity with exact server-side state, stable completion notifications, and quieter automatic reconnect behavior.
+- Tightened one-way managed Provider asset projection and added packaged Qoder control skills without exposing user-global state to managed mutation.
+
+</details>
+
+<details>
 <summary><b>v8.4.3</b> - Isolated Provider auth, guaranteed control skills, and reliable Mobile pairing and terminal recovery</summary>
 
 - Isolated mutable authentication, account, session, and storage state inside each managed Provider home for visible and headless execution.

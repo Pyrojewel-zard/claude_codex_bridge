@@ -1,5 +1,44 @@
 # Changelog
 
+## v8.5.0 (2026-07-29)
+
+### Pi And OMP Completion
+
+- **Native Terminal Evidence Is Exact**: Pi `0.82.1` requires its final
+  `agent_settled` event, while OMP `17.1.6` requires
+  `agent_end.isTerminal=true`. Intermediate turns, retries, and legacy event
+  shapes cannot complete a CCB job.
+- **Completion Waits For Stream Closure**: semantic completion is accepted only
+  after the one-shot process exits and output closes. Missing outcomes,
+  malformed or truncated JSONL, provider errors, and nonzero exits fail
+  closed; terminal OMP `yield` results remain supported.
+
+### npm Runtime And Config UI
+
+- **npm Installs Repair Their Managed Python**: postinstall now creates or
+  repairs the release-managed virtual environment and installs the required
+  runtime dependencies instead of falling back to an incomplete system Python.
+- **Linked Worktrees Stay In Source Mode**: source installs now recognize both
+  Git directories and linked-worktree `.git` files instead of applying packaged
+  release behavior inside a development checkout.
+- **Sidebar Settings Opens Reliably**: the settings launcher recovers the
+  release-managed interpreter and opens Config UI even when inherited runtime
+  paths are stale.
+
+### Mobile Activity
+
+- **Provider Activity Is Synchronized**: Mobile ask state, provider activity,
+  completion notifications, and selected-agent views now follow exact
+  server-side state across reconnects.
+- **Automatic Recovery Is Quiet**: expected reconnect transitions no longer
+  surface misleading snackbar errors.
+
+### Managed Provider Assets
+
+- **Asset Projection Is One-Way And Owned**: managed Provider assets are
+  refreshed inside private homes without writable aliases back to user-global
+  state, and packaged Qoder `ask` / `ccb-clear` controls are now guaranteed.
+
 ## v8.4.3 (2026-07-27)
 
 ### Managed Provider Authentication
