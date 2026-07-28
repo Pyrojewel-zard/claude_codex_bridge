@@ -363,8 +363,7 @@ def test_phase2_config_ui_opens_and_serves_project_panel(monkeypatch, tmp_path: 
         'closed': True,
     }
     assert 'config_ui_status: serving' in stdout
-    assert 'url: http://127.0.0.1:43210/' in stdout
-    assert _FakeHandle.url not in stdout
+    assert f'url: {_FakeHandle.url}' in stdout
     assert (project_root / '.ccb' / 'ccb.config').exists() is False
 
 

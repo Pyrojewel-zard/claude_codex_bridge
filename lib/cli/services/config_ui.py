@@ -190,6 +190,8 @@ def _browser_open_commands(url: str) -> tuple[tuple[str, ...], ...]:
         return (('open', url),)
     if sys.platform.startswith(('linux', 'freebsd', 'openbsd')):
         return (
+            ('sensible-browser', url),
+            ('x-www-browser', url),
             ('xdg-open', url),
             ('gio', 'open', url),
         )

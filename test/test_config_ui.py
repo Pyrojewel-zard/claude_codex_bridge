@@ -940,6 +940,32 @@ def test_config_ui_browser_open_prefers_macos_open_over_linux_opener(monkeypatch
     assert seen == [('open', url)]
 
 
+def test_config_ui_browser_open_prefers_linux_configured_browser_over_xdg(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.delenv('WSL_DISTRO_NAME', raising=False)
+    monkeypatch.delenv('WSL_INTEROP', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(config_ui_module, '_is_wsl_environment', lambda: False)
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name in {'sensible-browser', 'xdg-open'} else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert seen == [('sensible-browser', url)]
+
+
 def test_config_ui_browser_open_retries_after_wsl_opener_exits_nonzero(monkeypatch) -> None:
     seen: list[tuple[str, ...]] = []
     url = 'http://127.0.0.1:43123/?token=test'
