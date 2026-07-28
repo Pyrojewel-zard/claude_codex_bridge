@@ -802,6 +802,66 @@ def test_install_managed_venv_selects_python_when_called_directly(tmp_path: Path
     assert "venv-ok" in completed.stdout
 
 
+def test_runtime_bootstrap_forces_release_local_required_dependencies(
+    tmp_path: Path,
+) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        CCB_USE_MANAGED_VENV=0
+        CCB_INSTALL_TOMLI=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
+        canonical_existing_parent_path() { echo "$REPO_ROOT"; }
+        install_managed_venv() {
+          echo "managed:$CCB_USE_MANAGED_VENV:$CCB_INSTALL_TOMLI:$CCB_INSTALL_MOBILE_RELAY_DEPS"
+        }
+        managed_venv_python() { echo "$HOME/release-python"; }
+        python_has_toml_reader() {
+          echo "toml:$PYTHON_BIN"
+          return 0
+        }
+        python_has_mobile_relay_dependencies() {
+          echo "relay:$1"
+          return 0
+        }
+        runtime_bootstrap
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "managed:1:1:1" in completed.stdout
+    assert f"toml:{tmp_path / 'home' / 'release-python'}" in completed.stdout
+    assert f"relay:{tmp_path / 'home' / 'release-python'}" in completed.stdout
+    assert "Release-local Python runtime ready" in completed.stdout
+
+
+def test_runtime_bootstrap_rejects_live_source_tree(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=source
+        runtime_bootstrap
+        """,
+    )
+
+    assert completed.returncode == 1
+    assert "only supported for a packaged CCB release" in completed.stderr
+
+
+def test_runtime_bootstrap_rejects_a_different_install_prefix(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        runtime_bootstrap
+        """,
+    )
+
+    assert completed.returncode == 1
+    assert "must target its own packaged release tree" in completed.stderr
+
+
 def test_release_mode_uses_managed_venv_by_default(tmp_path: Path) -> None:
     completed = _run_install_snippet(
         tmp_path,

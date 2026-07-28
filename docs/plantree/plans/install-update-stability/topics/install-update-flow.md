@@ -41,11 +41,21 @@ For an npm install, the outer `@seemseam/ccb` package owns the vendored release:
    Python child on every invocation.
 2. Python accepts npm provenance only when the outer `package.json` matches and
    the executing release is below that package's `.ccb-release` directory.
-3. `ccb update` prints `npm install -g @seemseam/ccb@<target>` and does not
+3. npm `postinstall` downloads the manifest-pinned release and calls only the
+   release installer's restricted `runtime-bootstrap` command. That command
+   creates and validates `.ccb-release/<platform>/.venv`; it must not install
+   global wrappers, skills, settings, tmux assets, tools, or Role Packs.
+4. The npm runner validates the release-local managed Python before launching
+   CCB and repeats the same idempotent bootstrap under the package install lock
+   when postinstall was interrupted, disabled, or left an unhealthy runtime.
+5. A vendored payload is complete only when `VERSION` exactly matches the outer
+   manifest, the `ccb` entrypoint is executable, and the managed Python can
+   import CCB's required TOML, Mobile, and Relay dependencies.
+6. `ccb update` prints `npm install -g @seemseam/ccb@<target>` and does not
    download, extract, install, or relaunch a vendored payload.
-4. Startup update acceptance prints the same command and defers the current
+7. Startup update acceptance prints the same command and defers the current
    prompt window without reporting a successful in-place update.
-5. The npm runner continues requiring exact equality between the manifest
+8. The npm runner continues requiring exact equality between the manifest
    version and vendored `VERSION`; equality is safe because only npm mutates
    that payload.
 

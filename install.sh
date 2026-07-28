@@ -383,6 +383,8 @@ usage() {
 Usage:
   ./install.sh install    # Install or update Codex dual-window tools
   ./install.sh uninstall  # Uninstall installed content
+  ./install.sh runtime-bootstrap
+                          # Internal: prepare only the release-local Python runtime
 
 Optional environment variables:
   CODEX_INSTALL_PREFIX     Install directory (default: ~/.local/share/codex-dual)
@@ -1931,6 +1933,40 @@ install_managed_venv() {
   install_watchdog_for_python "$venv_python"
   install_mobile_relay_dependencies_for_python "$venv_python"
   echo "OK: Managed Python venv ready"
+}
+
+runtime_bootstrap() {
+  if install_uses_live_source; then
+    echo "ERROR: runtime-bootstrap is only supported for a packaged CCB release." >&2
+    exit 1
+  fi
+  local release_root install_root
+  release_root="$(canonical_existing_parent_path "$REPO_ROOT")"
+  install_root="$(canonical_existing_parent_path "$INSTALL_PREFIX")"
+  if [[ "$install_root" != "$release_root" ]]; then
+    echo "ERROR: runtime-bootstrap must target its own packaged release tree." >&2
+    echo "   Release tree : $REPO_ROOT" >&2
+    echo "   Install prefix: $INSTALL_PREFIX" >&2
+    exit 1
+  fi
+
+  # npm owns its vendored release tree and must not run the full installer,
+  # which also writes global wrappers, skills, settings, and tmux assets.
+  # Force the release-local runtime policy here so an inherited user setting
+  # cannot leave the vendored payload without its required Python packages.
+  CCB_USE_MANAGED_VENV=1 \
+  CCB_INSTALL_TOMLI=1 \
+  CCB_INSTALL_MOBILE_RELAY_DEPS=1 \
+    install_managed_venv
+
+  local venv_python
+  venv_python="$(managed_venv_python)"
+  if ! PYTHON_BIN="$venv_python" python_has_toml_reader || \
+     ! python_has_mobile_relay_dependencies "$venv_python"; then
+    echo "ERROR: Managed Python runtime validation failed: $venv_python" >&2
+    exit 1
+  fi
+  echo "OK: Release-local Python runtime ready"
 }
 
 write_live_source_wrapper() {
@@ -3911,6 +3947,9 @@ main() {
     install)
       confirm_root_install_if_needed
       install_all
+      ;;
+    runtime-bootstrap)
+      runtime_bootstrap
       ;;
     uninstall)
       uninstall_all
