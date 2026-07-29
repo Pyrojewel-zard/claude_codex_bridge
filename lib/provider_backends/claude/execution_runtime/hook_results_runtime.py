@@ -31,14 +31,36 @@ class ExactHookEvidence:
     event_at: datetime
 
 
+_EMPTY_HOOK_FINAL_TEXT_GRACE_S = 180.0
+
+
 def poll_exact_hook(submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
-    context = hook_poll_context(submission)
-    if context is None:
+    evidence = load_strict_exact_hook_evidence(submission, now=now)
+    if evidence is None:
         return None
-    event = load_event(context.completion_dir, context.request_anchor)
-    if not event:
-        return None
-    return poll_hook_event(submission, context=context, event=event, now=now)
+    event = evidence.event
+    status = hook_status(event)
+    reply = hook_reply(event)
+    extra_diagnostics: dict[str, object] | None = None
+    if not reply and status in {CompletionStatus.COMPLETED, CompletionStatus.INCOMPLETE}:
+        observed_at = _parse_timestamp(now)
+        if observed_at is None:
+            return None
+        age_s = (observed_at - evidence.event_at).total_seconds()
+        if age_s < _EMPTY_HOOK_FINAL_TEXT_GRACE_S:
+            return None
+        extra_diagnostics = {
+            "empty_hook_final_text_grace_elapsed": True,
+            "empty_hook_final_text_grace_s": _EMPTY_HOOK_FINAL_TEXT_GRACE_S,
+            "empty_hook_age_s": age_s,
+        }
+    return poll_hook_event(
+        submission,
+        context=evidence.context,
+        event=event,
+        now=now,
+        extra_diagnostics=extra_diagnostics,
+    )
 
 
 def poll_hook_event(
@@ -52,6 +74,11 @@ def poll_hook_event(
     reply = hook_reply(event)
     status = hook_status(event)
     diagnostics = hook_diagnostics(event, extra=extra_diagnostics)
+    status, diagnostics = normalize_stalled_reply_status(
+        status,
+        diagnostics,
+        reply=reply,
+    )
     status, diagnostics = normalize_empty_reply_status(status, diagnostics, reply=reply)
     provider_turn_ref = hook_provider_turn_ref(event, request_anchor=context.request_anchor)
     cursor_path = hook_cursor_path(context)
@@ -87,12 +114,12 @@ def load_strict_exact_hook_evidence(
     now: str | None = None,
     require_reply: bool = False,
 ) -> ExactHookEvidence | None:
-    """Load independently attributable hook evidence for recovery paths.
+    """Load independently attributable hook evidence for every terminal path.
 
-    Normal hook polling is already protected by prompt activation. Recovery
-    and cancellation bypass that guard, so they must fail closed unless the
-    artifact proves provider, agent, workspace, request time, and Claude
-    session identity.
+    Prompt activation is necessary but does not prove that a hook artifact
+    belongs to the current managed agent/session. Normal polling, recovery,
+    and cancellation all fail closed unless provider, agent, workspace,
+    request time, and Claude session identity agree.
     """
     if not bool(submission.runtime_state.get("prompt_sent", False)):
         return None
@@ -189,7 +216,7 @@ def _parse_timestamp(value: object) -> datetime | None:
         return None
     try:
         parsed = parse_utc_timestamp(text)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
@@ -236,6 +263,25 @@ def normalize_empty_reply_status(
     )
     normalized.setdefault("diagnosis", normalized["message"])
     return CompletionStatus.INCOMPLETE, normalized
+
+
+def normalize_stalled_reply_status(
+    status: CompletionStatus,
+    diagnostics: dict[str, object],
+    *,
+    reply: str,
+) -> tuple[CompletionStatus, dict[str, object]]:
+    first_line = reply.strip().splitlines()[0].strip().casefold() if reply.strip() else ""
+    if not first_line.startswith("api error: response stalled mid-stream"):
+        return status, diagnostics
+    normalized = dict(diagnostics)
+    normalized["reason"] = "claude_response_stalled_mid_stream"
+    normalized.setdefault("error_type", "provider_api_error")
+    normalized.setdefault("error_message", reply)
+    normalized.setdefault("message", reply)
+    normalized.setdefault("diagnosis", reply)
+    normalized["response_incomplete"] = True
+    return CompletionStatus.FAILED, normalized
 
 
 def hook_provider_turn_ref(event: dict[str, object], *, request_anchor: str) -> str:

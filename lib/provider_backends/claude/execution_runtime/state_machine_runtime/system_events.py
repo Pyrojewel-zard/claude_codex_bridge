@@ -164,6 +164,11 @@ def handle_system_event(
                 "raw_buffer": poll.raw_buffer,
                 "session_path": poll.session_path,
                 "last_assistant_uuid": poll.last_assistant_uuid,
+                "active_assistant_message_id": poll.active_assistant_message_id,
+                "active_assistant_text": poll.active_assistant_text,
+                "active_assistant_stop_reason": poll.active_assistant_stop_reason,
+                "active_assistant_has_tool_use": poll.active_assistant_has_tool_use,
+                "terminal_reply": poll.terminal_reply,
                 "prompt_enqueued": poll.prompt_enqueued,
                 "queue_dequeue_observed": poll.queue_dequeue_observed,
                 "prompt_activated": poll.prompt_activated,
@@ -173,7 +178,10 @@ def handle_system_event(
         )
         return ProviderPollResult(submission=updated, items=tuple(poll.items), decision=decision)
 
-    if is_turn_boundary_event(event, last_assistant_uuid=poll.last_assistant_uuid):
+    if is_turn_boundary_event(
+        event,
+        last_assistant_uuid=poll.last_assistant_uuid,
+    ) and _current_assistant_message_can_complete(poll):
         poll.items.append(
             build_item(
                 submission,
@@ -182,16 +190,26 @@ def handle_system_event(
                 seq=poll.next_seq,
                 payload={
                     "reason": "turn_duration",
-                    "last_agent_message": poll.reply_buffer,
+                    "last_agent_message": poll.active_assistant_text,
                     "turn_id": poll.request_anchor,
                     "session_path": poll.session_path or None,
                     "assistant_uuid": poll.last_assistant_uuid or None,
+                    "assistant_message_id": poll.active_assistant_message_id or None,
                 },
             )
         )
         poll.next_seq += 1
+        poll.terminal_reply = poll.active_assistant_text
         poll.reached_turn_boundary = True
     return None
+
+
+def _current_assistant_message_can_complete(poll: ClaudePollState) -> bool:
+    if not str(poll.active_assistant_text or "").strip():
+        return False
+    if poll.active_assistant_has_tool_use:
+        return False
+    return str(poll.active_assistant_stop_reason or "").strip().lower() != "tool_use"
 
 
 __all__ = [

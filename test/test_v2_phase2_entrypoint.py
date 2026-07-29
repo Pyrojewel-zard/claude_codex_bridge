@@ -4453,7 +4453,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
 
         pend = _wait_for_phase2_status(project_root, 'demo', 'completed')
         assert f'job_id: {job_id}' in pend
-        assert 'reply: partial\nfinal' in pend
+        assert 'reply: final' in pend
         assert 'completion_reason: task_complete' in pend
         assert 'completion_confidence: observed' in pend
 
@@ -4838,7 +4838,8 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
 
         pend = _wait_for_phase2_status(project_root, job_id, 'completed', timeout=5.0)
         assert 'reply: old partial' not in pend
-        assert 'reply: new partial\nnew child work' in pend
+        assert 'reply: new partial' in pend
+        assert 'new child work' not in pend
         assert 'completion_reason: turn_duration' in pend
         assert 'completion_confidence: observed' in pend
 
@@ -4998,13 +4999,14 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
         running = ''
         while time.time() < deadline:
             running = _wait_for_phase2_status(project_root, 'demo', 'running')
-            if 'reply: old partial\nold child work' in running:
+            if 'reply: old partial' in running:
                 break
             time.sleep(0.05)
         else:
             raise AssertionError(f'expected running partial reply before restart; last output={running!r}')
         assert f'job_id: {job_id}' in running
         assert 'completion_reason: None' in running
+        assert 'old child work' not in running
 
         app1.request_shutdown()
         thread1.join(timeout=2)
@@ -5017,7 +5019,8 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
         try:
             pend = _wait_for_phase2_status(project_root, job_id, 'completed')
             assert 'reply: old partial' not in pend
-            assert 'reply: new partial\nnew child work' in pend
+            assert 'reply: new partial' in pend
+            assert 'new child work' not in pend
             assert 'completion_reason: turn_duration' in pend
             assert 'completion_confidence: observed' in pend
         finally:

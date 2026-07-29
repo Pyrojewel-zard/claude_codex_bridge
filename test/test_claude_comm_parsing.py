@@ -98,3 +98,24 @@ def test_structured_event_preserves_real_sidechain_identity() -> None:
     assert event is not None
     assert "subagent_name" not in event
     assert event["is_sidechain"] is True
+
+
+def test_structured_event_preserves_claude_message_id_for_snapshot_aggregation() -> None:
+    entry = {
+        "type": "assistant",
+        "uuid": "transcript-entry-1",
+        "message": {
+            "id": "msg_01rrDqvNMrzRR5vt4O8NZvIk",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{"type": "thinking", "thinking": "private"}],
+        },
+    }
+
+    event = structured_event(entry)
+
+    assert event is not None
+    assert event["role"] == "assistant"
+    assert event["text"] == ""
+    assert event["message_id"] == "msg_01rrDqvNMrzRR5vt4O8NZvIk"
+    assert event["stop_reason"] == "end_turn"

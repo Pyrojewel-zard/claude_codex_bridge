@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Claude Completion Integrity
+
+- **Late Final Snapshots Win**: Claude assistant snapshots are aggregated by
+  API message id, so a thinking-only `end_turn` waits for the visible final
+  text instead of completing with earlier `Let me...` process narration.
+- **Terminal Replies Are Isolated From Progress**: completion artifacts now use
+  only the confirmed terminal assistant message; tool-only boundaries and
+  stop-reason-free process text cannot promote the cumulative progress buffer.
+- **Failure And Attribution Are Fail-Closed**: stalled mid-stream responses are
+  failed, empty Stop hooks allow a bounded late-final grace, and all normal or
+  recovery hook paths require exact request, workspace, timestamp, and Claude
+  session identity.
+
 ## v8.5.0 (2026-07-29)
 
 ### Pi And OMP Completion

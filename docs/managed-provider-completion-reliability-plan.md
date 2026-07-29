@@ -648,6 +648,11 @@ Default rule:
 - Claude and Gemini hook readers must also normalize legacy or malformed
   `completed` + empty-reply hook events into terminal `incomplete` decisions
   with `empty_reply`, `empty_provider_reply`, and a human-readable diagnosis.
+  Claude first holds an attributable empty Stop-hook as provisional evidence
+  for a bounded final-text grace window, because Claude may persist a
+  thinking-only `end_turn` snapshot before materializing the visible text for
+  the same API message. A visible final that arrives during that window wins;
+  only an unchanged empty hook after the grace may become `incomplete`.
 - Protocol-turn providers such as managed Codex must normalize
   `task_complete` boundaries with no boundary reply and no prior
   assistant-visible reply evidence into terminal `incomplete` decisions with
@@ -709,6 +714,39 @@ Claude session-name `slug` is display metadata, not subagent identity.
 Top-level records with `isSidechain=false` remain eligible for request-anchor
 tracking; real sidechains are fenced by `isSidechain=true` or explicit
 subagent identity.
+
+Claude assistant transcript records are snapshots, not independent completed
+replies. Completion state therefore has three separate layers:
+
+- `reply_buffer` is cumulative visible progress for streaming/diagnostics only
+- the active assistant snapshot is keyed by Claude API `message.id`, with the
+  transcript UUID used only as a compatibility fallback
+- `terminal_reply` is assigned exactly once from the assistant message that
+  satisfies a terminal boundary
+
+A thinking-only or tool-only snapshot cannot supply terminal text, even when
+it carries `stop_reason=end_turn`. If a later snapshot for the same
+`message.id` supplies visible text, it inherits the earlier observed
+`end_turn` and may complete. This pending message identity, text,
+`stop_reason`, and tool-use state must survive daemon restart. Visible text
+without `stop_reason` is progress, not a boundary; it may complete only after
+an exact protocol marker, an attributable non-empty Stop hook, or a
+`turn_duration` event whose `parentUuid` matches the current top-level
+assistant transcript UUID. A tool-only `turn_duration` must not reuse earlier
+progress narration.
+
+The terminal boundary payload and completion artifact must use
+`terminal_reply`, never the cross-message progress buffer. This preserves
+genuine short replies such as `OK` while preventing process narration such as
+`Let me read...` from replacing a later full final review. A response whose
+first visible line is `API Error: Response stalled mid-stream` is failed and
+incomplete provider output, never a completed answer.
+
+Every Claude hook path, including normal polling, orphan recovery, and
+cancellation salvage, must validate the exact request id, schema, provider,
+agent, workspace, event time, and tracked Claude session before using the
+artifact. Prompt activation alone is not proof that an on-disk hook belongs to
+the current managed session.
 
 Issue `#282` requires a narrow recovery exception when the provider has already
 written an exact terminal Stop-hook artifact but transcript anchor observation
@@ -917,6 +955,17 @@ Add tests for:
   session
 - cancellation preserves a hook-only non-empty reply and labels an
   unsalvageable forced empty artifact as non-evidence
+- the recorded process-text/tool-use/tool-result/thinking-only
+  `end_turn`/late-final sequence emits exactly one terminal reply
+- thinking-only `end_turn` remains pending across daemon restart and completes
+  from later visible text with the same API `message.id`
+- text without `stop_reason` stays pending until a matching `turn_duration`
+- a genuine short-text `end_turn` completes without being swallowed
+- tool-only boundaries never reuse accumulated process narration
+- stalled-mid-stream API text produces `failed`, not `completed`
+- normal Stop-hook polling rejects old or mismatched Claude session artifacts
+- the final reply artifact contains only terminal message text and the message
+  bureau records exactly one reply
 
 ### 12.4 Kimi
 
