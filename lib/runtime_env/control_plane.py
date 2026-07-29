@@ -4,10 +4,10 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from runtime_env.user_session import USER_SESSION_TRANSPORT_ENV_KEYS
 from provider_core.runtime_shared import provider_start_env_vars
 from provider_core.source_home import current_provider_source_home
 
+from runtime_env.user_session import USER_SESSION_TRANSPORT_ENV_KEYS
 
 _CONTROL_PLANE_ALLOWLIST = {
     'ANTHROPIC_API_KEY',
@@ -23,6 +23,9 @@ _CONTROL_PLANE_ALLOWLIST = {
     'CCB_LANG',
     'CCB_MOBILE_HOST_STATE_HOME',
     'CCB_NO_ATTACH',
+    'CCB_PI_EXECUTION_MODE',
+    'CCB_PI_EXTENSION_READY_TIMEOUT_S',
+    'CCB_PI_NO_TERMINAL_TIMEOUT_S',
     'CCB_PYTHON',
     'CCB_REPLY_LANG',
     'CCB_STDIN_ENCODING',

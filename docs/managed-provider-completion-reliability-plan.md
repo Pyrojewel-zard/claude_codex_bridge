@@ -27,9 +27,10 @@ This plan applies to:
 - managed `pi`
 - managed `omp`
 
-in pane-backed mode. Pi and OMP asks use per-job structured one-shot
-subprocesses owned by their managed pane-backed agents; their completion
-authority is covered here even though reply execution itself is headless.
+in pane-backed mode. Pi asks execute in the managed visible pane and use a
+provider-local lifecycle sidecar. OMP asks use per-job structured one-shot
+subprocesses owned by their managed pane-backed agents. Pi's 8.5.0 one-shot
+path remains a persisted-job compatibility path and explicit rollback mode.
 
 This document does not replace:
 
@@ -814,7 +815,7 @@ authentication failures, non-normal result reasons, nonzero exit, and a clean
 process exit without a result envelope all fail or remain incomplete; they may
 not be returned as successful assistant text.
 
-### 10.6 Pi And OMP Latest Structured Streams
+### 10.6 Pi Visible Lifecycle And OMP Structured Streams
 
 The supported completion contract intentionally targets the current provider
 protocols only:
@@ -825,11 +826,48 @@ protocols only:
 Pi and OMP must have separate observers. Similar JSON event names do not make
 their lifecycle semantics interchangeable.
 
-Pi completion authority is the final `agent_settled` event. `turn_end` is one
-model/tool turn and `agent_end` is one low-level run; either may be followed by
-automatic retry, compaction retry, or queued continuation. A later
-`agent_start` invalidates an earlier settled observation until another
-`agent_settled` arrives.
+New Pi asks are sent to the existing managed Pi pane. CCB loads one
+runtime-owned Pi extension through the official `--extension` surface. The
+extension observes lifecycle callbacks and appends a normalized, owner-only
+JSONL sidecar in the agent runtime completion directory. It does not read or
+write provider auth/configuration state. A separate owner-only dispatch log
+binds the exact prompt digest to `req_id`, actor, CCB launch session, and live
+runtime instance before the prompt is sent. Each extension process also emits
+a random runtime instance id, so daemon restore can distinguish the same
+session record from a restarted Pi process. Unmanaged interactive/RPC input
+during a bound CCB turn emits explicit supersession evidence; its later reply
+cannot be returned as the CCB job's final text.
+
+Pi completion authority is the bound runtime instance's final
+`agent_settled` event. `turn_end` is one model/tool turn and `agent_end` is one
+low-level run; either may be followed by automatic retry, compaction retry, or
+queued continuation. Assistant/tool events are semantic progress only. The
+terminal reply comes only from the latest visible assistant text carried by
+the settled event; thinking and earlier tool-round narration are excluded.
+
+Pi pane completion additionally requires:
+
+- exact match of request id, actor, CCB launch session, runtime instance, and
+  the pre-send sidecar byte offset
+- a successful final `stop` outcome
+- a non-empty visible reply
+- every complete sidecar record to parse
+
+An `error` outcome fails. `aborted`, `length`, `tool_use`, missing outcome, and
+empty settled replies are incomplete. A partial trailing sidecar record stays
+pending until it becomes a complete newline-delimited record. Pane death,
+extension bootstrap failure before dispatch, binding mismatch, and runtime
+instance replacement close explicitly; CCB never silently reattributes the
+job.
+
+Pi pane execution has no fixed terminal wall-clock cutoff by default. The
+provider reliability policy uses
+`CCB_PI_NO_TERMINAL_TIMEOUT_S` only when an operator explicitly enables a
+semantic no-progress watchdog. This prevents CCB from truncating a valid long
+Pi turn. Cancellation interrupts the current pane run without killing the
+managed Pi pane. Both pane and headless Pi paths have native cancellation, so
+Pi prompts omit the generic model-facing cancel-file probe and avoid its extra
+tool call and uncached-token cost.
 
 OMP completion authority is an `agent_end` event carrying
 `isTerminal=true`. An `agent_end` with `isTerminal=false`, or without the field,
@@ -837,7 +875,9 @@ is progress only. A later `agent_start` likewise invalidates any earlier
 terminal observation. A successful terminal `yield` tool result is a valid
 final outcome and its structured `details.data` is the reply source.
 
-For both providers, semantic completion is necessary but not sufficient:
+For OMP, and for Pi jobs intentionally started with
+`CCB_PI_EXECUTION_MODE=headless` or restored from persisted `mode=pi_run`,
+semantic completion is necessary but not sufficient:
 
 - the one-shot process must exit before CCB terminalizes the job, so stdout is
   closed and late retry/advisor events cannot be truncated
@@ -848,14 +888,14 @@ For both providers, semantic completion is necessary but not sufficient:
 - every complete JSONL record must parse; an unterminated trailing record is a
   truncated stream
 
-A clean process exit without the provider-specific semantic event closes as
+A clean one-shot process exit without the provider-specific semantic event closes as
 `incomplete/<provider>_native_terminal_missing`. A semantic event without a
 final outcome closes as `incomplete/<provider>_native_outcome_missing`.
 Malformed or truncated output closes as
 `incomplete/<provider>_native_protocol_invalid`. Nonzero exit and final
-provider error remain failures. Older Pi streams that stop at `agent_end` and
-older OMP streams without `isTerminal` deliberately fail closed; CCB does not
-guess legacy completion.
+provider error remain failures. Older Pi headless streams that stop at
+`agent_end` and older OMP streams without `isTerminal` deliberately fail
+closed; CCB does not guess legacy completion.
 
 ## 11. Placement In Code
 
@@ -1000,10 +1040,24 @@ Add execution-layer tests for:
 
 Add tests for:
 
-- Pi `turn_end` / `agent_end` followed by retry and final `agent_settled`
+- Pi visible-pane request/response evidence with the official extension loaded
+- Pi process text, tool use/result, retry/progress, final text, and
+  `agent_settled` producing exactly one terminal final reply
+- no Pi `agent_settled`, short replies, empty replies, final `error`,
+  `aborted`, and `length`
+- Pi old offsets, foreign request/actor/launch/runtime identities, binding
+  mismatch, unmanaged-input supersession, malformed complete JSONL, and
+  partial trailing JSONL
+- Pi busy-pane deferral, extension readiness failure before send, pane death,
+  native cancellation without a model cancel-file probe, exact live-instance
+  export/restore, and restarted-instance rejection
+- persisted 8.5.0 `mode=pi_run` dispatch and
+  `CCB_PI_EXECUTION_MODE=headless` rollback
+- Pi headless `turn_end` / `agent_end` followed by retry and final
+  `agent_settled`
 - OMP nonterminal `agent_end`, delayed continuation, and final
   `agent_end.isTerminal=true`
-- a semantic terminal event while the one-shot process is still alive
+- a headless semantic terminal event while the one-shot process is still alive
 - a semantic terminal event whose process never closes converging to run timeout
 - clean exit without semantic terminal evidence
 - semantic terminal followed by nonzero exit

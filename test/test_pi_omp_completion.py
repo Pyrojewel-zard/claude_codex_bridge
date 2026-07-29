@@ -9,7 +9,10 @@ import pytest
 from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope
 from completion.models import CompletionSourceKind, CompletionStatus
 from provider_backends.omp.execution import observe_omp_json_output
-from provider_backends.pi.execution import observe_pi_json_output
+from provider_backends.pi.execution import (
+    build_headless_execution_adapter,
+    observe_pi_json_output,
+)
 from provider_core.pathing import session_filename_for_agent
 from provider_core.registry import build_default_backend_registry
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
@@ -72,6 +75,8 @@ def _observer(provider: str):
 
 
 def _adapter(provider: str):
+    if provider == "pi":
+        return build_headless_execution_adapter()
     backend = build_default_backend_registry(
         include_optional=True,
         include_test_doubles=False,

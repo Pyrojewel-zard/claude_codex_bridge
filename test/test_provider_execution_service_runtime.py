@@ -94,6 +94,20 @@ def test_default_pane_backed_providers_wait_indefinitely_without_terminal_eviden
         assert policy.no_terminal_timeout_s == 0.0
 
 
+def test_pi_waits_indefinitely_without_terminal_evidence_by_default() -> None:
+    registry = build_default_execution_registry(
+        include_optional=True,
+        include_test_doubles=False,
+    )
+
+    adapter = registry.get("pi")
+    assert adapter is not None
+    policy = adapter_reliability_policy(adapter)
+    assert policy is not None
+    assert policy.primary_authority == "pi_extension_agent_settled"
+    assert policy.no_terminal_timeout_s == 0.0
+
+
 def test_execution_service_captures_provider_cancel_evidence_without_mutating_active() -> None:
     captured: list[tuple[ProviderSubmission, str]] = []
 

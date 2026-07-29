@@ -11,10 +11,14 @@ instead of asking the model to print `CCB_DONE`. Kimi and OpenCode inherited
 ask skill injection landed in commit `a4395c2`. MiMo inherited ask instruction
 injection and `mimo run --format json` execution landed in commit `fce17c3`.
 
-The active phase is next-wave provider validation for Qwen Code, GitHub
-Copilot CLI, Cursor Agent, Kiro CLI, Charm Crush, and Pi. Source implementation has
-landed for the minimal built-in provider path, and the stub-backed
-source-runtime smoke plus real CLI version smoke have passed.
+Pi's per-job headless execution has been replaced in the source worktree by
+visible managed-pane execution while preserving 8.5.0 headless jobs and an
+explicit rollback mode. The terminal contract uses Pi's native
+`agent_settled` event rather than interactive session-message stop reasons.
+Authenticated Pi 0.82.1 visible-pane, clear/reuse, and headless rollback
+acceptance passed; the slice is awaiting commit. Topic:
+[topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md).
+The other next-wave providers retain their previously landed paths.
 
 Kimi follow-up receipt and diagnostics hardening has landed in source. This work
 is explicitly Kimi-only: it does not change default provider behavior for Codex,
@@ -118,9 +122,11 @@ Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
     `qwen`/`QWEN_START_CMD`, `agent`/`CURSOR_START_CMD`,
     `copilot`/`COPILOT_START_CMD`, `crush`/`CRUSH_START_CMD`,
     `kiro-cli`/`KIRO_START_CMD`, and `pi`/`PI_START_CMD`.
-  - Visible panes use the shared simple-tmux launcher while CCB ask execution
-    uses per-job subprocesses: structured JSON for Qwen/Cursor/Copilot/Pi and
-    process exit plus stdout for Crush/Kiro.
+  - Visible panes use the shared simple-tmux launcher. Qwen/Cursor/Copilot ask
+    execution uses per-job structured subprocesses and Crush/Kiro use process
+    exit plus stdout. Pi's current landing sends new asks to its visible pane
+    and observes exact `agent_settled` lifecycle sidecar evidence; its
+    structured subprocess is retained for rollback and persisted 8.5.0 jobs.
   - Talk1 review found one release-blocking gap: Crush ask execution used
     `--data-dir`, but the visible pane did not. The shared native CLI launcher
     now supports prepared-state-derived visible arguments, and the Crush visible
@@ -162,11 +168,13 @@ Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
 
 ## Active TODO
 
-1. Decide whether to keep the smoke/real test projects as reusable validation
+1. Commit the accepted Pi visible-pane adapter, lifecycle sidecar,
+   persisted-mode migration, restore behavior, and no-default-cutoff contract.
+2. Decide whether to keep the smoke/real test projects as reusable validation
    fixtures.
-2. Decide whether provider-specific auth diagnostics should land before the
+3. Decide whether provider-specific auth diagnostics should land before the
    next public release or remain a follow-up.
-3. Decide whether real authenticated blackbox asks for all six next-wave CLIs
+4. Decide whether real authenticated blackbox asks for all six next-wave CLIs
    should be required before a public release or tracked as manual follow-up.
 
 ## Blocked By

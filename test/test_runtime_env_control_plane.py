@@ -69,6 +69,18 @@ def test_control_plane_env_keeps_source_test_wrapper_signals(monkeypatch) -> Non
     assert 'CCB_CALLER_ACTOR' not in env
 
 
+def test_control_plane_env_keeps_pi_execution_policy(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_PI_EXECUTION_MODE', 'headless')
+    monkeypatch.setenv('CCB_PI_EXTENSION_READY_TIMEOUT_S', '45')
+    monkeypatch.setenv('CCB_PI_NO_TERMINAL_TIMEOUT_S', '1800')
+
+    env = control_plane_env()
+
+    assert env['CCB_PI_EXECUTION_MODE'] == 'headless'
+    assert env['CCB_PI_EXTENSION_READY_TIMEOUT_S'] == '45'
+    assert env['CCB_PI_NO_TERMINAL_TIMEOUT_S'] == '1800'
+
+
 def test_control_plane_env_keeps_mobile_host_state_override(monkeypatch) -> None:
     monkeypatch.setenv('CCB_MOBILE_HOST_STATE_HOME', '/tmp/ccb-mobile-state')
 

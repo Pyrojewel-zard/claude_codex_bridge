@@ -65,6 +65,9 @@ override the shipped contracts.
   AGY ready-gated prompt delivery, late transcript/pane fallback, and
   coalesced-request diagnostics needed to approach OpenCode-style reply
   attribution stability.
+- [topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md):
+  active Pi visible-pane execution, exact `agent_settled` completion, legacy
+  headless migration, timeout, restore, rollback, and test contract.
 - [history/next-wave-cli-lab-2026-06-13.md](history/next-wave-cli-lab-2026-06-13.md):
   local install/source lab record for Qwen, Copilot, Cursor, Kiro, and Crush.
 - [history/pi-provider-landing-2026-06-13.md](history/pi-provider-landing-2026-06-13.md):
@@ -94,8 +97,10 @@ In scope:
 - MiMo ask execution through native `mimo run --format json` result events,
   using `part.text` plus `step_finish` / `part.reason=stop` as completion
   evidence.
-- Pi ask execution through native `pi --mode json` events, using `turn_end`
-  with assistant message content as completion evidence.
+- Pi ask execution in the managed visible pane, using an exact-request
+  provider-local lifecycle sidecar and `agent_settled` as terminal authority;
+  the 8.5.0 `pi --mode json` subprocess remains the explicit rollback and
+  persisted-job compatibility path.
 - AGY completion alignment to Antigravity transcript logs, so AGY no longer
   relies on `CCB_DONE` as its primary completion signal.
 - AGY prompt delivery hardening so CCB waits for an input-ready Antigravity pane

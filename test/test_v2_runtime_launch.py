@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shlex
 import sqlite3
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
+
 try:  # pragma: no cover - version shim
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
+import cli.services.runtime_launch as runtime_launch
+import provider_backends.claude.launcher_runtime.home as claude_home_runtime
+import provider_profiles.codex_home_config as codex_home_config
 from agents.models import (
     AgentSpec,
     PermissionMode,
@@ -25,32 +30,33 @@ from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from cli.services.provider_binding import AgentBinding
 from cli.services.role_command_policy import RoleCommandPolicy
-import cli.services.runtime_launch as runtime_launch
-from cli.services.runtime_launch_runtime import tmux_panes
 from cli.services.runtime_launch import ensure_agent_runtime
+from cli.services.runtime_launch_runtime import tmux_panes
+from project.ids import compute_project_id
+from project.resolver import ProjectContext
+from provider_backends.agy import launcher as agy_launcher
 from provider_backends.claude import launcher as claude_launcher
-import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import (
     prepare_claude_home_overrides as prepare_claude_home_overrides_for_test,
 )
 from provider_backends.codex import launcher as codex_launcher
+from provider_backends.codex.launcher_runtime.command import (
+    prepare_codex_home_overrides as prepare_codex_home_overrides_for_test,
+)
+from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
 from provider_backends.droid import launcher as droid_launcher
 from provider_backends.gemini import launcher as gemini_launcher
 from provider_backends.grok import home as grok_home
 from provider_backends.mimo import launcher as mimo_launcher
-from provider_backends.opencode import launcher as opencode_launcher
-from provider_backends.agy import launcher as agy_launcher
 from provider_backends.native_cli_support import NativeCliExecutionRequest
-from provider_backends.qoderclicn.execution import _build_command as build_qoderclicn_command
+from provider_backends.opencode import launcher as opencode_launcher
+from provider_backends.qoderclicn.execution import (
+    _build_command as build_qoderclicn_command,
+)
 from provider_backends.runtime_restore import ProviderRestoreTarget
-from provider_backends.codex.launcher_runtime.command import prepare_codex_home_overrides as prepare_codex_home_overrides_for_test
-from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
 from provider_core.registry import build_default_runtime_launcher_map
-import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles import load_resolved_provider_profile
 from provider_profiles.models import ResolvedProviderProfile
-from project.ids import compute_project_id
-from project.resolver import ProjectContext
 from storage.paths import PathLayout
 from terminal_runtime.tmux_identity import pane_visual
 from workspace.planner import WorkspacePlanner
@@ -2208,17 +2214,48 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert (state_dir / 'home' / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
         assert (state_dir / 'home' / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     elif provider == 'pi':
+        extension_path = Path(payload['pi_completion_extension'])
+        completion_event_log = Path(payload['pi_completion_event_log'])
+        dispatch_event_log = Path(payload['pi_dispatch_event_log'])
         assert f'PI_CODING_AGENT_DIR={shlex.quote(str(state_dir / "home"))}' in start_cmd
         assert f'PI_CODING_AGENT_SESSION_DIR={shlex.quote(str(state_dir / "sessions"))}' in start_cmd
         assert 'PI_SKIP_VERSION_CHECK=1' in start_cmd
         assert 'PI_TELEMETRY=0' in start_cmd
+        assert (
+            f'CCB_PI_COMPLETION_EVENTS={shlex.quote(str(completion_event_log))}'
+            in start_cmd
+        )
+        assert (
+            f'CCB_PI_DISPATCH_EVENTS={shlex.quote(str(dispatch_event_log))}'
+            in start_cmd
+        )
         assert visible_parts == [
             default_executable,
             '--session-dir',
             str(state_dir / 'sessions'),
+            '--extension',
+            str(extension_path),
             '--no-approve',
             '--demo',
         ]
+        assert payload['pi_completion_schema_version'] == 1
+        assert extension_path.is_file()
+        assert completion_event_log.is_file()
+        assert dispatch_event_log.is_file()
+        extension_source = extension_path.read_text(encoding='utf-8')
+        assert 'pi.on("agent_settled"' in extension_source
+        assert 'pi.on("input"' in extension_source
+        assert 'request_superseded' in extension_source
+        assert 'CCB_PI_COMPLETION_EVENTS' in extension_source
+        assert (
+            'String(record.runtime_instance_id || "") === runtimeInstanceId'
+            in extension_source
+        )
+        assert 'String(record.dispatch_id || "")' in extension_source
+        assert 'oauth' not in extension_source.lower()
+        assert extension_path.stat().st_mode & 0o077 == 0
+        assert completion_event_log.stat().st_mode & 0o077 == 0
+        assert dispatch_event_log.stat().st_mode & 0o077 == 0
     elif provider == 'zai':
         assert visible_parts == [
             default_executable,

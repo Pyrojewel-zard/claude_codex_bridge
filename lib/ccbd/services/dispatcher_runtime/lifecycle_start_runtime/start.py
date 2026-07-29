@@ -3,17 +3,22 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState
-from ccbd.api_models import JobRecord, JobStatus, TargetKind
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 from provider_core.registry import TEST_DOUBLE_PROVIDER_NAMES
+
+from ccbd.api_models import JobRecord, JobStatus, TargetKind
 
 from ..cancel_flags import cancel_flag_path
 from ..context import build_job_runtime_context
 from ..records import append_event, append_job
 from ..reply_delivery import is_reply_delivery_job
+from ..reply_delivery_runtime.start_completion import (
+    complete_reply_delivery_after_start,
+)
 from ..runtime_state import sync_runtime
-from ..reply_delivery_runtime.start_completion import complete_reply_delivery_after_start
 from .models import QueuedTargetSlot
+
+_NATIVE_CANCEL_NOTICE_FREE_PROVIDERS = frozenset({'pi'})
 
 
 def write_running_snapshot(dispatcher, running: JobRecord, *, started_at: str) -> None:
@@ -112,7 +117,14 @@ def with_cancel_flag_notice(dispatcher, running: JobRecord) -> JobRecord:
         return running
     if is_reply_delivery_job(running):
         return running
-    if str(running.provider or '').strip().lower() in TEST_DOUBLE_PROVIDER_NAMES:
+    provider = str(running.provider or '').strip().lower()
+    if provider in TEST_DOUBLE_PROVIDER_NAMES:
+        return running
+    if provider in _NATIVE_CANCEL_NOTICE_FREE_PROVIDERS:
+        # Pi pane runs are interrupted through provider-native keys and Pi
+        # headless runs through process termination. Asking the model to probe
+        # a cancel flag before every step adds a tool call and uncached tokens
+        # without strengthening either cancellation path.
         return running
     try:
         flag_path = cancel_flag_path(dispatcher._layout, running.agent_name, running.job_id)

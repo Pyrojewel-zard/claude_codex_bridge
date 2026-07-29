@@ -45,14 +45,18 @@ These providers enter CCB as optional built-in managed providers:
   same command authority as foreground launchers. Provider home/session authority
   remains isolated and must not be broadly passed through by prefix.
 
-Next-wave runtime should split visible pane startup from ask execution:
+Most next-wave runtimes split visible pane startup from ask execution:
 
-- `qwen`, `copilot`, `cursor`, `grok`, and `pi` use per-job subprocess
+- `qwen`, `copilot`, `cursor`, and `grok` use per-job subprocess
   execution with JSONL/stream-json parsing.
 - `crush` and `kiro` use per-job subprocess execution with process exit plus
   stdout as the completion signal.
 - Visible panes still use simple tmux launchers for user observation and
   runtime maintenance.
+- Pi is the deliberate exception: new asks execute in its managed visible
+  pane and an official Pi extension writes exact-request lifecycle evidence.
+  The earlier per-job structured subprocess remains the explicit headless
+  rollback and persisted `pi_run` compatibility path.
 - Shared native CLI launchers may derive visible-pane arguments from prepared
   provider-state. Crush uses this to start visible panes with
   `--data-dir <provider-state>/data`, matching the state isolation used by
@@ -137,8 +141,11 @@ result streams:
 12. Kiro asks initially collect stdout from `kiro-cli chat --no-interactive
    --wrap never` and treat process exit as completion until a stable structured
    chat event source is found.
-13. Pi asks parse `pi --mode json` JSONL and terminalize from native
-   `turn_end` events carrying assistant message content.
+13. Pi asks are dispatched to the managed visible pane and terminalize only
+   from the exact bound extension `agent_settled` event. `turn_end`,
+   `agent_end`, assistant text, and tool events are progress; the latest
+   settled visible text is the reply. Persisted/headless rollback jobs retain
+   the `pi --mode json` process-exit fence.
 14. Grok asks parse official `grok --no-auto-update -p ... --output-format
    streaming-json --session-id <job>` output. CCB accepts both generic
    assistant/result envelopes and JSON-RPC style `session/update`

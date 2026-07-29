@@ -36,7 +36,12 @@ Date: 2026-06-13
 - Next target: review and release readiness for the next native CLI provider
   wave after source-runtime and real CLI version smoke passed for Qwen Code,
   Cursor Agent, GitHub Copilot CLI, Charm Crush, Kiro CLI, and Pi. Talk1's
-  Crush visible-pane isolation blocker has been fixed in source.
+  Crush visible-pane isolation blocker has been fixed in source. Pi
+  visible-pane execution has completed source and authenticated acceptance,
+  with exact
+  `agent_settled` completion, persisted headless-mode compatibility, an
+  explicit rollback switch, and pane/trace evidence tracked in
+  [topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md).
 
 ## Done
 
