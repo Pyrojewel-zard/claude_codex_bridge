@@ -41,10 +41,28 @@ def build_claude_env_prefix(
         claude_user_base_url_fn=claude_user_base_url_fn,
     )
 
+    passthrough_statement = render_export_statement(passthrough_env(extra_env, api_keys=api_keys))
+    if passthrough_statement:
+        parts.append(passthrough_statement)
+
     export_statement = render_export_statement(explicit_env)
     if export_statement:
         parts.append(export_statement)
     return "; ".join(parts)
+
+
+def passthrough_env(extra_env: dict[str, str] | None, *, api_keys: set[str]) -> dict[str, str]:
+    """Keys from `agents.<name>.env` that the API reconciler above does not govern.
+
+    That reconciler exists to decide credential and endpoint precedence, so it
+    keeps only the provider's API keys. `agents.<name>.env` is a general
+    environment map though, and every other launcher passes it through whole, so
+    the remaining keys still have to reach the launched process.
+
+    Emitted before the API exports and before CCB's own managed overrides, so
+    neither can be shadowed by a value declared in config.
+    """
+    return {key: value for key, value in (extra_env or {}).items() if key not in api_keys}
 
 
 def runtime_home_env_parts(*, profile=None) -> list[str]:
@@ -185,4 +203,4 @@ def render_export_statement(explicit_env: dict[str, str]) -> str:
     return f"export {exports}"
 
 
-__all__ = ["build_claude_env_prefix"]
+__all__ = ["build_claude_env_prefix", "passthrough_env"]
