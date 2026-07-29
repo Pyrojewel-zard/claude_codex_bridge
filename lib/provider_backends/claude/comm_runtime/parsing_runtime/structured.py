@@ -173,14 +173,18 @@ def _event_record(
         entry.get("subagent_id") or entry.get("agentId") or entry.get("agent_id"),
         lowercase=False,
     )
+    # Claude 2.1.x writes ``slug`` as the human-readable session name on
+    # ordinary top-level records.  It is not subagent identity.
     subagent_name = _optional_text(
-        entry.get("subagent_name") or entry.get("slug") or entry.get("agentName"),
+        entry.get("subagent_name") or entry.get("agentName"),
         lowercase=False,
     )
     if subagent_id:
         event["subagent_id"] = subagent_id
     if subagent_name:
         event["subagent_name"] = subagent_name
+    if bool(entry.get("isSidechain")):
+        event["is_sidechain"] = True
     return event
 
 

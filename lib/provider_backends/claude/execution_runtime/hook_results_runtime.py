@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
+from ccbd.system import parse_utc_timestamp
 from completion.models import (
     CompletionConfidence,
     CompletionCursor,
@@ -22,6 +24,13 @@ class HookPollContext:
     next_seq: int
 
 
+@dataclass(frozen=True)
+class ExactHookEvidence:
+    context: HookPollContext
+    event: dict[str, object]
+    event_at: datetime
+
+
 def poll_exact_hook(submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
     context = hook_poll_context(submission)
     if context is None:
@@ -29,10 +38,20 @@ def poll_exact_hook(submission: ProviderSubmission, *, now: str) -> ProviderPoll
     event = load_event(context.completion_dir, context.request_anchor)
     if not event:
         return None
+    return poll_hook_event(submission, context=context, event=event, now=now)
 
+
+def poll_hook_event(
+    submission: ProviderSubmission,
+    *,
+    context: HookPollContext,
+    event: dict[str, object],
+    now: str,
+    extra_diagnostics: dict[str, object] | None = None,
+) -> ProviderPollResult:
     reply = hook_reply(event)
     status = hook_status(event)
-    diagnostics = hook_diagnostics(event)
+    diagnostics = hook_diagnostics(event, extra=extra_diagnostics)
     status, diagnostics = normalize_empty_reply_status(status, diagnostics, reply=reply)
     provider_turn_ref = hook_provider_turn_ref(event, request_anchor=context.request_anchor)
     cursor_path = hook_cursor_path(context)
@@ -60,6 +79,121 @@ def poll_exact_hook(submission: ProviderSubmission, *, now: str) -> ProviderPoll
     )
     updated = advance_submission(submission, reply=reply, next_seq=context.next_seq + 1)
     return ProviderPollResult(submission=updated, items=(item,), decision=decision)
+
+
+def load_strict_exact_hook_evidence(
+    submission: ProviderSubmission,
+    *,
+    now: str | None = None,
+    require_reply: bool = False,
+) -> ExactHookEvidence | None:
+    """Load independently attributable hook evidence for recovery paths.
+
+    Normal hook polling is already protected by prompt activation. Recovery
+    and cancellation bypass that guard, so they must fail closed unless the
+    artifact proves provider, agent, workspace, request time, and Claude
+    session identity.
+    """
+    if not bool(submission.runtime_state.get("prompt_sent", False)):
+        return None
+    context = hook_poll_context(submission)
+    if context is None:
+        return None
+    event = load_event(context.completion_dir, context.request_anchor)
+    if not event:
+        return None
+    if str(event.get("req_id") or "").strip() != context.request_anchor:
+        return None
+    if not hook_event_matches_submission(submission, event):
+        return None
+    try:
+        hook_status(event)
+    except (TypeError, ValueError):
+        return None
+    event_at = _parse_timestamp(event.get("timestamp"))
+    accepted_at = _parse_timestamp(submission.accepted_at)
+    if event_at is None or accepted_at is None or event_at < accepted_at:
+        return None
+    if now is not None:
+        observed_at = _parse_timestamp(now)
+        if observed_at is None or event_at > observed_at:
+            return None
+    if require_reply and not hook_reply(event):
+        return None
+    return ExactHookEvidence(context=context, event=event, event_at=event_at)
+
+
+def capture_exact_hook_cancel_evidence(
+    submission: ProviderSubmission,
+    *,
+    now: str,
+) -> CompletionDecision | None:
+    evidence = load_strict_exact_hook_evidence(
+        submission,
+        now=now,
+        require_reply=True,
+    )
+    if evidence is None:
+        return None
+    result = poll_hook_event(
+        submission,
+        context=evidence.context,
+        event=evidence.event,
+        now=now,
+        extra_diagnostics={
+            "cancel_reply_salvaged": True,
+            "cancel_reply_source": "exact_hook_artifact",
+            "completion_fallback_source": "cancel_exact_hook_artifact",
+        },
+    )
+    return result.decision
+
+
+def hook_event_matches_submission(
+    submission: ProviderSubmission,
+    event: dict[str, object],
+) -> bool:
+    if event.get("schema_version") != 1:
+        return False
+    if str(event.get("record_type") or "").strip() != "provider_completion_hook":
+        return False
+    if str(event.get("provider") or "").strip().lower() != submission.provider.strip().lower():
+        return False
+    if str(event.get("agent_name") or "").strip() != submission.agent_name.strip():
+        return False
+    expected_workspace = str((submission.diagnostics or {}).get("workspace_path") or "").strip()
+    recorded_workspace = str(event.get("workspace_path") or "").strip()
+    if not expected_workspace or not recorded_workspace:
+        return False
+    if _normalized_path_text(recorded_workspace) != _normalized_path_text(expected_workspace):
+        return False
+    hook_session = str(event.get("session_id") or "").strip()
+    tracked_session = _tracked_session_id(submission)
+    return bool(hook_session and tracked_session and hook_session == tracked_session)
+
+
+def _tracked_session_id(submission: ProviderSubmission) -> str:
+    tracked_path = str(submission.runtime_state.get("session_path") or "").strip()
+    if not tracked_path:
+        return ""
+    return _normalized_path_text(tracked_path).rsplit("/", 1)[-1].removesuffix(".jsonl")
+
+
+def _normalized_path_text(value: object) -> str:
+    return str(value or "").strip().replace("\\", "/").rstrip("/")
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = parse_utc_timestamp(text)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def hook_poll_context(submission: ProviderSubmission) -> HookPollContext | None:
@@ -145,10 +279,15 @@ def hook_item_payload(
     return payload
 
 
-def hook_diagnostics(event: dict[str, object]) -> dict[str, object]:
+def hook_diagnostics(
+    event: dict[str, object],
+    *,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
     diagnostics = dict(event.get("diagnostics") or {})
     diagnostics.setdefault("completion_source", "hook_artifact")
     diagnostics.setdefault("hook_event_name", event.get("hook_event_name"))
+    diagnostics.update(dict(extra or {}))
     return diagnostics
 
 
@@ -244,4 +383,12 @@ def advance_submission(submission: ProviderSubmission, *, reply: str, next_seq: 
     )
 
 
-__all__ = ["poll_exact_hook"]
+__all__ = [
+    "ExactHookEvidence",
+    "capture_exact_hook_cancel_evidence",
+    "hook_event_matches_submission",
+    "hook_poll_context",
+    "load_strict_exact_hook_evidence",
+    "poll_exact_hook",
+    "poll_hook_event",
+]

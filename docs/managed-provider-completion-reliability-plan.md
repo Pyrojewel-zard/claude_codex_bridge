@@ -705,6 +705,38 @@ facts and requires activation in the new top-level session. Pane dispatch,
 elapsed time, apparent FIFO order, or an idle prompt may not substitute for
 exact queued-command identity.
 
+Claude session-name `slug` is display metadata, not subagent identity.
+Top-level records with `isSidechain=false` remain eligible for request-anchor
+tracking; real sidechains are fenced by `isSidechain=true` or explicit
+subagent identity.
+
+Issue `#282` requires a narrow recovery exception when the provider has already
+written an exact terminal Stop-hook artifact but transcript anchor observation
+failed. The normal activation boundary remains authoritative during the grace
+window. After that window, an orphaned exact hook may terminalize only when all
+of these independent proofs agree:
+
+- artifact request id is the active outer request id
+- artifact provider, agent, and workspace match the active submission
+- artifact timestamp is parseable, no earlier than submission acceptance, and
+  no later than the current observation time
+- both artifact and tracked Claude session identities are present and equal
+- the target pane is observably idle
+
+Session-path comparison may normalize `/` and `\` separators before extracting
+the session id, but missing identity must fail closed. Recovery diagnostics
+must record that anchor observation was missed and that the exact-hook fallback
+was used.
+
+Cancellation is a separate preservation path. Before destructively cancelling
+an active Claude submission, the execution service may best-effort capture the
+same strictly attributable exact hook without waiting for the orphan grace or
+idle-pane proof. Only a non-empty reply is salvageable. Cancellation remains
+the terminal job status, while its decision records the captured completion
+status/source and preserves the reply or reply artifact. If no reply can be
+captured, a forced empty artifact must be labeled as transport metadata rather
+than task evidence.
+
 ### 10.4 Kimi
 
 Kimi native completion must support both observed provider layouts without
@@ -877,6 +909,14 @@ Add tests for:
 - empty hook reply does not burn job
 - session-boundary and hook evidence merge correctly
 - timeout closure works when hook never arrives
+- a named top-level session `slug` does not hide the request anchor
+- real `isSidechain=true` records remain excluded
+- orphaned exact-hook recovery requires complete request, provider, agent,
+  workspace, timestamp, session, grace, and idle-pane proof
+- Linux and Windows-style session-path separators identify the same tracked
+  session
+- cancellation preserves a hook-only non-empty reply and labels an
+  unsalvageable forced empty artifact as non-evidence
 
 ### 12.4 Kimi
 

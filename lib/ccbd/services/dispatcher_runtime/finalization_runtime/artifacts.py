@@ -36,6 +36,21 @@ def spill_terminal_reply_if_needed(
             )
             diagnostics['artifact_instruction'] = 'no_provider_reply_captured'
             diagnostics['artifact_empty_no_provider_reply'] = True
+        elif not str(decision.reply or '').strip():
+            provider = str(getattr(current, 'provider', '') or 'provider').strip()
+            reply = artifact_stub(
+                prefix=(
+                    f'CCB completion reply for job {current.job_id} has no captured '
+                    f'{provider} provider reply; --artifact-reply stored an empty '
+                    'artifact for transport metadata only.'
+                ),
+                artifact=artifact,
+                include_preview=False,
+                instruction='Instruction: no provider reply was captured; do not treat this artifact as task evidence.',
+            )
+            diagnostics['artifact_instruction'] = 'no_provider_reply_captured'
+            diagnostics['artifact_empty_no_provider_reply'] = True
+            diagnostics['no_captured_reply'] = True
         else:
             reply = artifact_stub(
                 prefix=f'CCB completion reply for job {current.job_id} was stored as an artifact by --artifact-reply.',

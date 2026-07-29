@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from completion.models import CompletionSourceKind, CompletionItemKind
-from provider_backends.claude.execution_runtime.state_machine_runtime import ClaudePollState, handle_assistant_event
+from completion.models import CompletionItemKind, CompletionSourceKind
+from provider_backends.claude.execution_runtime.state_machine_runtime import (
+    ClaudePollState,
+    handle_assistant_event,
+)
 from provider_execution.base import ProviderSubmission
 
 
@@ -158,6 +161,34 @@ def test_handle_assistant_event_keeps_primary_uuid_for_subagent_chunks() -> None
     assert [item.kind for item in poll.items] == [CompletionItemKind.ASSISTANT_CHUNK]
     assert poll.items[0].payload["assistant_uuid"] == "subagent-uuid"
     assert poll.items[0].payload["subagent_id"] == "worker-1"
+
+
+def test_handle_assistant_event_does_not_complete_real_sidechain() -> None:
+    poll = ClaudePollState(
+        request_anchor="job_1",
+        next_seq=1,
+        anchor_seen=True,
+        reply_buffer="",
+        raw_buffer="",
+        session_path="/tmp/session.jsonl",
+        last_assistant_uuid="primary-uuid",
+    )
+
+    handle_assistant_event(
+        _submission(),
+        poll,
+        {
+            "text": "child final answer",
+            "uuid": "sidechain-uuid",
+            "is_sidechain": True,
+            "stop_reason": "end_turn",
+        },
+        now="2026-04-06T00:01:00Z",
+    )
+
+    assert poll.last_assistant_uuid == "primary-uuid"
+    assert [item.kind for item in poll.items] == [CompletionItemKind.ASSISTANT_CHUNK]
+    assert poll.reached_turn_boundary is False
 
 
 def test_handle_assistant_event_does_not_complete_tool_use_stop_reason() -> None:

@@ -404,6 +404,14 @@ when they can observe matching workspace paths there. A session outside the
 managed home is a contract violation or legacy-leak diagnostic, not a completion
 source.
 
+Completion recovery that bypasses normal transcript-anchor activation must bind
+its hook artifact to the persisted managed Claude session as well as the active
+request. Both the hook `session_id` and tracked `claude_session_path` identity
+must be present and equal; missing session evidence is not a compatibility
+match. Implementations may normalize path separators before extracting the
+final `.jsonl` stem, but must not search another Claude home or infer identity
+from `work_dir`.
+
 ## 6. Isolation Contract
 
 By default:

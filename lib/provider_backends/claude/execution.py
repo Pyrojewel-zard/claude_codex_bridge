@@ -3,9 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from ccbd.api_models import JobRecord
+from completion.models import CompletionDecision
 from provider_core.protocol import request_anchor_for_job
-from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
+from provider_execution.base import (
+    ProviderPollResult,
+    ProviderRuntimeContext,
+    ProviderSubmission,
+)
 from provider_execution.common import request_anchor_from_runtime_state
+from provider_execution.followups import unsupported_active_followup_capability
 from provider_execution.reliability import CompletionReliabilityPolicy
 from terminal_runtime import get_backend_for_session
 
@@ -13,8 +19,8 @@ from .comm import ClaudeLogReader
 from .execution_runtime import poll_submission as _poll_submission
 from .execution_runtime import resume_submission as _resume_submission
 from .execution_runtime import start_active_submission as _start_active_submission
+from .execution_runtime.hook_results import capture_exact_hook_cancel_evidence
 from .session import load_project_session
-from provider_execution.followups import unsupported_active_followup_capability
 
 
 class ClaudeProviderAdapter:
@@ -40,6 +46,14 @@ class ClaudeProviderAdapter:
 
     def poll(self, submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
         return _poll_submission(self, submission, now=now)
+
+    def capture_cancel_evidence(
+        self,
+        submission: ProviderSubmission,
+        *,
+        now: str,
+    ) -> CompletionDecision | None:
+        return capture_exact_hook_cancel_evidence(submission, now=now)
 
     def export_runtime_state(self, submission: ProviderSubmission) -> dict[str, object]:
         return {

@@ -54,7 +54,9 @@ def assistant_text(event: dict[str, object]) -> str:
 def assistant_identity(event: dict[str, object]) -> tuple[str, str, bool]:
     subagent_id = str(event.get("subagent_id") or "").strip()
     subagent_name = str(event.get("subagent_name") or "").strip()
-    return subagent_id, subagent_name, bool(subagent_id or subagent_name)
+    return subagent_id, subagent_name, bool(
+        subagent_id or subagent_name or event.get("is_sidechain")
+    )
 
 
 def assistant_uuid(event: dict[str, object]) -> str:

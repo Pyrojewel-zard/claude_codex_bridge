@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState
-from ccbd.api_models import CancelReceipt, JobStatus, TargetKind
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
+
+from ccbd.api_models import CancelReceipt, JobStatus, TargetKind
 
 from .cancel_flags import cleanup_cancel_flags, clear_cancel_flag, write_cancel_flag
 from .completion import build_terminal_state
@@ -31,28 +32,70 @@ def cancel_job(dispatcher, job_id: str, *, record_reply: bool = True) -> CancelR
         # check this flag between steps and stop if it exists.
         write_cancel_flag(dispatcher._layout, current.agent_name, job_id)
         cleanup_cancel_flags(dispatcher._layout, current.agent_name)
+    cancel_evidence = (
+        _capture_cancel_evidence(dispatcher, job_id)
+        if record_reply
+        else None
+    )
     if dispatcher._execution_service is not None:
         dispatcher._execution_service.cancel(job_id)
 
     snapshot = dispatcher._snapshot_writer.load(job_id)
-    reply = snapshot.latest_decision.reply if snapshot is not None else ''
-    return cancel_with_decision(dispatcher, marked, cancelled_at, reply, snapshot, record_reply=record_reply)
+    snapshot_reply = str(
+        getattr(getattr(snapshot, 'latest_decision', None), 'reply', '') or ''
+    )
+    reply = cancel_evidence.reply if cancel_evidence is not None else snapshot_reply
+    return cancel_with_decision(
+        dispatcher,
+        marked,
+        cancelled_at,
+        reply,
+        snapshot,
+        record_reply=record_reply,
+        cancel_evidence=cancel_evidence,
+    )
 
 
-def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, snapshot, *, record_reply: bool = True) -> CancelReceipt:
+def cancel_with_decision(
+    dispatcher,
+    current,
+    cancelled_at: str,
+    reply: str,
+    snapshot,
+    *,
+    record_reply: bool = True,
+    cancel_evidence: CompletionDecision | None = None,
+) -> CancelReceipt:
+    diagnostics = _cancel_diagnostics(cancel_evidence)
     decision = CompletionDecision(
         terminal=True,
         status=CompletionStatus.CANCELLED,
         reason='cancel_info',
         confidence=CompletionConfidence.DEGRADED,
         reply=reply,
-        anchor_seen=snapshot.state.anchor_seen if snapshot else False,
-        reply_started=snapshot.state.reply_started if snapshot else False,
-        reply_stable=snapshot.state.reply_stable if snapshot else False,
-        provider_turn_ref=snapshot.state.provider_turn_ref if snapshot else None,
-        source_cursor=snapshot.state.latest_cursor if snapshot else None,
+        anchor_seen=(
+            snapshot.state.anchor_seen
+            if snapshot
+            else bool(cancel_evidence.anchor_seen if cancel_evidence else False)
+        ),
+        reply_started=bool(reply) or (snapshot.state.reply_started if snapshot else False),
+        reply_stable=(
+            bool(cancel_evidence.reply_stable)
+            if cancel_evidence is not None
+            else (snapshot.state.reply_stable if snapshot else False)
+        ),
+        provider_turn_ref=(
+            cancel_evidence.provider_turn_ref
+            if cancel_evidence is not None
+            else (snapshot.state.provider_turn_ref if snapshot else None)
+        ),
+        source_cursor=(
+            cancel_evidence.source_cursor
+            if cancel_evidence is not None
+            else (snapshot.state.latest_cursor if snapshot else None)
+        ),
         finished_at=cancelled_at,
-        diagnostics={'cancel_requested': True},
+        diagnostics=diagnostics,
     )
     with dispatcher._chain_transition_lock:
         latest = dispatcher.get(current.job_id)
@@ -110,6 +153,47 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
         dispatcher._sync_runtime(current.agent_name, state=AgentState.IDLE)
     resolve_reply_delivery_terminal(dispatcher, terminal, finished_at=cancelled_at)
     return _cancel_receipt(terminal)
+
+
+def _capture_cancel_evidence(dispatcher, job_id: str) -> CompletionDecision | None:
+    execution_service = dispatcher._execution_service
+    capture = getattr(execution_service, 'capture_cancel_evidence', None)
+    if not callable(capture):
+        return None
+    try:
+        evidence = capture(job_id)
+    except Exception:
+        return None
+    if not isinstance(evidence, CompletionDecision):
+        return None
+    if not evidence.terminal or not str(evidence.reply or '').strip():
+        return None
+    return evidence
+
+
+def _cancel_diagnostics(cancel_evidence: CompletionDecision | None) -> dict[str, object]:
+    diagnostics: dict[str, object] = {'cancel_requested': True}
+    if cancel_evidence is None:
+        return diagnostics
+    evidence_diagnostics = dict(cancel_evidence.diagnostics or {})
+    diagnostics.update(
+        {
+            'cancel_reply_salvaged': True,
+            'cancel_reply_source': str(
+                evidence_diagnostics.get('cancel_reply_source')
+                or evidence_diagnostics.get('completion_source')
+                or 'provider_terminal_evidence'
+            ),
+            'captured_completion_status': cancel_evidence.status.value,
+            'captured_completion_reason': cancel_evidence.reason,
+            'captured_completion_finished_at': cancel_evidence.finished_at,
+        }
+    )
+    for key in ('completion_source', 'completion_fallback_source', 'hook_event_name'):
+        value = evidence_diagnostics.get(key)
+        if value is not None:
+            diagnostics[key] = value
+    return diagnostics
 
 
 def _cancel_receipt(terminal) -> CancelReceipt:

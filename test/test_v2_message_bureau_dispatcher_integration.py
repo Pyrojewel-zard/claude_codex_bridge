@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
-from pathlib import Path
 import subprocess
 import threading
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from agents.models import (
     AgentRuntime,
     AgentSpec,
@@ -23,8 +22,12 @@ from agents.models import (
 from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope
 from ccbd.services.dispatcher import DispatchError, JobDispatcher
 from ccbd.services.dispatcher_runtime.cancel_flags import cancel_flag_path
-from ccbd.services.dispatcher_runtime.finalization_runtime.persistence import persist_terminal_completion
-from ccbd.services.dispatcher_runtime.polling_service import _validate_provider_completion_decision
+from ccbd.services.dispatcher_runtime.finalization_runtime.persistence import (
+    persist_terminal_completion,
+)
+from ccbd.services.dispatcher_runtime.polling_service import (
+    _validate_provider_completion_decision,
+)
 from ccbd.services.dispatcher_runtime.reply_delivery import prepare_reply_deliveries
 from ccbd.services.job_heartbeat import JobHeartbeatService
 from ccbd.services.registry import AgentRegistry
@@ -707,6 +710,113 @@ def test_dispatcher_delivers_cancelled_reply_when_partial_output_exists(
     assert mailbox is not None
     assert mailbox.queue_depth == 1
     assert mailbox.pending_reply_count == 1
+
+
+def test_dispatcher_salvages_exact_provider_reply_before_cancellation(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-cancel-hook-salvage'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('claude', 'codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:20Z')
+
+    job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='cancel after Claude already finished',
+            task_id='task-cancel-hook-salvage',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'artifact_reply': True},
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    captured = replace(
+        _decision(reply='full reply from exact Stop hook'),
+        diagnostics={
+            'completion_source': 'hook_artifact',
+            'hook_event_name': 'Stop',
+            'cancel_reply_salvaged': True,
+            'cancel_reply_source': 'exact_hook_artifact',
+        },
+    )
+    cancelled: list[str] = []
+
+    class CapturingExecution:
+        def capture_cancel_evidence(self, current_job_id: str):
+            assert current_job_id == job_id
+            return captured
+
+        def cancel(self, current_job_id: str) -> None:
+            cancelled.append(current_job_id)
+
+    dispatcher._execution_service = CapturingExecution()
+
+    dispatcher.cancel(job_id)
+
+    terminal_job = dispatcher.get(job_id)
+    assert terminal_job is not None
+    assert terminal_job.status is JobStatus.CANCELLED
+    terminal = dict(terminal_job.terminal_decision or {})
+    diagnostics = dict(terminal['diagnostics'])
+    assert diagnostics['cancel_reply_salvaged'] is True
+    assert diagnostics['cancel_reply_source'] == 'exact_hook_artifact'
+    assert diagnostics['captured_completion_status'] == 'completed'
+    assert diagnostics['hook_event_name'] == 'Stop'
+    artifact = dict(diagnostics['reply_artifact'])
+    artifact_path = Path(str(artifact['path']))
+    assert artifact_path.read_text(encoding='utf-8') == 'full reply from exact Stop hook'
+    assert artifact['bytes'] > 0
+    assert cancelled == [job_id]
+
+
+def test_dispatcher_labels_forced_empty_cancel_artifact_as_no_captured_reply(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-cancel-empty-artifact'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('claude', 'codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:20Z')
+
+    job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='cancel without captured output',
+            task_id='task-cancel-empty-artifact',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'artifact_reply': True},
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    dispatcher.cancel(job_id)
+
+    terminal_job = dispatcher.get(job_id)
+    assert terminal_job is not None
+    terminal = dict(terminal_job.terminal_decision or {})
+    diagnostics = dict(terminal['diagnostics'])
+    assert diagnostics['artifact_empty_no_provider_reply'] is True
+    assert diagnostics['artifact_instruction'] == 'no_provider_reply_captured'
+    assert diagnostics['no_captured_reply'] is True
+    assert 'no captured claude provider reply' in str(terminal['reply'])
+    artifact = dict(diagnostics['reply_artifact'])
+    assert artifact['bytes'] == 0
 
 
 def test_dispatcher_cancelled_chain_child_submits_one_parent_continuation_without_restart(

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from provider_backends.claude.comm_runtime.parsing import extract_content_text, extract_message, structured_event
+from provider_backends.claude.comm_runtime.parsing import (
+    extract_content_text,
+    extract_message,
+    structured_event,
+)
 
 
 def test_extract_content_text_ignores_thinking_fragments() -> None:
@@ -58,3 +62,39 @@ def test_structured_event_captures_assistant_stop_reason() -> None:
         "stop_reason": "end_turn",
         "entry": entry,
     }
+
+
+def test_structured_event_does_not_treat_named_session_slug_as_subagent() -> None:
+    entry = {
+        "type": "user",
+        "slug": "bright-running-otter",
+        "isSidechain": False,
+        "message": {
+            "role": "user",
+            "content": "CCB_REQ_ID: job_1\n\nrun the task",
+        },
+    }
+
+    event = structured_event(entry)
+
+    assert event is not None
+    assert "subagent_name" not in event
+    assert "is_sidechain" not in event
+
+
+def test_structured_event_preserves_real_sidechain_identity() -> None:
+    entry = {
+        "type": "assistant",
+        "slug": "bright-running-otter",
+        "isSidechain": True,
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "child result"}],
+        },
+    }
+
+    event = structured_event(entry)
+
+    assert event is not None
+    assert "subagent_name" not in event
+    assert event["is_sidechain"] is True

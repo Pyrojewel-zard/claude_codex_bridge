@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
 from completion.models import CompletionSourceKind, CompletionStatus
-from provider_backends.claude.execution_runtime.hook_results import poll_exact_hook
+from provider_backends.claude.execution_runtime.hook_results import (
+    capture_exact_hook_cancel_evidence,
+    poll_exact_hook,
+)
+from provider_backends.claude.execution_runtime.hook_results_runtime import (
+    load_strict_exact_hook_evidence,
+)
 from provider_execution.base import ProviderSubmission
 
 
@@ -19,6 +28,38 @@ def _submission() -> ProviderSubmission:
             "next_seq": 7,
         },
     )
+
+
+def _strict_submission() -> ProviderSubmission:
+    return replace(
+        _submission(),
+        diagnostics={"workspace_path": "C:/work/demo"},
+        runtime_state={
+            "completion_dir": "/tmp/completion",
+            "request_anchor": "job_1",
+            "next_seq": 7,
+            "prompt_sent": True,
+            "session_path": r"C:\Users\demo\.claude\projects\session-1.jsonl",
+        },
+    )
+
+
+def _strict_event(**overrides: object) -> dict[str, object]:
+    event: dict[str, object] = {
+        "schema_version": 1,
+        "record_type": "provider_completion_hook",
+        "provider": "claude",
+        "agent_name": "agent1",
+        "workspace_path": r"C:\work\demo",
+        "req_id": "job_1",
+        "reply": "completed reply",
+        "timestamp": "2026-04-06T00:01:00Z",
+        "status": "completed",
+        "hook_event_name": "Stop",
+        "session_id": "session-1",
+    }
+    event.update(overrides)
+    return event
 
 
 def test_poll_exact_hook_builds_failed_terminal_result(monkeypatch) -> None:
@@ -71,3 +112,69 @@ def test_poll_exact_hook_marks_completed_empty_reply_incomplete(monkeypatch) -> 
     assert result.items[0].payload["status"] == "incomplete"
     assert result.items[0].payload["empty_reply"] is True
     assert "without assistant reply text" in result.items[0].payload["text"]
+
+
+def test_capture_cancel_evidence_accepts_exact_hook_with_windows_session_path(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.hook_results_runtime.load_event",
+        lambda completion_dir, request_anchor: _strict_event(),
+    )
+
+    decision = capture_exact_hook_cancel_evidence(
+        _strict_submission(),
+        now="2026-04-06T00:02:00Z",
+    )
+
+    assert decision is not None
+    assert decision.reply == "completed reply"
+    assert decision.diagnostics["cancel_reply_salvaged"] is True
+    assert decision.diagnostics["cancel_reply_source"] == "exact_hook_artifact"
+
+
+@pytest.mark.parametrize(
+    ("event_overrides", "runtime_overrides", "diagnostic_overrides", "require_reply"),
+    [
+        ({"schema_version": 2}, {}, {}, False),
+        ({"record_type": "other"}, {}, {}, False),
+        ({"req_id": "other"}, {}, {}, False),
+        ({"status": "unknown"}, {}, {}, False),
+        ({"session_id": None}, {}, {}, False),
+        ({}, {"session_path": ""}, {}, False),
+        ({"provider": "gemini"}, {}, {}, False),
+        ({"agent_name": "other"}, {}, {}, False),
+        ({"workspace_path": "/different"}, {}, {}, False),
+        ({"timestamp": "2026-04-05T23:59:59Z"}, {}, {}, False),
+        ({"timestamp": "2026-04-06T00:03:00Z"}, {}, {}, False),
+        ({"reply": ""}, {}, {}, True),
+        ({}, {"prompt_sent": False}, {}, False),
+        ({}, {}, {"workspace_path": ""}, False),
+    ],
+)
+def test_strict_hook_evidence_fails_closed_when_identity_proof_is_missing(
+    monkeypatch,
+    event_overrides,
+    runtime_overrides,
+    diagnostic_overrides,
+    require_reply,
+) -> None:
+    event = _strict_event(**event_overrides)
+    submission = _strict_submission()
+    submission = replace(
+        submission,
+        diagnostics={**dict(submission.diagnostics or {}), **diagnostic_overrides},
+        runtime_state={**submission.runtime_state, **runtime_overrides},
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.hook_results_runtime.load_event",
+        lambda completion_dir, request_anchor: event,
+    )
+
+    evidence = load_strict_exact_hook_evidence(
+        submission,
+        now="2026-04-06T00:02:00Z",
+        require_reply=require_reply,
+    )
+
+    assert evidence is None

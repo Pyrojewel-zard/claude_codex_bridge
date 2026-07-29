@@ -14,9 +14,9 @@ from provider_backends.claude.execution_runtime.state_machine_runtime import (
     apply_session_rotation,
     build_poll_state,
     finalize_poll_result,
+    is_top_level_user_prompt,
 )
 from provider_execution.base import ProviderPollResult, ProviderSubmission
-
 
 NOW = "2026-07-21T08:00:00Z"
 
@@ -177,6 +177,22 @@ def test_structured_parser_preserves_queue_lifecycle_and_tool_only_uuid() -> Non
     assert tool_only["role"] == "assistant"
     assert tool_only["text"] == ""
     assert tool_only["uuid"] == "assistant-tool"
+
+
+def test_named_main_session_prompt_remains_top_level_but_sidechain_does_not() -> None:
+    main_entry = _user_record("job_current")
+    main_entry["slug"] = "bright-running-otter"
+    main_entry["isSidechain"] = False
+    sidechain_entry = dict(main_entry)
+    sidechain_entry["isSidechain"] = True
+
+    main_event = structured_event(main_entry)
+    sidechain_event = structured_event(sidechain_entry)
+
+    assert main_event is not None
+    assert sidechain_event is not None
+    assert is_top_level_user_prompt(main_event) is True
+    assert is_top_level_user_prompt(sidechain_event) is False
 
 
 def test_deferred_pane_dispatch_does_not_synthesize_activation_or_anchor() -> None:
