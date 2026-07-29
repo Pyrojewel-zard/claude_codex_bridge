@@ -15,7 +15,7 @@ import time
 from types import SimpleNamespace
 from typing import Callable
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
@@ -632,7 +632,11 @@ def _mobile_host_log_tail(path: Path, *, max_chars: int = 1200) -> str:
 
 def _http_health_check(local_gateway_url: str) -> bool:
     try:
-        with urlopen(f'{local_gateway_url}/v1/health', timeout=MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S) as response:
+        opener = build_opener(ProxyHandler({}))
+        with opener.open(
+            f'{local_gateway_url}/v1/health',
+            timeout=MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S,
+        ) as response:
             return 200 <= int(response.status) < 300
     except (OSError, URLError):
         return False

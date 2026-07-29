@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 from types import SimpleNamespace
+from urllib import request as urllib_request
 
 import pytest
 
@@ -123,6 +124,56 @@ def test_mobile_host_health_check_tolerates_server_wide_health_latency() -> None
             return
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), _SlowHealthyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        assert mobile_host._http_health_check(f'http://{host}:{port}')
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
+def test_mobile_host_health_check_bypasses_configured_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _HealthyHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - stdlib hook
+            if self.path != '/v1/health':
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = b'{"status":"ok"}'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
+            return
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+        reserved.bind(('127.0.0.1', 0))
+        unavailable_proxy_port = reserved.getsockname()[1]
+
+    proxy_url = f'http://127.0.0.1:{unavailable_proxy_port}'
+    proxy_names = (
+        'HTTP_PROXY',
+        'http_proxy',
+        'HTTPS_PROXY',
+        'https_proxy',
+        'ALL_PROXY',
+        'all_proxy',
+    )
+    for name in proxy_names:
+        monkeypatch.setenv(name, proxy_url)
+    for name in ('NO_PROXY', 'no_proxy'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(urllib_request, '_opener', None)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _HealthyHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
