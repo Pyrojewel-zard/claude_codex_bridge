@@ -1,5 +1,38 @@
 # Changelog
 
+## v8.5.2 (2026-07-30)
+
+### Bounded Pane Recovery
+
+- **Recovery Requires Stability**: a respawned pane remains probing for
+  90 seconds and must receive a new healthy observation before it can drain
+  queued work.
+- **Crash Loops Back Off And Stop**: unstable recovery uses
+  30s/60s/120s/5m/10m/30m delays and opens a durable circuit after six
+  attempts. Runtime diagnostics expose the probe, consecutive-failure, and
+  circuit state.
+- **Crash Writes Stay Bounded**: each Provider runtime retains only the newest
+  50 pane-crash records, pane history is cleared before respawn, and unchanged
+  helper manifests are not rewritten.
+- **Provider Failures Are Contained**: stale CCB-owned Claude continuation
+  state can be removed without changing authentication, while a missing
+  managed Codex app server fails closed and requests restart/remount.
+
+### Concise Managed Communication
+
+- **Stable Guidance Lives In Memory**: normal asks no longer repeat the default
+  reply-policy and cancellation-file blocks. Compact/silent mode remains
+  explicit, and runtime interruption is the primary cancellation path.
+
+### Rich Terminal Isolation
+
+- **GUI Launches Detach Cleanly**: CCB Rich WezTerm starts in a new process
+  session with standard streams detached, preventing GUI diagnostics and
+  job-control signals from polluting or stopping the invoking terminal.
+- **Wayland Cursor Compatibility Is Private**: a CCB-owned XCursor overlay
+  supplies the missing `hand` cursor without replacing the selected theme or
+  modifying user/system cursor files.
+
 ## v8.5.1 (2026-07-30)
 
 ### Claude Completion Integrity

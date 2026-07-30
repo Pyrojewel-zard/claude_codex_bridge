@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.2 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.1/ccb-mobile-v8.5.1.apk)
+- [下载 CCB Mobile v8.5.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -300,6 +300,18 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.2</b> - 有界 pane 恢复、更简练的 ask 与隔离的 Rich 终端启动</summary>
+
+- respawn 后进入 90 秒观察期，只有新的健康观测确认恢复后才会继续派发队列任务。
+- 不稳定恢复依次退避 30s/60s/120s/5m/10m/30m，第六次后打开熔断，不再无限重启和写盘。
+- 每个 Provider runtime 只保留最新 50 份 pane crash 记录，清空旧 pane history，并跳过内容未变化的 helper manifest 写入。
+- 只修复失效的 CCB 托管 Claude continuation 状态且不改登录信息；托管 Codex app server 不可用时安全停止。
+- 把稳定的回复与取消规则放入托管项目记忆，普通 ask 不再重复注入提示段落，也不要求每一步轮询取消文件。
+- CCB Rich WezTerm 与父 TTY 完全分离，并提供私有 Wayland XCursor overlay，同时保留用户选择的 cursor theme。
+
+</details>
+
+<details>
 <summary><b>v8.5.1</b> - 完整 Claude 回复、可见 Pi 执行与不受代理干扰的 Mobile 健康检查</summary>
 
 - 按 assistant message 聚合 Claude 快照，只有 thinking 的边界和工具过程说明不会再替代真实最终回复。

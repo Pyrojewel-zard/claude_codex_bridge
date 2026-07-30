@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.1 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.2 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.1/ccb-mobile-v8.5.1.apk)
+- [Download CCB Mobile v8.5.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,6 +309,18 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.2</b> - Bounded pane recovery, quieter asks, and isolated Rich terminal launches</summary>
+
+- Keep a respawned pane in a 90-second probation window and hold queued work until a new healthy observation confirms recovery.
+- Back off unstable recovery through 30s/60s/120s/5m/10m/30m, then open a circuit after six attempts instead of restarting and writing indefinitely.
+- Bound each Provider runtime to the newest 50 pane-crash records, clear stale pane history, and skip unchanged helper-manifest writes.
+- Repair only stale CCB-managed Claude continuation state without touching authentication; fail closed when the managed Codex app server is unavailable.
+- Move stable reply/cancellation policy into managed project memory so normal asks no longer repeat prompt blocks or require per-step cancel-file polling.
+- Detach CCB Rich WezTerm from the parent TTY and provide a private Wayland XCursor overlay without replacing the selected cursor theme.
+
+</details>
+
+<details>
 <summary><b>v8.5.1</b> - Complete Claude replies, visible Pi execution, and proxy-safe Mobile health checks</summary>
 
 - Aggregate Claude snapshots by assistant message so thinking-only boundaries and tool narration cannot replace the true final reply.
