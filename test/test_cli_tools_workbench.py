@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 import zipfile
 
+import pytest
+
 from cli.tools_runtime import cmd_tools
 from cli.tools_runtime import workbench as workbench_tools
 from terminal_runtime.ui_theme import theme_config_path
@@ -195,6 +197,7 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert 'CCB_SIDEBAR_THEME_PROFILE="$workbench_tmux_theme"' in workbench
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm' in workbench
     assert 'configure_wayland_cursor_env()' in workbench
+    assert '[ "${is_wsl:-0}" = 0 ] || return 0' in workbench
     assert 'CCB_WORKBENCH_XCURSOR_COMPAT=1' in workbench
     assert "XMODIFIERS='@im=fcitx'" in workbench
     assert 'GTK_IM_MODULE=fcitx' in workbench
@@ -515,6 +518,8 @@ def test_detached_terminal_process_has_no_tty_and_owns_its_session(tmp_path: Pat
 
 
 def test_workbench_wayland_cursor_overlay_preserves_requested_theme(tmp_path: Path, monkeypatch) -> None:
+    if workbench_tools._is_wsl():
+        pytest.skip('native Linux Wayland XCursor overlay is intentionally disabled under WSL')
     fake_bin = _prepare_env(tmp_path, monkeypatch)
     cursor_root = tmp_path / 'xcursor'
     pointer = cursor_root / 'TestTheme' / 'cursors' / 'pointer'
