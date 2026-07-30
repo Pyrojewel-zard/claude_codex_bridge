@@ -28,8 +28,8 @@ def cancel_job(dispatcher, job_id: str, *, record_reply: bool = True) -> CancelR
     dispatcher._append_job(marked)
     dispatcher._append_event(marked, 'job_cancel_requested', {'status': current.status.value}, timestamp=cancelled_at)
     if current.target_kind is TargetKind.AGENT and current.agent_name:
-        # Visible to the agent itself: the dispatch prompt instructs agents to
-        # check this flag between steps and stop if it exists.
+        # Retain the cooperative compatibility signal documented once in the
+        # managed memory bundle. Runtime interruption below remains primary.
         write_cancel_flag(dispatcher._layout, current.agent_name, job_id)
         cleanup_cancel_flags(dispatcher._layout, current.agent_name)
     cancel_evidence = (

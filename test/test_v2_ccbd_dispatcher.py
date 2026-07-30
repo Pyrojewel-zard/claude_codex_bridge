@@ -1799,8 +1799,8 @@ def test_dispatcher_passes_runtime_context_to_execution_service(tmp_path: Path) 
     assert runtime_context.runtime_ref == 'codex-runtime'
     assert runtime_context.session_ref == 'codex-session'
     assert runtime_context.runtime_pid == 101
-    expected_flag = layout.agent_dir('codex') / 'cancel_flags' / f'{execution_job.job_id}.cancel'
-    assert f'`{expected_flag}`' in execution_job.request.body
+    assert execution_job.request.body == 'hello'
+    assert 'Before each work step' not in execution_job.request.body
     stored_job = dispatcher.get(execution_job.job_id)
     assert stored_job is not None
     assert stored_job.request.body == 'hello'

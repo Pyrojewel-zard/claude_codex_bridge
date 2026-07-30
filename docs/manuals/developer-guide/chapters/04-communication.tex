@@ -42,12 +42,20 @@ ask 解析入口在 \src{lib/cli/parser_runtime/ask.py}，提交服务在 \src{l
   \item 解析 target 和 message body，支持 stdin 追加。
   \item 推断 sender。当前 workspace agent 能识别时使用 agent，否则 fallback 到 user。
   \item 校验 target 和 sender 是否存在于项目配置。
-  \item 在普通 ask 中追加 reply guidance，除非用户已经给出明确输出要求。
+  \item 保持普通 ask 的原始正文不变；稳定 reply/cancel 规则由 managed
+  provider memory 承载。\cmd{--compact} 和 \cmd{--silence} 仅在没有显式
+  输出要求时追加一行 \src{CCB\_REPLY\_MODE} 动态标识。
   \item 在大 request 或显式 artifact flag 下把 request body 写入 text artifact。
   \item 构造 \src{MessageEnvelope} 并通过 mounted daemon client 提交。
 \end{itemize}
 
 ask flags 不应被理解为显示格式开关。它们是路由和交付策略。
+
+CCB 不再把相同的 reply guidance 和 cancel-file 长说明附加到每个 job。
+Provider materialization 会把稳定通信规则写入 managed memory；每次请求只保留
+用户正文、完成绑定所需的 \src{CCB\_REQ\_ID}，以及确有需要时的一行
+\src{CCB\_REPLY\_MODE}。取消以 execution service 的 provider interrupt 为
+主路径，cancel flag 仅作为 managed memory 中记录的协作兼容信号。
 
 \begin{longtable}{p{0.25\linewidth}p{0.65\linewidth}}
 \toprule

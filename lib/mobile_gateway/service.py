@@ -4528,6 +4528,8 @@ def _clean_native_message_text(text: str) -> str:
         stripped = line.strip()
         if _CCB_REQ_LINE_RE.match(line):
             continue
+        if stripped.startswith('CCB_REPLY_MODE:'):
+            continue
         if stripped == 'CCB reply guidance:':
             skipping_reply_guidance = True
             continue

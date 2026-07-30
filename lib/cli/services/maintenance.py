@@ -720,10 +720,7 @@ def _activation_message(
         '```json\n'
         f'{diagnostic}\n'
         '```\n\n'
-        'CCB reply guidance:\n'
-        '- Silent-on-success requested.\n'
-        '- Reply only with blockers, risks, needed user action, or a schedule recommendation.\n'
-        '- Do not include raw logs unless essential.'
+        'CCB_REPLY_MODE: silent'
     )
 
 

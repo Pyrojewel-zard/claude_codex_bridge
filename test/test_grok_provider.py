@@ -156,6 +156,7 @@ def test_grok_prompt_uses_request_anchor_without_semantic_done_marker() -> None:
 
     assert 'CCB_REQ_ID: job_grok_native_end' in prompt
     assert 'CCB_DONE' not in prompt
+    assert 'CCB reply guidance:' not in prompt
 
 
 class _FakeGrokSession:
@@ -306,7 +307,7 @@ def test_grok_reply_delivery_is_dispatched_to_visible_pane_without_headless_sess
     assert result.decision.diagnostics['submission_mode'] == 'grok_pane'
 
 
-def test_grok_pane_adapter_does_not_duplicate_existing_reply_guidance(
+def test_grok_pane_adapter_preserves_compact_reply_mode_without_static_guidance(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -316,7 +317,7 @@ def test_grok_pane_adapter_does_not_duplicate_existing_reply_guidance(
     monkeypatch.setattr(pane_execution, '_load_session', lambda work_dir, agent_name: session)
     monkeypatch.setattr(pane_execution, 'get_backend_for_session', lambda data: backend)
     job = _pane_job()
-    job.request.body = 'visible request\n\nCCB reply guidance:\n- Keep it short.'
+    job.request.body = 'visible request\n\nCCB_REPLY_MODE: compact'
 
     GrokPaneExecutionAdapter().start(
         job,
@@ -324,7 +325,8 @@ def test_grok_pane_adapter_does_not_duplicate_existing_reply_guidance(
         now='2026-07-13T00:00:00Z',
     )
 
-    assert backend.sent[0][1].count('CCB reply guidance:') == 1
+    assert backend.sent[0][1].count('CCB_REPLY_MODE: compact') == 1
+    assert 'CCB reply guidance:' not in backend.sent[0][1]
 
 
 def test_grok_observer_extracts_text_from_aggregated_json(tmp_path: Path) -> None:

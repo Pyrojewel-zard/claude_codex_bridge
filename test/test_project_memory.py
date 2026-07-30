@@ -307,6 +307,12 @@ def test_materialize_runtime_memory_bundle_writes_generated_bundle(tmp_path: Pat
     assert 'only `injected` is success' in text
     assert 'cancel and resubmit the complete corrected task' in text
     assert 'A `completed` CCB job means provider execution ended normally' in text
+    assert 'For every inbound CCB task, answer directly and concisely' in text
+    assert '`CCB_REPLY_MODE: compact` means distill aggressively' in text
+    assert '`CCB_REPLY_MODE: silent` means return the shortest useful terminal status' in text
+    assert 'CCB runtime interruption is the primary cancellation mechanism' in text
+    assert 'Do not poll cancellation files during ordinary work' in text
+    assert '<project_root>/.ccb/agents/<agent>/cancel_flags/<job>.cancel' in text
     assert '## CCB Shared Project Memory' in text
     assert 'shared ask rules' in text
     assert text.index('## CCB Runtime Coordination Rules') < text.index('## CCB Shared Project Memory')

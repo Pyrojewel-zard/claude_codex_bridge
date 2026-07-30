@@ -1325,7 +1325,7 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
             project_id=ctx.project_id,
             to_agent='codex',
             from_actor='user',
-            body='review with help',
+            body='review with help\n\nCCB_REPLY_MODE: compact',
             task_id='task-callback',
             reply_to=None,
             message_type='ask',
@@ -1339,7 +1339,7 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
             project_id=ctx.project_id,
             to_agent='claude',
             from_actor='codex',
-            body='collect evidence',
+            body='collect evidence\n\nCCB_REPLY_MODE: silent',
             task_id='task-callback',
             reply_to=None,
             message_type='ask',
@@ -1350,6 +1350,8 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
     assert edge is not None
     assert edge.parent_job_id == parent_job_id
+    assert edge.diagnostics['parent_body'] == 'review with help'
+    assert edge.diagnostics['child_body'] == 'collect evidence'
 
     dispatcher.complete(parent_job_id, _decision(reply='delegated to claude'))
     parent_job = dispatcher.get(parent_job_id)

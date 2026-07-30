@@ -1474,6 +1474,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
                     'message': (
                         'CCB_REQ_ID: job_mobile_probe\n\n'
                         'clean prompt\n\n'
+                        'CCB_REPLY_MODE: compact\n\n'
                         'CCB reply guidance:\n'
                         '- Answer directly and concisely.\n'
                         '- Avoid raw logs.'
@@ -1541,6 +1542,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
     assert 'hidden developer' not in public_json
     assert 'hidden context' not in public_json
     assert 'CCB_REQ_ID' not in public_json
+    assert 'CCB_REPLY_MODE' not in public_json
     assert 'CCB reply guidance' not in public_json
     assert 'stale ask prompt' not in public_json
     assert 'stale ask snapshot' not in public_json
@@ -1883,6 +1885,7 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
                             'text': (
                                 'CCB_REQ_ID: job_mobile_probe\n\n'
                                 'clean claude prompt\n\n'
+                                'CCB_REPLY_MODE: silent\n\n'
                                 'CCB reply guidance:\n'
                                 '- Answer directly and concisely.\n'
                             ),
@@ -1976,6 +1979,7 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
     assert 'hidden system prompt' not in public_json
     assert 'hidden thinking' not in public_json
     assert 'CCB_REQ_ID' not in public_json
+    assert 'CCB_REPLY_MODE' not in public_json
     assert 'CCB reply guidance' not in public_json
     assert '<command-name>' not in public_json
     assert '<local-command-caveat>' not in public_json

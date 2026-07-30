@@ -49,6 +49,8 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
         assert 'do not run `ask get` / `pend`' in text
         assert '`ping` / `watch`' in text
         assert 'Do not manually append output-policy text' in text
+        assert 'stable reply policy comes from managed CCB memory' in text
+        assert 'only requested compact/silent mode metadata' in text
         assert 'Artifact flags are orthogonal to `--chain`, `--silence`, and `--compact`.' in text
         assert 'Automatic spill for text over 4 KiB is a fallback' in text
         assert 'In `A --silence -> B`, B still runs an active job.' in text
@@ -102,6 +104,8 @@ def test_powershell_ask_skill_template_uses_short_ask_command() -> None:
     assert 'do not run `ask get` / `pend`' in text
     assert '`ping` / `watch`' in text
     assert 'Do not manually append output-policy text' in text
+    assert 'stable reply policy comes from managed CCB memory' in text
+    assert 'only requested compact/silent mode metadata' in text
     assert 'Artifact flags are orthogonal to `--chain`, `--silence`, and `--compact`.' in text
     assert 'Automatic spill for text over 4 KiB is a fallback' in text
     assert 'In `A --silence -> B`, B still runs an active job.' in text

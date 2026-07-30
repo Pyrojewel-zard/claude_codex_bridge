@@ -82,9 +82,15 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def test_native_prompts_do_not_request_ccb_done() -> None:
-    assert "CCB_DONE" not in wrap_native_prompt("answer", "job_native123")
-    assert "CCB_DONE" not in wrap_agy_prompt("answer", "job_native123")
-    assert "CCB_REQ_ID" in wrap_agy_prompt("answer", "job_native123")
+    native_prompt = wrap_native_prompt("answer", "job_native123")
+    agy_prompt = wrap_agy_prompt("answer", "job_native123")
+
+    assert native_prompt == "CCB_REQ_ID: job_native123\n\nanswer\n"
+    assert agy_prompt == "CCB_REQ_ID: job_native123\n\nanswer\n"
+    assert "CCB_DONE" not in native_prompt
+    assert "CCB_DONE" not in agy_prompt
+    assert "CCB reply guidance:" not in native_prompt
+    assert "CCB reply guidance:" not in agy_prompt
 
 
 def test_kimi_observes_wire_turn_end_and_poll_emits_boundary(monkeypatch, tmp_path: Path) -> None:

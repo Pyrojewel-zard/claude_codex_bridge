@@ -704,15 +704,14 @@ def test_pi_reply_delivery_completes_on_visible_dispatch(
     assert result.decision.reason == "reply_delivery_sent"
 
 
-def test_pi_visible_prompt_does_not_duplicate_existing_reply_guidance(
+def test_pi_visible_prompt_preserves_compact_reply_mode_without_static_guidance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     job = _job(
         body=(
             "Inspect this.\n\n"
-            "CCB reply guidance:\n"
-            "- Answer directly and concisely."
+            "CCB_REPLY_MODE: compact"
         )
     )
     _, _, backend, _, _ = _start_ready(
@@ -721,7 +720,8 @@ def test_pi_visible_prompt_does_not_duplicate_existing_reply_guidance(
         job=job,
     )
 
-    assert backend.sent[0][1].count("CCB reply guidance:") == 1
+    assert backend.sent[0][1].count("CCB_REPLY_MODE: compact") == 1
+    assert "CCB reply guidance:" not in backend.sent[0][1]
     assert backend.sent[0][1].startswith(
         "CCB_REQ_ID: job_pi_visible_1\n\n"
     )

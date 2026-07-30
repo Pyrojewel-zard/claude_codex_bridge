@@ -957,8 +957,6 @@ def _pane_prompt(
 ) -> str:
     if no_wrap:
         return body
-    if "CCB reply guidance:" in body:
-        return f"CCB_REQ_ID: {request_anchor}\n\n{body.rstrip()}\n"
     return wrap_native_prompt(body, request_anchor)
 
 
