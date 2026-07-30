@@ -1039,6 +1039,17 @@ async def _relay_host_connector_streams_files_beyond_frame_limit(
                 relay_origin=issued.relay_audience,
                 expected_host_public_key=public_key_b64(host_crypto_key),
             )
+
+            async def receive_stream_message() -> RelayInnerMessage:
+                # This is a capacity and integrity test, not a latency test. A
+                # loaded WSL runner can need more than the two-second default
+                # for one of the hundreds of frames in the 25 MiB case.
+                return await _receive_phone_inner(
+                    phone,
+                    phone_crypto,
+                    timeout=10.0,
+                )
+
             outer_seq = 2
             upload_id = 'upload-stream-demo'
             await _send_phone_inner(
@@ -1060,7 +1071,7 @@ async def _relay_host_connector_streams_files_beyond_frame_limit(
                 ),
             )
             outer_seq += 1
-            assert (await _receive_phone_inner(phone, phone_crypto)).kind == 'stream_window'
+            assert (await receive_stream_message()).kind == 'stream_window'
             for offset in range(0, len(content), 32 * 1024):
                 payload = {'chunk_b64': _b64(content[offset : offset + 32 * 1024])}
                 await _send_phone_inner(
@@ -1074,7 +1085,7 @@ async def _relay_host_connector_streams_files_beyond_frame_limit(
                     ),
                 )
                 outer_seq += 1
-                assert (await _receive_phone_inner(phone, phone_crypto)).kind == 'stream_window'
+                assert (await receive_stream_message()).kind == 'stream_window'
             await _send_phone_inner(
                 phone,
                 phone_crypto,
@@ -1086,10 +1097,10 @@ async def _relay_host_connector_streams_files_beyond_frame_limit(
                 ),
             )
             outer_seq += 1
-            assert (await _receive_phone_inner(phone, phone_crypto)).kind == 'stream_window'
-            upload_result = await _receive_phone_inner(phone, phone_crypto)
+            assert (await receive_stream_message()).kind == 'stream_window'
+            upload_result = await receive_stream_message()
             assert upload_result.payload['result']['ok'] is True, upload_result.payload
-            assert (await _receive_phone_inner(phone, phone_crypto)).kind == 'stream_close'
+            assert (await receive_stream_message()).kind == 'stream_close'
             assert gateway.uploaded_files['file-demo'] == content
 
             download_id = 'download-stream-demo'
@@ -1113,7 +1124,7 @@ async def _relay_host_connector_streams_files_beyond_frame_limit(
             outer_seq += 1
             downloaded = bytearray()
             while True:
-                message = await _receive_phone_inner(phone, phone_crypto)
+                message = await receive_stream_message()
                 if message.kind == 'stream_close':
                     break
                 assert message.kind == 'stream_data'
