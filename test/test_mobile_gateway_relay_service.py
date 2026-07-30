@@ -361,7 +361,13 @@ def test_rendezvous_valid_replay_mismatch_and_expiry(tmp_path: Path) -> None:
 
 
 async def _rendezvous_valid_replay_mismatch_and_expiry(tmp_path: Path) -> None:
-    service, issued = await _started_service(tmp_path, max_sessions=4)
+    # Keep this authentication test independent from the deliberately aggressive
+    # default test heartbeat, which can close an otherwise idle host on slow CI.
+    service, issued = await _started_service(
+        tmp_path,
+        max_sessions=4,
+        heartbeat_interval=5.0,
+    )
     try:
         async with _client_session() as client:
             host = await client.ws_connect(service.url('/v2/host'), ssl=_client_ssl())
