@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v8.5.1 (2026-07-30)
 
 ### Claude Completion Integrity
 
@@ -14,6 +14,27 @@
   failed, empty Stop hooks allow a bounded late-final grace, and all normal or
   recovery hook paths require exact request, workspace, timestamp, and Claude
   session identity.
+
+### Pi Visible Completion
+
+- **Pi Replies Stay Visible In The Managed TUI**: new Pi asks execute in the
+  existing managed pane and publish exact lifecycle evidence through the
+  official extension API instead of running in a hidden one-shot process.
+- **Only The Settled Final Message Completes**: exact dispatch, actor, launch
+  session, runtime instance, and request identity bind the final
+  `agent_settled` reply. Tool narration, retries, stale sessions, manual input,
+  and partial or malformed events cannot become a successful reply.
+- **Long Runs Are Not Arbitrarily Truncated**: Pi pane execution has no default
+  terminal wall-clock cutoff. Native cancellation no longer asks the model to
+  probe a cancel file, avoiding an extra tool call and uncached-token cost.
+  Persisted 8.5.0 jobs and `CCB_PI_EXECUTION_MODE=headless` retain the
+  compatible one-shot path.
+
+### Mobile Host Health
+
+- **Loopback Health Checks Ignore Proxies**: Mobile host startup checks connect
+  directly to the local gateway even when `HTTP_PROXY`, `HTTPS_PROXY`, or
+  `ALL_PROXY` is configured, preventing false startup failures.
 
 ## v8.5.0 (2026-07-29)
 
