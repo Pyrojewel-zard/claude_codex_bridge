@@ -52,6 +52,22 @@ suppression:
 
 ## Pressure Classes
 
+### 0. Crash-Recovery Write Storms
+
+Current landed guardrail:
+
+- pane respawn is provisional until a 90-second stable observation window
+- queued work does not dispatch to a probing runtime
+- consecutive unstable attempts back off at
+  30s/60s/120s/5m/10m/30m and stop after six attempts
+- the open circuit is durable and requires explicit restart/remount
+- per-runtime crash logs/reason sidecars are pruned online to the newest 50
+- unchanged helper manifests do not rewrite
+
+This guardrail takes precedence over idle pacing: a failing provider must not
+be mistaken for healthy idle state, and a crash loop must not become a durable
+write workload.
+
 ### 1. Control-Plane Heartbeat Writes
 
 Files:

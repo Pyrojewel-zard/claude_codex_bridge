@@ -58,6 +58,7 @@ def test_agent_stores_roundtrip(tmp_path: Path) -> None:
         desired_state='mounted',
         reconcile_state='steady',
         restart_count=2,
+        recovery_failure_count=2,
         last_reconcile_at='2026-03-18T00:00:02Z',
         last_failure_reason='pane-dead',
     )

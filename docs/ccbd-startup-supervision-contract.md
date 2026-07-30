@@ -980,6 +980,9 @@ When a desired agent's pane dies, the daemon must reconcile it in the background
 7. otherwise tear down stale binding authority
 8. relaunch runtime through the normal launch path
 9. persist recovery result and retry/backoff state
+10. treat an immediately live replacement pane as provisional, then require a
+    post-respawn health observation across the stability window before
+    publishing recovery success
 
 Important rule:
 
@@ -987,12 +990,34 @@ Important rule:
 - when `cmd` is enabled, pane death or slot drift for `cmd` must also be detected and repaired on heartbeat even if no user command is running in that pane
 - `cmd` recovery must first try session-preserving local slot replacement inside the current workspace window before escalating to project reflow
 - ordinary `pane-dead` / `pane-missing` recovery must not use project-server destruction as the first-line path
+- `respawn_pane()` returning and an immediate `is_alive()` check prove only
+  that recovery entered `health=recovering` / `reconcile_state=probing`; they
+  must not emit `recover_succeeded`
+- a probe succeeds only after at least 90 seconds and at least one healthy pane
+  observation whose `last_seen_at` is later than the recovery attempt; queued
+  work must remain accepted but undispatched while the runtime is probing
+- unstable automatic pane recovery uses consecutive-failure backoff of
+  30 seconds, 60 seconds, 120 seconds, 5 minutes, 10 minutes, then 30 minutes.
+  Six consecutive attempts without a stable probe open
+  `health=recovery-circuit-open` / `reconcile_state=blocked`; heartbeat must
+  then stop respawning, logging crashes, appending recovery attempts, and
+  starting dispatcher work until an explicit restart/remount creates a fresh
+  mount attempt
+- `restart_count` remains cumulative diagnostics; `recovery_failure_count`
+  counts only the current consecutive unstable recovery series and resets
+  after a stable probe or a fresh explicit mount attempt
 - a provider-declared terminal recovery block is not ordinary pane death. For
   revoked Codex auth, runtime authority must transition to degraded health
   `provider-auth-revoked` with `reconcile_state=blocked`, preserve the
   actionable login/remount reason, and stop heartbeat recovery, replacement
   pane creation, dispatcher starts, and further `restart_count` increments
   until an explicit remount repairs or replaces that authority
+- a Claude crash containing `No conversation found to continue` may repair
+  only the CCB-owned persisted `--continue` argument and stale Claude session
+  id/path before respawn; it must not mutate provider authentication
+- a Codex crash containing `failed to connect to remote app server` is a
+  managed-helper failure, not a successful local pane recovery. It must fail
+  closed with an actionable single-agent restart/remount reason
 - a still-present, exact-owned `pane-dead` Agent leaf is not a namespace
   recreate reason.  Namespace identity and healthy peer runtime identity must
   remain unchanged while the dead target alone is prepared and respawned
@@ -1155,7 +1180,8 @@ At minimum, the supervision model must distinguish these states:
 For desired agents, `recovering` and `degraded` are not the same:
 
 - `recovering`
-  - daemon currently owns a live reconcile attempt
+  - daemon owns a live reconcile attempt or a provisional replacement pane is
+    inside its stability window; dispatcher starts remain blocked
 - `degraded`
   - agent is not healthy and no active recovery has yet succeeded
 - `blocked`
@@ -1241,7 +1267,9 @@ Path:
 
 Required purpose:
 
-- append-only record of pane death detection, relaunch attempts, recovery failures, and success transitions
+- append-only record of pane death detection, relaunch attempts,
+  `recover_probing`, recovery failures, circuit-open blocks, and stable success
+  transitions
 
 ### 7.4 Agent Runtime Authority
 
@@ -1256,6 +1284,7 @@ Required fields beyond current baseline:
 - `desired_state`
 - `reconcile_state`
 - `restart_count`
+- `recovery_failure_count`
 - `last_reconcile_at`
 - `last_failure_reason`
 - optional `runtime_owner_pid`
@@ -1581,6 +1610,15 @@ Runtime supervision:
 - `ensure_pane()` succeeds
 - `ensure_pane()` fails and relaunch succeeds
 - repeated relaunch failure enters backoff/recovering state
+- an immediately live respawn remains probing and cannot drain queued work
+- a healthy post-respawn observation completes only after the 90-second
+  stability window
+- six unstable respawns open the recovery circuit and repeated heartbeats add
+  no further attempts
+- explicit restart/remount clears the consecutive recovery circuit counter
+- Claude missing-conversation repair removes only CCB-owned continuation state
+- Codex managed-helper loss blocks rather than respawning forever
+- crash artifacts remain bounded during repeated failure
 
 Shutdown:
 

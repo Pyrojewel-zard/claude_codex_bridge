@@ -177,12 +177,13 @@ def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -
         recovered_pane_id='%88',
         recovered_session_id='codex-session-new',
     )
+    now = {'value': '2026-03-18T00:00:10Z'}
     runtime_service = RuntimeService(
         layout,
         registry,
         ctx.project_id,
         session_bindings=_binding_map('codex', session),
-        clock=lambda: '2026-03-18T00:00:00Z',
+        clock=lambda: now['value'],
     )
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead'))
     loop = RuntimeSupervisionLoop(
@@ -191,31 +192,51 @@ def test_runtime_supervision_loop_recovers_idle_degraded_agent(tmp_path: Path) -
         config=config,
         registry=registry,
         runtime_service=runtime_service,
-        clock=lambda: '2026-03-18T00:00:10Z',
+        clock=lambda: now['value'],
         generation_getter=lambda: 7,
     )
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy'}
+    assert statuses == {'codex': 'recovering'}
     runtime = registry.get('codex')
     assert runtime is not None
-    assert runtime.state is AgentState.IDLE
-    assert runtime.health == 'healthy'
+    assert runtime.state is AgentState.DEGRADED
+    assert runtime.health == 'recovering'
     assert runtime.runtime_ref == 'tmux:%88'
     assert runtime.session_ref == 'codex-session-new'
     assert runtime.daemon_generation == 7
     assert runtime.desired_state == 'mounted'
+    assert runtime.reconcile_state == 'probing'
+    assert runtime.restart_count == 1
+    assert runtime.recovery_failure_count == 1
+    assert runtime.last_reconcile_at == '2026-03-18T00:00:10Z'
+    assert runtime.last_failure_reason == 'pane-dead'
+    assert session.ensure_calls == 1
+
+    runtime_service.patch_runtime_state(runtime, last_seen_at='2026-03-18T00:00:40Z')
+    now['value'] = '2026-03-18T00:01:40Z'
+
+    assert loop.reconcile_once() == {'codex': 'healthy'}
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.IDLE
+    assert runtime.health == 'healthy'
     assert runtime.reconcile_state == 'steady'
     assert runtime.restart_count == 1
-    assert runtime.last_reconcile_at == '2026-03-18T00:00:10Z'
+    assert runtime.recovery_failure_count == 0
     assert runtime.last_failure_reason is None
     assert session.ensure_calls == 1
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
+    assert [event.event_kind for event in events] == [
+        'recover_started',
+        'recover_probing',
+        'recover_succeeded',
+    ]
     assert events[0].prior_health == 'pane-dead'
-    assert events[1].result_health == 'healthy'
-    assert events[1].daemon_generation == 7
+    assert events[1].result_health == 'recovering'
+    assert events[2].result_health == 'healthy'
+    assert events[2].daemon_generation == 7
 
 
 def test_runtime_supervision_loop_adopts_canonical_epoch_when_daemon_generation_changes(tmp_path: Path) -> None:
@@ -323,7 +344,7 @@ def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_n
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert statuses == {'codex': 'recovering', 'claude': 'healthy'}
     assert remount_calls == ['pane_recovery:codex']
     runtime = registry.get('codex')
     assert runtime is not None
@@ -331,7 +352,7 @@ def test_runtime_supervision_loop_reflows_after_local_replacement_when_project_n
     assert runtime.session_ref == 'codex-session-reflowed'
     assert session.ensure_calls == 1
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
+    assert [event.event_kind for event in events] == ['recover_started', 'recover_probing']
 
 
 def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_agent_busy(tmp_path: Path) -> None:
@@ -379,7 +400,7 @@ def test_runtime_supervision_loop_recovers_missing_pane_locally_even_when_other_
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert statuses == {'codex': 'recovering', 'claude': 'healthy'}
     assert remount_calls == []
     assert session.ensure_calls == 1
 
@@ -546,14 +567,14 @@ def test_runtime_supervision_loop_reflows_project_namespace_on_foreign_namespace
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert statuses == {'codex': 'recovering', 'claude': 'healthy'}
     assert remount_calls == ['pane_recovery:codex']
     runtime = registry.get('codex')
     assert runtime is not None
     assert runtime.runtime_ref == 'tmux:%55'
     assert runtime.session_ref == 'codex-session-reflowed'
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
+    assert [event.event_kind for event in events] == ['recover_started', 'recover_probing']
 
 
 def test_runtime_supervision_loop_recovers_explicit_topology_foreign_pane_before_reflow(
@@ -616,7 +637,7 @@ def test_runtime_supervision_loop_recovers_explicit_topology_foreign_pane_before
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert statuses == {'codex': 'recovering', 'claude': 'healthy'}
     assert refresh_calls == [('codex', True)]
     assert remount_calls == []
     runtime = registry.get('codex')
@@ -624,7 +645,7 @@ def test_runtime_supervision_loop_recovers_explicit_topology_foreign_pane_before
     assert runtime.runtime_ref == 'tmux:%41'
     assert runtime.session_ref == 'codex-session-reclaimed'
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
+    assert [event.event_kind for event in events] == ['recover_started', 'recover_probing']
 
 
 def test_runtime_supervision_loop_reflows_explicit_topology_when_recovery_replaces_pane(
@@ -705,14 +726,14 @@ def test_runtime_supervision_loop_reflows_explicit_topology_when_recovery_replac
 
     statuses = loop.reconcile_once()
 
-    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert statuses == {'codex': 'recovering', 'claude': 'healthy'}
     assert remount_calls == ['pane_recovery:codex']
     runtime = registry.get('codex')
     assert runtime is not None
     assert runtime.runtime_ref == 'tmux:%88'
     assert runtime.session_ref == 'codex-session-topology-reflowed'
     events = SupervisionEventStore(layout).read_all()
-    assert [event.event_kind for event in events] == ['recover_started', 'recover_succeeded']
+    assert [event.event_kind for event in events] == ['recover_started', 'recover_probing']
 
 
 def test_runtime_supervision_loop_keeps_healthy_cmd_slot_stable(tmp_path: Path, monkeypatch) -> None:
@@ -1215,11 +1236,102 @@ def test_runtime_supervision_loop_persists_failure_reason_and_event(tmp_path: Pa
     assert runtime.daemon_generation == 12
     assert runtime.reconcile_state == 'degraded'
     assert runtime.restart_count == 1
+    assert runtime.recovery_failure_count == 1
     assert runtime.last_reconcile_at == '2026-03-18T00:00:10Z'
     assert runtime.last_failure_reason == 'pane-dead'
     events = SupervisionEventStore(layout).read_all()
     assert [event.event_kind for event in events] == ['recover_started', 'recover_failed']
     assert events[1].details == {'reason': 'pane-dead'}
+
+
+def test_runtime_supervision_loop_opens_circuit_after_six_unstable_respawns(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-supervision-circuit'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    session = RecoveringBindingSession(
+        pane_id='%41',
+        fake_session_id='codex-session-old',
+        recovered_pane_id='%88',
+        recovered_session_id='codex-session-new',
+    )
+    attempt_times = (
+        '2026-03-18T00:00:00Z',
+        '2026-03-18T00:00:30Z',
+        '2026-03-18T00:01:30Z',
+        '2026-03-18T00:03:30Z',
+        '2026-03-18T00:08:30Z',
+        '2026-03-18T00:18:30Z',
+    )
+    now = {'value': attempt_times[0]}
+    runtime_service = RuntimeService(
+        layout,
+        registry,
+        ctx.project_id,
+        session_bindings=_binding_map('codex', session),
+        clock=lambda: now['value'],
+    )
+    registry.upsert(
+        _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='pane-dead')
+    )
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        clock=lambda: now['value'],
+        generation_getter=lambda: 13,
+    )
+
+    for attempt_index, attempted_at in enumerate(attempt_times, start=1):
+        now['value'] = attempted_at
+        assert loop.reconcile_once() == {'codex': 'recovering'}
+        runtime = registry.get('codex')
+        assert runtime is not None
+        assert runtime.recovery_failure_count == attempt_index
+        registry.upsert_authority(
+            replace(
+                runtime,
+                state=AgentState.DEGRADED,
+                health='pane-dead',
+                pane_state='dead',
+            )
+        )
+
+    now['value'] = '2026-03-18T00:18:31Z'
+    assert loop.reconcile_once() == {'codex': 'recovery-circuit-open'}
+    blocked = registry.get('codex')
+    assert blocked is not None
+    assert blocked.state is AgentState.DEGRADED
+    assert blocked.reconcile_state == 'blocked'
+    assert blocked.restart_count == 6
+    assert blocked.recovery_failure_count == 6
+    assert 'six' not in str(blocked.last_failure_reason).lower()
+    assert '6 consecutive' in str(blocked.last_failure_reason)
+    assert session.ensure_calls == 6
+
+    event_kinds = [
+        event.event_kind for event in SupervisionEventStore(layout).read_all()
+    ]
+    assert event_kinds == [
+        *('recover_started', 'recover_probing') * 6,
+        'recover_blocked',
+    ]
+
+    assert loop.reconcile_once() == {'codex': 'recovery-circuit-open'}
+    assert session.ensure_calls == 6
+    assert [
+        event.event_kind for event in SupervisionEventStore(layout).read_all()
+    ] == event_kinds
+
+    fresh_attempt, _attempt_id = runtime_service.begin_mount_attempt(
+        blocked,
+        attempted_at='2026-03-18T00:19:00Z',
+    )
+    assert fresh_attempt.recovery_failure_count == 0
 
 
 def test_runtime_supervision_loop_stops_after_provider_auth_recovery_is_blocked(tmp_path: Path) -> None:
@@ -1270,6 +1382,7 @@ def test_runtime_supervision_loop_stops_after_provider_auth_recovery_is_blocked(
     assert blocked.health == 'provider-auth-revoked'
     assert blocked.reconcile_state == 'blocked'
     assert blocked.restart_count == 1
+    assert blocked.recovery_failure_count == 1
     assert blocked.last_failure_reason == detail
     assert session.ensure_calls == 1
 

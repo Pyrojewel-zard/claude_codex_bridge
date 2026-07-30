@@ -12,6 +12,47 @@ from provider_backends.claude.session import ClaudeProjectSession
 from project.identity import normalize_work_dir
 
 
+def test_claude_missing_session_recovery_drops_only_managed_continue_binding(tmp_path: Path) -> None:
+    session_file = tmp_path / '.claude-session'
+    session = ClaudeProjectSession(
+        session_file=session_file,
+        data={
+            'work_dir': str(tmp_path),
+            'start_cmd': (
+                'export ANTHROPIC_BASE_URL=https://example.invalid; '
+                'claude --continue --setting-sources user,project,local'
+            ),
+            'claude_start_cmd': (
+                'export ANTHROPIC_BASE_URL=https://example.invalid; '
+                'claude --continue --setting-sources user,project,local'
+            ),
+            'claude_session_id': 'missing-session',
+            'claude_session_path': str(tmp_path / 'missing-session.jsonl'),
+        },
+    )
+
+    result = session.prepare_crash_recovery('provider_session_missing')
+
+    assert result is not None and result[0] is True
+    persisted = json.loads(session_file.read_text(encoding='utf-8'))
+    assert '--continue' not in persisted['start_cmd']
+    assert 'ANTHROPIC_BASE_URL=https://example.invalid' in persisted['start_cmd']
+    assert persisted['claude_session_id'] == ''
+    assert persisted['claude_session_path'] == ''
+
+
+def test_claude_missing_session_recovery_fails_closed_without_managed_continue(tmp_path: Path) -> None:
+    session = ClaudeProjectSession(
+        session_file=tmp_path / '.claude-session',
+        data={'work_dir': str(tmp_path), 'start_cmd': 'claude --verbose'},
+    )
+
+    result = session.prepare_crash_recovery('provider_session_missing')
+
+    assert result is not None and result[0] is False
+    assert 'no CCB-owned --continue' in result[1]
+
+
 def test_claude_session_update_backfills_work_dir_fields(tmp_path: Path) -> None:
     cfg = tmp_path / ".ccb"
     cfg.mkdir(parents=True, exist_ok=True)

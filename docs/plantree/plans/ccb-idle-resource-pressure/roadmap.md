@@ -4,6 +4,18 @@ Date: 2026-06-23
 
 ## Done
 
+- Diagnosed and bounded a production pane-crash write storm (2026-07-30):
+  one 70.6-hour `ccbd` had written about 71.9 GB while two provider panes
+  crashed every 30 seconds, producing 19,602 crash logs. The source fix now
+  makes respawn provisional for 90 seconds, blocks dispatch during probing,
+  applies 30s/60s/120s/5m/10m/30m recovery backoff, opens a circuit after six
+  unstable attempts, retains at most 50 crash artifacts per runtime, clears
+  stale pane history before respawn, and skips unchanged helper-manifest
+  writes.
+- Added provider-specific containment for the observed causes: stale Claude
+  `--continue` state is repaired without touching authentication, while a
+  missing Codex managed app server fails closed and requests explicit
+  restart/remount.
 - Identified the idle pressure classes from live local diagnosis:
   daemon heartbeat writes, agent runtime/helper rewrite amplification, provider
   bridge/CLI residency, provider SQLite/session writes, and shared-cache disk

@@ -34,6 +34,12 @@ class CodexProjectSession(PaneLogProjectSessionBase):
         return effective_start_cmd(self.data)
 
     def prepare_crash_recovery(self, reason: str) -> tuple[bool, str] | None:
+        if reason == 'provider_helper_unavailable':
+            return (
+                False,
+                'Managed Codex app server is unavailable; automatic pane respawn '
+                'was stopped. Run `ccb restart <agent>` or remount the project.',
+            )
         if reason != 'provider_auth_revoked':
             return None
         target_home = str(self.codex_home or '').strip()

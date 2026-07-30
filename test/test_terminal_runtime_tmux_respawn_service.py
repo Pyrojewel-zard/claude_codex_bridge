@@ -36,6 +36,7 @@ def test_tmux_respawn_service_builds_respawn_and_remain_calls() -> None:
     service.respawn_pane('%9', cmd='echo hi', cwd='/tmp/demo', stderr_log_path='/tmp/err.log', remain_on_exit=True)
 
     assert calls[0] == ['show-option', '-gqv', 'default-shell']
+    assert ['clear-history', '-t', '%9'] in calls
     assert ['set-option', '-p', '-t', '%9', 'remain-on-exit', 'on'] in calls
     assert ['respawn-pane', '-k', '-t', '%9', '/bin/bash -lc "echo hi"'] in calls
 

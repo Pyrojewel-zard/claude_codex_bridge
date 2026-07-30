@@ -1080,6 +1080,11 @@ Implemented:
   safely detaches CCB-owned legacy Claude cache links, removes the stopped
   current project's retired provider cache, and trims stale
   `pane-crash-*.log` runtime residue.
+- Pane crash capture also applies an online safety bound: each provider runtime
+  retains at most the newest 50 `pane-crash-*.log` files and matching
+  `.reason.json` sidecars. Explicit cleanup remains the age-based/offline
+  maintenance path, but a crash loop cannot wait for cleanup before bounding
+  new project-local diagnostic residue.
 - `ccb cleanup --legacy-provider-caches` additionally removes provider caches
   for recorded project roots that no longer exist. It validates the CCB
   manifest, absolute project root, and recomputed project id before deletion;
