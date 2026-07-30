@@ -106,6 +106,20 @@ Date: 2026-05-30
   tmux/sidebar color changes, and CCB-owned rich WezTerm follows the same
   preference through generated config reload. Design and validation evidence
   are recorded in [topics/ui-theme-preference.md](topics/ui-theme-preference.md).
+- Hardened CCB Rich WezTerm launch isolation on 2026-07-30: GUI launchers now
+  start in a new process session with all standard streams detached from the
+  invoking shell, so runtime GUI diagnostics and terminal job-control signals
+  cannot pollute or stop the parent `cmd` job. Linux Wayland provisioning also
+  creates a CCB-owned XCursor overlay that supplies the missing `hand` cursor
+  while preserving the selected user theme and leaving global cursor files
+  untouched. `ccb tools doctor workbench` reports the compatibility asset and
+  overlay root.
+- Verified the launch/cursor hardening with 218 related unit/integration tests
+  and an external source-under-test project at
+  `/home/bfly/yunwei/test_ccb2/workbench-cursor-detach-cMWaDI`: the launched
+  probe had `sid == pid`, no TTY on stdin/stdout/stderr, the generated
+  `default/cursors/hand` overlay was present, and the new-window command kept
+  `--always-new-process --no-auto-connect`.
 
 ## In Progress
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from io import StringIO
 import json
+import os
 from pathlib import Path
+import sys
 import zipfile
 
 from cli.tools_runtime import cmd_tools
@@ -192,6 +194,8 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert 'CCB_TMUX_THEME_PROFILE="$workbench_tmux_theme"' in workbench
     assert 'CCB_SIDEBAR_THEME_PROFILE="$workbench_tmux_theme"' in workbench
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm' in workbench
+    assert 'configure_wayland_cursor_env()' in workbench
+    assert 'CCB_WORKBENCH_XCURSOR_COMPAT=1' in workbench
     assert "XMODIFIERS='@im=fcitx'" in workbench
     assert 'GTK_IM_MODULE=fcitx' in workbench
     assert 'QT_IM_MODULE=fcitx' in workbench
@@ -270,6 +274,7 @@ def test_workbench_doctor_reports_manifest_and_component_paths(tmp_path: Path, m
     assert 'neovim' not in output.lower()
     assert 'yazi_safe_config:' in output
     assert 'wezterm_config:' in output
+    assert 'wezterm_xcursor_root:' in output
 
 
 def test_standalone_neovim_tool_route_is_unsupported() -> None:
@@ -447,13 +452,13 @@ def test_workbench_launch_detaches_outer_tmux_environment(tmp_path: Path, monkey
     monkeypatch.setenv('TMUX_PANE', '%7')
     monkeypatch.setenv('CCB_TMUX_SOCKET', 'outer')
     monkeypatch.setenv('CCB_TMUX_SOCKET_PATH', '/tmp/outer.sock')
-    calls: list[tuple[list[str], dict[str, str] | None]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
     class _Process:
         pid = 2424
 
-    def _popen(command, env=None):
-        calls.append((list(command), dict(env) if env is not None else None))
+    def _popen(command, **kwargs):
+        calls.append((list(command), dict(kwargs)))
         return _Process()
 
     monkeypatch.setattr(workbench_tools.subprocess, 'Popen', _popen)
@@ -462,13 +467,98 @@ def test_workbench_launch_detaches_outer_tmux_environment(tmp_path: Path, monkey
 
     assert result['launch_status'] == 'started'
     assert calls
-    command, env = calls[0]
+    command, kwargs = calls[0]
+    env = kwargs.get('env')
     assert command == [str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'), 'terminal']
-    assert env is not None
+    assert isinstance(env, dict)
     assert 'TMUX' not in env
     assert 'TMUX_PANE' not in env
     assert 'CCB_TMUX_SOCKET' not in env
     assert 'CCB_TMUX_SOCKET_PATH' not in env
+    assert kwargs['stdin'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stdout'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stderr'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['close_fds'] is True
+    assert kwargs['start_new_session'] is True
+
+
+def test_detached_terminal_process_has_no_tty_and_owns_its_session(tmp_path: Path, capfd) -> None:
+    if os.name != 'posix':
+        return
+    output = tmp_path / 'detached-process.json'
+    probe = tmp_path / 'detached-process.py'
+    probe.write_text(
+        'import json, os, pathlib, sys\n'
+        'pathlib.Path(sys.argv[1]).write_text(json.dumps({\n'
+        '    "pid": os.getpid(),\n'
+        '    "sid": os.getsid(0),\n'
+        '    "isatty": [os.isatty(0), os.isatty(1), os.isatty(2)],\n'
+        '}), encoding="utf-8")\n'
+        'print("detached-stdout-noise")\n'
+        'print("detached-stderr-noise", file=sys.stderr)\n',
+        encoding='utf-8',
+    )
+
+    process = workbench_tools._spawn_detached_terminal(
+        [sys.executable, str(probe), str(output)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+    )
+
+    assert process.wait(timeout=10) == 0
+    payload = json.loads(output.read_text(encoding='utf-8'))
+    assert payload['sid'] == payload['pid']
+    assert payload['isatty'] == [False, False, False]
+    captured = capfd.readouterr()
+    assert 'detached-stdout-noise' not in captured.out
+    assert 'detached-stderr-noise' not in captured.err
+
+
+def test_workbench_wayland_cursor_overlay_preserves_requested_theme(tmp_path: Path, monkeypatch) -> None:
+    fake_bin = _prepare_env(tmp_path, monkeypatch)
+    cursor_root = tmp_path / 'xcursor'
+    pointer = cursor_root / 'TestTheme' / 'cursors' / 'pointer'
+    pointer.parent.mkdir(parents=True)
+    pointer.write_bytes(b'valid-test-xcursor')
+    monkeypatch.setattr(workbench_tools.platform, 'system', lambda: 'Linux')
+    monkeypatch.setenv('XCURSOR_PATH', str(cursor_root))
+    monkeypatch.setenv('XCURSOR_THEME', 'TestTheme')
+    monkeypatch.setenv('WAYLAND_DISPLAY', 'wayland-0')
+    wezterm_env_log = tmp_path / 'wezterm-env.txt'
+    (fake_bin / 'wezterm').write_text(
+        '#!/usr/bin/env sh\n'
+        'env > "$WEZTERM_ENV_LOG"\n',
+        encoding='utf-8',
+    )
+    (fake_bin / 'wezterm').chmod(0o755)
+    monkeypatch.setenv('WEZTERM_ENV_LOG', str(wezterm_env_log))
+
+    workbench_tools.provision_workbench(profile='rich')
+
+    root = tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench'
+    cursor_asset = root / 'profiles' / 'wezterm' / 'xcursor' / '.ccb-assets' / 'hand'
+    assert cursor_asset.read_bytes() == pointer.read_bytes()
+    wrapper = root / 'bin' / 'ccb-workbench'
+    env = workbench_tools._detached_terminal_env()
+    env['PATH'] = f'{fake_bin}:/usr/bin:/bin'
+    result = workbench_tools.subprocess.run(
+        [str(wrapper), 'terminal', '/bin/sh', '-lc', 'exit 0'],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    overlay = root / 'profiles' / 'wezterm' / 'xcursor' / 'TestTheme' / 'cursors' / 'hand'
+    assert overlay.read_bytes() == pointer.read_bytes()
+    wezterm_env = dict(
+        line.split('=', 1)
+        for line in wezterm_env_log.read_text(encoding='utf-8').splitlines()
+        if '=' in line
+    )
+    assert wezterm_env['XCURSOR_THEME'] == 'TestTheme'
+    assert wezterm_env['XCURSOR_PATH'].split(':', 1)[0] == str(root / 'profiles' / 'wezterm' / 'xcursor')
+    assert wezterm_env['CCB_WORKBENCH_XCURSOR_COMPAT'] == '1'
 
 
 def test_workbench_terminal_uses_saved_theme_instead_of_stale_inherited_theme(
@@ -907,13 +997,13 @@ def test_rich_launch_opens_wezterm_with_source_test_entrypoint(tmp_path: Path, m
     monkeypatch.setenv('TMUX_PANE', '%7')
     monkeypatch.setenv('CCB_TMUX_SOCKET', 'outer')
     monkeypatch.setenv('CCB_TMUX_SOCKET_PATH', '/tmp/outer.sock')
-    calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
     class _Process:
         pid = 4242
 
-    def _popen(command, cwd=None, env=None):
-        calls.append((list(command), str(cwd) if cwd is not None else None, dict(env) if env is not None else None))
+    def _popen(command, **kwargs):
+        calls.append((list(command), dict(kwargs)))
         return _Process()
 
     monkeypatch.setattr(workbench_tools.subprocess, 'Popen', _popen)
@@ -923,17 +1013,24 @@ def test_rich_launch_opens_wezterm_with_source_test_entrypoint(tmp_path: Path, m
     assert result['launch_status'] == 'started'
     assert result['launch_pid'] == 4242
     assert calls
-    command, cwd, env = calls[0]
+    command, kwargs = calls[0]
+    cwd = kwargs.get('cwd')
+    env = kwargs.get('env')
     assert cwd == str(project_root)
     assert command[:2] == [str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'), 'terminal']
     assert command[2:4] == ['/bin/sh', '-lc']
     assert str(script_root / 'ccb_test') in command[4]
     assert 'exec "${SHELL:-/bin/sh}" -l' in command[4]
-    assert env is not None
+    assert isinstance(env, dict)
     assert 'TMUX' not in env
     assert 'TMUX_PANE' not in env
     assert 'CCB_TMUX_SOCKET' not in env
     assert 'CCB_TMUX_SOCKET_PATH' not in env
+    assert kwargs['stdin'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stdout'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stderr'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['close_fds'] is True
+    assert kwargs['start_new_session'] is True
 
 
 def test_rich_launch_requires_update_rich_first(tmp_path: Path, monkeypatch) -> None:

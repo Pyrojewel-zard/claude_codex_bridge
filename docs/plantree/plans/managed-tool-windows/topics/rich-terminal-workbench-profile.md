@@ -176,6 +176,16 @@ Current visual contract:
 - launch with `start --always-new-process --no-auto-connect --cwd "$PWD"` so
   old WezTerm GUI/mux state does not silently reuse user-global or stale rich
   config, and the project directory remains the cwd authority;
+- launch the CCB-owned GUI in a new process session with stdin, stdout, and
+  stderr detached from the invoking shell. A long-lived WezTerm process must
+  not retain the parent TTY, write GUI diagnostics into `cmd`, receive its
+  foreground job-control signals, or cause unrelated stopped shell jobs to be
+  resumed or signalled;
+- on Linux Wayland, provision a private XCursor compatibility asset and prepend
+  a CCB-owned overlay to `XCURSOR_PATH`. The overlay supplies WezTerm's missing
+  `hand` name for the currently selected `XCURSOR_THEME`; it must not replace
+  that theme, force XWayland, or edit `~/.icons`, system icon themes, or desktop
+  settings;
 - never pass `-n` / `--skip-config` with `--config-file`.
 
 Current font contract:

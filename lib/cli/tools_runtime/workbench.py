@@ -27,6 +27,9 @@ DETACHED_TMUX_ENV_KEYS = (
     'CCB_TMUX_SOCKET',
     'CCB_TMUX_SOCKET_PATH',
 )
+XCURSOR_COMPAT_ASSET_NAMES = ('pointer', 'hand2', 'left_ptr')
+XCURSOR_COMPAT_FALLBACK_THEMES = ('default', 'Adwaita', 'breeze_cursors', 'Breeze')
+XCURSOR_COMPAT_MAX_ASSET_BYTES = 4 * 1024 * 1024
 RICH_DEPENDENCIES: tuple[dict[str, object], ...] = (
     {
         'id': 'wezterm',
@@ -801,6 +804,7 @@ def provision_workbench(*, profile: str = DEFAULT_PROFILE, binary_result: dict[s
     _write_yazi_config(paths, rich=False)
     _write_yazi_config(paths, rich=True)
     _write_wezterm_config(paths)
+    _prepare_wayland_cursor_compat(paths)
     _write_wrappers(paths)
     _write_bin_links(paths)
     status = _build_status(paths, profile=profile, installed=True)
@@ -881,7 +885,10 @@ def launch_workbench(*, profile: str = DEFAULT_PROFILE, dry_run: bool = False) -
         status['reason'] = 'workbench bundle is disabled; run `ccb tools enable workbench --profile rich` first'
         status['launch_status'] = 'disabled'
         return status
-    completed = subprocess.Popen([str(paths['wrapper']), 'terminal'], env=_detached_terminal_env())
+    completed = _spawn_detached_terminal(
+        [str(paths['wrapper']), 'terminal'],
+        env=_detached_terminal_env(),
+    )
     _record_launch(paths, pid=completed.pid, command=[str(paths['wrapper']), 'terminal'])
     status['launch_status'] = 'started'
     status['launch_pid'] = completed.pid
@@ -917,7 +924,11 @@ def launch_rich_ccb(*, script_root: Path, cwd: Path, start_args: list[str] | tup
         '-lc',
         f'{entrypoint_command}; exec "${{SHELL:-/bin/sh}}" -l',
     ]
-    process = subprocess.Popen(command, cwd=str(cwd), env=_detached_terminal_env())
+    process = _spawn_detached_terminal(
+        command,
+        cwd=cwd,
+        env=_detached_terminal_env(),
+    )
     _record_launch(paths, pid=process.pid, command=command)
     status['launch_status'] = 'started'
     status['launch_pid'] = process.pid
@@ -1061,6 +1072,8 @@ def _paths() -> dict[str, Path]:
         'yazi_rich_profile': profiles / 'yazi-rich',
         'wezterm_profile': profiles / 'wezterm',
         'wezterm_config': profiles / 'wezterm' / 'wezterm.lua',
+        'wezterm_xcursor_root': profiles / 'wezterm' / 'xcursor',
+        'wezterm_cursor_asset': profiles / 'wezterm' / 'xcursor' / '.ccb-assets' / 'hand',
         'manifest': root / 'manifest.json',
         'binary_manifest': root / 'binary-bundles.json',
         'state_root': state_home / 'ccb' / 'tools' / 'workbench',
@@ -1077,9 +1090,142 @@ def _detached_terminal_env(environ: dict[str, str] | None = None) -> dict[str, s
     return env
 
 
+def _spawn_detached_terminal(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen:
+    """Start a GUI terminal without inheriting shell job-control or stdio."""
+    return subprocess.Popen(
+        command,
+        cwd=str(cwd) if cwd is not None else None,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
 def _ensure_dirs(paths: dict[str, Path]) -> None:
-    for key in ('bin_dir', 'bin_link_dir', 'yazi_safe_profile', 'yazi_rich_profile', 'wezterm_profile', 'state_root', 'cache_root'):
+    for key in (
+        'bin_dir',
+        'bin_link_dir',
+        'yazi_safe_profile',
+        'yazi_rich_profile',
+        'wezterm_profile',
+        'wezterm_xcursor_root',
+        'state_root',
+        'cache_root',
+    ):
         paths[key].mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_wayland_cursor_compat(
+    paths: dict[str, Path],
+    *,
+    environ: dict[str, str] | None = None,
+) -> Path | None:
+    """Keep a private valid cursor asset for WezTerm's Wayland `hand` lookup."""
+    if platform.system() != 'Linux':
+        return None
+    asset = paths['wezterm_cursor_asset']
+    source = _find_xcursor_pointer(environ=environ)
+    if source is None:
+        return asset if _valid_xcursor_asset(asset) else None
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    temporary = asset.with_name(f'.{asset.name}.{os.getpid()}.tmp')
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.chmod(0o644)
+        os.replace(temporary, asset)
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+    return asset
+
+
+def _find_xcursor_pointer(*, environ: dict[str, str] | None = None) -> Path | None:
+    env = environ if environ is not None else os.environ
+    roots = _xcursor_search_roots(env)
+    requested = _safe_xcursor_theme_name(str(env.get('XCURSOR_THEME') or 'default'))
+    themes = [requested, *XCURSOR_COMPAT_FALLBACK_THEMES]
+    pending = [theme for index, theme in enumerate(themes) if theme and theme not in themes[:index]]
+    visited: set[str] = set()
+    while pending:
+        theme = pending.pop(0)
+        if theme in visited:
+            continue
+        visited.add(theme)
+        for root in roots:
+            cursor_dir = root / theme / 'cursors'
+            for name in XCURSOR_COMPAT_ASSET_NAMES:
+                candidate = cursor_dir / name
+                if _valid_xcursor_asset(candidate):
+                    try:
+                        return candidate.resolve(strict=True)
+                    except OSError:
+                        continue
+            for inherited in _xcursor_inherited_themes(root / theme / 'index.theme'):
+                if inherited not in visited and inherited not in pending:
+                    pending.append(inherited)
+    return None
+
+
+def _xcursor_search_roots(environ: dict[str, str]) -> tuple[Path, ...]:
+    configured = str(environ.get('XCURSOR_PATH') or '').strip()
+    home = Path(str(environ.get('HOME') or Path.home())).expanduser()
+    data_home = Path(str(environ.get('XDG_DATA_HOME') or home / '.local' / 'share')).expanduser()
+    candidates = [Path(value).expanduser() for value in configured.split(':') if value]
+    candidates.extend(
+        [
+            home / '.icons',
+            data_home / 'icons',
+            Path('/usr/share/icons'),
+            Path('/usr/share/pixmaps'),
+        ]
+    )
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(candidate)
+    return tuple(roots)
+
+
+def _safe_xcursor_theme_name(value: str) -> str:
+    text = str(value or '').strip()
+    if text and all(character.isalnum() or character in '._+-' for character in text):
+        return text
+    return 'default'
+
+
+def _xcursor_inherited_themes(index_path: Path) -> tuple[str, ...]:
+    try:
+        lines = index_path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except OSError:
+        return ()
+    for line in lines:
+        key, separator, value = line.partition('=')
+        if separator and key.strip().lower() == 'inherits':
+            themes = [_safe_xcursor_theme_name(item) for item in value.split(',')]
+            return tuple(theme for index, theme in enumerate(themes) if theme and theme not in themes[:index])
+    return ()
+
+
+def _valid_xcursor_asset(path: Path) -> bool:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    return path.is_file() and 0 < size <= XCURSOR_COMPAT_MAX_ASSET_BYTES
 
 
 def _normalize_workbench_theme(value: str | None) -> str:
@@ -1825,6 +1971,40 @@ configure_input_method_env() {{
       ;;
   esac
 }}
+configure_wayland_cursor_env() {{
+  [ "${{is_wsl:-0}}" = 0 ] || return 0
+  if [ -z "${{WAYLAND_DISPLAY:-}}" ] && [ "${{XDG_SESSION_TYPE:-}}" != wayland ]; then
+    return 0
+  fi
+  cursor_asset={_shell_quote(str(paths['wezterm_cursor_asset']))}
+  cursor_overlay_root={_shell_quote(str(paths['wezterm_xcursor_root']))}
+  [ -r "$cursor_asset" ] || return 0
+  cursor_theme="${{XCURSOR_THEME:-default}}"
+  case "$cursor_theme" in
+    ""|*[!A-Za-z0-9._+-]*) cursor_theme=default ;;
+  esac
+  cursor_dir="$cursor_overlay_root/$cursor_theme/cursors"
+  if [ ! -r "$cursor_dir/hand" ]; then
+    mkdir -p "$cursor_dir" || return 0
+    cursor_tmp="$cursor_dir/.hand.$$"
+    if cp "$cursor_asset" "$cursor_tmp" 2>/dev/null; then
+      mv -f "$cursor_tmp" "$cursor_dir/hand"
+    else
+      rm -f "$cursor_tmp"
+      return 0
+    fi
+  fi
+  if [ -n "${{XCURSOR_PATH:-}}" ]; then
+    case ":$XCURSOR_PATH:" in
+      *":$cursor_overlay_root:"*) ;;
+      *) export XCURSOR_PATH="$cursor_overlay_root:$XCURSOR_PATH" ;;
+    esac
+  else
+    cursor_data_home="${{XDG_DATA_HOME:-${{HOME:-}}/.local/share}}"
+    export XCURSOR_PATH="$cursor_overlay_root:${{HOME:-}}/.icons:$cursor_data_home/icons:/usr/share/icons:/usr/share/pixmaps"
+  fi
+  export CCB_WORKBENCH_XCURSOR_COMPAT=1
+}}
 check_linux_inotify_capacity() {{
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
@@ -1998,6 +2178,7 @@ case "$cmd" in
       exit 127
     fi
     configure_input_method_env
+    configure_wayland_cursor_env
     if [ "$#" -eq 0 ]; then
       set -- "${{SHELL:-/bin/sh}}" -lc 'ccb-yazi-rich "$PWD"'
     fi
@@ -2226,6 +2407,7 @@ def _component_statuses(
     yazi = _tool_component('yazi', ('yazi',))
     ya = _tool_component('ya', ('ya',))
     wezterm = _wezterm_component()
+    wayland_cursor = _wayland_cursor_component(paths)
     pdf_text = _tool_component('pdf_text', ('pdftotext', 'pdfinfo'), require_all=True)
     pdf_image = _tool_component('pdf_image', ('pdftoppm', 'pdftocairo'))
     image_preview = _image_component(paths)
@@ -2238,6 +2420,7 @@ def _component_statuses(
         'config': config,
         'terminal': terminal,
         'wezterm': wezterm,
+        'wayland_cursor': wayland_cursor,
         'yazi': yazi,
         'ya': ya,
         'markdown': markdown,
@@ -2281,6 +2464,18 @@ def _wezterm_component() -> dict[str, object]:
             result['tool'] = 'windows-native'
         return result
     return {'status': 'missing', 'missing': 'wezterm', 'reason': 'wezterm helper not found'}
+
+
+def _wayland_cursor_component(paths: dict[str, Path]) -> dict[str, object]:
+    if platform.system() != 'Linux':
+        return {'status': 'not_applicable'}
+    asset = paths['wezterm_cursor_asset']
+    if _valid_xcursor_asset(asset):
+        return {'status': 'ok', 'tool': str(asset)}
+    return {
+        'status': 'unavailable',
+        'reason': 'no local XCursor pointer asset was available for the optional Wayland hand-cursor overlay',
+    }
 
 
 def _terminal_component() -> dict[str, object]:
@@ -2385,6 +2580,7 @@ def _status_paths(paths: dict[str, Path]) -> dict[str, object]:
         'yazi_safe_config': str(paths['yazi_safe_profile']),
         'yazi_rich_config': str(paths['yazi_rich_profile']),
         'wezterm_config': str(paths['wezterm_config']),
+        'wezterm_xcursor_root': str(paths['wezterm_xcursor_root']),
         'state_root': str(paths['state_root']),
         'theme_config': str(paths['theme_config']),
         'cache_root': str(paths['cache_root']),
@@ -2537,6 +2733,9 @@ def _print_status(status: dict[str, object], stdout: TextIO) -> None:
         'wezterm_tool',
         'wezterm_tools',
         'wezterm_reason',
+        'wayland_cursor_status',
+        'wayland_cursor_tool',
+        'wayland_cursor_reason',
         'yazi_status',
         'yazi_tools',
         'yazi_reason',
@@ -2564,6 +2763,7 @@ def _print_status(status: dict[str, object], stdout: TextIO) -> None:
         'yazi_safe_config',
         'yazi_rich_config',
         'wezterm_config',
+        'wezterm_xcursor_root',
         'state_root',
         'cache_root',
     ):
