@@ -25,6 +25,12 @@ from cli.phase2 import maybe_handle_phase2
 from storage.paths import PathLayout
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 

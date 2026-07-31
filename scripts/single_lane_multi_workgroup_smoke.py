@@ -1505,6 +1505,7 @@ def _smoke_env(*, test_root: Path, project_root: Path, role_store: Path, source_
             'CCB_NO_ATTACH': '1',
             'CCB_REPLY_LANG': 'en',
             'CCB_RUNTIME_ACCELERATOR_CODEX': '0',
+            'CCB_RUNTIME_STATE_ANCHOR': '1',
         }
     )
     return env

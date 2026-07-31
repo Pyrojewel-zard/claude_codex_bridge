@@ -37,6 +37,12 @@ from project.ids import compute_project_id
 from storage.paths import PathLayout
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _canonical_digest(value: object) -> str:
     encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return 'sha256:' + hashlib.sha256(encoded).hexdigest()

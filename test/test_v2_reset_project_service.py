@@ -14,6 +14,12 @@ from workspace.materializer import WorkspaceMaterializer
 from workspace.planner import WorkspacePlanner
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _spec() -> AgentSpec:
     return AgentSpec(
         name='agent1',

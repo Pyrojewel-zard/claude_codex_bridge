@@ -20,6 +20,12 @@ from project.ids import compute_project_id
 from provider_execution.fake import FakeProviderAdapter
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'single_lane_multi_workgroup_smoke.py'
 REQUIRES_AGENT_ROLES_RUNTIME = pytest.mark.skipif(
     sys.version_info < (3, 11),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore, CcbdStartupReportStore
 from ccbd.models import CcbdShutdownReport, CcbdStartupAgentResult, CcbdStartupReport
 from ccbd.services.project_namespace_state import ProjectNamespaceEvent, ProjectNamespaceEventStore, ProjectNamespaceState, ProjectNamespaceStateStore
@@ -14,6 +16,12 @@ from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from mailbox_kernel import InboundEventRecord, InboundEventStatus, InboundEventStore, InboundEventType, MailboxRecord, MailboxState, MailboxStore
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
 def test_tmux_cleanup_history_store_loads_latest(tmp_path: Path) -> None:

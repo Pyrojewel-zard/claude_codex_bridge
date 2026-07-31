@@ -1236,6 +1236,11 @@ def _copy_inherited_tree(source: Path, target: Path, *, enabled: bool, label: st
         elif not target.is_dir() or tree_content_fingerprint(target) != tree_content_fingerprint(source):
             _repair_owned_codex_skill_entries(source, target)
             return
+        else:
+            # Legacy copy matches source content — remove the old copy so
+            # route_projected_tree below can replace it with a symlink.
+            _remove_path(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
     # Prefer symlink-first (fork policy) so codex managed skills point at the
     # real user skill tree; route_projected_tree carries a shutil.copytree
     # fallback for platforms where symlinking is unavailable.
