@@ -22,6 +22,7 @@ class MailboxKernelRuntimeState:
     mailbox_state_idle: object
     status_delivering: object
     status_consumed: object
+    lease_ttl_seconds: object = None
 
 
 class MailboxKernelStateMixin:
@@ -92,6 +93,10 @@ class MailboxKernelStateMixin:
     @property
     def _status_consumed(self):
         return self._runtime_state.status_consumed
+
+    @property
+    def _lease_ttl_seconds(self):
+        return self._runtime_state.lease_ttl_seconds
 
 
 __all__ = [

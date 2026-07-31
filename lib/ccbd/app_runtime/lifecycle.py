@@ -5,6 +5,7 @@ from pathlib import Path
 from time import monotonic
 
 from agents.models import AgentState, RuntimeBindingSource, normalize_runtime_binding_source
+from ccbd.api_models import JobStatus, TargetKind
 from ccbd.models import CcbdShutdownReport, CcbdStartupReport, MountState, cleanup_summaries_from_objects
 from ccbd.reload_drain_auto_retry import tick_reload_drain_auto_retry
 from ccbd.services.dispatcher_runtime.frontdesk_direct_handoff import recover_frontdesk_direct_handoffs
@@ -13,6 +14,8 @@ from ccbd.services.lifecycle import build_lifecycle, current_socket_inode
 from ccbd.startup_fence import StartupFenceError, validate_expected_startup_lifecycle
 from ccbd.startup_policy import CONTROL_PLANE_RPC_TIMEOUT_S
 from ccbd.stop_flow import build_shutdown_runtime_snapshots
+from mailbox_kernel import MailboxKernelService
+from mailbox_runtime.targets import normalize_mailbox_owner_name
 from runtime_accelerator.lifecycle import maybe_start_runtime_accelerator, stop_runtime_accelerator
 from runtime_observability import record_startup_operation, startup_operation_counts
 from storage.path_helpers import socket_placement_payload
@@ -1318,6 +1321,7 @@ def _heartbeat_failures(app) -> tuple[str, ...]:
         ('dispatcher_poll_completions', app.dispatcher.poll_completions),
         ('reload_drain_auto_retry', lambda: tick_reload_drain_auto_retry(app)),
         ('job_heartbeat', lambda: app.job_heartbeat.tick(app.dispatcher)),
+        ('lease_expiry_sweep', lambda: _sweep_expired_delivery_leases(app)),
     ):
         if _lifecycle_stopping(app):
             break
@@ -1341,6 +1345,42 @@ def _heartbeat_failures(app) -> tuple[str, ...]:
         metrics.last_heartbeat_agents_inspected = agents_inspected
         metrics.last_heartbeat_runtime_store_writes = runtime_store_writes
     return tuple(failures)
+
+
+def _sweep_expired_delivery_leases(app) -> None:
+    ttl = getattr(app, 'mailbox_lease_ttl_s', None)
+    try:
+        ttl = float(ttl) if ttl is not None else None
+    except (TypeError, ValueError):
+        return
+    if ttl is None or ttl <= 0:
+        return
+    kernel = MailboxKernelService(app.paths, clock=app.clock, lease_ttl_seconds=ttl)
+    candidates = kernel.expired_delivery_leases()
+    if not candidates:
+        return
+    busy = _agents_with_running_jobs(app)
+    for lease in candidates:
+        if lease.agent_name in busy:
+            continue
+        kernel.expire_lease(lease.agent_name)
+
+
+def _agents_with_running_jobs(app) -> set[str]:
+    names: set[str] = set()
+    dispatcher = getattr(app, 'dispatcher', None)
+    state = getattr(dispatcher, '_state', None)
+    if state is None:
+        return names
+    for _target_kind, _target_name, job_id in state.active_items():
+        job = dispatcher.get(job_id)
+        if job is None or job.status is not JobStatus.RUNNING or job.target_kind is not TargetKind.AGENT:
+            continue
+        try:
+            names.add(normalize_mailbox_owner_name(job.target_name))
+        except Exception:
+            continue
+    return names
 
 
 def _runtime_store_save_count(app) -> int | None:
