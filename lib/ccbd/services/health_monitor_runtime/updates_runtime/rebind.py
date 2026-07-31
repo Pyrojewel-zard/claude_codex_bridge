@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState
+from ccbd.services.runtime_recovery_policy import RUNTIME_RECOVERY_PROBING_HEALTH
 from provider_core.session_binding_evidence import session_ref
 
 from .common import drop_explicit_runtime_fields, runtime_fields_from_facts
@@ -88,13 +89,21 @@ def _next_session_ref(*, runtime, bound_session_ref: str | None, force_session_r
 
 
 def _next_state(runtime):
+    if _recovery_probe_active(runtime):
+        return AgentState.DEGRADED
     return runtime.state if runtime.state is not AgentState.DEGRADED else AgentState.IDLE
 
 
 def _next_health(runtime) -> str:
+    if _recovery_probe_active(runtime):
+        return RUNTIME_RECOVERY_PROBING_HEALTH
     if runtime.state is not AgentState.DEGRADED and runtime.health == 'restored':
         return 'restored'
     return 'healthy'
+
+
+def _recovery_probe_active(runtime) -> bool:
+    return str(getattr(runtime, 'reconcile_state', '') or '').strip() == 'probing'
 
 
 def _next_pid(*, runtime, facts) -> int | None:

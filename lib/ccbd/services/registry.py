@@ -22,6 +22,7 @@ _STATE_MUTATION_FIELDS = frozenset(
         'desired_state',
         'reconcile_state',
         'restart_count',
+        'recovery_failure_count',
         'last_seen_at',
         'last_reconcile_at',
         'last_failure_reason',
@@ -112,6 +113,7 @@ class AgentRegistry:
                 pane_state=None,
                 desired_state='stopped',
                 reconcile_state='stopped',
+                recovery_failure_count=0,
                 last_failure_reason=None,
             )
             saved = self.upsert_authority(stopped)

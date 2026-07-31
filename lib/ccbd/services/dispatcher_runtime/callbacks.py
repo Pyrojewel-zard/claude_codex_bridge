@@ -839,10 +839,12 @@ def _reply_summary(decision: CompletionDecision) -> str:
 
 
 def _strip_ccb_guidance(body: str) -> str:
-    marker = '\n\nCCB reply guidance:'
-    if marker not in body:
-        return body
-    return body.split(marker, 1)[0].rstrip()
+    indexes = [
+        index
+        for marker in ('\n\nCCB_REPLY_MODE:', '\n\nCCB reply guidance:')
+        if (index := body.find(marker)) >= 0
+    ]
+    return body[: min(indexes)].rstrip() if indexes else body
 
 
 __all__ = [

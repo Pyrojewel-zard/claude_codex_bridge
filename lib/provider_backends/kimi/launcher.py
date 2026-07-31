@@ -16,7 +16,7 @@ from provider_core.caller_env import (
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.pathing import session_filename_for_agent
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
-from provider_backends.kimi.native_log import kimi_code_home, kimi_share_dir
+from provider_backends.kimi.home import materialize_kimi_home
 from provider_backends.kimi.session import (
     KIMI_RESTART_SESSION_MARKER,
     render_restart_command,
@@ -25,6 +25,7 @@ from provider_backends.kimi.session import (
 )
 from provider_backends.kimi.skills import kimi_skill_dirs_for_launch
 from project.identity import normalize_work_dir
+from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
 
 
@@ -50,7 +51,6 @@ def prepare_launch_context(
     runtime_dir: Path,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
-    del runtime_dir
     payload = dict(prepared_state or {})
     payload["agent_name"] = spec.name
     payload["project_root"] = str(context.project.project_root)
@@ -68,12 +68,14 @@ def prepare_launch_context(
     run_cwd = Path(str(payload["workspace_path"]))
     merged_env = dict(os.environ)
     merged_env.update({str(key): str(value) for key, value in spec.env.items()})
-    share_dir = kimi_share_dir(environ=merged_env)
-    if not share_dir.is_absolute():
-        share_dir = Path(os.path.abspath(str(run_cwd / share_dir)))
-    code_home = kimi_code_home(environ=merged_env)
-    if not code_home.is_absolute():
-        code_home = Path(os.path.abspath(str(run_cwd / code_home)))
+    state_dir = context.paths.agent_provider_state_dir(spec.name, "kimi")
+    share_dir = state_dir / "home" / ".kimi"
+    code_home = state_dir / "home" / ".kimi-code"
+    materialize_kimi_home(
+        share_dir,
+        code_home,
+        profile=load_resolved_provider_profile(Path(runtime_dir)),
+    )
     payload["kimi_share_dir"] = str(share_dir)
     payload["kimi_code_home"] = str(code_home)
     payload["kimi_capability_path"] = str(merged_env.get("PATH") or "")
@@ -142,6 +144,9 @@ def build_start_cmd(
     env_prefix = join_env_prefix(
         export_env_clause(provider_user_session_env()),
         export_env_clause(spec.env),
+        # Root variables are deliberately applied after user/profile env so a
+        # managed Kimi process cannot write into the external account home.
+        export_env_clause(_kimi_private_env(launch_context)),
         export_env_clause(
             caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
         ),
@@ -153,6 +158,25 @@ def build_start_cmd(
     else:
         launch_context.pop("kimi_restart_start_cmd_template", None)
     return render_restart_command(command_template, exact_args=exact_session_args)
+
+
+def _kimi_private_env(launch_context: dict[str, object]) -> dict[str, str]:
+    share = str(launch_context.get("kimi_share_dir") or "").strip()
+    code_home = str(launch_context.get("kimi_code_home") or "").strip()
+    if not share or not code_home:
+        return {}
+    home = str(Path(share).parent)
+    env = {
+        "HOME": home,
+        "KIMI_SHARE_DIR": share,
+        "KIMI_CODE_HOME": code_home,
+    }
+    if "WSL_DISTRO_NAME" in os.environ:
+        env["USERPROFILE"] = home
+        additions = "HOME/p:USERPROFILE/p:KIMI_SHARE_DIR/p:KIMI_CODE_HOME/p"
+        existing = os.environ.get("WSLENV", "")
+        env["WSLENV"] = f"{additions}:{existing}" if existing else additions
+    return env
 
 
 def build_session_payload(

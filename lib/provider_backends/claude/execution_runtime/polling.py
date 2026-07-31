@@ -3,13 +3,25 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 from ccbd.system import parse_utc_timestamp
-from provider_execution.active import ensure_active_pane_alive, prepare_active_poll_without_liveness
+from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
+from provider_execution.active import (
+    ensure_active_pane_alive,
+    prepare_active_poll_without_liveness,
+)
 from provider_execution.base import ProviderPollResult, ProviderSubmission
 
-from .event_reading import is_turn_boundary_event, read_events, terminal_api_error_payload
+from .event_reading import (
+    is_turn_boundary_event,
+    read_events,
+    terminal_api_error_payload,
+)
 from .hook_results import poll_exact_hook
+from .hook_results_runtime import (
+    load_strict_exact_hook_evidence,
+    poll_hook_event,
+)
+from .start import looks_ready, send_prompt, state_session_path
 from .state_machine import (
     apply_session_rotation,
     build_poll_state,
@@ -20,7 +32,6 @@ from .state_machine import (
     handle_user_event,
     is_top_level_user_prompt,
 )
-from .start import looks_ready, send_prompt, state_session_path
 
 
 def poll_submission(
@@ -47,6 +58,8 @@ def poll_submission(
     if reply_delivery_terminal is not None:
         return _merge_poll_result_items(reply_delivery_terminal, prefix_items=dispatch_items)
     hook_result = poll_exact_hook(submission, now=now) if _prompt_completion_is_eligible(submission) else None
+    if hook_result is None:
+        hook_result = _orphaned_exact_hook(submission, prepared=prepared, now=now)
     if hook_result is not None:
         return _merge_poll_result_items(hook_result, prefix_items=dispatch_items)
     pane_dead_result = _ensure_prepared_pane_alive(submission, prepared=prepared, now=now)
@@ -130,6 +143,11 @@ def _idle_pane_round_result_terminal(
             "raw_buffer": poll.raw_buffer,
             "session_path": poll.session_path,
             "last_assistant_uuid": poll.last_assistant_uuid,
+            "active_assistant_message_id": poll.active_assistant_message_id,
+            "active_assistant_text": poll.active_assistant_text,
+            "active_assistant_stop_reason": poll.active_assistant_stop_reason,
+            "active_assistant_has_tool_use": poll.active_assistant_has_tool_use,
+            "terminal_reply": reply,
             "prompt_enqueued": poll.prompt_enqueued,
             "queue_dequeue_observed": poll.queue_dequeue_observed,
             "prompt_activated": poll.prompt_activated,
@@ -232,6 +250,62 @@ def _prompt_completion_is_eligible(submission: ProviderSubmission) -> bool:
     if state.get("prompt_anchor_emitted_at"):
         return False
     return bool(state.get("anchor_seen", False))
+
+
+_ORPHANED_HOOK_GRACE_S = 180.0
+
+
+def _orphaned_exact_hook(
+    submission: ProviderSubmission,
+    *,
+    prepared,
+    now: str,
+) -> ProviderPollResult | None:
+    """Recover a completed turn whose transcript anchor was missed.
+
+    This bypasses prompt-activation gating only after independent artifact,
+    session, time, and idle-pane proof. Missing proof always keeps the normal
+    event-log path authoritative.
+    """
+    if bool(submission.runtime_state.get("no_wrap", False)):
+        return None
+    evidence = load_strict_exact_hook_evidence(submission, now=now)
+    if evidence is None:
+        return None
+    try:
+        age_s = (parse_utc_timestamp(now) - evidence.event_at).total_seconds()
+    except Exception:
+        return None
+    if age_s < _ORPHANED_HOOK_GRACE_S:
+        return None
+    if not _pane_observably_idle(prepared):
+        return None
+    return poll_hook_event(
+        submission,
+        context=evidence.context,
+        event=evidence.event,
+        now=now,
+        extra_diagnostics={
+            "completion_fallback_source": "orphaned_exact_hook",
+            "request_anchor_observation_missed": True,
+            "orphaned_hook_grace_s": _ORPHANED_HOOK_GRACE_S,
+            "orphaned_hook_age_s": age_s,
+        },
+    )
+
+
+def _pane_observably_idle(prepared) -> bool:
+    backend = getattr(prepared, "backend", None)
+    get_pane_content = getattr(backend, "get_pane_content", None)
+    if not callable(get_pane_content):
+        return False
+    try:
+        text = str(get_pane_content(getattr(prepared, "pane_id", None), lines=80) or "")
+    except Exception:
+        return False
+    if "esc to interrupt" in text.lower():
+        return False
+    return _has_idle_input_box(text)
 
 
 def _merge_poll_result_items(result: ProviderPollResult, *, prefix_items: tuple) -> ProviderPollResult:

@@ -17,7 +17,9 @@ def _required_session_info(comm):
 
 
 def _log_reader(comm, *, log_reader_cls):
+    storage_root = str(comm.session_info.get("opencode_storage_root") or "").strip()
     return log_reader_cls(
+        root=Path(storage_root).expanduser() if storage_root else None,
         work_dir=Path(comm.session_info.get("work_dir") or Path.cwd()),
         project_id="global",
         session_id_filter=(str(comm.session_info.get("opencode_session_id") or "").strip() or None),
@@ -52,6 +54,9 @@ def initialize_state(
     comm.timeout = int(os.environ.get("OPENCODE_SYNC_TIMEOUT", "30"))
     comm.marker_prefix = provider_marker_prefix("opencode")
     comm.project_session_file = comm.session_info.get("_session_file")
+    comm.opencode_storage_root = Path(
+        str(comm.session_info.get("opencode_storage_root") or "")
+    ).expanduser() if comm.session_info.get("opencode_storage_root") else None
     comm.log_reader = _log_reader(comm, log_reader_cls=log_reader_cls)
     _publish_runtime_registry(comm, publish_registry_fn=publish_registry_fn)
 

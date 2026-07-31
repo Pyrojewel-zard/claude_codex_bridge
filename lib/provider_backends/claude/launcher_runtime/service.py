@@ -89,7 +89,18 @@ def build_start_cmd(
         _ensure_bypass_permission_acceptance(home_overrides, project_root=restore_target.run_cwd)
     env_prefix = join_env_prefix(
         build_env_prefix_fn(profile=profile, extra_env=spec.env),
-        export_env_clause({'DISABLE_AUTOUPDATER': '1'}),
+        export_env_clause(
+            {
+                'DISABLE_AUTOUPDATER': '1',
+                # A managed Claude process inherits a private credential copy.
+                # Disable /login and /logout so neither command can reach an
+                # ambient OS credential backend and mutate the user's external
+                # login. Authentication changes are made outside CCB and
+                # inherited again on the next managed start.
+                'DISABLE_LOGIN_COMMAND': '1',
+                'DISABLE_LOGOUT_COMMAND': '1',
+            }
+        ),
         export_env_clause(provider_user_session_env()),
         export_env_clause(home_overrides),
         export_env_clause(_ROOT_SANDBOX_ENV if root_user else {}),
@@ -275,7 +286,12 @@ def _ensure_bypass_permission_acceptance(home_overrides: dict[str, str], *, proj
     home = str(home_overrides.get('HOME') or '').strip()
     if not home:
         return
-    path = Path(home).expanduser() / '.claude.json'
+    config_dir = str(home_overrides.get('CLAUDE_CONFIG_DIR') or '').strip()
+    path = (
+        Path(config_dir).expanduser() / '.claude.json'
+        if config_dir
+        else Path(home).expanduser() / '.claude.json'
+    )
     payload = {}
     if path.is_file():
         try:

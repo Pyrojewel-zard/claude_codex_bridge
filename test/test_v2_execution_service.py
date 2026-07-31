@@ -303,7 +303,7 @@ def test_execution_service_claude_adapter_emits_session_boundary_items_from_log(
         CompletionItemKind.ASSISTANT_CHUNK,
         CompletionItemKind.TURN_BOUNDARY,
     ]
-    assert update.items[-1].payload['last_agent_message'] == 'partial\nfinal'
+    assert update.items[-1].payload['last_agent_message'] == 'final'
     assert update.decision is None
 
 
@@ -534,7 +534,7 @@ def test_execution_service_claude_adapter_prefers_exact_hook_artifact(
                 {**state, 'anchor_emitted': True},
             )
 
-    write_event(
+    hook_path = write_event(
         provider='claude',
         completion_dir=completion_dir,
         agent_name='agent1',
@@ -542,9 +542,12 @@ def test_execution_service_claude_adapter_prefers_exact_hook_artifact(
         req_id=fixed_req_id,
         status='completed',
         reply='exact hook reply',
-        session_id='claude-session-id',
+        session_id='claude-session',
         hook_event_name='Stop',
     )
+    hook_event = json.loads(hook_path.read_text(encoding='utf-8'))
+    hook_event['timestamp'] = '2026-03-18T00:00:00Z'
+    hook_path.write_text(json.dumps(hook_event), encoding='utf-8')
 
     monkeypatch.setattr(claude_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
     monkeypatch.setattr(claude_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())

@@ -233,6 +233,7 @@ def _runtime_evidence(runtime) -> dict[str, object]:
             'session_ref': None,
             'runtime_pid': None,
             'restart_count': 0,
+            'recovery_failure_count': 0,
         }
     return {
         'state': _runtime_state(runtime),
@@ -243,6 +244,7 @@ def _runtime_evidence(runtime) -> dict[str, object]:
         'session_ref': getattr(runtime, 'session_ref', None),
         'runtime_pid': getattr(runtime, 'runtime_pid', None),
         'restart_count': _safe_int(getattr(runtime, 'restart_count', 0)),
+        'recovery_failure_count': _safe_int(getattr(runtime, 'recovery_failure_count', 0)),
     }
 
 

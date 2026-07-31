@@ -6,7 +6,7 @@
 **Koordiniere Codex, Claude, Gemini und andere CLI-Agenten in sichtbaren, steuerbaren Workflows, die du direkt uebernehmen kannst**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ Dieser Befehl fuehrt durch Installation und Konfiguration.
 <details>
 <summary><b>Mobile-App-Details, Sicherheitsgrenze und Source</b></summary>
 
-CCB 8.3.1 enthaelt den Flutter-Quellcode von CCB Mobile in [`mobile/`](../mobile/) und veroeffentlicht das Android APK ueber GitHub Releases:
+CCB 8.5.2 enthaelt den Flutter-Quellcode von CCB Mobile in [`mobile/`](../mobile/) und veroeffentlicht das Android APK ueber GitHub Releases:
 
-- [CCB Mobile v8.3.1 APK herunterladen](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [CCB Mobile v8.5.2 APK herunterladen](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App-Source: [`mobile/app`](../mobile/app)
 - Server-gateway-Source: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,16 @@ Danke an [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fue
 ## Release Notes
 
 <details open>
+<summary><b>v8.4.0</b> - Verschluesseltes Mobile Relay, einfaches Pairing, stabile Projekt-ID und Codex-Reconnect</summary>
+
+- Fuegt Ende-zu-Ende-verschluesseltes Relay, einmalige Einladungen, multiplexte Streams sowie offizielle oder selbst gehostete Modi hinzu.
+- Verschiebt die Auswahl von Tailscale, privatem LAN oder Relay nach `ccb update mobile`; das Telefon scannt nur QR oder gibt einen Code ein.
+- Prueft offizielle GitHub-Metadaten, Groesse und SHA-256, bevor Android ein signiertes APK installiert.
+- Bewahrt die Projekt-ID nach Verschiebungen, folgt dem System-Theme und integriert begrenztes opt-in Codex reconnect.
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - Einheitliche Provider-Updates, sichere Cache-Ablösung und persistenter Config-UI-Zugriff</summary>
 
 - Buendelt unterstuetzte Provider-Upgrades in `ccb update`, einschliesslich exakter Versionspruefung, Ablehnen und versionsgenauem Ueberspringen, ohne aktive Panes neu zu starten.

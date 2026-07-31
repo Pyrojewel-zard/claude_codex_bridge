@@ -57,6 +57,8 @@ def validate_runtime_fields(runtime) -> None:
         raise AgentValidationError('workspace_epoch must be positive when set')
     if runtime.restart_count < 0:
         raise AgentValidationError('restart_count cannot be negative')
+    if runtime.recovery_failure_count < 0:
+        raise AgentValidationError('recovery_failure_count cannot be negative')
     if not str(runtime.managed_by or '').strip():
         raise AgentValidationError('managed_by cannot be empty')
 

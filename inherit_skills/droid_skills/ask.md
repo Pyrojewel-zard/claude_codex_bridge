@@ -57,7 +57,7 @@ Before every ask, decide:
   itself prove business acceptance.
 - `ask get`, `pend`, `watch`, and `ping` are diagnostics-only commands for
   explicit debugging requests, not normal ask workflow tools.
-- Do not manually append output-policy text; `ask` injects reply guidance.
+- Do not manually append output-policy text; stable reply policy comes from managed CCB memory, and `ask` adds only requested compact/silent mode metadata.
 
 Always send `MESSAGE` through the `<<'EOF' ... EOF` heredoc below. No other form
 is allowed. Use no flags or insert selected flags before `"$TARGET"`:
@@ -77,3 +77,10 @@ EOF
 After the command returns, end the turn. Do not wait for a reply,
 do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
 For `--chain`, report only that delegation was submitted.
+
+# CCB Clear Skill
+
+For `/ccb-clear`, `$ccb-clear`, `$ccb_clear`, or an explicit request to clear
+CCB agent context, run `command ccb clear` for all configured agents or
+`command ccb clear "$AGENT"` for named agents. Report the command output and
+stop. Do not restart agents, delete files, or poll.

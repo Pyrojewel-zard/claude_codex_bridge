@@ -72,7 +72,7 @@ def print_start_help(*, file=None) -> None:
               ccb config ui        Open the local project configuration panel.
               ccb maintenance status Show maintenance heartbeat config and stored status.
               ccb maintenance tick   Run one maintenance heartbeat diagnosis tick.
-              ccb mobile serve       Start the loopback CCB Mobile gateway for the current project.
+              ccb mobile serve       Start the CCB Mobile gateway for the current project.
               ccb mobile devices     List paired mobile devices for the current project.
               ccb mobile revoke <id> Revoke one paired mobile device locally.
               ccb agent add NAME:PROVIDER --role ROLE [--window NAME|--window-class CLASS] --hidden --json
@@ -96,7 +96,7 @@ def print_start_help(*, file=None) -> None:
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
               ccb cleanup --legacy-provider-caches
                                     Also remove caches for project roots that no longer exist.
-              ccb theme [light|dark|+|-]
+              ccb theme [system|dark|light|+|-|PRESET]
                                     Set or show the global CCB UI theme.
 
             Core commands:
@@ -236,12 +236,13 @@ _COMMAND_HELP = {
           create a queued job, send pane keys, substitute providers, or retry.
     """,
     "theme": """
-        usage: ccb theme [dark|light|+|-|solarized|tokyo|gruvbox|rose-pine]
+        usage: ccb theme [system|dark|light|+|-|solarized|tokyo|gruvbox|rose-pine]
 
         CCB UI theme:
           ccb theme          Show current CCB theme preference.
           ccb theme +        Switch to the next CCB theme.
           ccb theme -        Switch to the previous CCB theme.
+          ccb theme system   Follow the operating-system light/dark appearance.
           ccb theme light    Use a light CCB tmux/sidebar theme.
           ccb theme dark     Use the dark CCB tmux/sidebar theme.
 
@@ -250,6 +251,7 @@ _COMMAND_HELP = {
             CCB-owned tmux/sidebar colors.
           - CCB-owned rich WezTerm follows this preference through its
             generated config.
+          - The same preference is available under Appearance in `ccb config ui`.
     """,
     "agent": """
         usage:
@@ -404,10 +406,13 @@ _COMMAND_HELP = {
 
         CCB Mobile gateway:
           ccb mobile serve
-              Start the loopback, current-project HTTP gateway and emit a
-              short-lived pairing code.
+              Start the current-project HTTP gateway on loopback by default
+              and emit a short-lived pairing code.
           ccb mobile serve --listen 127.0.0.1:0
               Start on a dynamic loopback port.
+          ccb mobile serve --listen 192.168.31.155:8787 --route-provider lan
+              Bind one specific private interface for direct LAN access and
+              infer the pairing URL from the listen address.
           ccb mobile serve --listen 127.0.0.1:8787 --public-url https://mobile.example.com --route-provider cloudflare_tunnel
               Keep the gateway loopback-bound but emit Cloudflare route
               metadata in the pairing payload.
@@ -454,6 +459,41 @@ _COMMAND_HELP = {
           - It does not configure Cloudflare Tunnel, lifecycle, or
             multi-project registry.
           - Stopping the gateway does not stop ccbd, provider panes, or tmux.
+    """,
+    "relay": """
+        usage: ccb relay <invite|host> <issue|activate|status|list|revoke>
+
+        Host activation:
+          ccb relay host activate --mode official --invitation-file /path/to/one-time-invitation
+              Use the CCB Official Relay. Request one one-time invitation from
+              the CCB Relay operator; the invitation is consumed on success.
+          ccb relay host activate --mode self-hosted --relay-origin wss://relay.example.com --invitation-file /path/to/one-time-invitation
+              Use an operator-managed Relay with a trusted TLS endpoint.
+          Omitting --mode preserves compatibility: an explicit --relay-origin
+          selects self-hosted mode; otherwise official mode is selected.
+
+        CCB hosted relay operator-local admission:
+          ccb relay invite issue --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json --ttl-seconds 900 --json
+              Create one one-time host invitation. This is the only command
+              that prints the raw invitation, exactly once, to explicit
+              operator output.
+          ccb relay invite status --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <invite_id> [--json]
+          ccb relay invite list --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json [--json]
+          ccb relay invite revoke --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <invite_id> [--reason TEXT] [--json]
+          ccb relay host status --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <host_id> [--json]
+          ccb relay host list --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json [--json]
+          ccb relay host revoke --db /path/to/relay-admission.sqlite3 --secrets /path/to/relay-secrets.json <host_id> [--reason TEXT] [--json]
+
+        Safety:
+          - This is not a public HTTP/admin route.
+          - Raw invitation secrets are not stored in logs, audit records, or
+            the SQLite admission database.
+          - Admission HMAC keys must come from --secrets,
+            CCB_RELAY_ADMISSION_SECRETS, or both
+            CCB_RELAY_VERIFIER_KEY_B64 and CCB_RELAY_CAPABILITY_KEY_B64; the
+            same key material is required after restart.
+          - Status/list/revoke output is redacted and never prints an
+            invitation value.
     """,
     "loop": """
         usage:
@@ -608,7 +648,11 @@ def _build_management_parser() -> argparse.ArgumentParser:
 
     install_parser = subparsers.add_parser("install", help="Install or activate optional CCB capabilities")
     install_parser.add_argument("target", nargs="?", help="'mobile' to start the server-wide CCB Mobile gateway")
-    install_parser.add_argument("--listen", default="127.0.0.1:8787")
+    install_parser.add_argument(
+        "--listen",
+        default="127.0.0.1:8787",
+        help="HOST:PORT; route-provider lan also accepts a specific private interface IP",
+    )
     install_parser.add_argument("--public-url", default=None)
     install_parser.add_argument(
         "--route-provider",
@@ -618,6 +662,17 @@ def _build_management_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser("update", help="Update CCB or an optional bundle")
     update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or optional bundle 'rich'/'mobile'")
+    update_parser.add_argument("--listen", default=None)
+    update_parser.add_argument("--public-url", default=None)
+    update_parser.add_argument(
+        "--route-provider",
+        default=None,
+        choices=("lan", "tailnet", "cloudflare_tunnel", "relay"),
+        help=(
+            "mobile route; omit in an interactive terminal to choose Tailscale, "
+            "LAN, official Relay, or self-hosted Relay"
+        ),
+    )
     update_parser.add_argument(
         "--providers",
         choices=("prompt", "check", "all", "none"),

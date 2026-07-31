@@ -65,6 +65,7 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
 
     seen: dict[str, object] = {}
+    cleared: list[object] = []
 
     class _FakeClient:
         def start(self, **kwargs):
@@ -80,6 +81,10 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     monkeypatch.setattr(
         'cli.services.start.ensure_daemon_started',
         lambda context: SimpleNamespace(client=_FakeClient(), started=True),
+    )
+    monkeypatch.setattr(
+        'cli.services.start.clear_applied_config_restart_intent',
+        lambda context: cleared.append(context),
     )
 
     summary = start_agents(context, command)
@@ -98,6 +103,7 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     assert summary.daemon_started is True
     assert summary.startup_run_id == startup_run_id
     assert summary.socket_path == str(context.paths.ccbd_socket_path)
+    assert cleared == [context]
 
 
 def test_foreground_start_refreshes_sidebar_with_current_cli_when_daemon_is_reused(

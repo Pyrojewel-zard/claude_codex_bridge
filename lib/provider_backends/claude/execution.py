@@ -3,9 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from ccbd.api_models import JobRecord
+from completion.models import CompletionDecision
 from provider_core.protocol import request_anchor_for_job
-from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
+from provider_execution.base import (
+    ProviderPollResult,
+    ProviderRuntimeContext,
+    ProviderSubmission,
+)
 from provider_execution.common import request_anchor_from_runtime_state
+from provider_execution.followups import unsupported_active_followup_capability
 from provider_execution.reliability import CompletionReliabilityPolicy
 from terminal_runtime import get_backend_for_session
 
@@ -13,8 +19,8 @@ from .comm import ClaudeLogReader
 from .execution_runtime import poll_submission as _poll_submission
 from .execution_runtime import resume_submission as _resume_submission
 from .execution_runtime import start_active_submission as _start_active_submission
+from .execution_runtime.hook_results import capture_exact_hook_cancel_evidence
 from .session import load_project_session
-from provider_execution.followups import unsupported_active_followup_capability
 
 
 class ClaudeProviderAdapter:
@@ -41,6 +47,14 @@ class ClaudeProviderAdapter:
     def poll(self, submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
         return _poll_submission(self, submission, now=now)
 
+    def capture_cancel_evidence(
+        self,
+        submission: ProviderSubmission,
+        *,
+        now: str,
+    ) -> CompletionDecision | None:
+        return capture_exact_hook_cancel_evidence(submission, now=now)
+
     def export_runtime_state(self, submission: ProviderSubmission) -> dict[str, object]:
         return {
             'mode': submission.runtime_state.get('mode'),
@@ -54,6 +68,11 @@ class ClaudeProviderAdapter:
             'raw_buffer': submission.runtime_state.get('raw_buffer'),
             'session_path': submission.runtime_state.get('session_path'),
             'last_assistant_uuid': submission.runtime_state.get('last_assistant_uuid'),
+            'active_assistant_message_id': submission.runtime_state.get('active_assistant_message_id'),
+            'active_assistant_text': submission.runtime_state.get('active_assistant_text'),
+            'active_assistant_stop_reason': submission.runtime_state.get('active_assistant_stop_reason'),
+            'active_assistant_has_tool_use': submission.runtime_state.get('active_assistant_has_tool_use'),
+            'terminal_reply': submission.runtime_state.get('terminal_reply'),
             'prompt_enqueued': submission.runtime_state.get('prompt_enqueued'),
             'queue_dequeue_observed': submission.runtime_state.get('queue_dequeue_observed'),
             'prompt_activated': submission.runtime_state.get('prompt_activated'),

@@ -27,11 +27,16 @@ from agents.config_loader import (
 )
 from agents.config_loader_runtime.defaults_runtime.rendering_runtime.service import render_config_document_text
 from agents.config_loader_runtime.io_runtime import parse_config_document_text
-from agents.models import parse_layout_spec
+from agents.models import ProviderProfileSpec, parse_layout_spec
 from cli.context import CliContext
 from cli.models import ParsedConfigUiCommand, ParsedReloadCommand
 from cli.output import atomic_write_text
+from cli.services.config_restart_intent import (
+    discard_config_restart_intent_for_digest,
+    record_config_restart_intent,
+)
 from cli.services.config_ui_settings import resolve_config_ui_settings
+from cli.services.theme import set_theme_preference, theme_preference_payload
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_model_shortcuts import supported_provider_model_shortcuts
 from provider_profiles import supported_provider_api_shortcuts, validate_provider_runtime_home_uniqueness
@@ -41,10 +46,7 @@ DEFAULT_IDLE_TIMEOUT_S = 30 * 60
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
 _BROWSER_OPEN_CONFIRM_TIMEOUT_S = 2.0
 _PROFILE_NAME_PATTERN = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]{0,63}$')
-_PROTOTYPE_RELATIVE_PATH = Path(
-    'docs/plantree/plans/agentic-loop-workflow/'
-    'prototypes/v2-static-config-panel-demo/index.html'
-)
+_CONFIG_UI_RELATIVE_PATH = Path('assets/config_ui/index.html')
 
 
 @dataclass
@@ -188,6 +190,8 @@ def _browser_open_commands(url: str) -> tuple[tuple[str, ...], ...]:
         return (('open', url),)
     if sys.platform.startswith(('linux', 'freebsd', 'openbsd')):
         return (
+            ('sensible-browser', url),
+            ('x-www-browser', url),
             ('xdg-open', url),
             ('gio', 'open', url),
         )
@@ -206,7 +210,7 @@ def _is_wsl_environment() -> bool:
 
 
 def config_ui_asset_path() -> Path:
-    return Path(__file__).resolve().parents[3] / _PROTOTYPE_RELATIVE_PATH
+    return Path(__file__).resolve().parents[3] / _CONFIG_UI_RELATIVE_PATH
 
 
 def config_ui_provider_capabilities(
@@ -464,6 +468,9 @@ def _handler_for(
             if parsed.path == '/api/capabilities':
                 self._send(HTTPStatus.OK, capabilities_payload, 'application/json; charset=utf-8')
                 return
+            if parsed.path == '/api/theme':
+                self._send_json(HTTPStatus.OK, theme_preference_payload())
+                return
             if parsed.path == '/api/config':
                 try:
                     payload = _config_payload(
@@ -555,6 +562,11 @@ def _handler_for(
                         )
                     self._send_json(HTTPStatus.OK, result)
                     return
+                if parsed.path == '/api/theme':
+                    with mutation_lock:
+                        result = _save_ui_theme(payload)
+                    self._send_json(HTTPStatus.OK, result)
+                    return
                 self._send(HTTPStatus.NOT_FOUND, b'not found\n', 'text/plain; charset=utf-8')
             except _ConfigUiHttpError as exc:
                 self._send_json(exc.status, {'status': 'error', 'error': exc.message})
@@ -614,6 +626,30 @@ class _ConfigUiHttpError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _save_ui_theme(payload: dict[str, object]) -> dict[str, object]:
+    value = payload.get('theme')
+    if not isinstance(value, str) or not value.strip():
+        raise _ConfigUiHttpError(
+            HTTPStatus.BAD_REQUEST,
+            'theme is required',
+        )
+    requested = value.strip().lower()
+    available = set(theme_preference_payload()['available_themes'])
+    if requested not in available:
+        raise _ConfigUiHttpError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            f'unsupported theme: {value}',
+        )
+    try:
+        result = set_theme_preference(requested)
+    except ValueError as exc:
+        raise _ConfigUiHttpError(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            str(exc),
+        ) from exc
+    return {'status': 'ok', **result}
 
 
 def _config_payload(
@@ -768,6 +804,7 @@ def _validate_candidate(
         'status': 'valid',
         'version': 2,
         'agent_names': sorted(config.agents),
+        'restart_bound_agents': list(_restart_bound_agent_names(config)),
         'default_agents': list(config.default_agents),
         'warnings': _candidate_warnings(text),
         'editor': _editor_payload(
@@ -776,6 +813,43 @@ def _validate_candidate(
             project_root=project_root,
         ),
     }
+
+
+def _restart_bound_agent_names(config) -> tuple[str, ...]:
+    names: list[str] = []
+    for agent_name, spec in sorted(config.agents.items()):
+        api = getattr(spec, 'api', None)
+        profile = getattr(spec, 'provider_profile', None)
+        if (
+            str(getattr(api, 'key', '') or '').strip()
+            or str(getattr(api, 'url', '') or '').strip()
+            or getattr(spec, 'provider_command_template', None) is not None
+            or getattr(spec, 'model', None) is not None
+            or getattr(spec, 'thinking', None) is not None
+            or bool(tuple(getattr(spec, 'startup_args', ()) or ()))
+            or bool(dict(getattr(spec, 'env', {}) or {}))
+            or (profile is not None and profile != ProviderProfileSpec())
+        ):
+            names.append(str(agent_name))
+    return tuple(names)
+
+
+def _restart_bound_changed_agents(current_config, candidate_config) -> tuple[str, ...]:
+    if candidate_config is None:
+        return ()
+    names: list[str] = []
+    current_agents = dict(getattr(current_config, 'agents', {}) or {})
+    candidate_agents = dict(getattr(candidate_config, 'agents', {}) or {})
+    for agent_name in sorted(set(current_agents) & set(candidate_agents)):
+        current_record = dict(current_agents[agent_name].to_record())
+        candidate_record = dict(candidate_agents[agent_name].to_record())
+        for record in (current_record, candidate_record):
+            record.pop('schema_version', None)
+            record.pop('record_type', None)
+            record.pop('dispatch_disabled', None)
+        if current_record != candidate_record:
+            names.append(str(agent_name))
+    return tuple(names)
 
 
 def _validate_document(
@@ -1002,6 +1076,18 @@ def _apply_candidate(
         project_root=project_root,
         path_layout=path_layout,
     )
+    candidate_config = None
+    if mode == 'hot_reload':
+        candidate_config = _validate_document(
+            parse_config_document_text(
+                text,
+                path=config_path,
+                project_root=project_root,
+            ),
+            config_path=config_path,
+            project_root=project_root,
+            path_layout=path_layout,
+        )
 
     with mutation_lock:
         current = _config_payload(config_path)
@@ -1011,6 +1097,23 @@ def _apply_candidate(
                 'error': 'ccb.config changed outside this editor; reload the current config before saving',
                 'current_digest': current['digest'],
             }
+        changed = str(current.get('text') or '') != text
+        restart_change_agents: tuple[str, ...] = ()
+        if mode == 'hot_reload' and bool(current.get('exists')):
+            current_config = _validate_document(
+                parse_config_document_text(
+                    str(current.get('text') or ''),
+                    path=config_path,
+                    project_root=project_root,
+                ),
+                config_path=config_path,
+                project_root=project_root,
+                path_layout=path_layout,
+            )
+            restart_change_agents = _restart_bound_changed_agents(
+                current_config,
+                candidate_config,
+            )
         backup_path = _backup_config(config_path)
         atomic_write_text(config_path, text)
         saved = _config_payload(config_path)
@@ -1023,19 +1126,84 @@ def _apply_candidate(
         result: dict[str, object] = {
             'status': 'saved',
             'saved': True,
+            'changed': changed,
             'digest': saved['digest'],
             'backup_path': str(backup_path) if backup_path is not None else None,
             'validation': validation,
         }
         if mode == 'save':
+            intent = record_config_restart_intent(
+                project_root,
+                target_config_digest=str(saved['digest']),
+                affected_agents=validation.get('restart_bound_agents') or (),
+                reason='active_config_saved',
+                layout=path_layout,
+            )
+            result.update(
+                restart_required=True,
+                restart_intent=intent.to_record(),
+            )
             return HTTPStatus.OK, result
 
         try:
             dry_run = dict(reload_action(True))
         except Exception as exc:
+            if restart_change_agents:
+                dry_run = {
+                    'status': 'unavailable',
+                    'plan_class': 'replace_agent',
+                    'future_safe_to_apply': False,
+                    'operations': [
+                        {'op': 'replace_agent', 'agent': agent_name}
+                        for agent_name in restart_change_agents
+                    ],
+                }
+                result['dry_run'] = dry_run
+                result['reload_warning'] = str(exc)
+                intent = record_config_restart_intent(
+                    project_root,
+                    target_config_digest=str(saved['digest']),
+                    affected_agents=restart_change_agents,
+                    reason='provider_launch_config_changed',
+                    layout=path_layout,
+                )
+                result.update(
+                    status='restart_required',
+                    restart_required=True,
+                    restart_intent=intent.to_record(),
+                    affected_agents=list(restart_change_agents),
+                )
+                return HTTPStatus.OK, result
             result.update(status='reload_unavailable', error=str(exc), dry_run=None)
             return HTTPStatus.SERVICE_UNAVAILABLE, result
         result['dry_run'] = dry_run
+        restart_agents = _restart_agents_from_dry_run(
+            dry_run,
+            fallback=(
+                restart_change_agents
+                or validation.get('restart_bound_agents')
+                or ()
+            ),
+        )
+        if _dry_run_requires_provider_restart(
+            dry_run,
+            restart_bound_agents=validation.get('restart_bound_agents') or (),
+            changed_agents=restart_change_agents,
+        ):
+            intent = record_config_restart_intent(
+                project_root,
+                target_config_digest=str(saved['digest']),
+                affected_agents=restart_agents,
+                reason='provider_launch_config_changed',
+                layout=path_layout,
+            )
+            result.update(
+                status='restart_required',
+                restart_required=True,
+                restart_intent=intent.to_record(),
+                affected_agents=list(restart_agents),
+            )
+            return HTTPStatus.OK, result
         if not _dry_run_allows_apply(dry_run):
             result.update(status='reload_blocked', error='reload dry-run did not allow apply')
             return HTTPStatus.CONFLICT, result
@@ -1049,6 +1217,11 @@ def _apply_candidate(
             result.update(status='reload_blocked', error='daemon did not publish the saved config')
             return HTTPStatus.CONFLICT, result
         result['status'] = 'reloaded'
+        discard_config_restart_intent_for_digest(
+            project_root,
+            str(saved['digest']),
+            layout=path_layout,
+        )
         return HTTPStatus.OK, result
 
 
@@ -1065,6 +1238,41 @@ def _dry_run_allows_apply(payload: dict[str, object]) -> bool:
         str(payload.get('status') or '') == 'ok'
         and bool(payload.get('future_safe_to_apply'))
     )
+
+
+def _dry_run_requires_provider_restart(
+    payload: dict[str, object],
+    *,
+    restart_bound_agents,
+    changed_agents=(),
+) -> bool:
+    if bool(tuple(changed_agents or ())):
+        return True
+    plan_class = str(payload.get('plan_class') or '')
+    if plan_class == 'replace_agent':
+        return True
+    return plan_class == 'no_change' and bool(tuple(restart_bound_agents or ()))
+
+
+def _restart_agents_from_dry_run(
+    payload: dict[str, object],
+    *,
+    fallback,
+) -> tuple[str, ...]:
+    agents = {
+        str(item.get('agent') or '').strip().lower()
+        for item in tuple(payload.get('operations') or ())
+        if isinstance(item, dict)
+        and str(item.get('op') or '') == 'replace_agent'
+        and str(item.get('agent') or '').strip()
+    }
+    if not agents:
+        agents.update(
+            str(item or '').strip().lower()
+            for item in tuple(fallback or ())
+            if str(item or '').strip()
+        )
+    return tuple(sorted(agents))
 
 
 def _reload_saved_config(

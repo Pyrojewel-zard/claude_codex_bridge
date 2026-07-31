@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.3.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.2 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [下载 CCB Mobile v8.5.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -221,7 +221,8 @@ CCB 8.3.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，�
 
 安全边界：
 
-- CCB gateway 只绑定 loopback，例如 `127.0.0.1:8787`。
+- CCB gateway 默认绑定 loopback，例如 `127.0.0.1:8787`。
+- 局域网直连时可绑定一个明确的私网网卡地址（拒绝通配地址和公网地址）：`ccb install mobile --route-provider lan --listen 192.168.31.155:8787`。配对 URL 会从 `--listen` 自动推导，无需额外转发进程或 `--public-url`。
 - 远程访问使用 Tailscale Serve，不启用 Tailscale Funnel。
 - CCB 不保存 Tailscale 密码、OAuth token、admin API token，也不会自动修改 tailnet ACL/grants。
 - 手机只获得 pairing profile 授权的 scope，例如 view、content、terminal、file upload 和 file download。
@@ -281,8 +282,10 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png" alt="微信群" width="240">
+  <img src="../assets/weixin.png" alt="CCB 微信技术群 2" width="240">
 </p>
+
+> 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
 
 <a id="community"></a>
 
@@ -297,6 +300,78 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.2</b> - 有界 pane 恢复、更简练的 ask 与隔离的 Rich 终端启动</summary>
+
+- respawn 后进入 90 秒观察期，只有新的健康观测确认恢复后才会继续派发队列任务。
+- 不稳定恢复依次退避 30s/60s/120s/5m/10m/30m，第六次后打开熔断，不再无限重启和写盘。
+- 每个 Provider runtime 只保留最新 50 份 pane crash 记录，清空旧 pane history，并跳过内容未变化的 helper manifest 写入。
+- 只修复失效的 CCB 托管 Claude continuation 状态且不改登录信息；托管 Codex app server 不可用时安全停止。
+- 把稳定的回复与取消规则放入托管项目记忆，普通 ask 不再重复注入提示段落，也不要求每一步轮询取消文件。
+- CCB Rich WezTerm 与父 TTY 完全分离，并提供私有 Wayland XCursor overlay，同时保留用户选择的 cursor theme。
+
+</details>
+
+<details>
+<summary><b>v8.5.1</b> - 完整 Claude 回复、可见 Pi 执行与不受代理干扰的 Mobile 健康检查</summary>
+
+- 按 assistant message 聚合 Claude 快照，只有 thinking 的边界和工具过程说明不会再替代真实最终回复。
+- Claude completion hook 缺失时只使用与请求、Agent、workspace、时间和 session 精确匹配的证据恢复；mid-stream stalled 响应会安全失败。
+- 新 Pi ask 在托管可见 pane 中执行，并且只从精确绑定的 `agent_settled` 消息完成。
+- Pi 长任务默认不再受固定终态超时限制，同时移除会产生额外工具调用和非缓存 token 的模型侧 cancel-file 检查。
+- 保持对 8.5.0 已持久化 Pi job 和显式 `CCB_PI_EXECUTION_MODE=headless` 回滚路径的兼容。
+- 本地 Mobile gateway 健康检查绕过已配置的 HTTP 代理。
+
+</details>
+
+<details>
+<summary><b>v8.5.0</b> - 精确 Pi/OMP 终止、自修复 npm 运行时、同步 Mobile 活动与更安全的托管资源</summary>
+
+- 将 Pi 完成信号绑定到最新的 `agent_settled`，将 OMP 完成信号绑定到 `agent_end.isTerminal=true`，并在进程退出且输出关闭后才进入终态。
+- 对缺少原生终止证据、缺少最终结果、JSONL 损坏或截断、Provider 错误和非零退出安全拒绝；OMP 的终态 `yield` 仍作为受支持的成功结果。
+- 安装时自动创建并修复 npm 托管 Python 环境，正式版运行依赖不再依靠不完整的系统 Python 兜底；linked Git worktree 仍会被正确识别为源码安装。
+- 让 sidebar 设置入口能够恢复正式版受管运行时，并可靠打开 Config UI。
+- 将 Mobile 的 ask/Provider 活动与服务端精确状态同步，稳定完成通知，并隐藏自动重连过程中的无意义提示。
+- 收紧托管 Provider 资源的单向投影边界，并加入内置 Qoder 控制技能，托管侧不会获得改写用户全局状态的通道。
+
+</details>
+
+<details>
+<summary><b>v8.4.3</b> - Provider 认证隔离、必备控制技能与可靠的 Mobile 配对和终端恢复</summary>
+
+- 将可变认证、账号、session 和存储状态隔离到每个托管 Provider 的私有 home，visible 与 headless 执行使用同一边界。
+- 外部凭据只作为单向继承来源，托管 Provider 的刷新或退出不会改写用户 shell、IDE、其他 Agent 或其他项目的登录态。
+- 即使关闭可选 skill 继承，也会为受支持的托管 Agent 提供内置 `ask` 与 `ccb-clear`；托管 Codex 还会保留 `reconnect`。
+- 可选 skill 改为逐项投影，一个损坏的外部条目不会阻断 CCB 控制技能或其他有效 skill。
+- 新增经过校验的紧凑 Relay 配对二维码，可放入 97 列终端，同时保留仅所有者可读的 PNG 兜底。
+- 通过同步 snapshot、完整重绘和自动更新 terminal handle，修复 Mobile 终端 resize 与流错误恢复竞态。
+
+</details>
+
+<details>
+<summary><b>v8.4.2</b> - Config UI 主题持久化、Relay 终端稳定传输与安全 Provider 更新</summary>
+
+- 即使 sidebar 继承到失效 Python 路径，也会使用正式版受管解释器打开 Config UI。
+- 新增可持久化的 CCB 主题选择，包括跟随系统，并在 Config UI、Rich WezTerm 与 sidebar 重启后保持一致。
+- 通过有界背压、稳定快照、增量更新和宽字符计算加固 Relay 终端流。
+- 密集配对内容无法在当前终端安全显示时，生成仅所有者可读的 PNG 二维码。
+- Provider 更新保持 npm/NVM 与 Bun 的包管理器所有权。
+- 对不可写系统安装和解析到本地依赖的异常 Registry 版本只报告、不更新。
+
+</details>
+
+<details>
+<summary><b>v8.4.0</b> - 加密 Mobile Relay、简化配对、稳定项目身份与 Codex 重连</summary>
+
+- 新增端到端加密的 CCB Mobile Relay，支持运营方签发的一次性邀请码、有边界的接入控制、多路复用流，以及官方或自建 Relay 两种部署方式。
+- 将路由选择收敛到 `ccb update mobile`：电脑端可选 Tailscale、经过校验的局域网私网地址、CCB Relay 或自建 Relay，手机端只需扫码或输入配对码。
+- 新增可信的 Android 应用内更新流程；交给系统安装前，会校验 GitHub 官方 Release 元数据、APK 大小和 SHA-256。
+- CCB 项目移动或改名后仍保持稳定身份，并让终端和配置界面支持跟随系统的浅色/深色主题。
+- 将可选的 Codex reconnect 监督集成到托管 home；保留有边界的终端错误证据，并在 pane 或 session 不匹配时拒绝恢复。
+- Relay 数据保持端到端加密；Relay 运营方只能看到连接元数据，不能读取任务提示、回复、终端内容或传输文件。
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - 统一 Provider 更新、安全回收缓存与持久化 Config UI 访问</summary>
 
 - 将受支持的 Provider 升级统一到 `ccb update`，提供准确版本检查、暂不更新和精确版本跳过，并且不会自动重启运行中的 pane。

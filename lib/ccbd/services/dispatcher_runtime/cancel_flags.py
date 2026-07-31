@@ -1,9 +1,8 @@
-"""Filesystem cancel flags (phase 2.1).
+"""Filesystem cancel flags retained as a cooperative compatibility signal.
 
-Marking a job CANCELLED in the stores does not reach an agent that is already
-mid-task in its pane. A flag file gives agents a cheap, transport-independent
-way to notice cancellation between work steps: the dispatch prompt tells them
-to check it and stop if present.
+Active execution is cancelled out of band by the provider execution service.
+Managed project memory documents the optional flag protocol once, so normal
+job prompts do not repeat cancellation instructions or require per-step polls.
 """
 
 from __future__ import annotations

@@ -416,7 +416,8 @@ void main() {
       findsOneWidget,
     );
     await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-    expect(find.byKey(const ValueKey('gateway-url-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('connection-code-field')), findsOneWidget);
+    expect(find.byKey(const ValueKey('gateway-url-field')), findsNothing);
 
     tester
         .widget<IconButton>(
@@ -542,6 +543,60 @@ void main() {
     },
   );
 
+  testWidgets(
+    'paired project refresh failure uses reconnect banner without snackbar',
+    (tester) async {
+      final profile = _pairedHost(hostId: 'server-host', deviceId: 'phone');
+      final profileStore = await _profileStoreWith([profile]);
+      final gatewayRepository = _ServerProjectsRepository([
+        _projectFixture(
+          id: 'test_ccb2',
+          displayName: 'test_ccb2',
+          root: '/srv/ccb/test_ccb2',
+        ),
+      ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: FakeMobileCcbRepository.demo(),
+            profileStore: profileStore,
+            gatewayRepositoryFactory: (_) => gatewayRepository,
+            gatewayTerminalTransportFactory:
+                (_) => RecordingTerminalTransport(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _activatePairedGatewayListOnly(tester);
+      await tester.tap(find.byKey(const ValueKey('project-open-test_ccb2')));
+      await tester.pumpAndSettle();
+
+      gatewayRepository.getProjectViewErrors['test_ccb2'] = StateError(
+        'automatic refresh unavailable',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('agent-conversation-refresh-action')),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(
+        find.byKey(const ValueKey('gateway-reconnecting-banner')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('automatic refresh unavailable'),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('selected-agent-workspace')),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('paired back returns to server project list', (tester) async {
     final profile = _pairedHost(hostId: 'server-host', deviceId: 'phone');
     final profileStore = await _profileStoreWith([profile]);
@@ -628,7 +683,11 @@ void main() {
         findsOneWidget,
       );
       await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-      expect(find.byKey(const ValueKey('gateway-url-field')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('connection-code-field')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('gateway-url-field')), findsNothing);
     },
   );
 }

@@ -683,7 +683,9 @@ def test_prepare_launch_context_selects_only_valid_agent_binding(monkeypatch, tm
     ccb_dir = work_dir / ".ccb"
     work_dir.mkdir()
     ccb_dir.mkdir()
-    share_dir = tmp_path / "share"
+    state_dir = ccb_dir / "agents" / "kimi1" / "provider-state" / "kimi"
+    share_dir = state_dir / "home" / ".kimi"
+    external_share = tmp_path / "external-share"
     session_file = _ccb_session_file(
         ccb_dir,
         agent_name="kimi1",
@@ -707,7 +709,7 @@ def test_prepare_launch_context_selects_only_valid_agent_binding(monkeypatch, tm
         project=SimpleNamespace(project_id="project-1", project_root=work_dir),
         paths=paths,
     )
-    spec = SimpleNamespace(name="kimi1", env={"KIMI_SHARE_DIR": str(share_dir)})
+    spec = SimpleNamespace(name="kimi1", env={"KIMI_SHARE_DIR": str(external_share)})
     plan = SimpleNamespace(workspace_path=work_dir)
     monkeypatch.setattr(
         "provider_backends.kimi.launcher._resolve_exact_resume_flag",
@@ -733,7 +735,9 @@ def test_prepare_launch_context_fails_fresh_without_exact_session_capability(mon
     ccb_dir = work_dir / ".ccb"
     work_dir.mkdir()
     ccb_dir.mkdir()
-    share_dir = tmp_path / "share"
+    state_dir = ccb_dir / "agents" / "kimi1" / "provider-state" / "kimi"
+    share_dir = state_dir / "home" / ".kimi"
+    external_share = tmp_path / "external-share"
     session_file = _ccb_session_file(
         ccb_dir,
         agent_name="kimi1",
@@ -757,7 +761,7 @@ def test_prepare_launch_context_fails_fresh_without_exact_session_capability(mon
         project=SimpleNamespace(project_id="project-1", project_root=work_dir),
         paths=paths,
     )
-    spec = SimpleNamespace(name="kimi1", env={"KIMI_SHARE_DIR": str(share_dir)})
+    spec = SimpleNamespace(name="kimi1", env={"KIMI_SHARE_DIR": str(external_share)})
     plan = SimpleNamespace(workspace_path=work_dir)
     monkeypatch.setattr(
         "provider_backends.kimi.launcher._resolve_exact_resume_flag",
@@ -782,7 +786,9 @@ def test_kimi_share_dir_honors_explicit_store_and_home(tmp_path: Path) -> None:
     assert kimi_share_dir(environ={"HOME": str(tmp_path / "home")}) == tmp_path / "home" / ".kimi"
 
 
-def test_prepare_launch_context_resolves_relative_share_against_agent_workdir(tmp_path: Path) -> None:
+def test_prepare_launch_context_ignores_external_share_override_for_private_agent_state(
+    tmp_path: Path,
+) -> None:
     work_dir = tmp_path / "repo"
     ccb_dir = work_dir / ".ccb"
     work_dir.mkdir()
@@ -796,7 +802,8 @@ def test_prepare_launch_context_resolves_relative_share_against_agent_workdir(tm
         project=SimpleNamespace(project_id="project-1", project_root=work_dir),
         paths=paths,
     )
-    spec = SimpleNamespace(name="kimi1", env={"KIMI_SHARE_DIR": "relative-share"})
+    external_share = work_dir / "external-share"
+    spec = SimpleNamespace(name="kimi1", env={"KIMI_SHARE_DIR": str(external_share)})
 
     prepared = prepare_launch_context(
         context,
@@ -806,7 +813,11 @@ def test_prepare_launch_context_resolves_relative_share_against_agent_workdir(tm
         {"run_cwd": str(work_dir)},
     )
 
-    assert prepared["kimi_share_dir"] == str(work_dir / "relative-share")
+    private_share = (
+        ccb_dir / "agents" / "kimi1" / "provider-state" / "kimi" / "home" / ".kimi"
+    )
+    assert prepared["kimi_share_dir"] == str(private_share)
+    assert prepared["kimi_share_dir"] != str(external_share)
     assert prepared["kimi_resume_status"] == "fresh_no_binding"
 
 

@@ -87,6 +87,36 @@ def test_render_tmux_session_theme_uses_saved_theme_preference(tmp_path) -> None
     assert rendered.session_options['status-style'] == 'bg=#eff1f5 fg=#4c4f69'
 
 
+def test_render_tmux_session_theme_resolves_saved_system_preference(tmp_path) -> None:
+    config_home = tmp_path / 'config'
+    theme_path = config_home / 'ccb' / 'theme.json'
+    theme_path.parent.mkdir(parents=True)
+    theme_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'theme': 'system',
+                'palette': 'system',
+                'tmux_profile': 'system',
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    rendered = render_tmux_session_theme(
+        ccb_version='9.9.9',
+        status_script=None,
+        git_script=None,
+        environ={
+            'XDG_CONFIG_HOME': str(config_home),
+            'CCB_SYSTEM_THEME': 'light',
+        },
+    )
+
+    assert rendered.profile_name == 'light'
+    assert rendered.session_options['status-style'] == 'bg=#eff1f5 fg=#4c4f69'
+
+
 def test_light_profile_uses_light_pane_and_sidebar_visuals() -> None:
     agent_visual = pane_visual(
         project_id='proj-1',

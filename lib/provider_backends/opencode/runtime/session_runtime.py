@@ -105,6 +105,8 @@ def merge_session_file_data(result: dict[str, object], session_file: Path) -> No
     copy_missing_field(result, file_data, "pane_title_marker", default="")
     copy_missing_field(result, file_data, "opencode_session_id")
     copy_missing_field(result, file_data, "opencode_project_id")
+    copy_missing_field(result, file_data, "opencode_storage_root")
+    copy_missing_field(result, file_data, "opencode_log_root")
 
 
 def copy_missing_field(result: dict[str, object], source: dict[str, object], field: str, default: object = None) -> None:

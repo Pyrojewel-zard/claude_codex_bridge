@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.3.1 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.2 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.3.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [Download CCB Mobile v8.5.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -230,7 +230,8 @@ The phone app is a remote controller for real CCB projects running on a server. 
 
 Safety boundary:
 
-- The CCB gateway binds only to loopback, for example `127.0.0.1:8787`.
+- The CCB gateway binds to loopback by default, for example `127.0.0.1:8787`.
+- For direct LAN access, bind one specific private interface address (wildcard and public addresses are rejected): `ccb install mobile --route-provider lan --listen 192.168.31.155:8787`. The pairing URL is inferred from `--listen`; no forwarding process or `--public-url` is needed.
 - Remote access uses Tailscale Serve, not Tailscale Funnel.
 - CCB does not store Tailscale passwords, OAuth tokens, admin API tokens, or automatically modify tailnet ACLs/grants.
 - The phone receives only the scopes authorized by the pairing profile, such as view, content, terminal, file upload, and file download.
@@ -290,8 +291,10 @@ Use the **⚙ Settings** control panel for normal project configuration. If you 
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png" alt="WeChat group" width="240">
+  <img src="assets/weixin.png" alt="CCB WeChat group 2" width="240">
 </p>
+
+> WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
 
 <a id="community"></a>
 
@@ -306,6 +309,78 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.2</b> - Bounded pane recovery, quieter asks, and isolated Rich terminal launches</summary>
+
+- Keep a respawned pane in a 90-second probation window and hold queued work until a new healthy observation confirms recovery.
+- Back off unstable recovery through 30s/60s/120s/5m/10m/30m, then open a circuit after six attempts instead of restarting and writing indefinitely.
+- Bound each Provider runtime to the newest 50 pane-crash records, clear stale pane history, and skip unchanged helper-manifest writes.
+- Repair only stale CCB-managed Claude continuation state without touching authentication; fail closed when the managed Codex app server is unavailable.
+- Move stable reply/cancellation policy into managed project memory so normal asks no longer repeat prompt blocks or require per-step cancel-file polling.
+- Detach CCB Rich WezTerm from the parent TTY and provide a private Wayland XCursor overlay without replacing the selected cursor theme.
+
+</details>
+
+<details>
+<summary><b>v8.5.1</b> - Complete Claude replies, visible Pi execution, and proxy-safe Mobile health checks</summary>
+
+- Aggregate Claude snapshots by assistant message so thinking-only boundaries and tool narration cannot replace the true final reply.
+- Recover missing Claude completion hooks only from exact request, Agent, workspace, time, and session evidence; stalled mid-stream responses fail closed.
+- Execute new Pi asks in the managed visible pane and complete only from the exact bound `agent_settled` message.
+- Keep long Pi runs free from a fixed default terminal timeout and remove the model-facing cancel-file probe that consumed an extra tool call and uncached tokens.
+- Preserve persisted Pi 8.5.0 jobs and the explicit `CCB_PI_EXECUTION_MODE=headless` rollback path.
+- Bypass configured HTTP proxies for local Mobile gateway health checks.
+
+</details>
+
+<details>
+<summary><b>v8.5.0</b> - Exact Pi/OMP completion, self-healing npm runtime, synchronized Mobile activity, and safer managed assets</summary>
+
+- Bound Pi completion to the latest `agent_settled` event and OMP completion to `agent_end.isTerminal=true`, while waiting for process exit and output closure before terminalizing.
+- Failed closed on missing native terminal evidence, missing final outcomes, malformed or truncated JSONL, provider errors, and nonzero exits; terminal OMP `yield` remains a supported successful result.
+- Bootstrapped and repaired the npm-managed Python environment during install, so release runtime dependencies no longer depend on an incomplete system Python fallback; linked Git worktrees remain correctly classified as source installs.
+- Made the sidebar settings launcher recover its release-managed runtime and reliably open Config UI.
+- Synchronized Mobile ask/provider activity with exact server-side state, stable completion notifications, and quieter automatic reconnect behavior.
+- Tightened one-way managed Provider asset projection and added packaged Qoder control skills without exposing user-global state to managed mutation.
+
+</details>
+
+<details>
+<summary><b>v8.4.3</b> - Isolated Provider auth, guaranteed control skills, and reliable Mobile pairing and terminal recovery</summary>
+
+- Isolated mutable authentication, account, session, and storage state inside each managed Provider home for visible and headless execution.
+- Made external credentials one-way inheritance input, so managed refresh or logout cannot modify the user's shell, IDE, another Agent, or another project.
+- Guaranteed packaged `ask` and `ccb-clear` controls for supported managed Agents even when optional skill inheritance is disabled; managed Codex also keeps `reconnect`.
+- Projected optional skills independently so one broken external entry cannot suppress CCB controls or unrelated valid skills.
+- Added a compact, validated Relay pairing QR that fits a 97-column terminal while retaining the owner-only PNG fallback.
+- Made Mobile terminal resize and stream recovery race-safe with synchronized snapshots, clean repaint, and automatic handle renewal.
+
+</details>
+
+<details>
+<summary><b>v8.4.2</b> - Persistent Config UI themes, stable Relay terminal streaming, and safe Provider updates</summary>
+
+- Opened Config UI with the release-managed interpreter even when the sidebar inherited a stale Python path.
+- Added persistent CCB theme selection, including system-default behavior, across Config UI, Rich WezTerm, and sidebar restarts.
+- Stabilized Relay terminal snapshots and incremental updates with bounded backpressure and correct wide-character accounting.
+- Generated owner-only PNG pairing codes when dense payloads cannot render safely in the current terminal.
+- Preserved npm/NVM and Bun package-manager ownership during Provider updates.
+- Reported non-writable system installs and unsafe local registry dependencies without attempting an update.
+
+</details>
+
+<details>
+<summary><b>v8.4.0</b> - Encrypted Mobile Relay, simpler pairing, stable project identity, and Codex reconnect</summary>
+
+- Added end-to-end encrypted CCB Mobile Relay transport with operator-issued one-time invitations, bounded admission, multiplexed streams, and official or self-hosted deployment modes.
+- Moved route selection to `ccb update mobile`: choose Tailscale, a validated private LAN address, CCB Relay, or a self-hosted Relay while the phone only scans a QR code or enters a pairing code.
+- Added trusted in-app Android updates that verify canonical GitHub release metadata, APK size, and SHA-256 before handing installation to the operating system.
+- Preserved project identity when a CCB project is moved or renamed, and added system-following light/dark themes across terminal and configuration surfaces.
+- Integrated opt-in Codex reconnect supervision into managed homes, retaining bounded terminal error evidence and refusing unsafe pane or session mismatches.
+- Kept Relay payloads encrypted end to end; Relay operators can observe connection metadata but not task prompts, replies, terminal content, or transferred files.
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - Unified Provider updates, safe cache retirement, and persistent Config UI access</summary>
 
 - Centralized supported Provider upgrades under `ccb update`, with exact version checks, explicit decline/skip choices, and no automatic restart of active panes.

@@ -1500,3 +1500,53 @@ def test_shutdown_daemon_records_intent_and_terminates_keeper(tmp_path: Path, mo
     assert lifecycle is not None
     assert lifecycle.desired_state == 'stopped'
     assert lifecycle.phase == 'unmounted'
+
+
+def test_keeper_reconciles_moved_project_identity_before_startup_fence(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-moved-runtime'
+    ctx = _context(project_root, 'agent1:codex\n')
+    keeper = ProjectKeeper(
+        project_root,
+        pid=432,
+        clock=lambda: '2026-07-24T00:02:00Z',
+    )
+    foreign_project_id = 'f' * 64
+    keeper._mount_manager.mark_mounted(
+        project_id=foreign_project_id,
+        pid=999999,
+        socket_path=project_root / '.ccb' / 'ccbd' / 'old.sock',
+        generation=8,
+        started_at='2026-07-24T00:00:00Z',
+        keeper_pid=999998,
+        daemon_instance_id='old-daemon',
+    )
+    keeper._lifecycle_store.save(
+        build_lifecycle(
+            project_id=foreign_project_id,
+            occurred_at='2026-07-24T00:00:00Z',
+            desired_state='running',
+            phase='failed',
+            generation=8,
+            keeper_pid=432,
+            socket_path=project_root / '.ccb' / 'ccbd' / 'old.sock',
+        )
+    )
+
+    inspection = keeper._ownership_guard.inspect()
+    lifecycle = keeper_loop.ensure_project_lifecycle(
+        keeper,
+        inspection=inspection,
+        now='2026-07-24T00:02:00Z',
+    )
+    lease = keeper._mount_manager.load_state()
+
+    assert lifecycle.project_id == ctx.project.project_id
+    assert lifecycle.desired_state == 'running'
+    assert lifecycle.phase == 'unmounted'
+    assert lifecycle.keeper_pid == 432
+    assert lifecycle.socket_path == str(ctx.paths.ccbd_socket_path)
+    assert lease is not None
+    assert lease.project_id == foreign_project_id
+    assert lease.mount_state is MountState.UNMOUNTED

@@ -137,6 +137,7 @@ class _GatewayTerminalSession implements TerminalSession {
       await renewal;
       return;
     }
+    _connectionGeneration += 1;
     await _cancelSubscription();
     await _connect(resumeCursor: _resumeCursor);
   }
@@ -335,6 +336,7 @@ class _GatewayTerminalSession implements TerminalSession {
   }
 
   Future<void> _doRenewTerminalHandle() async {
+    _connectionGeneration += 1;
     await _cancelSubscription();
     final handle = await _transport.openTerminal(
       GatewayTerminalOpenRequest.fromCcbTarget(
@@ -423,6 +425,9 @@ bool _isRenewableTerminalError(String code) {
       normalized == 'token_expired' ||
       normalized == 'stale_resume_cursor' ||
       normalized == 'invalid_token' ||
+      normalized == 'closed' ||
+      normalized == 'terminal_output_error' ||
+      normalized == 'terminal_stream_error' ||
       normalized == 'terminal_token_denied';
 }
 

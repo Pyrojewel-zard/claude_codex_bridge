@@ -41,11 +41,21 @@ For an npm install, the outer `@seemseam/ccb` package owns the vendored release:
    Python child on every invocation.
 2. Python accepts npm provenance only when the outer `package.json` matches and
    the executing release is below that package's `.ccb-release` directory.
-3. `ccb update` prints `npm install -g @seemseam/ccb@<target>` and does not
+3. npm `postinstall` downloads the manifest-pinned release and calls only the
+   release installer's restricted `runtime-bootstrap` command. That command
+   creates and validates `.ccb-release/<platform>/.venv`; it must not install
+   global wrappers, skills, settings, tmux assets, tools, or Role Packs.
+4. The npm runner validates the release-local managed Python before launching
+   CCB and repeats the same idempotent bootstrap under the package install lock
+   when postinstall was interrupted, disabled, or left an unhealthy runtime.
+5. A vendored payload is complete only when `VERSION` exactly matches the outer
+   manifest, the `ccb` entrypoint is executable, and the managed Python can
+   import CCB's required TOML, Mobile, and Relay dependencies.
+6. `ccb update` prints `npm install -g @seemseam/ccb@<target>` and does not
    download, extract, install, or relaunch a vendored payload.
-4. Startup update acceptance prints the same command and defers the current
+7. Startup update acceptance prints the same command and defers the current
    prompt window without reporting a successful in-place update.
-5. The npm runner continues requiring exact equality between the manifest
+8. The npm runner continues requiring exact equality between the manifest
    version and vendored `VERSION`; equality is safe because only npm mutates
    that payload.
 
@@ -130,8 +140,20 @@ Responsibilities:
 - Run provider update discovery only when the parent `ccb update` explicitly
   authorizes the internal provider-update flow.
 - Resolve provider executables from the real user environment, identify npm,
-  Homebrew, native, Snap, or custom-wrapper ownership, and update only when a
-  safe owner-specific command exists.
+  Bun, Homebrew, native, Snap, or custom-wrapper ownership, and update only
+  when a safe owner-specific command exists.
+- For npm-owned providers, derive the global install prefix from the resolved
+  package path and pass that exact prefix to npm. A system npm executable must
+  not redirect a user-prefix Provider into `/usr/local`; a non-writable
+  detected prefix is report-only with an actionable ownership message.
+- Treat packages under `<BUN_INSTALL>/install/global/node_modules` as
+  Bun-owned rather than npm-owned. Use the matching Bun executable, preserve
+  the detected `BUN_INSTALL` during execution, and keep a non-writable Bun home
+  report-only.
+- Treat an npm registry release that declares `file:`, `link:`, or `workspace:`
+  runtime dependencies as non-installable from the registry. Report that exact
+  version without executing npm or Bun, so a malformed upstream publication
+  cannot repeatedly damage an existing Provider installation.
 - Use a provider-native read-only latest check only when the CLI exposes a
   documented non-mutating check (currently `droid update --check`); never run
   a mutating updater merely to discover whether an update exists.

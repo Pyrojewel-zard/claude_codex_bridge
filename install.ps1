@@ -634,7 +634,7 @@ function Install-CodexSkills {
   }
 
   Write-Host "Installing inherited Codex skills (PowerShell SKILL.md template)..."
-  Get-ChildItem -Path $skillsSrc -Directory | ForEach-Object {
+  Get-ChildItem -Path $skillsSrc -Directory | Where-Object { $_.Name -ne "reconnect" } | ForEach-Object {
     $skillName = $_.Name
     $srcDir = $_.FullName
     $dstDir = Join-Path $skillsDst $skillName
@@ -693,8 +693,8 @@ function Install-DroidSkills {
     Remove-Item -Recurse -Force (Join-Path $skillsDst $skill) -ErrorAction SilentlyContinue
   }
 
-  Write-Host "Installing Droid/Factory ask skill..."
-  Get-ChildItem -Path $skillsSrc -Directory | Where-Object { $_.Name -eq "ask" } | ForEach-Object {
+  Write-Host "Installing Droid/Factory control skills..."
+  Get-ChildItem -Path $skillsSrc -Directory | ForEach-Object {
     $skillName = $_.Name
     $srcDir = $_.FullName
     $dstDir = Join-Path $skillsDst $skillName
@@ -912,7 +912,7 @@ function Uninstall-Native {
 
   # 3. Remove Claude skills
   $claudeSkillsDir = Join-Path $env:USERPROFILE ".claude\skills"
-  $ccbSkills = @("ask", "ccb-config", "ccb-clear")
+  $ccbSkills = @("ask", "ccb-config", "ccb-clear", "reconnect")
   $legacySkills = @("ccb_config", "ping", "pend", "autonew", "all-plan", "docs", "tp", "tr", "file-op", "review", "continue")
   if (Test-Path $claudeSkillsDir) {
     Write-Host "Removing CCB Claude skills..."
@@ -984,7 +984,7 @@ function Uninstall-Native {
   # 7. Remove Droid skills
   $factoryHome = if ($env:FACTORY_HOME) { $env:FACTORY_HOME } else { Join-Path $env:USERPROFILE ".factory" }
   $droidSkillsDir = Join-Path $factoryHome "skills"
-  $droidSkills = @("ask")
+  $droidSkills = @("ask", "ccb-clear")
   $legacyDroidSkills = @("ping", "pend", "autonew", "all-plan")
   if (Test-Path $droidSkillsDir) {
     Write-Host "Removing CCB Droid skills..."

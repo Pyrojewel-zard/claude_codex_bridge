@@ -240,6 +240,47 @@ void main() {
       await enterController.dispose();
     },
   );
+
+  test('times out a stuck paste and opens a fresh session next time', () async {
+    final view = CcbProjectView.fromProjectViewPayload(demoProjectViewFixture);
+    final agent = view.agentByName('mobile')!;
+    final pasteGate = Completer<void>();
+    final transport = _RecordingTerminalTransport(pasteGate: pasteGate.future);
+    final controller = PaneChatController(
+      transport: transport,
+      operationTimeout: const Duration(milliseconds: 20),
+    );
+
+    await expectLater(
+      controller.send(agent: agent, view: view, body: 'stuck'),
+      throwsA(
+        isA<PaneChatSendException>()
+            .having(
+              (error) => error.stage,
+              'stage',
+              PaneChatSendFailureStage.paste,
+            )
+            .having(
+              (error) => error.inputMayHaveReachedPane,
+              'inputMayHaveReachedPane',
+              isTrue,
+            ),
+      ),
+    );
+    expect(transport.sessions.single.closed, isTrue);
+
+    transport.pasteGate = null;
+    await controller.send(agent: agent, view: view, body: 'fresh');
+
+    expect(transport.sessions, hasLength(2));
+    expect(transport.sessions.last.pasted, ['fresh']);
+    expect(transport.sessions.last.written, [
+      [13],
+    ]);
+
+    pasteGate.complete();
+    await controller.dispose();
+  });
 }
 
 class _RecordingTerminalTransport implements TerminalTransport {
@@ -247,11 +288,13 @@ class _RecordingTerminalTransport implements TerminalTransport {
     this.openError,
     this.pasteError,
     this.writeError,
+    this.pasteGate,
   });
 
   final Object? openError;
   final Object? pasteError;
   final Object? writeError;
+  Future<void>? pasteGate;
   final requests = <TerminalOpenRequest>[];
   final sessions = <_RecordingTerminalSession>[];
 
@@ -266,6 +309,7 @@ class _RecordingTerminalTransport implements TerminalTransport {
       request.attachCommand,
       pasteError: pasteError,
       writeError: writeError,
+      pasteGate: pasteGate,
     );
     sessions.add(session);
     return session;
@@ -277,11 +321,13 @@ class _RecordingTerminalSession implements TerminalSession {
     this.launchedCommand, {
     this.pasteError,
     this.writeError,
+    this.pasteGate,
   });
 
   final _output = StreamController<Uint8List>.broadcast();
   final Object? pasteError;
   final Object? writeError;
+  final Future<void>? pasteGate;
   final written = <List<int>>[];
   final pasted = <String>[];
   var closed = false;
@@ -313,6 +359,7 @@ class _RecordingTerminalSession implements TerminalSession {
       throw error;
     }
     pasted.add(text);
+    await pasteGate;
   }
 
   @override

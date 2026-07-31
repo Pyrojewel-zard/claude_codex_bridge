@@ -36,6 +36,32 @@ void main() {
     await server.close(force: true);
   });
 
+  test('accepts official Relay QR only for the official endpoint', () {
+    final pairing = GatewayPairingPayload.fromJson({
+      'pairing_code': 'official-code',
+      'claim_endpoint': 'https://47.120.71.142/v1/pairing/claim',
+      'route_provider': 'relay',
+      'relay_mode': 'official',
+      'gateway_url': 'https://47.120.71.142',
+      'websocket_url': 'wss://47.120.71.142',
+      'scopes': ['view'],
+    });
+    expect(pairing.relayMode, RelayDeploymentMode.official);
+
+    expect(
+      () => GatewayPairingPayload.fromJson({
+        'pairing_code': 'spoofed-code',
+        'claim_endpoint': 'https://relay.example.test/v1/pairing/claim',
+        'route_provider': 'relay',
+        'relay_mode': 'official',
+        'gateway_url': 'https://relay.example.test',
+        'websocket_url': 'wss://relay.example.test',
+        'scopes': ['view'],
+      }),
+      throwsFormatException,
+    );
+  });
+
   test('claims pairing payload and stores host profile securely', () async {
     final secureStore = _MemorySecureStore();
     final store = GatewayHostProfileStore(secureStore: secureStore);
@@ -179,6 +205,166 @@ void main() {
     );
   });
 
+  test(
+    'connection code round trips complete Relay bootstrap without padding',
+    () {
+      final original = GatewayPairingPayload.fromJson({
+        'pairing_code': 'relay-code',
+        'claim_endpoint': 'https://relay.example.com/v1/pairing/claim',
+        'route_provider': 'relay',
+        'gateway_url': 'https://relay.example.com',
+        'scopes': ['view', 'notify'],
+        'project_id': 'host-relay',
+        'host_id': 'host-relay',
+        'websocket_url': 'wss://relay.example.com',
+        'server_fingerprint': 'sha256:relay-host',
+        'relay_session_id': 'relay-session',
+        'relay_client_private_key_b64': 'bootstrap-private-key',
+        'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+        'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+        'relay_bootstrap_expires_at': '2026-07-25T00:00:00Z',
+        'relay_bootstrap_single_use': true,
+      });
+
+      final code = original.toConnectionCode();
+      final decoded = GatewayPairingPayload.fromConnectionText(code);
+
+      expect(code, startsWith(gatewayPairingConnectionCodePrefix));
+      expect(code, isNot(contains('=')));
+      expect(decoded.toJson(), original.toJson());
+      expect(decoded.relayBootstrap?.sessionId, 'relay-session');
+      expect(decoded.relayBootstrapSingleUse, isTrue);
+    },
+  );
+
+  test('parses compact Relay terminal QR from signed capability fields', () {
+    const expiresAtSeconds = 1785124800;
+    final capabilityPayload = base64Url
+        .encode(
+          utf8.encode(
+            jsonEncode({
+              'typ': 'ccb-relay-rv-v1',
+              'schema_version': 2,
+              'host_id': 'relay-host-compact',
+              'session_id': 'relay-session-compact',
+              'phone_nonce_b64': 'phone-nonce-compact',
+              'aud': 'wss://47.120.71.142',
+              'exp': expiresAtSeconds,
+            }),
+          ),
+        )
+        .replaceAll('=', '');
+    final capability = 'header.$capabilityPayload.signature';
+    final compactQr =
+        '$gatewayCompactRelayQrPrefix'
+        'pair-code|client-private|sha256:host-fingerprint|o|$capability';
+
+    final pairing = GatewayPairingPayload.fromQrText(compactQr);
+
+    expect(pairing.pairingCode, 'pair-code');
+    expect(pairing.routeProvider, RouteProviderKind.relay);
+    expect(pairing.relayMode, RelayDeploymentMode.official);
+    expect(pairing.gatewayUrl, Uri.parse('https://47.120.71.142'));
+    expect(
+      pairing.claimEndpoint,
+      Uri.parse('https://47.120.71.142/v1/pairing/claim'),
+    );
+    expect(pairing.websocketUrl, Uri.parse('wss://47.120.71.142'));
+    expect(pairing.hostId, 'relay-host-compact');
+    expect(pairing.hostFingerprint, 'sha256:host-fingerprint');
+    expect(pairing.scopes, isEmpty);
+    expect(pairing.relayBootstrap?.sessionId, 'relay-session-compact');
+    expect(pairing.relayBootstrap?.clientPrivateKeyB64, 'client-private');
+    expect(pairing.relayBootstrap?.phoneNonceB64, 'phone-nonce-compact');
+    expect(pairing.relayBootstrap?.rendezvousCapability, capability);
+    expect(
+      pairing.relayBootstrapExpiresAt,
+      DateTime.fromMillisecondsSinceEpoch(
+        expiresAtSeconds * Duration.millisecondsPerSecond,
+        isUtc: true,
+      ),
+    );
+    expect(pairing.relayBootstrapSingleUse, isTrue);
+  });
+
+  test('rejects malformed or spoofed compact Relay terminal QR', () {
+    String capabilityFor(String audience) {
+      final payload = base64Url
+          .encode(
+            utf8.encode(
+              jsonEncode({
+                'typ': 'ccb-relay-rv-v1',
+                'host_id': 'relay-host',
+                'session_id': 'relay-session',
+                'phone_nonce_b64': 'phone-nonce',
+                'aud': audience,
+                'exp': 1785124800,
+              }),
+            ),
+          )
+          .replaceAll('=', '');
+      return 'header.$payload.signature';
+    }
+
+    expect(
+      () => GatewayPairingPayload.fromQrText(
+        '${gatewayCompactRelayQrPrefix}too|few|fields',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromQrText(
+        '$gatewayCompactRelayQrPrefix'
+        'code|private|fingerprint|x|${capabilityFor('wss://47.120.71.142')}',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromQrText(
+        '$gatewayCompactRelayQrPrefix'
+        'code|private|fingerprint|o|'
+        '${capabilityFor('wss://relay.example.test')}',
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('connection parser retains raw QR JSON compatibility', () {
+    final rawJson = jsonEncode({
+      'pairing_code': 'lan-code',
+      'claim_endpoint': '$baseUrl/v1/pairing/claim',
+      'route_provider': 'lan',
+      'gateway_url': baseUrl.toString(),
+      'scopes': ['view'],
+    });
+
+    final decoded = GatewayPairingPayload.fromConnectionText(rawJson);
+
+    expect(decoded.pairingCode, 'lan-code');
+    expect(decoded.routeProvider, RouteProviderKind.lan);
+  });
+
+  test('connection parser rejects malformed and oversized input', () {
+    expect(
+      () => GatewayPairingPayload.fromConnectionText('ccb1_%%%'),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromConnectionText('ccb1__w'),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromConnectionText('[]'),
+      throwsFormatException,
+    );
+    expect(
+      () => GatewayPairingPayload.fromConnectionText(
+        List.filled(16 * 1024 + 1, 'x').join(),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('parses mobile update pairing QR payload JSON', () {
     final payload = GatewayPairingPayload.fromQrText(
       jsonEncode({
@@ -214,6 +400,62 @@ void main() {
       'file_upload',
       'file_download',
     });
+  });
+
+  test('durable relay profile does not retain one-time QR bootstrap', () {
+    final pairing = GatewayPairingPayload.fromQrText(
+      jsonEncode({
+        'pairing_code': 'one-time-relay-code',
+        'claim_endpoint': 'https://relay.seemlab.top/v1/pairing/claim',
+        'route_provider': 'relay',
+        'gateway_url': 'https://relay.seemlab.top',
+        'host_id': 'rhost-demo',
+        'websocket_url': 'wss://relay.seemlab.top',
+        'server_fingerprint': 'sha256:host-demo',
+        'relay_session_id': 'pair-session-demo',
+        'relay_client_private_key_b64': 'bootstrap-private-key',
+        'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+        'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+        'relay_bootstrap_expires_at': '2026-07-23T00:00:00Z',
+        'relay_bootstrap_single_use': true,
+        'scopes': ['view', 'notify'],
+      }),
+    );
+    final paired = GatewayPairedHost.fromClaimJson(
+      {
+        'device_token': 'device-secret',
+        'device': {'device_id': 'device-demo', 'project_id': 'project-demo'},
+        'host_profile': {
+          'host_id': 'rhost-demo',
+          'device_id': 'device-demo',
+          'project_id': 'project-demo',
+          'route_provider': 'relay',
+          'gateway_url': 'https://relay.seemlab.top',
+          'websocket_url': 'wss://relay.seemlab.top',
+          'server_fingerprint': 'sha256:host-demo',
+          'relay_access_grant': 'ccb-relay-access-v1.payload.signature',
+          'scopes': ['view', 'notify'],
+          'capabilities': ['relay_tunnel', 'relay_reconnect'],
+        },
+      },
+      pairing: pairing,
+      relayPhoneAuthPrivateKeyB64: 'phone-auth-private-key',
+    );
+
+    final secureJson = jsonEncode(paired.toSecureJson());
+    final restored = GatewayPairedHost.fromSecureJson(
+      jsonDecode(secureJson) as Map<String, Object?>,
+    );
+
+    expect(restored.profile.routeProvider.relayAccess, isNotNull);
+    expect(restored.profile.routeProvider.relayBootstrap, isNull);
+    expect(secureJson, contains('ccb-relay-access-v1.payload.signature'));
+    expect(secureJson, contains('phone-auth-private-key'));
+    expect(secureJson, isNot(contains('one-time-relay-code')));
+    expect(secureJson, isNot(contains('pair-session-demo')));
+    expect(secureJson, isNot(contains('bootstrap-private-key')));
+    expect(secureJson, isNot(contains('bootstrap-phone-nonce')));
+    expect(secureJson, isNot(contains('ccb-relay-rv-v1.payload.signature')));
   });
 
   test('claims relay pairing and stores relay route metadata', () async {

@@ -361,6 +361,7 @@ def test_build_agent_payload_surfaces_provider_auth_recovery_block() -> None:
         provider='codex',
         reconcile_state='blocked',
         restart_count=1,
+        recovery_failure_count=1,
         last_reconcile_at='2026-04-22T00:00:02Z',
         last_failure_reason=detail,
     )
@@ -380,6 +381,7 @@ def test_build_agent_payload_surfaces_provider_auth_recovery_block() -> None:
     assert payload['health'] == 'provider-auth-revoked'
     assert payload['diagnostics']['reconcile_state'] == 'blocked'
     assert payload['diagnostics']['restart_count'] == 1
+    assert payload['diagnostics']['recovery_failure_count'] == 1
     assert payload['diagnostics']['last_reconcile_at'] == '2026-04-22T00:00:02Z'
     assert payload['diagnostics']['last_failure_reason'] == detail
 

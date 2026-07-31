@@ -14,7 +14,10 @@ from provider_backends.native_cli_support.launcher import (
 )
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import provider_start_parts
+from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
+
+from .skills import materialize_qoder_skills
 
 
 _CONFIG_OPTION = "--config-dir"
@@ -133,6 +136,13 @@ def _build_start_cmd(
         launch_context[f"{provider}_managed_config_arg"] = True
         if managed_config_preparer is not None:
             managed_config_preparer(config_dir)
+    materialize_qoder_skills(
+        provider=provider,
+        config_dir=config_dir,
+        profile=load_resolved_provider_profile(Path(runtime_dir)),
+        project_root=_optional_path(launch_context.get("project_root")),
+        agent_name=str(launch_context.get("agent_name") or "").strip() or None,
+    )
     launch_context[f"{provider}_auto_permission_enabled"] = bool(command.auto_permission)
     launch_context[f"{provider}_managed_permission_arg"] = not any(
         _has_option(parts, option) for option in _PERMISSION_OPTIONS
@@ -266,6 +276,11 @@ def _path_from_prepared(
     if not raw:
         raise RuntimeError(f"{provider} launch requires {key} in prepared_state")
     return Path(raw).expanduser()
+
+
+def _optional_path(value: object) -> Path | None:
+    raw = str(value or "").strip()
+    return Path(raw).expanduser() if raw else None
 
 
 def _qoder_launch_config(provider: str) -> NativeCliLaunchConfig:

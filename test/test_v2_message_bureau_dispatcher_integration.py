@@ -709,6 +709,113 @@ def test_dispatcher_delivers_cancelled_reply_when_partial_output_exists(
     assert mailbox.pending_reply_count == 1
 
 
+def test_dispatcher_salvages_exact_provider_reply_before_cancellation(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-cancel-hook-salvage'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('claude', 'codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:20Z')
+
+    job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='cancel after Claude already finished',
+            task_id='task-cancel-hook-salvage',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'artifact_reply': True},
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    captured = replace(
+        _decision(reply='full reply from exact Stop hook'),
+        diagnostics={
+            'completion_source': 'hook_artifact',
+            'hook_event_name': 'Stop',
+            'cancel_reply_salvaged': True,
+            'cancel_reply_source': 'exact_hook_artifact',
+        },
+    )
+    cancelled: list[str] = []
+
+    class CapturingExecution:
+        def capture_cancel_evidence(self, current_job_id: str):
+            assert current_job_id == job_id
+            return captured
+
+        def cancel(self, current_job_id: str) -> None:
+            cancelled.append(current_job_id)
+
+    dispatcher._execution_service = CapturingExecution()
+
+    dispatcher.cancel(job_id)
+
+    terminal_job = dispatcher.get(job_id)
+    assert terminal_job is not None
+    assert terminal_job.status is JobStatus.CANCELLED
+    terminal = dict(terminal_job.terminal_decision or {})
+    diagnostics = dict(terminal['diagnostics'])
+    assert diagnostics['cancel_reply_salvaged'] is True
+    assert diagnostics['cancel_reply_source'] == 'exact_hook_artifact'
+    assert diagnostics['captured_completion_status'] == 'completed'
+    assert diagnostics['hook_event_name'] == 'Stop'
+    artifact = dict(diagnostics['reply_artifact'])
+    artifact_path = Path(str(artifact['path']))
+    assert artifact_path.read_text(encoding='utf-8') == 'full reply from exact Stop hook'
+    assert artifact['bytes'] > 0
+    assert cancelled == [job_id]
+
+
+def test_dispatcher_labels_forced_empty_cancel_artifact_as_no_captured_reply(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-cancel-empty-artifact'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('claude', 'codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:20Z')
+
+    job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='cancel without captured output',
+            task_id='task-cancel-empty-artifact',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'artifact_reply': True},
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    dispatcher.cancel(job_id)
+
+    terminal_job = dispatcher.get(job_id)
+    assert terminal_job is not None
+    terminal = dict(terminal_job.terminal_decision or {})
+    diagnostics = dict(terminal['diagnostics'])
+    assert diagnostics['artifact_empty_no_provider_reply'] is True
+    assert diagnostics['artifact_instruction'] == 'no_provider_reply_captured'
+    assert diagnostics['no_captured_reply'] is True
+    assert 'no captured claude provider reply' in str(terminal['reply'])
+    artifact = dict(diagnostics['reply_artifact'])
+    assert artifact['bytes'] == 0
+
+
 def test_dispatcher_cancelled_chain_child_submits_one_parent_continuation_without_restart(
     tmp_path: Path,
 ) -> None:
@@ -1218,7 +1325,7 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
             project_id=ctx.project_id,
             to_agent='codex',
             from_actor='user',
-            body='review with help',
+            body='review with help\n\nCCB_REPLY_MODE: compact',
             task_id='task-callback',
             reply_to=None,
             message_type='ask',
@@ -1232,7 +1339,7 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
             project_id=ctx.project_id,
             to_agent='claude',
             from_actor='codex',
-            body='collect evidence',
+            body='collect evidence\n\nCCB_REPLY_MODE: silent',
             task_id='task-callback',
             reply_to=None,
             message_type='ask',
@@ -1243,6 +1350,8 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
     assert edge is not None
     assert edge.parent_job_id == parent_job_id
+    assert edge.diagnostics['parent_body'] == 'review with help'
+    assert edge.diagnostics['child_body'] == 'collect evidence'
 
     dispatcher.complete(parent_job_id, _decision(reply='delegated to claude'))
     parent_job = dispatcher.get(parent_job_id)
@@ -3997,6 +4106,142 @@ def test_job_heartbeat_terminalizes_after_three_internal_no_progress_intervals_w
     assert dispatcher.get(job_id).status is JobStatus.INCOMPLETE
     assert MessageStore(layout).list_all()[-1].message_state is MessageState.INCOMPLETE
     assert heartbeat_path.exists() is False
+
+
+def test_dispatcher_uses_late_visible_text_from_same_claude_message_fixture(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from provider_backends.claude.comm_runtime.parsing import structured_event
+    from provider_execution import claude as claude_adapter_module
+
+    project_root = tmp_path / 'repo-claude-late-final'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    session_path = tmp_path / 'claude-late-final.jsonl'
+    fixture_path = (
+        Path(__file__).parent
+        / 'fixtures'
+        / 'claude'
+        / 'completion-thinking-end-turn-then-final.jsonl'
+    )
+    expected_final = (
+        'Final review: all requested checks passed. No blocking issues remain.'
+    )
+    job_id = ''
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%2'
+
+    class FakeSession:
+        data = None
+        claude_session_path = str(session_path)
+        claude_projects_root = None
+        work_dir = str(layout.workspace_path('claude'))
+
+        def ensure_pane(self):
+            return True, '%2'
+
+    class FixtureReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            raw = fixture_path.read_text(encoding='utf-8').replace(
+                '__REQ_ID__',
+                job_id,
+            )
+            self._events = []
+            for line in raw.splitlines():
+                event = structured_event(json.loads(line))
+                if event is not None:
+                    self._events.append(event)
+
+        def set_preferred_session(self, selected_path) -> None:
+            assert Path(selected_path) == session_path
+
+        def capture_state(self):
+            return {'session_path': str(session_path), 'index': 0}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {
+                **state,
+                'session_path': str(session_path),
+                'index': index + 1,
+            }
+
+    monkeypatch.setattr(
+        claude_adapter_module,
+        'load_project_session',
+        lambda work_dir, instance=None: FakeSession(),
+    )
+    monkeypatch.setattr(
+        claude_adapter_module,
+        'get_backend_for_session',
+        lambda data: FakeBackend(),
+    )
+    monkeypatch.setattr(claude_adapter_module, 'ClaudeLogReader', FixtureReader)
+
+    execution_service = ExecutionService(
+        build_default_execution_registry(),
+        clock=lambda: '2026-07-28T00:49:00Z',
+    )
+    provider_catalog = build_default_provider_catalog()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        completion_tracker=CompletionTrackerService(config, provider_catalog),
+        provider_catalog=provider_catalog,
+        clock=lambda: '2026-07-28T00:49:00Z',
+    )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='review the requested changes',
+            task_id='task-claude-late-final',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'artifact_reply': True},
+        )
+    )
+    message = MessageStore(layout).list_all()[-1]
+    job_id = receipt.jobs[0].job_id
+
+    assert dispatcher.tick()[0].job_id == job_id
+    completed = dispatcher.poll_completions()
+
+    assert [job.job_id for job in completed] == [job_id]
+    terminal_job = dispatcher.get(job_id)
+    assert terminal_job is not None
+    assert terminal_job.status is JobStatus.COMPLETED
+    replies = ReplyStore(layout).list_message(message.message_id)
+    assert len(replies) == 1
+    terminal = dict(terminal_job.terminal_decision or {})
+    artifact = dict(terminal['diagnostics']['reply_artifact'])
+    assert replies[0].reply_artifact == artifact
+    artifact_text = Path(str(artifact['path'])).read_text(encoding='utf-8')
+    assert artifact_text == expected_final
+    assert 'Let me read' not in artifact_text
+    assert 'Let me verify' not in artifact_text
+
+    assert dispatcher.poll_completions() == ()
+    assert len(ReplyStore(layout).list_message(message.message_id)) == 1
+    assert dispatcher.trace(job_id)['reply_count'] == 1
 
 
 def test_dispatcher_delivers_failed_reply_to_sender_when_claude_hits_anchored_api_error(

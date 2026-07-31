@@ -16,6 +16,8 @@ from provider_backends.codex.session_authority import (
 )
 from provider_profiles.codex_home_config import codex_api_authority
 
+from ..session_paths import session_file_for_runtime_dir
+
 
 def build_start_cmd(
     command,
@@ -144,6 +146,12 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
     if codex_api_authority(profile) is not None:
         explicit_env.pop('OPENAI_BASE_URL', None)
         explicit_env.pop('OPENAI_API_BASE', None)
+    session_file = session_file_for_runtime_dir(runtime_dir)
+    session_binding_env = (
+        {'CCB_SESSION_FILE': str(session_file)}
+        if session_file is not None
+        else {}
+    )
     return {
         **provider_user_session_env(),
         **inherited_api_env,
@@ -154,6 +162,7 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
         'CODEX_OUTPUT_FIFO': str(artifacts.output_fifo),
         'CODEX_TERMINAL': 'tmux',
         **codex_home_overrides,
+        **session_binding_env,
         **caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id),
     }
 

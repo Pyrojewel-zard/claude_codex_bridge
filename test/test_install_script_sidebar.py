@@ -674,6 +674,26 @@ def test_macos_install_smoke_uses_prebuilt_sidebar_helper() -> None:
     assert 'bin/build-ccb-rs-helper' in text
 
 
+def test_wsl_workflows_pin_python_inside_wsl_shells() -> None:
+    expected = 'export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python'
+    tests_workflow = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
+    real_workflow = Path('.github/workflows/ccbd-real-platform.yml').read_text(
+        encoding='utf-8',
+    )
+
+    smoke_step = tests_workflow.split(
+        '- name: Smoke ccb startup from /mnt/c in WSL',
+        1,
+    )[1].split('- name: Run tests in WSL with tmux', 1)[0]
+    communication_step = real_workflow.split(
+        '- name: Communication matrix in WSL mounted checkout',
+        1,
+    )[1].split('- name: Short soak in WSL mounted checkout', 1)[0]
+
+    assert expected in smoke_step
+    assert expected in communication_step
+
+
 def test_sidebar_release_workflow_publishes_linux_artifact() -> None:
     text = Path('.github/workflows/release-sidebar.yml').read_text(encoding='utf-8')
 
@@ -694,6 +714,7 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
     assert f'default: "v{version}"' in text
+    assert 'test "$TAG_NAME" = "v$version"' in text
     assert 'os: ubuntu-22.04' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
     assert 'rustup target add x86_64-apple-darwin aarch64-apple-darwin' in text

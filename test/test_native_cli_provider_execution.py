@@ -1,30 +1,42 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import pytest
-
 from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope
 from completion.models import CompletionItemKind, CompletionSourceKind, CompletionStatus
+from provider_backends.copilot.execution import _build_env as build_copilot_env
 from provider_backends.grok import home as grok_home
 from provider_backends.grok.execution import (
     _grok_session_id_for_job,
-    build_headless_execution_adapter,
     observe_grok_output,
 )
-from provider_backends.copilot.execution import _build_env as build_copilot_env
-from provider_backends.native_cli_support import NativeCliExecutionRequest
+from provider_backends.grok.execution import (
+    build_headless_execution_adapter as build_grok_headless_execution_adapter,
+)
+from provider_backends.native_cli_support import (
+    NativeCliExecutionConfig,
+    NativeCliExecutionRequest,
+)
+from provider_backends.native_cli_support.execution import _native_cli_env
+from provider_backends.pi.execution import (
+    build_headless_execution_adapter as build_pi_headless_execution_adapter,
+)
 from provider_backends.qoder.execution import (
     _build_command as build_qoder_command,
+)
+from provider_backends.qoder.execution import (
     _qoder_session_id_for_job,
     observe_qoder_output,
 )
 from provider_backends.qoderclicn.execution import (
     _build_command as build_qoderclicn_command,
+)
+from provider_backends.qoderclicn.execution import (
     _qoderclicn_session_id_for_job,
     observe_qoderclicn_output,
 )
@@ -32,7 +44,6 @@ from provider_backends.zai.execution import observe_zai_output
 from provider_core.pathing import session_filename_for_agent
 from provider_core.registry import build_default_backend_registry
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
-
 
 PROVIDERS = ("qwen", "qoder", "qoderclicn", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
 STRUCTURED_PROVIDERS = ("qwen", "cursor", "copilot", "pi", "omp")
@@ -96,6 +107,8 @@ def _write_session(provider: str, work_dir: Path) -> None:
 
 
 def _adapter(provider: str):
+    if provider == "pi":
+        return build_pi_headless_execution_adapter()
     backend = build_default_backend_registry(include_optional=True, include_test_doubles=False).get(provider)
     assert backend is not None
     assert backend.execution_adapter is not None
@@ -172,6 +185,14 @@ def test_qoderclicn_headless_command_does_not_repeat_explicit_options(
 
 
 def _install_stub(monkeypatch, provider: str, *, mode: str = "") -> None:
+    if provider == "kiro":
+        # Kiro's managed storage contract intentionally fails closed on
+        # macOS. These generic adapter tests exercise the supported private
+        # file-store path; the macOS rejection has dedicated coverage.
+        monkeypatch.setattr(
+            "provider_backends.native_cli_support.home.platform.system",
+            lambda: "Linux",
+        )
     stub = Path("test/stubs/provider_stub.py").resolve()
     monkeypatch.setenv(f"{provider.upper()}_START_CMD", f"{sys.executable} {stub} --provider {provider}")
     if mode:
@@ -215,9 +236,66 @@ def test_copilot_headless_execution_uses_agent_local_home_and_cache(tmp_path: Pa
     assert env == {
         'COPILOT_HOME': str(state_dir / 'home'),
         'COPILOT_CACHE_HOME': str(state_dir / 'data' / 'cache'),
+        'COPILOT_DISABLE_KEYTAR': '1',
     }
     assert (state_dir / 'home').is_dir()
     assert (state_dir / 'data' / 'cache').is_dir()
+
+
+def test_native_headless_env_overrides_global_home_and_detaches_legacy_link(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    managed_home = tmp_path / "managed-home"
+    managed_home.symlink_to(outside, target_is_directory=True)
+    request = NativeCliExecutionRequest(
+        provider="qwen",
+        job=_job("qwen", work_dir),
+        work_dir=work_dir,
+        session_data={"qwen_home": str(managed_home)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+    config = NativeCliExecutionConfig(
+        provider="qwen",
+        session_filename=".qwen-session",
+        command_builder=lambda _request: ["qwen"],
+        env_builder=lambda _request: {"HOME": str(tmp_path / "global-home")},
+    )
+
+    env = _native_cli_env(config, request)
+
+    assert env["HOME"] == str(managed_home)
+    assert env["XDG_CONFIG_HOME"] == str(managed_home / ".config")
+    assert env["XDG_DATA_HOME"] == str(managed_home.parent / "data")
+    assert env["XDG_STATE_HOME"] == str(managed_home / ".local" / "state")
+    assert env["XDG_CACHE_HOME"] == str(managed_home / ".cache")
+    assert managed_home.is_dir() and not managed_home.is_symlink()
+    assert not any(outside.iterdir())
+
+
+def test_cursor_headless_disables_os_credential_store(tmp_path: Path) -> None:
+    from provider_backends.cursor.execution import _build_env as build_cursor_env
+
+    work_dir = tmp_path / "repo-cursor"
+    work_dir.mkdir()
+    managed_home = tmp_path / "managed-cursor"
+    request = NativeCliExecutionRequest(
+        provider="cursor",
+        job=_job("cursor", work_dir),
+        work_dir=work_dir,
+        session_data={"cursor_home": str(managed_home)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+
+    env = build_cursor_env(request)
+
+    assert env["HOME"] == str(managed_home)
+    assert env["AGENT_CLI_CREDENTIAL_STORE"] == "file"
 
 
 def test_qoder_headless_command_uses_documented_print_mode_and_uuid(tmp_path: Path) -> None:
@@ -466,13 +544,20 @@ def test_grok_provider_adapter_projects_system_login_and_uses_uuid_session(
     _write_session("grok", work_dir)
     _install_stub(monkeypatch, "grok")
 
-    adapter = build_headless_execution_adapter()
+    adapter = build_grok_headless_execution_adapter()
     job = _job("grok", work_dir)
     submission = adapter.start(job, context=_runtime_context("grok", work_dir), now="2026-06-13T00:00:00Z")
 
     managed_home = work_dir / ".ccb" / "agents" / "grok1" / "provider-state" / "grok" / "home"
     assert (managed_home / ".grok" / "auth.json").read_text(encoding="utf-8") == '{"token":"system-login"}\n'
     assert (managed_home / ".grok" / "config.toml").read_text(encoding="utf-8") == 'model = "grok-test"\n'
+    (managed_home / ".grok" / "auth.json").write_text(
+        '{"token":"managed-login"}\n',
+        encoding="utf-8",
+    )
+    assert (source_grok / "auth.json").read_text(encoding="utf-8") == (
+        '{"token":"system-login"}\n'
+    )
     grok_session_id = _grok_session_id_for_job(job.job_id)
     assert grok_session_id != job.job_id
     assert str(uuid.UUID(grok_session_id)) == grok_session_id
@@ -491,7 +576,7 @@ def test_grok_provider_adapter_requires_native_terminal_event(monkeypatch, tmp_p
     _write_session("grok", work_dir)
     _install_stub(monkeypatch, "grok", mode="no_terminal")
 
-    adapter = build_headless_execution_adapter()
+    adapter = build_grok_headless_execution_adapter()
     submission = adapter.start(
         _job("grok", work_dir),
         context=_runtime_context("grok", work_dir),
@@ -513,7 +598,7 @@ def test_grok_provider_adapter_reports_native_cancelled_end(monkeypatch, tmp_pat
     _write_session("grok", work_dir)
     _install_stub(monkeypatch, "grok", mode="cancelled")
 
-    adapter = build_headless_execution_adapter()
+    adapter = build_grok_headless_execution_adapter()
     submission = adapter.start(
         _job("grok", work_dir),
         context=_runtime_context("grok", work_dir),
@@ -709,8 +794,8 @@ def test_native_cli_structured_tool_event_does_not_terminalize_before_final(tmp_
     assert terminal.decision is not None
     assert terminal.decision.status is CompletionStatus.INCOMPLETE
     expected_reason = (
-        "grok_native_terminal_missing"
-        if provider == "grok"
+        f"{provider}_native_terminal_missing"
+        if provider in {"grok", "pi", "omp"}
         else f"{provider}_run_finished:tool_calls"
     )
     assert terminal.decision.reason == expected_reason

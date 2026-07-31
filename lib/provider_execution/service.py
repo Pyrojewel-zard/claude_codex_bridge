@@ -4,22 +4,9 @@ from threading import RLock
 
 from ccbd.api_models import JobRecord
 from completion.models import CompletionDecision
-
 from fault_injection import FaultInjectionService
+
 from .base import ProviderRuntimeContext, ProviderSubmission
-from .registry import ProviderExecutionRegistry
-from .state_store import ExecutionStateStore
-from .service_state import ExecutionServiceRuntimeState, ExecutionServiceStateMixin
-from .service_runtime import (
-    ExecutionRestoreResult,
-    ExecutionUpdate,
-    acknowledge,
-    acknowledge_item,
-    persist_submission,
-    poll_updates,
-    restore_submission,
-    active_runtime_snapshots,
-)
 from .common import interrupt_and_clear_runtime_target
 from .followups import (
     ActiveFollowupCapability,
@@ -27,6 +14,19 @@ from .followups import (
     ActiveFollowupResult,
     unsupported_active_followup_capability,
 )
+from .registry import ProviderExecutionRegistry
+from .service_runtime import (
+    ExecutionRestoreResult,
+    ExecutionUpdate,
+    acknowledge,
+    acknowledge_item,
+    active_runtime_snapshots,
+    persist_submission,
+    poll_updates,
+    restore_submission,
+)
+from .service_state import ExecutionServiceRuntimeState, ExecutionServiceStateMixin
+from .state_store import ExecutionStateStore
 
 
 class ExecutionService(ExecutionServiceStateMixin):
@@ -93,6 +93,26 @@ class ExecutionService(ExecutionServiceStateMixin):
         if submission is not None:
             adapter = self._registry.get(submission.provider)
             _cancel_submission(adapter, submission)
+
+    def capture_cancel_evidence(self, job_id: str) -> CompletionDecision | None:
+        """Best-effort provider evidence capture before destructive cancellation."""
+        with self._active_transition_lock:
+            submission = self._active.get(job_id)
+            if submission is None:
+                return None
+            adapter = self._registry.get(submission.provider)
+            capture = getattr(adapter, "capture_cancel_evidence", None) if adapter is not None else None
+            if not callable(capture):
+                return None
+            try:
+                evidence = capture(submission, now=self._clock())
+            except Exception:
+                return None
+            if not isinstance(evidence, CompletionDecision):
+                return None
+            if not evidence.terminal or not str(evidence.reply or "").strip():
+                return None
+            return evidence
 
     def finish(self, job_id: str) -> None:
         with self._active_transition_lock:

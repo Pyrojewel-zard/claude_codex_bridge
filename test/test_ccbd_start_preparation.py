@@ -539,6 +539,6 @@ def test_prepare_start_agents_uses_hard_role_effective_command_for_claude_projec
     assert observed_auto_permission == [False]
     managed_home = paths.agent_provider_state_dir('reviewer', 'claude') / 'home'
     settings = json.loads((managed_home / '.claude' / 'settings.json').read_text(encoding='utf-8'))
-    trust = json.loads((managed_home / '.claude.json').read_text(encoding='utf-8'))
+    trust = json.loads((managed_home / '.claude' / '.claude.json').read_text(encoding='utf-8'))
     assert 'skipDangerousModePermissionPrompt' not in settings
     assert 'bypassPermissionsModeAccepted' not in trust

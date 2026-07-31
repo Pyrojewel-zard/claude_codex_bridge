@@ -23,6 +23,9 @@ projects, but high-intensity multi-project usage causes idle resource pressure:
   meaningful state change.
 - Provider-local durable state, especially Codex session JSONL and SQLite WALs,
   can grow independently from CCB's own runtime metadata.
+- A false-success pane recovery loop can turn a provider startup failure into
+  continuous crash-log and atomic-state writes unless retry, stability, and
+  circuit-breaker boundaries are explicit.
 
 This plan focuses on idle behavior. Active task throughput and response
 latency remain important, but idle safety should not require users to kill every
@@ -82,9 +85,14 @@ Local diagnosis on 2026-06-23 found:
     `activity.json`, and `models_cache.json`
 - Large disk usage came from per-agent `provider-state/codex/home` and shared
   plugin bundles; not all of that is continuous write pressure.
+- On 2026-07-30, a separate active failure loop was measured at about 71.9 GB
+  of physical writes over 70.6 hours with 19,602 pane crash logs. Recovery
+  stability, backoff/circuit breaking, and online crash-log retention are now
+  implemented in the working tree; this is distinct from ordinary idle
+  heartbeat pressure.
 
 ## Status
 
-Planning. Corrected Codex diagnostic SQLite hardening is implemented in the
-working tree after the partial `v7.6.14` mitigation; broader idle CPU, memory,
-JSON write, heartbeat, and provider suspend work remains in planning.
+In progress. Corrected Codex diagnostic SQLite hardening and pane-crash storm
+containment are implemented in the working tree; broader idle CPU, memory,
+heartbeat, and provider suspend work remains in planning.

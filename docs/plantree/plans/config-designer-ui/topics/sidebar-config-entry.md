@@ -53,7 +53,9 @@ config ui: http://127.0.0.1:49231/?token=...
 The cross-platform launch path must not treat successful process creation as
 proof that a browser opened. On WSL it tries the host-browser path first
 (`wslview`, `cmd.exe`, then `explorer.exe`) before a Linux desktop fallback; on
-macOS it prefers `open`. Each native opener is checked for an immediate
+macOS it prefers `open`; on Linux it prefers the configured browser launchers
+(`sensible-browser`, then `x-www-browser`) before generic desktop dispatch
+(`xdg-open`, then `gio open`). Each native opener is checked for an immediate
 non-zero exit before the next fallback is attempted. The tmux namespace also
 refreshes `BROWSER`, desktop-session IPC, and WSL/Windows Terminal variables so
 the sidebar child receives the same browser transport context as the user's
@@ -106,3 +108,15 @@ Date: 2026-07-22
 - A real source-wrapper launch from `/home/bfly/yunwei/test_ccb2` again emitted
   the URL through a pipe, served the token-authorized project session, returned
   HTTP `403` without the token, and shut down cleanly.
+
+Date: 2026-07-28
+
+- Fixed the sidebar handoff to emit the authenticated launch URL while keeping
+  `ConfigUiHandle.summary` token-free for diagnostics.
+- Reproduced a Linux `xdg-open` false positive that printed dispatch errors but
+  exited `0`; configured browser launchers now run before generic desktop
+  dispatch.
+- Real source-wrapper and Chrome validation opened the token-authorized panel,
+  returned HTTP `200`, and completed a `Validate config` click through
+  `/api/validate`.
+- Focused Python config UI suite: `29 passed`; Rust sidebar suite: `81 passed`.

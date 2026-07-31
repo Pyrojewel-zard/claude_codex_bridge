@@ -77,9 +77,33 @@ def structured_event(entry: dict[str, Any]) -> dict[str, Any] | None:
 
 def _assistant_stop_reason(entry: dict[str, Any]) -> str | None:
     message = entry.get("message")
-    if not isinstance(message, dict):
-        return None
-    return _optional_text(message.get("stop_reason"), lowercase=False)
+    if isinstance(message, dict):
+        return _optional_text(message.get("stop_reason"), lowercase=False)
+    payload = entry.get("payload")
+    if isinstance(payload, dict):
+        return _optional_text(
+            payload.get("stop_reason") or payload.get("stopReason"),
+            lowercase=False,
+        )
+    return None
+
+
+def _assistant_message_id(entry: dict[str, Any]) -> str | None:
+    message = entry.get("message")
+    if isinstance(message, dict):
+        message_id = _optional_text(
+            message.get("id") or message.get("messageId") or message.get("message_id"),
+            lowercase=False,
+        )
+        if message_id:
+            return message_id
+    payload = entry.get("payload")
+    if isinstance(payload, dict):
+        return _optional_text(
+            payload.get("id") or payload.get("messageId") or payload.get("message_id"),
+            lowercase=False,
+        )
+    return None
 
 
 def _is_assistant_non_text_entry(entry: dict[str, Any]) -> bool:
@@ -173,14 +197,22 @@ def _event_record(
         entry.get("subagent_id") or entry.get("agentId") or entry.get("agent_id"),
         lowercase=False,
     )
+    # Claude 2.1.x writes ``slug`` as the human-readable session name on
+    # ordinary top-level records.  It is not subagent identity.
     subagent_name = _optional_text(
-        entry.get("subagent_name") or entry.get("slug") or entry.get("agentName"),
+        entry.get("subagent_name") or entry.get("agentName"),
         lowercase=False,
     )
     if subagent_id:
         event["subagent_id"] = subagent_id
     if subagent_name:
         event["subagent_name"] = subagent_name
+    if bool(entry.get("isSidechain")):
+        event["is_sidechain"] = True
+    if role == "assistant":
+        message_id = _assistant_message_id(entry)
+        if message_id:
+            event["message_id"] = message_id
     return event
 
 

@@ -434,6 +434,13 @@ Contract:
 - Config rendering and recovery must preserve the user-facing `key/url` shortcut
   instead of expanding it back into verbose provider-profile API env or nested
   `api` tables.
+- Changing API authority for an existing managed agent is provider-startup
+  configuration, not a hot-reload mutation. Config UI must save the active
+  config, skip the non-dry-run reload for a `replace_agent` plan, and record a
+  restart-required intent. The current provider process remains unchanged until
+  the user next starts CCB; that foreground start must create a fresh provider
+  process and managed provider home from the saved `key/url` or profile
+  authority.
 
 For Codex official-login users who do not have an API key, `key/url` is not
 available. A project with multiple concurrent Codex agents must not copy one

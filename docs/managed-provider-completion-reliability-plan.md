@@ -24,8 +24,13 @@ This plan applies to:
 - managed `codex`
 - managed `claude`
 - managed `gemini`
+- managed `pi`
+- managed `omp`
 
-in pane-backed mode only.
+in pane-backed mode. Pi asks execute in the managed visible pane and use a
+provider-local lifecycle sidecar. OMP asks use per-job structured one-shot
+subprocesses owned by their managed pane-backed agents. Pi's 8.5.0 one-shot
+path remains a persisted-job compatibility path and explicit rollback mode.
 
 This document does not replace:
 
@@ -644,6 +649,11 @@ Default rule:
 - Claude and Gemini hook readers must also normalize legacy or malformed
   `completed` + empty-reply hook events into terminal `incomplete` decisions
   with `empty_reply`, `empty_provider_reply`, and a human-readable diagnosis.
+  Claude first holds an attributable empty Stop-hook as provisional evidence
+  for a bounded final-text grace window, because Claude may persist a
+  thinking-only `end_turn` snapshot before materializing the visible text for
+  the same API message. A visible final that arrives during that window wins;
+  only an unchanged empty hook after the grace may become `incomplete`.
 - Protocol-turn providers such as managed Codex must normalize
   `task_complete` boundaries with no boundary reply and no prior
   assistant-visible reply evidence into terminal `incomplete` decisions with
@@ -701,6 +711,71 @@ facts and requires activation in the new top-level session. Pane dispatch,
 elapsed time, apparent FIFO order, or an idle prompt may not substitute for
 exact queued-command identity.
 
+Claude session-name `slug` is display metadata, not subagent identity.
+Top-level records with `isSidechain=false` remain eligible for request-anchor
+tracking; real sidechains are fenced by `isSidechain=true` or explicit
+subagent identity.
+
+Claude assistant transcript records are snapshots, not independent completed
+replies. Completion state therefore has three separate layers:
+
+- `reply_buffer` is cumulative visible progress for streaming/diagnostics only
+- the active assistant snapshot is keyed by Claude API `message.id`, with the
+  transcript UUID used only as a compatibility fallback
+- `terminal_reply` is assigned exactly once from the assistant message that
+  satisfies a terminal boundary
+
+A thinking-only or tool-only snapshot cannot supply terminal text, even when
+it carries `stop_reason=end_turn`. If a later snapshot for the same
+`message.id` supplies visible text, it inherits the earlier observed
+`end_turn` and may complete. This pending message identity, text,
+`stop_reason`, and tool-use state must survive daemon restart. Visible text
+without `stop_reason` is progress, not a boundary; it may complete only after
+an exact protocol marker, an attributable non-empty Stop hook, or a
+`turn_duration` event whose `parentUuid` matches the current top-level
+assistant transcript UUID. A tool-only `turn_duration` must not reuse earlier
+progress narration.
+
+The terminal boundary payload and completion artifact must use
+`terminal_reply`, never the cross-message progress buffer. This preserves
+genuine short replies such as `OK` while preventing process narration such as
+`Let me read...` from replacing a later full final review. A response whose
+first visible line is `API Error: Response stalled mid-stream` is failed and
+incomplete provider output, never a completed answer.
+
+Every Claude hook path, including normal polling, orphan recovery, and
+cancellation salvage, must validate the exact request id, schema, provider,
+agent, workspace, event time, and tracked Claude session before using the
+artifact. Prompt activation alone is not proof that an on-disk hook belongs to
+the current managed session.
+
+Issue `#282` requires a narrow recovery exception when the provider has already
+written an exact terminal Stop-hook artifact but transcript anchor observation
+failed. The normal activation boundary remains authoritative during the grace
+window. After that window, an orphaned exact hook may terminalize only when all
+of these independent proofs agree:
+
+- artifact request id is the active outer request id
+- artifact provider, agent, and workspace match the active submission
+- artifact timestamp is parseable, no earlier than submission acceptance, and
+  no later than the current observation time
+- both artifact and tracked Claude session identities are present and equal
+- the target pane is observably idle
+
+Session-path comparison may normalize `/` and `\` separators before extracting
+the session id, but missing identity must fail closed. Recovery diagnostics
+must record that anchor observation was missed and that the exact-hook fallback
+was used.
+
+Cancellation is a separate preservation path. Before destructively cancelling
+an active Claude submission, the execution service may best-effort capture the
+same strictly attributable exact hook without waiting for the orphan grace or
+idle-pane proof. Only a non-empty reply is salvageable. Cancellation remains
+the terminal job status, while its decision records the captured completion
+status/source and preserves the reply or reply artifact. If no reply can be
+captured, a forced empty artifact must be labeled as transport metadata rather
+than task evidence.
+
 ### 10.4 Kimi
 
 Kimi native completion must support both observed provider layouts without
@@ -739,6 +814,88 @@ do not terminalize by themselves. `is_error=true`, assistant error fields,
 authentication failures, non-normal result reasons, nonzero exit, and a clean
 process exit without a result envelope all fail or remain incomplete; they may
 not be returned as successful assistant text.
+
+### 10.6 Pi Visible Lifecycle And OMP Structured Streams
+
+The supported completion contract intentionally targets the current provider
+protocols only:
+
+- Pi `0.82.1`
+- OMP `17.1.6`
+
+Pi and OMP must have separate observers. Similar JSON event names do not make
+their lifecycle semantics interchangeable.
+
+New Pi asks are sent to the existing managed Pi pane. CCB loads one
+runtime-owned Pi extension through the official `--extension` surface. The
+extension observes lifecycle callbacks and appends a normalized, owner-only
+JSONL sidecar in the agent runtime completion directory. It does not read or
+write provider auth/configuration state. A separate owner-only dispatch log
+binds the exact prompt digest to `req_id`, actor, CCB launch session, and live
+runtime instance before the prompt is sent. Each extension process also emits
+a random runtime instance id, so daemon restore can distinguish the same
+session record from a restarted Pi process. Unmanaged interactive/RPC input
+during a bound CCB turn emits explicit supersession evidence; its later reply
+cannot be returned as the CCB job's final text.
+
+Pi completion authority is the bound runtime instance's final
+`agent_settled` event. `turn_end` is one model/tool turn and `agent_end` is one
+low-level run; either may be followed by automatic retry, compaction retry, or
+queued continuation. Assistant/tool events are semantic progress only. The
+terminal reply comes only from the latest visible assistant text carried by
+the settled event; thinking and earlier tool-round narration are excluded.
+
+Pi pane completion additionally requires:
+
+- exact match of request id, actor, CCB launch session, runtime instance, and
+  the pre-send sidecar byte offset
+- a successful final `stop` outcome
+- a non-empty visible reply
+- every complete sidecar record to parse
+
+An `error` outcome fails. `aborted`, `length`, `tool_use`, missing outcome, and
+empty settled replies are incomplete. A partial trailing sidecar record stays
+pending until it becomes a complete newline-delimited record. Pane death,
+extension bootstrap failure before dispatch, binding mismatch, and runtime
+instance replacement close explicitly; CCB never silently reattributes the
+job.
+
+Pi pane execution has no fixed terminal wall-clock cutoff by default. The
+provider reliability policy uses
+`CCB_PI_NO_TERMINAL_TIMEOUT_S` only when an operator explicitly enables a
+semantic no-progress watchdog. This prevents CCB from truncating a valid long
+Pi turn. Cancellation interrupts the current pane run without killing the
+managed Pi pane. Both pane and headless Pi paths have native cancellation, so
+Pi prompts omit the generic model-facing cancel-file probe and avoid its extra
+tool call and uncached-token cost.
+
+OMP completion authority is an `agent_end` event carrying
+`isTerminal=true`. An `agent_end` with `isTerminal=false`, or without the field,
+is progress only. A later `agent_start` likewise invalidates any earlier
+terminal observation. A successful terminal `yield` tool result is a valid
+final outcome and its structured `details.data` is the reply source.
+
+For OMP, and for Pi jobs intentionally started with
+`CCB_PI_EXECUTION_MODE=headless` or restored from persisted `mode=pi_run`,
+semantic completion is necessary but not sufficient:
+
+- the one-shot process must exit before CCB terminalizes the job, so stdout is
+  closed and late retry/advisor events cannot be truncated
+- process exit code must be zero
+- the final assistant outcome must be successful (`stop`, or OMP terminal
+  `yield`)
+- the reply must be non-empty
+- every complete JSONL record must parse; an unterminated trailing record is a
+  truncated stream
+
+A clean one-shot process exit without the provider-specific semantic event closes as
+`incomplete/<provider>_native_terminal_missing`. A semantic event without a
+final outcome closes as `incomplete/<provider>_native_outcome_missing`.
+Malformed or truncated output closes as
+`incomplete/<provider>_native_protocol_invalid`. Nonzero exit and final
+provider error remain failures. Older Pi headless streams that stop at
+`agent_end` and older OMP streams without `isTerminal` deliberately fail
+closed; CCB does not guess legacy completion.
 
 ## 11. Placement In Code
 
@@ -830,6 +987,25 @@ Add tests for:
 - empty hook reply does not burn job
 - session-boundary and hook evidence merge correctly
 - timeout closure works when hook never arrives
+- a named top-level session `slug` does not hide the request anchor
+- real `isSidechain=true` records remain excluded
+- orphaned exact-hook recovery requires complete request, provider, agent,
+  workspace, timestamp, session, grace, and idle-pane proof
+- Linux and Windows-style session-path separators identify the same tracked
+  session
+- cancellation preserves a hook-only non-empty reply and labels an
+  unsalvageable forced empty artifact as non-evidence
+- the recorded process-text/tool-use/tool-result/thinking-only
+  `end_turn`/late-final sequence emits exactly one terminal reply
+- thinking-only `end_turn` remains pending across daemon restart and completes
+  from later visible text with the same API `message.id`
+- text without `stop_reason` stays pending until a matching `turn_duration`
+- a genuine short-text `end_turn` completes without being swallowed
+- tool-only boundaries never reuse accumulated process narration
+- stalled-mid-stream API text produces `failed`, not `completed`
+- normal Stop-hook polling rejects old or mismatched Claude session artifacts
+- the final reply artifact contains only terminal message text and the message
+  bureau records exactly one reply
 
 ### 12.4 Kimi
 
@@ -859,6 +1035,35 @@ Add execution-layer tests for:
 - active job cannot remain `running` forever without primary completion evidence
 - reliability timeout is provider-manifest-driven
 - degraded fallback decision is persisted and restorable
+
+### 12.7 Pi And OMP
+
+Add tests for:
+
+- Pi visible-pane request/response evidence with the official extension loaded
+- Pi process text, tool use/result, retry/progress, final text, and
+  `agent_settled` producing exactly one terminal final reply
+- no Pi `agent_settled`, short replies, empty replies, final `error`,
+  `aborted`, and `length`
+- Pi old offsets, foreign request/actor/launch/runtime identities, binding
+  mismatch, unmanaged-input supersession, malformed complete JSONL, and
+  partial trailing JSONL
+- Pi busy-pane deferral, extension readiness failure before send, pane death,
+  native cancellation without a model cancel-file probe, exact live-instance
+  export/restore, and restarted-instance rejection
+- persisted 8.5.0 `mode=pi_run` dispatch and
+  `CCB_PI_EXECUTION_MODE=headless` rollback
+- Pi headless `turn_end` / `agent_end` followed by retry and final
+  `agent_settled`
+- OMP nonterminal `agent_end`, delayed continuation, and final
+  `agent_end.isTerminal=true`
+- a headless semantic terminal event while the one-shot process is still alive
+- a semantic terminal event whose process never closes converging to run timeout
+- clean exit without semantic terminal evidence
+- semantic terminal followed by nonzero exit
+- final `error`, `aborted`, and `length` outcomes
+- OMP terminal structured `yield`
+- missing final outcome, malformed JSONL, and an unterminated trailing record
 
 ## 13. Rollout Phases
 

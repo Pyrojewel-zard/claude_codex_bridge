@@ -50,6 +50,7 @@ class AgentRuntime:
     desired_state: str | None = None
     reconcile_state: str | None = None
     restart_count: int = 0
+    recovery_failure_count: int = 0
     last_reconcile_at: str | None = None
     last_failure_reason: str | None = None
     mount_attempt_id: str | None = None
@@ -102,6 +103,7 @@ class AgentRuntime:
             'desired_state': self.desired_state,
             'reconcile_state': self.reconcile_state,
             'restart_count': self.restart_count,
+            'recovery_failure_count': self.recovery_failure_count,
             'last_reconcile_at': self.last_reconcile_at,
             'last_failure_reason': self.last_failure_reason,
             'mount_attempt_id': self.mount_attempt_id,

@@ -473,6 +473,11 @@ Rules:
 - provider runtime `pane-crash-*.reason.json` records are paired diagnostics
   for their matching `pane-crash-*.log`; cleanup must remove the reason record
   when retention removes the matching crash log
+- crash capture enforces online per-runtime retention of the newest 50
+  `pane-crash-*.log` files and matching reason sidecars; retention is not
+  deferred until a later `ccb cleanup`
+- pane history is cleared after crash capture and before respawn so a recovered
+  pane does not repeatedly reclassify stale terminal history as a new crash
 
 ### 3.5 Namespace State And Lifecycle
 
@@ -547,10 +552,15 @@ Rules:
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('<agent>')` diagnostics must surface runtime `reconcile_state`,
-  `restart_count`, `last_reconcile_at`, and `last_failure_reason`. A terminal
+  `restart_count`, `recovery_failure_count`, `last_reconcile_at`, and
+  `last_failure_reason`. A terminal
   provider-auth block must report health `provider-auth-revoked`,
   `reconcile_state=blocked`, and the actionable login/remount reason rather
   than collapsing to generic `pane-dead` or `stale`
+- provisional recovery must report `health=recovering` and
+  `reconcile_state=probing`; exhausted automatic recovery must report
+  `health=recovery-circuit-open`, `reconcile_state=blocked`, the consecutive
+  failure count, and the explicit restart/remount action
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
 - `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
 - `ping('ccbd')` must remain available during the post-self-ping

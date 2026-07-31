@@ -3,18 +3,19 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState
-from ccbd.api_models import JobRecord, JobStatus, TargetKind
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 from provider_core.registry import TEST_DOUBLE_PROVIDER_NAMES
 
-from ..cancel_flags import cancel_flag_path
+from ccbd.api_models import JobRecord, JobStatus, TargetKind
+
 from ..context import build_job_runtime_context
 from ..records import append_event, append_job
 from ..reply_delivery import is_reply_delivery_job
+from ..reply_delivery_runtime.start_completion import (
+    complete_reply_delivery_after_start,
+)
 from ..runtime_state import sync_runtime
-from ..reply_delivery_runtime.start_completion import complete_reply_delivery_after_start
 from .models import QueuedTargetSlot
-
 
 def write_running_snapshot(dispatcher, running: JobRecord, *, started_at: str) -> None:
     if dispatcher._completion_tracker is not None:
@@ -57,7 +58,7 @@ def start_running_job(
     if dispatcher._execution_service is not None and should_start_execution(dispatcher, running, runtime_context):
         try:
             submission = dispatcher._execution_service.start(
-                with_cancel_flag_notice(dispatcher, running),
+                running,
                 runtime_context=runtime_context,
             )
         except Exception as exc:
@@ -100,30 +101,6 @@ def fail_provider_start(dispatcher, running: JobRecord, exc: Exception, *, faile
         diagnostics=diagnostics,
     )
     return dispatcher.complete(running.job_id, decision)
-
-
-def with_cancel_flag_notice(dispatcher, running: JobRecord) -> JobRecord:
-    """Append the cancel-flag protocol note to the prompt handed to execution.
-
-    Only the in-memory copy passed to the execution service is modified; the
-    stored job/message records keep the original body.
-    """
-    if running.target_kind is not TargetKind.AGENT or not running.agent_name:
-        return running
-    if is_reply_delivery_job(running):
-        return running
-    if str(running.provider or '').strip().lower() in TEST_DOUBLE_PROVIDER_NAMES:
-        return running
-    try:
-        flag_path = cancel_flag_path(dispatcher._layout, running.agent_name, running.job_id)
-    except Exception:
-        return running
-    notice = (
-        "\n\n[ccb] Before each work step, check whether the file "
-        f"`{flag_path}` exists. If it does, this task has been cancelled: "
-        "stop immediately, reply with CANCELLED, and wait for new instructions."
-    )
-    return replace(running, request=replace(running.request, body=running.request.body + notice))
 
 
 def should_start_execution(dispatcher, current: JobRecord, runtime_context) -> bool:

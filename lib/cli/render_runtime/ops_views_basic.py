@@ -863,6 +863,110 @@ def render_mobile_serve(summary) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def render_relay_operator(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    status = str(payload.get('relay_status') or 'unknown')
+    lines = [f'relay_status: {status}']
+    if payload.get('db_path') not in (None, ''):
+        lines.append(f'db_path: {payload.get("db_path", "")}')
+    if status == 'host_activated':
+        lines.extend(
+            f'{key}: {payload.get(key, "")}'
+            for key in (
+                'relay_origin',
+                'host_id',
+                'invitation_id',
+                'host_fingerprint',
+                'credential_path',
+                'activated_at',
+            )
+        )
+        return tuple(lines)
+    if status == 'invite_issued':
+        lines.extend(
+            [
+                f'invite_id: {payload.get("invite_id", "")}',
+                f'invitation: {payload.get("invitation", "")}',
+                f'state: {payload.get("state", "")}',
+                f'expires_at: {payload.get("expires_at", "")}',
+            ]
+        )
+        quota = payload.get('quota')
+        if isinstance(quota, Mapping):
+            lines.append(_relay_quota_line(quota))
+        return tuple(lines)
+    if status in {'invite_status', 'host_status'}:
+        lines.extend(_relay_record_lines(payload))
+        return tuple(lines)
+    if status == 'invite_list':
+        items = payload.get('invitations')
+        if not isinstance(items, (list, tuple)) or not items:
+            lines.append('invitations: none')
+            return tuple(lines)
+        for item in items:
+            if isinstance(item, Mapping):
+                lines.append(_relay_invite_summary_line(item))
+        return tuple(lines)
+    if status == 'host_list':
+        items = payload.get('hosts')
+        if not isinstance(items, (list, tuple)) or not items:
+            lines.append('hosts: none')
+            return tuple(lines)
+        for item in items:
+            if isinstance(item, Mapping):
+                lines.append(_relay_host_summary_line(item))
+        return tuple(lines)
+    lines.extend(_relay_record_lines(payload))
+    return tuple(lines)
+
+
+def _relay_record_lines(payload: Mapping[str, object]) -> list[str]:
+    keys = (
+        'invite_id',
+        'host_id',
+        'invitation_id',
+        'state',
+        'issued_at',
+        'expires_at',
+        'consumed_at',
+        'revoked_at',
+        'host_public_key_sha256',
+    )
+    lines = [f'{key}: {payload.get(key, "")}' for key in keys if payload.get(key) not in (None, '')]
+    quota = payload.get('quota')
+    if isinstance(quota, Mapping):
+        lines.append(_relay_quota_line(quota))
+    return lines
+
+
+def _relay_invite_summary_line(payload: Mapping[str, object]) -> str:
+    return (
+        'invite: '
+        f'id={payload.get("invite_id", "")} '
+        f'state={payload.get("state", "")} '
+        f'expires_at={payload.get("expires_at", "")} '
+        f'host_id={payload.get("host_id", "")}'
+    )
+
+
+def _relay_host_summary_line(payload: Mapping[str, object]) -> str:
+    return (
+        'host: '
+        f'id={payload.get("host_id", "")} '
+        f'state={payload.get("state", "")} '
+        f'invitation_id={payload.get("invitation_id", "")} '
+        f'pubkey={payload.get("host_public_key_sha256", "")}'
+    )
+
+
+def _relay_quota_line(quota: Mapping[str, object]) -> str:
+    return (
+        'quota: '
+        f'max_sessions={quota.get("max_sessions", "")} '
+        f'max_bytes_per_day={quota.get("max_bytes_per_day", "")}'
+    )
+
+
 def _maintenance_record_lines(prefix: str, payload: Mapping[str, object]) -> list[str]:
     lines = [
         f'{prefix}_state: {payload.get("state")}',
@@ -1064,6 +1168,7 @@ __all__ = [
     'render_loop_runner',
     'render_maintenance',
     'render_mobile_serve',
+    'render_relay_operator',
     'render_plan_task',
     'render_ps',
     'render_restart',

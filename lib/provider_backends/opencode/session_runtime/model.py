@@ -30,6 +30,14 @@ class OpenCodeProjectSession(PaneLogProjectSessionBase):
     def opencode_project_id(self) -> str:
         return str(self.data.get("opencode_project_id") or "").strip()
 
+    @property
+    def opencode_storage_root(self) -> str:
+        return str(self.data.get("opencode_storage_root") or "").strip()
+
+    @property
+    def opencode_log_root(self) -> str:
+        return str(self.data.get("opencode_log_root") or "").strip()
+
     def backend(self):
         from provider_backends.opencode import session as session_module
 

@@ -28,6 +28,7 @@ _STATE_PATCH_FIELDS = frozenset(
         'desired_state',
         'reconcile_state',
         'restart_count',
+        'recovery_failure_count',
         'last_seen_at',
         'last_reconcile_at',
         'last_failure_reason',
@@ -345,6 +346,7 @@ class RuntimeService:
             replace(
                 runtime,
                 mount_attempt_id=attempt_id,
+                recovery_failure_count=0,
                 last_reconcile_at=attempted_at,
             )
         )
@@ -369,6 +371,7 @@ class RuntimeService:
                 state=state,
                 reconcile_state='steady',
                 restart_count=restart_count,
+                recovery_failure_count=0,
                 last_reconcile_at=attempted_at,
                 last_failure_reason=None,
                 lifecycle_state=lifecycle_state,

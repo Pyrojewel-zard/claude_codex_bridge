@@ -23,6 +23,10 @@ class DeepSeekProjectSession(PaneLogProjectSessionBase):
     def deepseek_session_path(self) -> str:
         return str(self.session_file)
 
+    @property
+    def deepseek_home(self) -> str:
+        return str(self.data.get("deepseek_home") or "").strip()
+
     def backend(self):
         from terminal_runtime import get_backend_for_session
 

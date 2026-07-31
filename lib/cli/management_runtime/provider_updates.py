@@ -130,6 +130,12 @@ class ProviderUpdateExecution:
     detail: str
 
 
+@dataclass(frozen=True)
+class _RegistryRelease:
+    version: str | None
+    issue: str | None = None
+
+
 def provider_update_state_path(
     *,
     env: Mapping[str, str] | None = None,
@@ -185,7 +191,7 @@ def discover_provider_updates(
     providers: Iterable[str] = SUPPORTED_PROVIDER_NAMES,
     which_fn: Callable[[str], str | None] = shutil.which,
     run_fn: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    fetch_latest_fn: Callable[[str], str | None] | None = None,
+    fetch_latest_fn: Callable[[str], str | _RegistryRelease | None] | None = None,
 ) -> tuple[ProviderUpdateCandidate, ...]:
     fetch_latest = fetch_latest_fn or _fetch_registry_latest
     discovered: list[dict[str, object]] = []
@@ -214,6 +220,10 @@ def discover_provider_updates(
             resolved=resolved,
             which_fn=which_fn,
         )
+        npm_prefix = (
+            _npm_install_prefix_from_path(resolved) if owner == "npm" else None
+        )
+        bun_home = _bun_install_home_from_path(resolved) if owner == "bun" else None
         registry_package = package or _NATIVE_REGISTRY_PACKAGES.get(normalized)
         discovered.append(
             {
@@ -223,6 +233,8 @@ def discover_provider_updates(
                 "current_version": current_version,
                 "owner": owner,
                 "package": package,
+                "npm_prefix": npm_prefix,
+                "bun_home": bun_home,
                 "registry_package": registry_package,
                 "has_latest_source": bool(
                     registry_package or normalized in _NATIVE_LATEST_ARGS
@@ -247,22 +259,53 @@ def discover_provider_updates(
         owner = str(row.get("owner") or "unknown")
         package = _optional_text(row.get("package"))
         registry_package = _optional_text(row.get("registry_package"))
-        latest_version = latest_by_package.get(registry_package or "") if registry_package else None
+        registry_release = (
+            latest_by_package.get(registry_package or "", _RegistryRelease(None))
+            if registry_package
+            else _RegistryRelease(None)
+        )
+        latest_version = registry_release.version
         if latest_version is None and owner == "native":
             latest_version = _fetch_native_latest_version(
                 provider,
                 executable=executable,
                 run_fn=run_fn,
             )
-        command, command_issue = _build_update_command(
-            provider,
-            executable=executable,
-            owner=owner,
-            package=package,
-            latest_version=latest_version,
-            which_fn=which_fn,
-            run_fn=run_fn,
+        registry_issue = (
+            registry_release.issue if owner in {"npm", "bun"} else None
         )
+        if registry_issue:
+            command, command_issue = None, registry_issue
+        else:
+            command, command_issue = _build_update_command(
+                provider,
+                executable=executable,
+                owner=owner,
+                package=package,
+                latest_version=latest_version,
+                which_fn=which_fn,
+                run_fn=run_fn,
+                npm_prefix=(
+                    Path(row["npm_prefix"])
+                    if row.get("npm_prefix") is not None
+                    else None
+                ),
+                bun_home=(
+                    Path(row["bun_home"])
+                    if row.get("bun_home") is not None
+                    else None
+                ),
+                check_npm_prefix_writable=bool(
+                    current_version
+                    and latest_version
+                    and _provider_version_is_newer(latest_version, current_version)
+                ),
+                check_bun_home_writable=bool(
+                    current_version
+                    and latest_version
+                    and _provider_version_is_newer(latest_version, current_version)
+                ),
+            )
         issues = [
             _optional_text(row.get("owner_issue")),
             None if current_version else "installed version could not be read",
@@ -305,6 +348,20 @@ def execute_provider_update(
             detail="no supported update command",
         )
     env = _explicit_update_env()
+    if candidate.owner == "bun":
+        try:
+            bun_home = _bun_install_home_from_path(candidate.executable.resolve())
+        except Exception:
+            bun_home = None
+        if bun_home is None:
+            return ProviderUpdateExecution(
+                provider=candidate.provider,
+                success=False,
+                before_version=candidate.current_version,
+                after_version=candidate.current_version,
+                detail="Bun install home could not be revalidated before update",
+            )
+        env["BUN_INSTALL"] = str(bun_home)
     try:
         completed = run_fn(
             list(candidate.update_command),
@@ -544,7 +601,17 @@ def _detect_install_owner(
             None,
             "Windows interop installations are not updated from WSL; update this CLI from Windows",
         )
+    bun_home = _bun_install_home_from_path(resolved)
     package = _npm_package_from_path(resolved)
+    if bun_home is not None and package:
+        bun = _bun_executable_for(
+            executable,
+            bun_home=bun_home,
+            which_fn=which_fn,
+        )
+        if bun is None:
+            return "bun", package, "matching Bun executable was not found"
+        return "bun", package, None
     if package:
         npm = _npm_executable_for(executable, which_fn=which_fn)
         if npm is None:
@@ -608,6 +675,30 @@ def _npm_package_from_path(path: Path) -> str | None:
     return None
 
 
+def _npm_install_prefix_from_path(path: Path) -> Path | None:
+    parts = path.parts
+    indexes = [index for index, part in enumerate(parts) if part == "node_modules"]
+    for index in reversed(indexes):
+        if index <= 0:
+            continue
+        modules_parent = Path(*parts[:index])
+        if modules_parent.name == "lib":
+            return modules_parent.parent
+        return modules_parent
+    return None
+
+
+def _bun_install_home_from_path(path: Path) -> Path | None:
+    parts = path.parts
+    for index in range(len(parts) - 2):
+        if parts[index : index + 3] != ("install", "global", "node_modules"):
+            continue
+        if index <= 0:
+            return None
+        return Path(*parts[:index])
+    return None
+
+
 def _npm_executable_for(executable: Path, *, which_fn: Callable[[str], str | None]) -> Path | None:
     sibling = executable.parent / ("npm.cmd" if os.name == "nt" else "npm")
     if sibling.is_file():
@@ -616,30 +707,51 @@ def _npm_executable_for(executable: Path, *, which_fn: Callable[[str], str | Non
     return Path(resolved).expanduser() if resolved else None
 
 
+def _bun_executable_for(
+    executable: Path,
+    *,
+    bun_home: Path,
+    which_fn: Callable[[str], str | None],
+) -> Path | None:
+    owned = Path(bun_home).expanduser() / "bin" / ("bun.exe" if os.name == "nt" else "bun")
+    if owned.is_file():
+        return owned
+    sibling = executable.parent / ("bun.exe" if os.name == "nt" else "bun")
+    if sibling.is_file():
+        return sibling
+    resolved = which_fn("bun")
+    return Path(resolved).expanduser() if resolved else None
+
+
 def _fetch_latest_versions(
     packages: list[str],
     *,
-    fetch_latest_fn: Callable[[str], str | None],
-) -> dict[str, str | None]:
+    fetch_latest_fn: Callable[[str], str | _RegistryRelease | None],
+) -> dict[str, _RegistryRelease]:
     if not packages:
         return {}
-    results: dict[str, str | None] = {}
+    results: dict[str, _RegistryRelease] = {}
     workers = min(4, len(packages))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ccb-provider-update") as pool:
         futures = {pool.submit(fetch_latest_fn, package): package for package in packages}
         for future in as_completed(futures):
             package = futures[future]
             try:
-                results[package] = _optional_text(future.result())
+                result = future.result()
+                results[package] = (
+                    result
+                    if isinstance(result, _RegistryRelease)
+                    else _RegistryRelease(_optional_text(result))
+                )
             except Exception:
-                results[package] = None
+                results[package] = _RegistryRelease(None)
     return results
 
 
-def _fetch_registry_latest(package: str) -> str | None:
+def _fetch_registry_latest(package: str) -> _RegistryRelease:
     encoded = quote(str(package or "").strip(), safe="")
     if not encoded:
-        return None
+        return _RegistryRelease(None)
     url = f"https://registry.npmjs.org/{encoded}/latest"
     payload = None
     try:
@@ -649,8 +761,33 @@ def _fetch_registry_latest(package: str) -> str | None:
     if payload is None:
         payload = fetch_json_via_curl(url, timeout=8)
     if not isinstance(payload, dict):
-        return None
-    return _optional_text(payload.get("version"))
+        return _RegistryRelease(None)
+    version = _optional_text(payload.get("version"))
+    return _RegistryRelease(
+        version,
+        _registry_release_install_issue(payload, version=version),
+    )
+
+
+def _registry_release_install_issue(
+    payload: Mapping[str, object],
+    *,
+    version: str | None,
+) -> str | None:
+    for field in ("dependencies", "optionalDependencies", "peerDependencies"):
+        dependencies = payload.get(field)
+        if not isinstance(dependencies, Mapping):
+            continue
+        for name, raw_spec in dependencies.items():
+            spec = str(raw_spec or "").strip()
+            if not spec.lower().startswith(("file:", "link:", "workspace:")):
+                continue
+            release = f" {version}" if version else ""
+            return (
+                f"registry release{release} declares non-published local dependency "
+                f"`{name}: {spec}`; wait for the provider publisher to replace this release"
+            )
+    return None
 
 
 def _fetch_native_latest_version(
@@ -710,6 +847,10 @@ def _build_update_command(
     latest_version: str | None,
     which_fn: Callable[[str], str | None],
     run_fn: Callable[..., subprocess.CompletedProcess],
+    npm_prefix: Path | None = None,
+    bun_home: Path | None = None,
+    check_npm_prefix_writable: bool = True,
+    check_bun_home_writable: bool = True,
 ) -> tuple[tuple[str, ...] | None, str | None]:
     if not latest_version:
         return None, None
@@ -717,13 +858,47 @@ def _build_update_command(
         npm = _npm_executable_for(executable, which_fn=which_fn)
         if npm is None:
             return None, "matching npm executable was not found"
+        if npm_prefix is None:
+            return None, "npm install prefix could not be derived from the provider executable"
+        prefix_issue = (
+            _npm_prefix_write_issue(npm_prefix)
+            if check_npm_prefix_writable
+            else None
+        )
+        if prefix_issue is not None:
+            return None, prefix_issue
         return (
             str(npm),
             "install",
             "--global",
+            "--prefix",
+            str(npm_prefix),
             f"{package}@{latest_version}",
             "--no-audit",
             "--no-fund",
+        ), None
+    if owner == "bun" and package:
+        if bun_home is None:
+            return None, "Bun install home could not be derived from the provider executable"
+        bun = _bun_executable_for(
+            executable,
+            bun_home=bun_home,
+            which_fn=which_fn,
+        )
+        if bun is None:
+            return None, "matching Bun executable was not found"
+        home_issue = (
+            _bun_home_write_issue(bun_home)
+            if check_bun_home_writable
+            else None
+        )
+        if home_issue is not None:
+            return None, home_issue
+        return (
+            str(bun),
+            "add",
+            "--global",
+            f"{package}@{latest_version}",
         ), None
     if owner == "brew":
         brew = which_fn("brew")
@@ -747,6 +922,40 @@ def _build_update_command(
             [str(executable), *(latest_version if part == "{version}" else part for part in args)]
         ), None
     return None, None
+
+
+def _npm_prefix_write_issue(prefix: Path) -> str | None:
+    target_prefix = Path(prefix).expanduser()
+    for target in (
+        target_prefix / "bin",
+        target_prefix / "lib" / "node_modules",
+    ):
+        probe = target
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        if not os.access(probe, os.W_OK | os.X_OK):
+            return (
+                f"npm install prefix `{target_prefix}` is not writable by the current user; "
+                "update this provider with its installation owner or move it to a user-owned npm prefix"
+            )
+    return None
+
+
+def _bun_home_write_issue(bun_home: Path) -> str | None:
+    target_home = Path(bun_home).expanduser()
+    for target in (
+        target_home / "bin",
+        target_home / "install" / "global" / "node_modules",
+    ):
+        probe = target
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        if not os.access(probe, os.W_OK | os.X_OK):
+            return (
+                f"Bun install home `{target_home}` is not writable by the current user; "
+                "update this provider with the Bun installation owner"
+            )
+    return None
 
 
 def _native_subcommand_supported(

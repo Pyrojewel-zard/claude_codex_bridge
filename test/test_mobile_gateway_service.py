@@ -400,12 +400,27 @@ def _server_registry_service(
     )
 
 
-def test_parse_listen_accepts_loopback_only() -> None:
+def test_parse_listen_defaults_to_loopback_only() -> None:
     assert parse_listen_address(None).text == '127.0.0.1:8787'
     assert parse_listen_address('127.0.0.1:0').text == '127.0.0.1:0'
     assert parse_listen_address('localhost:8787').text == 'localhost:8787'
     with pytest.raises(ValueError, match='loopback'):
-        parse_listen_address('0.0.0.0:8787')
+        parse_listen_address('192.168.31.155:8787')
+
+
+def test_parse_listen_accepts_specific_private_ip_for_lan() -> None:
+    assert (
+        parse_listen_address('192.168.31.155:8787', allow_lan=True).text
+        == '192.168.31.155:8787'
+    )
+    assert parse_listen_address('10.0.0.7:0', allow_lan=True).text == '10.0.0.7:0'
+    assert parse_listen_address('169.254.10.2:8787', allow_lan=True).text == '169.254.10.2:8787'
+
+
+@pytest.mark.parametrize('host', ('0.0.0.0', '8.8.8.8', 'mobile.example.com'))
+def test_parse_listen_rejects_non_specific_or_non_private_lan_host(host: str) -> None:
+    with pytest.raises(ValueError, match='specific private or link-local'):
+        parse_listen_address(f'{host}:8787', allow_lan=True)
 
 
 def test_health_and_projects_use_ccbd_without_exposing_tmux_socket() -> None:
@@ -1459,6 +1474,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
                     'message': (
                         'CCB_REQ_ID: job_mobile_probe\n\n'
                         'clean prompt\n\n'
+                        'CCB_REPLY_MODE: compact\n\n'
                         'CCB reply guidance:\n'
                         '- Answer directly and concisely.\n'
                         '- Avoid raw logs.'
@@ -1526,6 +1542,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
     assert 'hidden developer' not in public_json
     assert 'hidden context' not in public_json
     assert 'CCB_REQ_ID' not in public_json
+    assert 'CCB_REPLY_MODE' not in public_json
     assert 'CCB reply guidance' not in public_json
     assert 'stale ask prompt' not in public_json
     assert 'stale ask snapshot' not in public_json
@@ -1868,11 +1885,37 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
                             'text': (
                                 'CCB_REQ_ID: job_mobile_probe\n\n'
                                 'clean claude prompt\n\n'
+                                'CCB_REPLY_MODE: silent\n\n'
                                 'CCB reply guidance:\n'
                                 '- Answer directly and concisely.\n'
                             ),
                         }
                     ],
+                },
+            },
+            {
+                'uuid': 'local-clear',
+                'timestamp': '2026-06-25T12:00:03.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': (
+                        '<command-name>/clear</command-name>\n'
+                        '<command-message>clear</command-message> '
+                        '<command-args></command-args>'
+                    ),
+                },
+            },
+            {
+                'uuid': 'local-caveat',
+                'timestamp': '2026-06-25T12:00:04.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': (
+                        '<local-command-caveat>Local command metadata. '
+                        'Do not respond.</local-command-caveat>'
+                    ),
                 },
             },
         ],
@@ -1936,7 +1979,10 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
     assert 'hidden system prompt' not in public_json
     assert 'hidden thinking' not in public_json
     assert 'CCB_REQ_ID' not in public_json
+    assert 'CCB_REPLY_MODE' not in public_json
     assert 'CCB reply guidance' not in public_json
+    assert '<command-name>' not in public_json
+    assert '<local-command-caveat>' not in public_json
     assert 'stale ask snapshot' not in public_json
     assert 'stale claude pane prompt' not in public_json
     assert 'stale claude pane answer' not in public_json
@@ -4195,6 +4241,7 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         assert 'attach-session' not in sessions[0].target.command
         assert sessions[0].target.geometry.columns == 100
         assert sessions[0].target.geometry.rows == 30
+        assert sessions[0].target.include_history is True
 
         _websocket_send_json(sock, {'type': 'input', 'seq': 1, 'bytes_b64': base64.b64encode(b'a').decode('ascii')})
         _wait_for(lambda: sessions[0].writes == [b'a'])
@@ -4292,6 +4339,7 @@ def test_terminal_websocket_resumes_after_transport_disconnect_with_matching_cur
         second_output = _websocket_read_until(resumed_sock, 'output')
         assert second_output['seq'] == 2
         assert len(sessions) == 2
+        assert sessions[1].target.include_history is False
         _wait_for(
             lambda: '"last_output_seq": 2'
             in (tmp_path / 'mobile' / 'terminal-tokens.jsonl').read_text(encoding='utf-8')
@@ -4371,6 +4419,7 @@ def test_terminal_websocket_accepts_stale_output_resume_cursor(tmp_path: Path) -
         output = _websocket_read_until(stale_sock, 'output')
         assert output['seq'] == 2
         assert len(sessions) == 2
+        assert sessions[1].target.include_history is False
         stored_after_resume = (tmp_path / 'mobile' / 'terminal-tokens.jsonl').read_text(encoding='utf-8')
         assert '"last_resume_cursor": 0' in stored_after_resume
         assert '"last_resume_gap": 1' in stored_after_resume

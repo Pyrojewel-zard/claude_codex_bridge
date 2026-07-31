@@ -120,10 +120,36 @@ def test_prepare_gemini_home_overrides_keeps_cli_home_aligned_with_projected_sta
     assert env['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
     assert env['npm_config_cache'] == str(expected_cache / 'npm')
     assert env['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
+    assert env['GEMINI_FORCE_FILE_STORAGE'] == 'true'
+    assert env['GEMINI_FORCE_ENCRYPTED_FILE_STORAGE'] == 'true'
     assert (expected_cache / 'npm').is_dir()
     assert (expected_cache / 'xdg').is_dir()
     assert (expected_home / '.gemini' / 'settings.json').is_file()
     assert not (expected_home / '.gemini' / '.gemini' / 'settings.json').exists()
+
+
+def test_prepare_gemini_home_overrides_pins_windows_home_under_wsl(tmp_path, monkeypatch) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSLENV', 'EXISTING/u')
+
+    env = prepare_gemini_home_overrides(runtime_dir, None, refresh_home=False)
+
+    assert env['USERPROFILE'] == env['HOME']
+    wslenv = env['WSLENV'].split(':')
+    for name in (
+        'HOME/p',
+        'USERPROFILE/p',
+        'GEMINI_CLI_HOME/p',
+        'GEMINI_ROOT/p',
+        'NPM_CONFIG_CACHE/p',
+        'npm_config_cache/p',
+        'XDG_CACHE_HOME/p',
+        'GEMINI_FORCE_FILE_STORAGE',
+        'GEMINI_FORCE_ENCRYPTED_FILE_STORAGE',
+    ):
+        assert name in wslenv
+    assert wslenv[-1] == 'EXISTING/u'
 
 
 def test_prepare_gemini_home_overrides_uses_user_cache_without_project_context(tmp_path, monkeypatch) -> None:

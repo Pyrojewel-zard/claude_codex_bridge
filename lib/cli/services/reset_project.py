@@ -13,6 +13,7 @@ from cli.services.kill import kill_project
 from cli.services.tmux_ui import set_tmux_ui_active
 from ccbd.services.project_namespace import ProjectNamespaceController
 from project.ids import compute_project_id
+from project.identity_store import PROJECT_IDENTITY_FILENAME
 from project.resolver import ProjectContext
 from provider_core.pathing import session_filename_for_agent
 from storage.path_helpers import RUNTIME_ROOT_REF_FILENAME
@@ -183,7 +184,10 @@ def _clear_anchor_contents(ccb_dir: Path, *, preserve_runtime_root_ref: bool) ->
     if not ccb_dir.is_dir():
         return
     for child in tuple(ccb_dir.iterdir()):
-        if child.name == 'ccb.config':
+        if child.name in {
+            'ccb.config',
+            PROJECT_IDENTITY_FILENAME,
+        }:
             continue
         if preserve_runtime_root_ref and child.name == RUNTIME_ROOT_REF_FILENAME:
             continue

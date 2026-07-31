@@ -110,6 +110,10 @@ class CcbdMountPathMixin:
         return self.ccbd_dir / 'project-view-state.json'
 
     @property
+    def ccbd_config_restart_intent_path(self):
+        return self.ccbd_dir / 'config-restart-intent.json'
+
+    @property
     def ccbd_mobile_dir(self):
         return self.ccbd_dir / 'mobile'
 

@@ -79,6 +79,11 @@ CCB 在 agent materialization 时把 runtime coordination rules 写入 managed
 当该 provider 不支持热加载时，再重启 provider 或启动新 session。
 不要假设正在运行的 provider session 会热加载改变后的 managed memory。
 
+默认回复规范和取消协作规则也只在该 managed memory 中出现一次。普通 ask
+不会再重复携带整段 guidance；\cmd{--compact} 或 \cmd{--silence} 最多增加一行
+\src{CCB\_REPLY\_MODE} 动态标识。CCB runtime 会优先直接中断被取消的 provider
+execution，agent 不应在普通读写步骤中反复轮询 cancel flag。
+
 \section{长内容}
 
 长 request：

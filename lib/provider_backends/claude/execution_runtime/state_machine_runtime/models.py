@@ -17,6 +17,11 @@ class ClaudePollState:
     raw_buffer: str
     session_path: str
     last_assistant_uuid: str
+    active_assistant_message_id: str = ""
+    active_assistant_text: str = ""
+    active_assistant_stop_reason: str = ""
+    active_assistant_has_tool_use: bool = False
+    terminal_reply: str = ""
     prompt_enqueued: bool = False
     queue_dequeue_observed: bool = False
     prompt_activated: bool = False
@@ -39,14 +44,28 @@ def build_poll_state(submission: ProviderSubmission) -> ClaudePollState:
     if not no_wrap and not prompt_activated:
         anchor_seen = False
 
+    reply_buffer = str(submission.runtime_state.get("reply_buffer") or "")
     return ClaudePollState(
         request_anchor=request_anchor_from_runtime_state(submission.runtime_state, fallback=submission.job_id),
         next_seq=int(submission.runtime_state.get("next_seq", 1)),
         anchor_seen=anchor_seen,
-        reply_buffer=str(submission.runtime_state.get("reply_buffer") or ""),
+        reply_buffer=reply_buffer,
         raw_buffer=str(submission.runtime_state.get("raw_buffer") or ""),
         session_path=str(submission.runtime_state.get("session_path") or ""),
         last_assistant_uuid=str(submission.runtime_state.get("last_assistant_uuid") or ""),
+        active_assistant_message_id=str(
+            submission.runtime_state.get("active_assistant_message_id") or ""
+        ),
+        active_assistant_text=str(
+            submission.runtime_state.get("active_assistant_text") or ""
+        ),
+        active_assistant_stop_reason=str(
+            submission.runtime_state.get("active_assistant_stop_reason") or ""
+        ),
+        active_assistant_has_tool_use=bool(
+            submission.runtime_state.get("active_assistant_has_tool_use", False)
+        ),
+        terminal_reply=str(submission.runtime_state.get("terminal_reply") or ""),
         prompt_enqueued=bool(submission.runtime_state.get("prompt_enqueued", False)),
         queue_dequeue_observed=bool(submission.runtime_state.get("queue_dequeue_observed", False)),
         prompt_activated=prompt_activated,
@@ -76,6 +95,11 @@ def apply_session_rotation(submission: ProviderSubmission, poll: ClaudePollState
     poll.reply_buffer = ""
     poll.raw_buffer = ""
     poll.last_assistant_uuid = ""
+    poll.active_assistant_message_id = ""
+    poll.active_assistant_text = ""
+    poll.active_assistant_stop_reason = ""
+    poll.active_assistant_has_tool_use = False
+    poll.terminal_reply = ""
     poll.prompt_enqueued = False
     poll.queue_dequeue_observed = False
     poll.prompt_activated = bool(submission.runtime_state.get("no_wrap", False))

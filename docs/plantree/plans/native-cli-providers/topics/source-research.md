@@ -391,6 +391,12 @@ Observed official docs:
 - JSON event stream docs define turn lifecycle events including `turn_start`
   and `turn_end`; `turn_end` carries the final assistant `message` and tool
   results.
+- The official extension API exposes `before_agent_start`, assistant/tool
+  events, `agent_end`, and `agent_settled`. Pi 0.82.1 documents
+  `agent_settled` as the boundary after automatic retry, compaction, and
+  queued continuation have finished.
+- CLI extension loading uses `--extension <path>`, so CCB can observe native
+  lifecycle state without screen scraping or modifying Pi's auth/config files.
 - Session options include `--session-dir <dir>`, `--session`, `--resume`,
   `--continue`, `--no-session`, and `--name`.
 - Trust options include `--approve` and `--no-approve`; noninteractive modes do
@@ -402,10 +408,14 @@ Observed official docs:
 CCB direction:
 
 - Provider key `pi`; default command `pi`; override `PI_START_CMD`.
-- Prefer per-job structured subprocess execution:
-  `PI_CODING_AGENT_DIR=<state>/home PI_CODING_AGENT_SESSION_DIR=<state>/sessions pi --mode json --session-dir <state>/sessions --no-approve --name <job> <wrapped prompt>`.
-- Terminalize on native `turn_end`, extracting final assistant text from the
-  embedded `message.content`.
+- Prefer managed visible-pane execution. Load a runtime-owned extension with
+  `--extension`, bind its append-only lifecycle sidecar to exact dispatch,
+  actor, launch-session, and runtime-instance identity, and terminalize only
+  on `agent_settled` with final `stop` plus non-empty visible text.
+- Retain the per-job structured subprocess
+  `pi --mode json --session-dir ... --no-approve --name <job>` for
+  `CCB_PI_EXECUTION_MODE=headless` rollback and persisted 8.5.0 `pi_run`
+  jobs. That path still waits for both `agent_settled` and process exit.
 - Keep visible pane state isolated with `PI_CODING_AGENT_DIR` and
   `PI_CODING_AGENT_SESSION_DIR`; skip startup version checks with
   `PI_SKIP_VERSION_CHECK=1`.

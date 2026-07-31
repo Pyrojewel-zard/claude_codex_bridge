@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from io import StringIO
 import json
+import os
 from pathlib import Path
+import sys
 import zipfile
+
+import pytest
 
 from cli.tools_runtime import cmd_tools
 from cli.tools_runtime import workbench as workbench_tools
@@ -47,6 +51,7 @@ def _prepare_env(tmp_path: Path, monkeypatch) -> Path:
     (fake_proc / 'sys' / 'fs' / 'inotify' / 'max_user_instances').write_text('1024\n', encoding='utf-8')
     monkeypatch.setenv('CCB_WORKBENCH_PROC_ROOT', str(fake_proc))
     monkeypatch.delenv('CCB_WORKBENCH_THEME', raising=False)
+    monkeypatch.delenv('CCB_WORKBENCH_THEME_CONFIG_WINDOWS', raising=False)
     monkeypatch.delenv('CCB_TMUX_THEME_PROFILE', raising=False)
     monkeypatch.delenv('CCB_SIDEBAR_THEME_PROFILE', raising=False)
     monkeypatch.delenv('TMUX', raising=False)
@@ -128,20 +133,27 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert 'config.initial_cols = 132' in wezterm_config
     assert 'config.initial_rows = 38' in wezterm_config
     assert 'config.automatically_reload_config = true' in wezterm_config
-    assert 'local theme_config_path = "' in wezterm_config
+    assert 'local theme_config_paths = {' in wezterm_config
+    assert 'local theme_config_path = theme_config_paths[1]' in wezterm_config
     assert 'wezterm.add_to_config_reload_watch_list(theme_config_path)' in wezterm_config
     assert 'local themes = {' in wezterm_config
+    assert 'ansi = { "#3b4252"' in wezterm_config
+    assert 'brights = { "#4c566a"' in wezterm_config
     assert 'latte = {' in wezterm_config
     assert 'solarized_light = {' in wezterm_config
     assert 'tokyo_night_light = {' in wezterm_config
     assert 'gruvbox_light = {' in wezterm_config
     assert 'rose_pine_dawn = {' in wezterm_config
     assert 'local function normalize_theme(value)' in wezterm_config
+    assert 'local function system_theme()' in wezterm_config
+    assert 'wezterm.gui.get_appearance' in wezterm_config
     assert 'local function read_theme_file(path)' in wezterm_config
     assert 'local requested_theme = read_theme_file(theme_config_path) or os.getenv("CCB_WORKBENCH_THEME")' in wezterm_config
     assert 'config.enable_tab_bar = false' in wezterm_config
     assert 'config.window_padding = {' in wezterm_config
     assert 'config.hide_tab_bar_if_only_one_tab = true' in wezterm_config
+    assert 'ansi = theme.ansi' in wezterm_config
+    assert 'brights = theme.brights' in wezterm_config
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM = "WezTerm"' in wezterm_config
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM_VERSION = wezterm.version' in wezterm_config
     assert 'CCB_WORKBENCH_THEME = theme_name' in wezterm_config
@@ -173,14 +185,20 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert str(root / 'profiles' / 'wezterm' / 'wezterm.lua') in workbench
     assert 'CCB_WORKBENCH_FORCE_RICH=1' in workbench
     assert 'normalize_workbench_theme()' in workbench
+    assert 'detect_system_workbench_theme()' in workbench
     assert 'theme_config_file=' in workbench
     assert 'read_workbench_theme_config()' in workbench
+    assert 'requested_theme="$(read_workbench_theme_config)"' in workbench
+    assert 'requested_theme="${CCB_WORKBENCH_THEME:-${CCB_TMUX_THEME_PROFILE:-}}"' in workbench
     assert 'available_themes: dark latte solarized_light tokyo_night_light gruvbox_light rose_pine_dawn' not in workbench
     assert 'ccb-tmux-on.sh >/dev/null 2>&1 || true' not in workbench
     assert 'CCB_WORKBENCH_THEME="$workbench_theme"' in workbench
     assert 'CCB_TMUX_THEME_PROFILE="$workbench_tmux_theme"' in workbench
     assert 'CCB_SIDEBAR_THEME_PROFILE="$workbench_tmux_theme"' in workbench
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm' in workbench
+    assert 'configure_wayland_cursor_env()' in workbench
+    assert '[ "${is_wsl:-0}" = 0 ] || return 0' in workbench
+    assert 'CCB_WORKBENCH_XCURSOR_COMPAT=1' in workbench
     assert "XMODIFIERS='@im=fcitx'" in workbench
     assert 'GTK_IM_MODULE=fcitx' in workbench
     assert 'QT_IM_MODULE=fcitx' in workbench
@@ -211,6 +229,36 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert manifest['components']['image_preview']['status'] == 'ok'
 
 
+def test_workbench_wezterm_config_watches_native_windows_theme_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _prepare_env(tmp_path, monkeypatch)
+    windows_theme_path = (
+        r'\\wsl.localhost\Ubuntu\home\bfly\.config\ccb\theme.json'
+    )
+    monkeypatch.setenv(
+        'CCB_WORKBENCH_THEME_CONFIG_WINDOWS',
+        windows_theme_path,
+    )
+
+    workbench_tools.provision_workbench(profile='rich')
+
+    wezterm_config = (
+        tmp_path
+        / 'xdg-data'
+        / 'ccb'
+        / 'tools'
+        / 'workbench'
+        / 'profiles'
+        / 'wezterm'
+        / 'wezterm.lua'
+    ).read_text(encoding='utf-8')
+    escaped_windows_path = windows_theme_path.replace('\\', '\\\\')
+    assert f'"{escaped_windows_path}"' in wezterm_config
+    assert 'wezterm.add_to_config_reload_watch_list(theme_config_path)' in wezterm_config
+
+
 def test_workbench_doctor_reports_manifest_and_component_paths(tmp_path: Path, monkeypatch) -> None:
     _prepare_env(tmp_path, monkeypatch)
     workbench_tools.provision_workbench(profile='rich')
@@ -229,6 +277,7 @@ def test_workbench_doctor_reports_manifest_and_component_paths(tmp_path: Path, m
     assert 'neovim' not in output.lower()
     assert 'yazi_safe_config:' in output
     assert 'wezterm_config:' in output
+    assert 'wezterm_xcursor_root:' in output
 
 
 def test_standalone_neovim_tool_route_is_unsupported() -> None:
@@ -406,13 +455,13 @@ def test_workbench_launch_detaches_outer_tmux_environment(tmp_path: Path, monkey
     monkeypatch.setenv('TMUX_PANE', '%7')
     monkeypatch.setenv('CCB_TMUX_SOCKET', 'outer')
     monkeypatch.setenv('CCB_TMUX_SOCKET_PATH', '/tmp/outer.sock')
-    calls: list[tuple[list[str], dict[str, str] | None]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
     class _Process:
         pid = 2424
 
-    def _popen(command, env=None):
-        calls.append((list(command), dict(env) if env is not None else None))
+    def _popen(command, **kwargs):
+        calls.append((list(command), dict(kwargs)))
         return _Process()
 
     monkeypatch.setattr(workbench_tools.subprocess, 'Popen', _popen)
@@ -421,16 +470,106 @@ def test_workbench_launch_detaches_outer_tmux_environment(tmp_path: Path, monkey
 
     assert result['launch_status'] == 'started'
     assert calls
-    command, env = calls[0]
+    command, kwargs = calls[0]
+    env = kwargs.get('env')
     assert command == [str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'), 'terminal']
-    assert env is not None
+    assert isinstance(env, dict)
     assert 'TMUX' not in env
     assert 'TMUX_PANE' not in env
     assert 'CCB_TMUX_SOCKET' not in env
     assert 'CCB_TMUX_SOCKET_PATH' not in env
+    assert kwargs['stdin'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stdout'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stderr'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['close_fds'] is True
+    assert kwargs['start_new_session'] is True
 
 
-def test_workbench_terminal_starts_managed_wezterm_when_current_window_is_not_ccb_rich(tmp_path: Path, monkeypatch) -> None:
+def test_detached_terminal_process_has_no_tty_and_owns_its_session(tmp_path: Path, capfd) -> None:
+    if os.name != 'posix':
+        return
+    output = tmp_path / 'detached-process.json'
+    probe = tmp_path / 'detached-process.py'
+    probe.write_text(
+        'import json, os, pathlib, sys\n'
+        'pathlib.Path(sys.argv[1]).write_text(json.dumps({\n'
+        '    "pid": os.getpid(),\n'
+        '    "sid": os.getsid(0),\n'
+        '    "isatty": [os.isatty(0), os.isatty(1), os.isatty(2)],\n'
+        '}), encoding="utf-8")\n'
+        'print("detached-stdout-noise")\n'
+        'print("detached-stderr-noise", file=sys.stderr)\n',
+        encoding='utf-8',
+    )
+
+    process = workbench_tools._spawn_detached_terminal(
+        [sys.executable, str(probe), str(output)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+    )
+
+    assert process.wait(timeout=10) == 0
+    payload = json.loads(output.read_text(encoding='utf-8'))
+    assert payload['sid'] == payload['pid']
+    assert payload['isatty'] == [False, False, False]
+    captured = capfd.readouterr()
+    assert 'detached-stdout-noise' not in captured.out
+    assert 'detached-stderr-noise' not in captured.err
+
+
+def test_workbench_wayland_cursor_overlay_preserves_requested_theme(tmp_path: Path, monkeypatch) -> None:
+    if workbench_tools._is_wsl():
+        pytest.skip('native Linux Wayland XCursor overlay is intentionally disabled under WSL')
+    fake_bin = _prepare_env(tmp_path, monkeypatch)
+    cursor_root = tmp_path / 'xcursor'
+    pointer = cursor_root / 'TestTheme' / 'cursors' / 'pointer'
+    pointer.parent.mkdir(parents=True)
+    pointer.write_bytes(b'valid-test-xcursor')
+    monkeypatch.setattr(workbench_tools.platform, 'system', lambda: 'Linux')
+    monkeypatch.setenv('XCURSOR_PATH', str(cursor_root))
+    monkeypatch.setenv('XCURSOR_THEME', 'TestTheme')
+    monkeypatch.setenv('WAYLAND_DISPLAY', 'wayland-0')
+    wezterm_env_log = tmp_path / 'wezterm-env.txt'
+    (fake_bin / 'wezterm').write_text(
+        '#!/usr/bin/env sh\n'
+        'env > "$WEZTERM_ENV_LOG"\n',
+        encoding='utf-8',
+    )
+    (fake_bin / 'wezterm').chmod(0o755)
+    monkeypatch.setenv('WEZTERM_ENV_LOG', str(wezterm_env_log))
+
+    workbench_tools.provision_workbench(profile='rich')
+
+    root = tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench'
+    cursor_asset = root / 'profiles' / 'wezterm' / 'xcursor' / '.ccb-assets' / 'hand'
+    assert cursor_asset.read_bytes() == pointer.read_bytes()
+    wrapper = root / 'bin' / 'ccb-workbench'
+    env = workbench_tools._detached_terminal_env()
+    env['PATH'] = f'{fake_bin}:/usr/bin:/bin'
+    result = workbench_tools.subprocess.run(
+        [str(wrapper), 'terminal', '/bin/sh', '-lc', 'exit 0'],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    overlay = root / 'profiles' / 'wezterm' / 'xcursor' / 'TestTheme' / 'cursors' / 'hand'
+    assert overlay.read_bytes() == pointer.read_bytes()
+    wezterm_env = dict(
+        line.split('=', 1)
+        for line in wezterm_env_log.read_text(encoding='utf-8').splitlines()
+        if '=' in line
+    )
+    assert wezterm_env['XCURSOR_THEME'] == 'TestTheme'
+    assert wezterm_env['XCURSOR_PATH'].split(':', 1)[0] == str(root / 'profiles' / 'wezterm' / 'xcursor')
+    assert wezterm_env['CCB_WORKBENCH_XCURSOR_COMPAT'] == '1'
+
+
+def test_workbench_terminal_uses_saved_theme_instead_of_stale_inherited_theme(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     fake_bin = _prepare_env(tmp_path, monkeypatch)
     workbench_tools.provision_workbench(profile='rich')
     project_root = tmp_path / 'project'
@@ -474,9 +613,10 @@ def test_workbench_terminal_starts_managed_wezterm_when_current_window_is_not_cc
     assert str(project_root) in argv
     assert '-u' in argv
     assert 'TMUX' in argv
-    assert 'CCB_WORKBENCH_THEME=gruvbox_light' in argv
-    assert 'CCB_TMUX_THEME_PROFILE=light' in argv
-    assert 'CCB_SIDEBAR_THEME_PROFILE=light' in argv
+    assert 'CCB_WORKBENCH_THEME=dark' in argv
+    assert 'CCB_TMUX_THEME_PROFILE=default' in argv
+    assert 'CCB_SIDEBAR_THEME_PROFILE=default' in argv
+    assert 'CCB_WORKBENCH_THEME=gruvbox_light' not in argv
     assert 'CCB_WORKBENCH_FORCE_RICH=1' in argv
     assert argv[-3:] == ['/bin/sh', '-lc', 'echo rich']
 
@@ -528,6 +668,59 @@ def test_workbench_terminal_reads_global_theme_config(tmp_path: Path, monkeypatc
     assert 'CCB_WORKBENCH_THEME=solarized_light' in argv
     assert 'CCB_TMUX_THEME_PROFILE=light' in argv
     assert 'CCB_SIDEBAR_THEME_PROFILE=light' in argv
+
+
+def test_workbench_terminal_resolves_system_theme_without_user_wezterm_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fake_bin = _prepare_env(tmp_path, monkeypatch)
+    workbench_tools.provision_workbench(profile='rich')
+    wrapper = tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'
+    theme_config_path().write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'theme': 'system',
+                'palette': 'system',
+                'tmux_profile': 'system',
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    project_root = tmp_path / 'project'
+    project_root.mkdir()
+    wezterm_log = tmp_path / 'wezterm-argv-system-theme.txt'
+    (fake_bin / 'wezterm').write_text(
+        '#!/usr/bin/env sh\n'
+        'printf "%s\\n" "$@" > "$WEZTERM_ARGV_LOG"\n',
+        encoding='utf-8',
+    )
+    (fake_bin / 'wezterm').chmod(0o755)
+
+    env = workbench_tools._detached_terminal_env()
+    env['PATH'] = f'{fake_bin}:/usr/bin:/bin'
+    env['WEZTERM_ARGV_LOG'] = str(wezterm_log)
+    env['CCB_SYSTEM_THEME'] = 'light'
+    result = workbench_tools.subprocess.run(
+        [str(wrapper), 'terminal', '/bin/sh', '-lc', 'echo system-themed'],
+        cwd=project_root,
+        env=env,
+        text=True,
+        stdout=workbench_tools.subprocess.PIPE,
+        stderr=workbench_tools.subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    argv = wezterm_log.read_text(encoding='utf-8').splitlines()
+    assert 'CCB_WORKBENCH_THEME=latte' in argv
+    assert 'CCB_TMUX_THEME_PROFILE=light' in argv
+    assert 'CCB_SIDEBAR_THEME_PROFILE=light' in argv
+    assert all('.wezterm.lua' not in item for item in argv)
 
 
 def test_workbench_terminal_reports_inotify_exhaustion_before_new_wezterm(tmp_path: Path, monkeypatch) -> None:
@@ -809,13 +1002,13 @@ def test_rich_launch_opens_wezterm_with_source_test_entrypoint(tmp_path: Path, m
     monkeypatch.setenv('TMUX_PANE', '%7')
     monkeypatch.setenv('CCB_TMUX_SOCKET', 'outer')
     monkeypatch.setenv('CCB_TMUX_SOCKET_PATH', '/tmp/outer.sock')
-    calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
     class _Process:
         pid = 4242
 
-    def _popen(command, cwd=None, env=None):
-        calls.append((list(command), str(cwd) if cwd is not None else None, dict(env) if env is not None else None))
+    def _popen(command, **kwargs):
+        calls.append((list(command), dict(kwargs)))
         return _Process()
 
     monkeypatch.setattr(workbench_tools.subprocess, 'Popen', _popen)
@@ -825,17 +1018,24 @@ def test_rich_launch_opens_wezterm_with_source_test_entrypoint(tmp_path: Path, m
     assert result['launch_status'] == 'started'
     assert result['launch_pid'] == 4242
     assert calls
-    command, cwd, env = calls[0]
+    command, kwargs = calls[0]
+    cwd = kwargs.get('cwd')
+    env = kwargs.get('env')
     assert cwd == str(project_root)
     assert command[:2] == [str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'), 'terminal']
     assert command[2:4] == ['/bin/sh', '-lc']
     assert str(script_root / 'ccb_test') in command[4]
     assert 'exec "${SHELL:-/bin/sh}" -l' in command[4]
-    assert env is not None
+    assert isinstance(env, dict)
     assert 'TMUX' not in env
     assert 'TMUX_PANE' not in env
     assert 'CCB_TMUX_SOCKET' not in env
     assert 'CCB_TMUX_SOCKET_PATH' not in env
+    assert kwargs['stdin'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stdout'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['stderr'] == workbench_tools.subprocess.DEVNULL
+    assert kwargs['close_fds'] is True
+    assert kwargs['start_new_session'] is True
 
 
 def test_rich_launch_requires_update_rich_first(tmp_path: Path, monkeypatch) -> None:

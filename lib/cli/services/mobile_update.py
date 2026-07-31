@@ -1,28 +1,37 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
+import ipaddress
 import json
 import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from types import SimpleNamespace
 
 from cli.services.mobile import prepare_server_mobile_gateway
-from cli.services.terminal_qr import render_terminal_qr
+from cli.services.terminal_qr import render_terminal_qr, write_terminal_qr_png
+from mobile_gateway import mobile_host_state_dir, parse_listen_address
 
 
 TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download"
 TAILSCALE_LOGIN_URL = "https://login.tailscale.com/start"
 DEFAULT_MOBILE_GATEWAY_LISTEN = "127.0.0.1:8787"
+MOBILE_CONNECTION_CODE_PREFIX = "ccb1_"
+MOBILE_COMPACT_RELAY_QR_PREFIX = "ccbr1_"
 CCB_MOBILE_APP_DOWNLOAD_URL_ENV = "CCB_MOBILE_APP_DOWNLOAD_URL"
+CCB_MOBILE_PAIRING_QR_OUTPUT_ENV = "CCB_MOBILE_PAIRING_QR_OUTPUT"
+MAX_INLINE_TERMINAL_QR_COLUMNS = 100
 DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL = (
     "https://github.com/SeemSeam/claude_codex_bridge/releases/download/"
-    "v8.3.1/ccb-mobile-v8.3.1.apk"
+    "v8.5.2/ccb-mobile-v8.5.2.apk"
 )
 TAILSCALE_LINUX_INSTALL_COMMAND = (
     "sh",
@@ -65,6 +74,7 @@ def run_mobile_update_onboarding(
     print_fn: Callable[[str], None] = print,
     serve_forever: bool = True,
     qr_ansi: bool | None = None,
+    listen: str = DEFAULT_MOBILE_GATEWAY_LISTEN,
 ) -> int:
     detect_tailscale_fn = detect_tailscale_fn or detect_tailscale
     install_tailscale_fn = install_tailscale_fn or install_tailscale
@@ -115,7 +125,7 @@ def run_mobile_update_onboarding(
         return 0
 
     print_fn("Tailscale: logged in")
-    commands = build_tailnet_onboarding_commands(status=status)
+    commands = build_tailnet_onboarding_commands(status=status, listen=listen)
     if start_service_fn is not None:
         print_fn("")
         print_fn("Starting or refreshing the loopback-only CCB Mobile gateway:")
@@ -136,16 +146,12 @@ def run_mobile_update_onboarding(
         _print_mobile_app_steps(print_fn, environ=env, qr_ready=True)
         print_fn("")
         print_fn("Scan this QR in CCB Mobile:")
-        use_ansi = (
-            (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
-        )
-        for line in render_terminal_qr(
+        _print_pairing_qr(
             qr_payload,
-            ansi=use_ansi,
-            quiet_zone=2,
-            compact=True,
-        ):
-            print_fn(line)
+            print_fn=print_fn,
+            qr_ansi=qr_ansi,
+            environ=env,
+        )
         print_fn("")
         _print_pairing_fallback(service, print_fn=print_fn)
         print_fn("")
@@ -214,13 +220,12 @@ def run_mobile_update_onboarding(
     _print_mobile_app_steps(print_fn, environ=env, qr_ready=True)
     print_fn("")
     print_fn("Scan this QR in CCB Mobile:")
-    use_ansi = (
-        (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
+    _print_pairing_qr(
+        qr_payload,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+        environ=env,
     )
-    for line in render_terminal_qr(
-        qr_payload, ansi=use_ansi, quiet_zone=2, compact=True
-    ):
-        print_fn(line)
     print_fn("")
     _print_pairing_fallback(handle.summary, print_fn=print_fn)
     if serve_forever:
@@ -233,6 +238,360 @@ def run_mobile_update_onboarding(
     else:
         _close_handle(handle)
     return 0
+
+
+def run_mobile_relay_onboarding(
+    *,
+    start_service_fn: Callable[[], Mapping[str, object]],
+    environ: Mapping[str, str] | None = None,
+    print_fn: Callable[[str], None] = print,
+    qr_ansi: bool | None = None,
+) -> int:
+    env = os.environ if environ is None else environ
+    print_fn("CCB Mobile Relay setup")
+    print_fn("Security: loopback-only gateway with an outbound encrypted Relay connector.")
+    print_fn("")
+    print_fn("Starting or refreshing the loopback-only CCB Mobile gateway:")
+    try:
+        service = start_service_fn()
+        if not isinstance(service, Mapping):
+            raise TypeError('mobile service starter must return a mapping')
+        if str(service.get('route_provider') or '') != 'relay':
+            raise ValueError('mobile service did not start in relay mode')
+        _print_mobile_service_summary(print_fn, service)
+        qr_payload = _pairing_qr_text(service)
+    except Exception as exc:
+        print_fn(f"❌ CCB Mobile gateway update failed: {type(exc).__name__}: {exc}")
+        return 1
+    print_fn("")
+    print_fn("On your phone:")
+    print_fn("   1. Install or update CCB Mobile.")
+    print_fn("   2. Open CCB Mobile.")
+    print_fn(
+        "   3. Scan the complete Relay QR, or paste the connection code below."
+    )
+    print_fn(
+        "   The one-time Relay invitation stays on the computer "
+        "and is not part of this QR."
+    )
+    app_download_url = (
+        _clean_text(env.get(CCB_MOBILE_APP_DOWNLOAD_URL_ENV))
+        or DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL
+    )
+    print_fn(f"   APK: {app_download_url}")
+    print_fn("")
+    print_fn("Scan this QR in CCB Mobile:")
+    _print_pairing_qr(
+        qr_payload,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+        environ=env,
+    )
+    print_fn("")
+    _print_pairing_fallback(service, print_fn=print_fn)
+    print_fn(
+        "The QR and connection code contain the same host fingerprint "
+        "and single-use bootstrap."
+    )
+    print_fn("Run this command again when that bootstrap expires or has already been used.")
+    return 0
+
+
+def run_mobile_lan_onboarding(
+    *,
+    start_service_fn: Callable[[], Mapping[str, object]],
+    listen: str,
+    environ: Mapping[str, str] | None = None,
+    print_fn: Callable[[str], None] = print,
+    qr_ansi: bool | None = None,
+) -> int:
+    try:
+        parsed = parse_listen_address(listen, allow_lan=True)
+    except ValueError as exc:
+        print_fn(f"Invalid LAN listen address: {exc}")
+        return 1
+    if parsed.host.strip().lower() in {"127.0.0.1", "localhost", "::1"}:
+        print_fn(
+            "LAN setup requires a specific private interface address, "
+            "not a loopback address."
+        )
+        return 1
+    return _run_mobile_direct_route_onboarding(
+        route_provider="lan",
+        title="CCB Mobile local network setup",
+        security_text=(
+            "Security: direct HTTP on a trusted local network. "
+            "Do not expose this listener to the public Internet."
+        ),
+        phone_steps=(
+            "Connect the phone and computer to the same trusted local network.",
+            "Open CCB Mobile.",
+            "Scan the complete LAN QR or paste the connection code below.",
+        ),
+        start_service_fn=start_service_fn,
+        environ=environ,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+    )
+
+
+def run_mobile_cloudflare_onboarding(
+    *,
+    start_service_fn: Callable[[], Mapping[str, object]],
+    environ: Mapping[str, str] | None = None,
+    print_fn: Callable[[str], None] = print,
+    qr_ansi: bool | None = None,
+) -> int:
+    return _run_mobile_direct_route_onboarding(
+        route_provider="cloudflare_tunnel",
+        title="CCB Mobile Cloudflare Tunnel setup",
+        security_text=(
+            "Security: advanced route. Configure an authenticated HTTPS/WebSocket "
+            "tunnel to the loopback-only gateway before pairing."
+        ),
+        phone_steps=(
+            "Confirm the named Cloudflare Tunnel is running.",
+            "Open CCB Mobile.",
+            "Scan the complete tunnel QR or paste the connection code below.",
+        ),
+        start_service_fn=start_service_fn,
+        environ=environ,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+    )
+
+
+def _run_mobile_direct_route_onboarding(
+    *,
+    route_provider: str,
+    title: str,
+    security_text: str,
+    phone_steps: Sequence[str],
+    start_service_fn: Callable[[], Mapping[str, object]],
+    environ: Mapping[str, str] | None,
+    print_fn: Callable[[str], None],
+    qr_ansi: bool | None,
+) -> int:
+    env = os.environ if environ is None else environ
+    print_fn(title)
+    print_fn(security_text)
+    print_fn("")
+    print_fn("Starting or refreshing the server-wide CCB Mobile gateway:")
+    try:
+        service = start_service_fn()
+        if not isinstance(service, Mapping):
+            raise TypeError("mobile service starter must return a mapping")
+        if str(service.get("route_provider") or "") != route_provider:
+            raise ValueError(
+                f"mobile service did not start in {route_provider} mode"
+            )
+        _print_mobile_service_summary(print_fn, service)
+        qr_payload = _pairing_qr_text(service)
+    except Exception as exc:
+        print_fn(f"❌ CCB Mobile gateway update failed: {type(exc).__name__}: {exc}")
+        return 1
+    print_fn("")
+    print_fn("On your phone:")
+    for index, step in enumerate(phone_steps, start=1):
+        print_fn(f"   {index}. {step}")
+    app_download_url = (
+        _clean_text(env.get(CCB_MOBILE_APP_DOWNLOAD_URL_ENV))
+        or DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL
+    )
+    print_fn(f"   APK: {app_download_url}")
+    print_fn("")
+    print_fn("Scan this QR in CCB Mobile:")
+    _print_pairing_qr(
+        qr_payload,
+        print_fn=print_fn,
+        qr_ansi=qr_ansi,
+        environ=env,
+    )
+    print_fn("")
+    _print_pairing_fallback(service, print_fn=print_fn)
+    return 0
+
+
+def suggest_lan_listen_address(
+    *,
+    port: int = 8787,
+    socket_factory: Callable[..., socket.socket] = socket.socket,
+    hostname_fn: Callable[[], str] = socket.gethostname,
+    getaddrinfo_fn: Callable[..., Sequence[tuple[object, ...]]] = socket.getaddrinfo,
+    run_fn: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
+    system_fn: Callable[[], str] = platform.system,
+) -> str | None:
+    candidates = _lan_interface_ipv4_candidates(
+        run_fn=run_fn,
+        system_name=system_fn(),
+    )
+    known_interfaces: dict[str, list[str]] = {}
+    for interface, address in candidates:
+        known_interfaces.setdefault(address.strip(), []).append(interface)
+    route_socket = None
+    try:
+        route_socket = socket_factory(socket.AF_INET, socket.SOCK_DGRAM)
+        route_socket.connect(("192.0.2.1", 9))
+        candidates.append(("", str(route_socket.getsockname()[0] or "")))
+    except OSError:
+        pass
+    finally:
+        if route_socket is not None:
+            try:
+                route_socket.close()
+            except OSError:
+                pass
+    try:
+        records = getaddrinfo_fn(
+            hostname_fn(),
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError:
+        records = ()
+    for record in records:
+        try:
+            candidates.append(("", str(record[4][0])))
+        except (IndexError, TypeError):
+            continue
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda item: _lan_candidate_rank(
+            interface=item[1][0],
+            address=item[1][1],
+            original_index=item[0],
+        ),
+    )
+    for _index, (_interface, candidate) in ranked:
+        text = candidate.strip()
+        if not text or not _is_preferred_lan_address(text):
+            continue
+        if _interface and _is_virtual_network_interface(_interface):
+            continue
+        interfaces = known_interfaces.get(text, ())
+        if (
+            not _interface
+            and interfaces
+            and all(_is_virtual_network_interface(name) for name in interfaces)
+        ):
+            continue
+        try:
+            parsed = parse_listen_address(f"{text}:{port}", allow_lan=True)
+        except ValueError:
+            continue
+        if parsed.host.strip().lower() in {"127.0.0.1", "localhost", "::1"}:
+            continue
+        return parsed.text
+    return None
+
+
+def _lan_interface_ipv4_candidates(
+    *,
+    run_fn: Callable[..., subprocess.CompletedProcess[object]],
+    system_name: str,
+) -> list[tuple[str, str]]:
+    if system_name == "Linux":
+        command = ("ip", "-o", "-4", "addr", "show", "scope", "global")
+    elif system_name == "Darwin":
+        command = ("ifconfig",)
+    else:
+        return []
+    try:
+        result = run_fn(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    text = str(result.stdout or "")
+    if system_name == "Linux":
+        candidates: list[tuple[str, str]] = []
+        for line in text.splitlines():
+            match = re.search(
+                r"^\d+:\s+([^\s:]+)(?:@[^\s]+)?\s+inet\s+([0-9.]+)/\d+",
+                line.strip(),
+            )
+            if match:
+                candidates.append((match.group(1), match.group(2)))
+        return candidates
+    candidates = []
+    interface = ""
+    for line in text.splitlines():
+        if line and not line[0].isspace() and ":" in line:
+            interface = line.split(":", 1)[0].strip()
+            continue
+        match = re.match(r"\s*inet\s+([0-9.]+)\s", line)
+        if match:
+            candidates.append((interface, match.group(1)))
+    return candidates
+
+
+def _lan_candidate_rank(
+    *,
+    interface: str,
+    address: str,
+    original_index: int,
+) -> tuple[int, int, int]:
+    virtual = _is_virtual_network_interface(interface)
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return (3, 3, original_index)
+    if parsed in ipaddress.ip_network("192.168.0.0/16"):
+        range_rank = 0
+    elif parsed in ipaddress.ip_network("172.16.0.0/12"):
+        range_rank = 1
+    elif parsed in ipaddress.ip_network("10.0.0.0/8"):
+        range_rank = 2
+    else:
+        range_rank = 3
+    return (1 if virtual else 0, range_rank, original_index)
+
+
+def _is_virtual_network_interface(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    return normalized.startswith(
+        (
+            "br-",
+            "docker",
+            "ham",
+            "mihomo",
+            "tailscale",
+            "tap",
+            "tun",
+            "utun",
+            "veth",
+            "virbr",
+            "vmnet",
+            "wg",
+            "zt",
+            "zerotier",
+        )
+    )
+
+
+def _is_preferred_lan_address(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return bool(
+        address.version == 4
+        and (
+            address in ipaddress.ip_network("10.0.0.0/8")
+            or address in ipaddress.ip_network("172.16.0.0/12")
+            or address in ipaddress.ip_network("192.168.0.0/16")
+            or address.is_link_local
+        )
+        and not address.is_loopback
+        and not address.is_unspecified
+        and not address.is_multicast
+    )
 
 
 def detect_tailscale(
@@ -499,6 +858,156 @@ def _print_ready_summary(
     print_fn(f"Mounted projects available in the app: {summary.get('project_count', 0)}")
 
 
+def _print_pairing_qr(
+    payload: str,
+    *,
+    print_fn: Callable[[str], None],
+    qr_ansi: bool | None,
+    environ: Mapping[str, str],
+    terminal_columns: int | None = None,
+    qr_image_path: str | Path | None = None,
+) -> Path | None:
+    display_payload = payload
+    plain_lines = render_terminal_qr(
+        payload,
+        ansi=False,
+        quiet_zone=2,
+        compact=True,
+    )
+    required_columns = max((len(line) for line in plain_lines), default=0)
+    available_columns = (
+        _terminal_columns(print_fn)
+        if terminal_columns is None
+        else max(1, int(terminal_columns))
+    )
+    inline_limit = (
+        min(available_columns, MAX_INLINE_TERMINAL_QR_COLUMNS)
+        if available_columns is not None
+        else None
+    )
+    image_path: Path | None = None
+    if inline_limit is not None and required_columns > inline_limit:
+        compact_payload = build_compact_relay_qr_payload(payload)
+        if compact_payload is not None:
+            compact_lines = render_terminal_qr(
+                compact_payload,
+                ansi=False,
+                quiet_zone=2,
+                compact=True,
+            )
+            compact_columns = max((len(line) for line in compact_lines), default=0)
+            if compact_columns <= inline_limit:
+                display_payload = compact_payload
+                plain_lines = compact_lines
+                required_columns = compact_columns
+
+        image_path = Path(qr_image_path).expanduser() if qr_image_path else (
+            _pairing_qr_image_path(environ)
+        )
+        write_terminal_qr_png(
+            image_path,
+            payload,
+            quiet_zone=4,
+            module_size=8,
+        )
+        if required_columns > inline_limit:
+            if required_columns > available_columns:
+                reason = (
+                    f"{required_columns} columns required; "
+                    f"{available_columns} available"
+                )
+            else:
+                reason = (
+                    f"{required_columns} columns exceeds the "
+                    f"{MAX_INLINE_TERMINAL_QR_COLUMNS}-column safe inline limit"
+                )
+            print_fn(f"Terminal QR omitted to keep it scannable ({reason}).")
+            print_fn(f"Pairing QR image: {image_path}")
+            print_fn(
+                "Open that owner-only PNG at normal size and scan it with CCB Mobile."
+            )
+            return image_path
+
+        print_fn(
+            f"Compact Relay QR shown in {required_columns} columns; "
+            "the complete compatibility QR is also saved below."
+        )
+
+    use_ansi = (
+        (
+            print_fn is print
+            and sys.stdout.isatty()
+            and _terminal_supports_ansi(environ)
+        )
+        if qr_ansi is None
+        else qr_ansi
+    )
+    lines = (
+        render_terminal_qr(
+            display_payload,
+            ansi=True,
+            quiet_zone=2,
+            compact=True,
+        )
+        if use_ansi
+        else plain_lines
+    )
+    for line in lines:
+        print_fn(line)
+    if image_path is not None:
+        print_fn(f"Pairing QR image: {image_path}")
+        print_fn(
+            "The PNG keeps the complete legacy-compatible payload and is owner-only."
+        )
+    return image_path
+
+
+def build_compact_relay_qr_payload(pairing_payload: str) -> str | None:
+    try:
+        payload = json.loads(str(pairing_payload or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    if _clean_text(payload.get("route_provider")).lower() != "relay":
+        return None
+    mode = _clean_text(payload.get("relay_mode")).lower().replace("-", "_")
+    mode_code = {
+        "official": "o",
+        "self_hosted": "s",
+    }.get(mode)
+    if mode_code is None:
+        return None
+    fields = (
+        _clean_text(payload.get("pairing_code")),
+        _clean_text(payload.get("relay_client_private_key_b64")),
+        _clean_text(payload.get("server_fingerprint")),
+        mode_code,
+        _clean_text(payload.get("relay_rendezvous_capability")),
+    )
+    if not all(fields) or any("|" in value for value in fields):
+        return None
+    return f"{MOBILE_COMPACT_RELAY_QR_PREFIX}{'|'.join(fields)}"
+
+
+def _terminal_columns(print_fn: Callable[[str], None]) -> int | None:
+    if print_fn is not print:
+        return None
+    return max(1, int(shutil.get_terminal_size(fallback=(80, 24)).columns))
+
+
+def _terminal_supports_ansi(environ: Mapping[str, str]) -> bool:
+    terminal = _clean_text(environ.get("TERM")).lower()
+    return terminal not in {"", "dumb"} and "NO_COLOR" not in environ
+
+
+def _pairing_qr_image_path(environ: Mapping[str, str]) -> Path:
+    configured = _clean_text(environ.get(CCB_MOBILE_PAIRING_QR_OUTPUT_ENV))
+    if configured:
+        return Path(configured).expanduser()
+    return mobile_host_state_dir() / "pairing-qr.png"
+
+
 def _pairing_qr_text(summary: Mapping[str, object]) -> str:
     pairing = summary.get("pairing")
     if not isinstance(pairing, Mapping):
@@ -514,6 +1023,23 @@ def _pairing_qr_text(summary: Mapping[str, object]) -> str:
         ),
         "scopes": list(pairing.get("scopes") or []),
     }
+    for key in (
+        "project_id",
+        "host_id",
+        "relay_mode",
+        "expires_at",
+        "websocket_url",
+        "server_fingerprint",
+        "relay_session_id",
+        "relay_client_private_key_b64",
+        "relay_phone_nonce_b64",
+        "relay_rendezvous_capability",
+        "relay_bootstrap_expires_at",
+        "relay_bootstrap_single_use",
+    ):
+        value = pairing.get(key)
+        if value is not None and value != "":
+            payload[key] = value
     if (
         not payload["pairing_code"]
         or not payload["claim_endpoint"]
@@ -525,17 +1051,20 @@ def _pairing_qr_text(summary: Mapping[str, object]) -> str:
     )
 
 
+def build_mobile_connection_code(pairing_payload: str) -> str:
+    payload = str(pairing_payload or "").strip()
+    if not payload:
+        raise ValueError("mobile pairing payload is empty")
+    encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+    return f"{MOBILE_CONNECTION_CODE_PREFIX}{encoded.rstrip('=')}"
+
+
 def _print_pairing_fallback(
     summary: Mapping[str, object], *, print_fn: Callable[[str], None]
 ) -> None:
-    pairing = summary.get("pairing")
-    if not isinstance(pairing, Mapping):
-        return
-    print_fn("If scanning fails, use Manual Pairing in CCB Mobile:")
-    print_fn(
-        f"  Gateway URL: {pairing.get('gateway_url') or summary.get('gateway_url') or ''}"
-    )
-    print_fn(f"  Pairing Code: {pairing.get('pairing_code') or ''}")
+    connection_code = build_mobile_connection_code(_pairing_qr_text(summary))
+    print_fn("If scanning is unavailable, paste this connection code in CCB Mobile:")
+    print_fn(connection_code)
 
 
 def _split_loopback_listen(value: str) -> tuple[str, str]:
@@ -654,10 +1183,12 @@ def _print_mobile_app_steps(
     )
     print_fn("   3. Turn on the Tailscale VPN.")
     if qr_ready:
-        print_fn("   4. Open CCB Mobile, tap Scan computer QR, and scan the QR below.")
+        print_fn(
+            "   4. Open CCB Mobile, then scan the QR or paste the connection code below."
+        )
     else:
         print_fn(
-            "   4. After the next `ccb update mobile` prints a QR, open CCB Mobile and scan it."
+            "   4. After the next `ccb update mobile` prints a QR and connection code, open CCB Mobile."
         )
 
 
@@ -681,12 +1212,8 @@ def _print_mobile_service_summary(print_fn: Callable[[str], None], service: Mapp
         print_fn(f"   replaced_pid: {service.get('replaced_pid')}")
     pairing = service.get("pairing")
     if isinstance(pairing, Mapping):
-        if pairing.get("pairing_code"):
-            print_fn(f"   pairing_code: {pairing.get('pairing_code')}")
         if pairing.get("expires_at"):
             print_fn(f"   pairing_expires_at: {pairing.get('expires_at')}")
-        if pairing.get("claim_endpoint"):
-            print_fn(f"   pairing_claim_endpoint: {pairing.get('claim_endpoint')}")
 
 
 def _should_open_login(environ: Mapping[str, str]) -> bool:
@@ -726,6 +1253,7 @@ def _quote_shell_part(value: object) -> str:
 
 __all__ = [
     "DEFAULT_MOBILE_GATEWAY_LISTEN",
+    "MOBILE_CONNECTION_CODE_PREFIX",
     "CCB_MOBILE_APP_DOWNLOAD_URL_ENV",
     "DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL",
     "TAILSCALE_LINUX_INSTALL_COMMAND",
@@ -733,8 +1261,13 @@ __all__ = [
     "TAILSCALE_LOGIN_URL",
     "TailnetOnboardingCommands",
     "TailscaleStatus",
+    "build_mobile_connection_code",
     "build_tailnet_onboarding_commands",
     "detect_tailscale",
     "install_tailscale",
+    "run_mobile_cloudflare_onboarding",
+    "run_mobile_lan_onboarding",
+    "run_mobile_relay_onboarding",
     "run_mobile_update_onboarding",
+    "suggest_lan_listen_address",
 ]

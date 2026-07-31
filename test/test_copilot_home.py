@@ -100,7 +100,7 @@ def _hard_role_policy(tmp_path: Path) -> RoleCommandPolicy:
     )
 
 
-def test_materialize_copilot_projects_only_plugin_entries_and_local_tree(tmp_path: Path) -> None:
+def test_materialize_copilot_projects_login_and_plugins_without_linking_source(tmp_path: Path) -> None:
     source_home = tmp_path / 'source-home'
     target_home = tmp_path / 'target-home'
     entry, source_plugin = _write_plugin(source_home)
@@ -145,9 +145,9 @@ def test_materialize_copilot_projects_only_plugin_entries_and_local_tree(tmp_pat
     materialize_copilot_home_config(target_home, source_home=source_home)
 
     payload = _read_config(target_home)
-    assert payload['loggedInUsers'] == target_payload['loggedInUsers']
+    assert payload['loggedInUsers'] == [{'host': 'source.invalid', 'login': 'source-user'}]
     assert payload['trustedFolders'] == target_payload['trustedFolders']
-    assert 'copilotTokens' not in payload
+    assert payload['copilotTokens'] == {'source.invalid': 'not-copied'}
     entries = payload['installedPlugins']
     assert isinstance(entries, list) and len(entries) == 2
     projected = _projected_entry(target_home)
@@ -168,6 +168,9 @@ def test_materialize_copilot_projects_only_plugin_entries_and_local_tree(tmp_pat
         assert path.read_text(encoding='utf-8') == text
     assert tree_content_fingerprint(source_home) == source_hash
     assert source_plugin.is_dir()
+    payload['copilotTokens']['source.invalid'] = 'managed-only'
+    _write_config(target_home, payload)
+    assert _read_config(source_home)['copilotTokens']['source.invalid'] == 'not-copied'
 
 
 def test_materialize_copilot_supports_direct_entries_and_two_agent_isolation(tmp_path: Path) -> None:
@@ -280,11 +283,12 @@ def test_materialize_copilot_refreshes_and_removes_only_owned_entry(tmp_path: Pa
 
     _write_config(source_home, {'loggedInUsers': []})
     materialize_copilot_home_config(target_home, source_home=source_home)
-    assert tree_content_fingerprint(target_home) == before
+    assert _read_config(target_home)['loggedInUsers'] == []
+    assert target_plugin.is_dir()
 
     _write_config(source_home, {'installedPlugins': []})
     materialize_copilot_home_config(target_home, source_home=source_home)
-    assert _read_config(target_home) == {'staff': False}
+    assert _read_config(target_home) == {'staff': False, 'loggedInUsers': []}
     assert not target_plugin.exists()
     assert not _tree_marker(target_plugin).exists()
     assert not _aggregate_marker(target_home).exists()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from provider_profiles import load_resolved_provider_profile
 from provider_thinking_shortcuts import provider_thinking_runtime_env
 from workspace.models import WorkspacePlan
 
+from .home import materialize_deepseek_home
+
 
 def build_runtime_launcher() -> ProviderRuntimeLauncher:
     return ProviderRuntimeLauncher(
@@ -37,12 +40,14 @@ def prepare_launch_context(
     runtime_dir: Path,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
-    del runtime_dir
     payload = dict(prepared_state or {})
     payload["agent_name"] = spec.name
     payload["project_root"] = str(context.project.project_root)
     payload["workspace_path"] = str(prepared_state.get("run_cwd") or plan.workspace_path)
     payload["agent_events_path"] = str(context.paths.agent_events_path(spec.name))
+    payload["deepseek_home"] = str(
+        context.paths.agent_provider_state_dir(spec.name, "deepseek") / "home"
+    )
     return payload
 
 
@@ -54,9 +59,20 @@ def build_start_cmd(
     *,
     prepared_state: dict[str, object] | None = None,
 ) -> str:
-    del command, prepared_state
+    del command
     runtime_dir = Path(runtime_dir)
+    launch_context = prepared_state or {}
     profile = load_resolved_provider_profile(runtime_dir)
+    deepseek_home = Path(
+        str(launch_context.get("deepseek_home") or (runtime_dir / "deepseek-home"))
+    ).expanduser()
+    materialize_deepseek_home(deepseek_home, profile=profile)
+    private_env = {"HOME": str(deepseek_home)}
+    if "WSL_DISTRO_NAME" in os.environ:
+        private_env["USERPROFILE"] = str(deepseek_home)
+        additions = "HOME/p:USERPROFILE/p"
+        existing = os.environ.get("WSLENV", "")
+        private_env["WSLENV"] = f"{additions}:{existing}" if existing else additions
     runtime_env = {
         **(dict(profile.env) if profile is not None else {}),
         **spec.env,
@@ -70,6 +86,7 @@ def build_start_cmd(
     env_prefix = join_env_prefix(
         export_env_clause(provider_user_session_env()),
         export_env_clause(runtime_env),
+        export_env_clause(private_env),
         export_env_clause(
             caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
         ),
@@ -91,7 +108,7 @@ def build_session_payload(
     launch_session_id: str,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
-    del prepared_state
+    prepared = prepared_state or {}
     return {
         "ccb_session_id": launch_session_id,
         "agent_name": spec.name,
@@ -106,6 +123,7 @@ def build_session_payload(
         "work_dir": str(run_cwd),
         "start_dir": str(context.project.project_root),
         "start_cmd": start_cmd,
+        "deepseek_home": str(prepared.get("deepseek_home") or ""),
     }
 
 

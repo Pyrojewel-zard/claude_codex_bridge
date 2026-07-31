@@ -43,6 +43,7 @@ class TmuxRespawnService:
         start_dir = self.normalize_start_dir_fn(cwd)
         cmd_body, _ = self.append_stderr_redirection_fn(cmd_body, stderr_log_path)
         full = _resolved_shell_command(self, cmd_body)
+        _clear_pane_history(self, pane_id)
         if remain_on_exit:
             _set_remain_on_exit(self, pane_id)
         tmux_args = self.build_respawn_tmux_args_fn(
@@ -96,6 +97,13 @@ def _tmux_default_shell(service: TmuxRespawnService) -> str:
 
 def _set_remain_on_exit(service: TmuxRespawnService, pane_id: str) -> None:
     service.tmux_run_fn(['set-option', '-p', '-t', pane_id, 'remain-on-exit', 'on'], check=False, capture=True)
+
+
+def _clear_pane_history(service: TmuxRespawnService, pane_id: str) -> None:
+    try:
+        service.tmux_run_fn(['clear-history', '-t', pane_id], check=False, capture=True)
+    except Exception:
+        pass
 
 
 def _run_respawn_command(service: TmuxRespawnService, tmux_args: list[str]) -> None:

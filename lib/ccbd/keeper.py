@@ -13,7 +13,6 @@ from ccbd.keeper_runtime.app_state import KeeperAppState, KeeperAppStateMixin
 from ccbd.keeper_runtime import KeeperState, KeeperStateStore, ShutdownIntent, ShutdownIntentStore, keeper_state_is_running
 from ccbd.keeper_runtime.failure_policy import exception_summary, keeper_start_failure_suppression_reason
 from ccbd.keeper_runtime.loop import cleanup_transient_keeper_files, daemon_matches_project_config, reconcile_once, request_shutdown, run_forever
-from ccbd.keeper_runtime.state import compute_project_id
 from ccbd.keeper_runtime.support import reap_child_processes, try_acquire_keeper_lock
 from ccbd.services.lifecycle import CcbdLifecycleStore, current_socket_inode, lifecycle_from_inspection
 from ccbd.services.mount import MountManager
@@ -23,6 +22,7 @@ from ccbd.startup_policy import STARTUP_TRANSACTION_TIMEOUT_S
 from ccbd.system import parse_utc_timestamp, process_exists, utc_now
 from cli.kill_runtime.processes import terminate_pid_tree
 from mobile_gateway.project_registry import publish_mobile_gateway_project
+from project.identity_store import ensure_project_identity
 from storage.paths import PathLayout
 
 
@@ -38,6 +38,7 @@ class ProjectKeeper(KeeperAppStateMixin):
         spawn_ccbd_process_fn=spawn_ccbd_process,
     ) -> None:
         resolved_project_root = Path(project_root).expanduser().resolve()
+        ensure_project_identity(resolved_project_root)
         paths = PathLayout(resolved_project_root)
         paths.ensure_runtime_state_root()
         _publish_mobile_gateway_project(paths.project_id, resolved_project_root, paths.ccbd_socket_path, clock=clock)
@@ -95,7 +96,7 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
             lifecycle = app._lifecycle_store.load()
             if lifecycle is None:
                 lifecycle = lifecycle_from_inspection(
-                    project_id=compute_project_id(app.project_root),
+                    project_id=app.paths.project_id,
                     inspection=inspection,
                     occurred_at=now,
                     keeper_pid=app.pid,

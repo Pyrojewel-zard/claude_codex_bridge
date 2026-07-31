@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../l10n/ccb_mobile_localizations.dart';
 import 'gateway_pairing.dart';
 
 class GatewayPairingScannerScreen extends StatefulWidget {
@@ -221,6 +222,7 @@ class _GatewayPairingScannerScreenState
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final strings = CcbMobileLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Scan Pairing QR')),
       body: Stack(
@@ -302,7 +304,7 @@ class _GatewayPairingScannerScreenState
                         ),
                         onPressed: () => Navigator.of(context).pop(),
                         icon: const Icon(Icons.keyboard_outlined),
-                        label: const Text('Manual setup'),
+                        label: Text(strings.enterConnectionCode),
                       ),
                     ],
                   ),
@@ -424,15 +426,16 @@ String gatewayPairingCameraErrorMessage(Object error) {
   if (error is MobileScannerException) {
     return switch (error.errorCode) {
       MobileScannerErrorCode.permissionDenied =>
-        'Camera permission denied. Enable camera access for CCB Mobile or use image/manual setup.',
+        'Camera permission denied. Enable camera access for CCB Mobile, scan an image, or enter a connection code.',
       MobileScannerErrorCode.unsupported =>
-        'This device does not expose a usable camera. Use image/manual setup instead.',
+        'This device does not expose a usable camera. Scan an image or enter a connection code instead.',
       MobileScannerErrorCode.controllerInitializing =>
-        'Camera is still starting. Try again, or use image/manual setup.',
-      _ => 'Camera could not be opened. Try again or use image/manual setup.',
+        'Camera is still starting. Try again, scan an image, or enter a connection code.',
+      _ =>
+        'Camera could not be opened. Try again, scan an image, or enter a connection code.',
     };
   }
-  return 'Scanner could not start. Try again or use image/manual setup.';
+  return 'Scanner could not start. Try again, scan an image, or enter a connection code.';
 }
 
 @visibleForTesting
@@ -440,7 +443,7 @@ String gatewayPairingImageScannerErrorMessage(Object error) {
   if (error is MobileScannerBarcodeException) {
     return 'That image could not be decoded as a QR code.';
   }
-  return 'Image QR scanning failed. Choose another image or use manual setup.';
+  return 'Image QR scanning failed. Choose another image or enter a connection code.';
 }
 
 class GatewayPairingCameraErrorPanel extends StatelessWidget {
@@ -460,6 +463,7 @@ class GatewayPairingCameraErrorPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final strings = CcbMobileLocalizations.of(context);
     final mediaQuery = MediaQuery.of(context);
     return ColoredBox(
       color: Colors.black,
@@ -537,7 +541,7 @@ class GatewayPairingCameraErrorPanel extends StatelessWidget {
                               ),
                               onPressed: onUseManualSetup,
                               icon: const Icon(Icons.keyboard_outlined),
-                              label: const Text('Manual setup'),
+                              label: Text(strings.enterConnectionCode),
                             ),
                           ],
                         ),

@@ -3,6 +3,10 @@
 Date: 2026-06-17
 Status: In Progress
 
+Deployment modes: [official and self-hosted Relay](../../../relay/relay-deployment-modes.md).
+Guided setup: [interactive mobile route onboarding](topics/mobile-update-interactive-route-onboarding.md).
+Phone pairing: [scan-or-code onboarding](topics/mobile-pairing-scan-or-code.md).
+
 ## Purpose
 
 Design a mobile and iPad remote-control surface for CCB that connects to

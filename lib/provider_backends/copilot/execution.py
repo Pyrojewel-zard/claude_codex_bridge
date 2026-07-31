@@ -17,6 +17,8 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".copilot-session",
             command_builder=_build_command,
             env_builder=_build_env,
+            private_path_env_names=("COPILOT_HOME", "COPILOT_CACHE_HOME"),
+            private_raw_env_names=("COPILOT_DISABLE_KEYTAR",),
             output_kind="jsonl",
             mode="copilot_run",
             start_failed_reason="copilot_run_start_failed",
@@ -53,6 +55,7 @@ def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     return {
         "COPILOT_HOME": str(copilot_home),
         "COPILOT_CACHE_HOME": str(copilot_cache),
+        "COPILOT_DISABLE_KEYTAR": "1",
     }
 
 

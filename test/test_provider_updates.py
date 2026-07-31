@@ -82,6 +82,27 @@ def test_npm_package_detection_supports_scoped_and_unscoped_packages() -> None:
     ) == "opencode-ai"
 
 
+def test_npm_install_prefix_detection_tracks_the_resolved_global_package_root() -> None:
+    assert provider_updates._npm_install_prefix_from_path(
+        Path("/home/demo/.local/lib/node_modules/@vegamo/deepcode-cli/dist/cli.js")
+    ) == Path("/home/demo/.local")
+    assert provider_updates._npm_install_prefix_from_path(
+        Path("/nvm/versions/node/v22/lib/node_modules/opencode-ai/bin/opencode")
+    ) == Path("/nvm/versions/node/v22")
+
+
+def test_bun_install_home_detection_requires_the_bun_global_layout() -> None:
+    assert provider_updates._bun_install_home_from_path(
+        Path(
+            "/home/demo/.bun/install/global/node_modules/"
+            "@oh-my-pi/pi-coding-agent/dist/cli.js"
+        )
+    ) == Path("/home/demo/.bun")
+    assert provider_updates._bun_install_home_from_path(
+        Path("/home/demo/.local/lib/node_modules/@openai/codex/bin/codex.js")
+    ) is None
+
+
 def test_provider_version_comparison_handles_semver_prereleases() -> None:
     assert provider_updates._provider_version_is_newer("1.2.0", "1.2.0-beta.2") is True
     assert provider_updates._provider_version_is_newer("1.2.0-beta.10", "1.2.0-beta.2") is True
@@ -125,10 +146,267 @@ def test_discovery_uses_matching_npm_install_and_pins_latest_version(tmp_path: P
         str(npm_entry),
         "install",
         "--global",
+        "--prefix",
+        str(nvm_root),
         "@openai/codex@1.2.0",
         "--no-audit",
         "--no-fund",
     )
+
+
+def test_discovery_pins_user_prefix_when_only_system_npm_is_available(
+    tmp_path: Path,
+) -> None:
+    user_prefix = tmp_path / "home" / ".local"
+    package_entry = (
+        user_prefix
+        / "lib"
+        / "node_modules"
+        / "@vegamo"
+        / "deepcode-cli"
+        / "dist"
+        / "cli.js"
+    )
+    package_entry.parent.mkdir(parents=True)
+    package_entry.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    bin_dir = user_prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    executable = bin_dir / "deepcode"
+    executable.symlink_to(package_entry)
+    system_npm = tmp_path / "usr" / "bin" / "npm"
+    system_npm.parent.mkdir(parents=True)
+    system_npm.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def _which(name: str) -> str | None:
+        if name == "deepcode":
+            return str(executable)
+        if name == "npm":
+            return str(system_npm)
+        return None
+
+    def _run(command, **_kwargs):
+        assert command == [str(executable), "--version"]
+        return subprocess.CompletedProcess(command, 0, stdout="0.1.29\n", stderr="")
+
+    candidates = provider_updates.discover_provider_updates(
+        providers=("deepseek",),
+        which_fn=_which,
+        run_fn=_run,
+        fetch_latest_fn=lambda package: (
+            "0.1.34" if package == "@vegamo/deepcode-cli" else None
+        ),
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].update_command == (
+        str(system_npm),
+        "install",
+        "--global",
+        "--prefix",
+        str(user_prefix),
+        "@vegamo/deepcode-cli@0.1.34",
+        "--no-audit",
+        "--no-fund",
+    )
+
+
+def test_registry_release_with_local_dependency_is_report_only(
+    tmp_path: Path,
+) -> None:
+    user_prefix = tmp_path / ".local"
+    package_entry = (
+        user_prefix
+        / "lib"
+        / "node_modules"
+        / "@vegamo"
+        / "deepcode-cli"
+        / "dist"
+        / "cli.js"
+    )
+    package_entry.parent.mkdir(parents=True)
+    package_entry.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    executable = user_prefix / "bin" / "deepcode"
+    executable.parent.mkdir(parents=True)
+    executable.symlink_to(package_entry)
+    npm = user_prefix / "bin" / "npm"
+    npm.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    candidates = provider_updates.discover_provider_updates(
+        providers=("deepseek",),
+        which_fn=lambda name: str(executable) if name == "deepcode" else None,
+        run_fn=lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="0.1.29\n",
+            stderr="",
+        ),
+        fetch_latest_fn=lambda _package: provider_updates._RegistryRelease(
+            "0.1.34",
+            "registry release 0.1.34 declares non-published local dependency "
+            "`@vegamo/deepcode-core: file:../core`",
+        ),
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].update_available is True
+    assert candidates[0].update_command is None
+    assert "file:../core" in str(candidates[0].issue)
+
+
+def test_registry_latest_rejects_non_published_local_dependencies(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        provider_updates,
+        "fetch_json_via_urllib",
+        lambda *_args, **_kwargs: {
+            "version": "0.1.34",
+            "dependencies": {
+                "@vegamo/deepcode-core": "file:../core",
+                "chalk": "^5.6.2",
+            },
+        },
+    )
+
+    release = provider_updates._fetch_registry_latest("@vegamo/deepcode-cli")
+
+    assert release.version == "0.1.34"
+    assert "@vegamo/deepcode-core: file:../core" in str(release.issue)
+
+
+def test_discovery_uses_bun_for_a_bun_global_provider(tmp_path: Path) -> None:
+    bun_home = tmp_path / "home" / ".bun"
+    package_entry = (
+        bun_home
+        / "install"
+        / "global"
+        / "node_modules"
+        / "@oh-my-pi"
+        / "pi-coding-agent"
+        / "dist"
+        / "cli.js"
+    )
+    package_entry.parent.mkdir(parents=True)
+    package_entry.write_text("#!/usr/bin/env bun\n", encoding="utf-8")
+    bin_dir = bun_home / "bin"
+    bin_dir.mkdir(parents=True)
+    executable = bin_dir / "omp"
+    executable.symlink_to(package_entry)
+    bun = bin_dir / "bun"
+    bun.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def _which(name: str) -> str | None:
+        return str(executable) if name == "omp" else None
+
+    def _run(command, **_kwargs):
+        assert command == [str(executable), "--version"]
+        return subprocess.CompletedProcess(command, 0, stdout="17.1.3\n", stderr="")
+
+    candidates = provider_updates.discover_provider_updates(
+        providers=("omp",),
+        which_fn=_which,
+        run_fn=_run,
+        fetch_latest_fn=lambda package: (
+            "17.1.4" if package == "@oh-my-pi/pi-coding-agent" else None
+        ),
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].owner == "bun"
+    assert candidates[0].package == "@oh-my-pi/pi-coding-agent"
+    assert candidates[0].update_command == (
+        str(bun),
+        "add",
+        "--global",
+        "@oh-my-pi/pi-coding-agent@17.1.4",
+    )
+
+
+def test_npm_update_is_report_only_when_detected_prefix_is_not_writable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    system_prefix = tmp_path / "system"
+    (system_prefix / "bin").mkdir(parents=True)
+    (system_prefix / "lib" / "node_modules").mkdir(parents=True)
+    npm = tmp_path / "usr" / "bin" / "npm"
+    npm.parent.mkdir(parents=True)
+    npm.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(provider_updates.os, "access", lambda _path, _mode: False)
+
+    command, issue = provider_updates._build_update_command(
+        "pi",
+        executable=system_prefix / "bin" / "pi",
+        owner="npm",
+        package="@earendil-works/pi-coding-agent",
+        latest_version="0.82.1",
+        which_fn=lambda name: str(npm) if name == "npm" else None,
+        run_fn=subprocess.run,
+        npm_prefix=system_prefix,
+    )
+
+    assert command is None
+    assert f"npm install prefix `{system_prefix}` is not writable" in str(issue)
+
+
+def test_bun_update_is_report_only_when_detected_home_is_not_writable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bun_home = tmp_path / ".bun"
+    bun = bun_home / "bin" / "bun"
+    bun.parent.mkdir(parents=True)
+    bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(provider_updates.os, "access", lambda _path, _mode: False)
+
+    command, issue = provider_updates._build_update_command(
+        "omp",
+        executable=bun_home / "bin" / "omp",
+        owner="bun",
+        package="@oh-my-pi/pi-coding-agent",
+        latest_version="17.1.4",
+        which_fn=lambda _name: None,
+        run_fn=subprocess.run,
+        bun_home=bun_home,
+    )
+
+    assert command is None
+    assert f"Bun install home `{bun_home}` is not writable" in str(issue)
+
+
+def test_current_npm_install_does_not_report_prefix_permission_as_update_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    system_prefix = tmp_path / "system"
+    npm = tmp_path / "usr" / "bin" / "npm"
+    npm.parent.mkdir(parents=True)
+    npm.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(provider_updates.os, "access", lambda _path, _mode: False)
+
+    command, issue = provider_updates._build_update_command(
+        "codex",
+        executable=system_prefix / "bin" / "codex",
+        owner="npm",
+        package="@openai/codex",
+        latest_version="0.145.0",
+        which_fn=lambda name: str(npm) if name == "npm" else None,
+        run_fn=subprocess.run,
+        npm_prefix=system_prefix,
+        check_npm_prefix_writable=False,
+    )
+
+    assert command == (
+        str(npm),
+        "install",
+        "--global",
+        "--prefix",
+        str(system_prefix),
+        "@openai/codex@0.145.0",
+        "--no-audit",
+        "--no-fund",
+    )
+    assert issue is None
 
 
 def test_custom_start_wrapper_is_never_treated_as_native_provider_updater(
@@ -685,6 +963,86 @@ def test_execute_provider_update_requires_post_update_version_verification(
 
     assert result.success is True
     assert result.after_version == "1.1.0"
+
+
+def test_execute_bun_update_pins_the_detected_bun_home(tmp_path: Path) -> None:
+    bun_home = tmp_path / ".bun"
+    package_entry = (
+        bun_home
+        / "install"
+        / "global"
+        / "node_modules"
+        / "@oh-my-pi"
+        / "pi-coding-agent"
+        / "dist"
+        / "cli.js"
+    )
+    package_entry.parent.mkdir(parents=True)
+    package_entry.write_text("#!/usr/bin/env bun\n", encoding="utf-8")
+    executable = bun_home / "bin" / "omp"
+    executable.parent.mkdir(parents=True)
+    executable.symlink_to(package_entry)
+    candidate = provider_updates.ProviderUpdateCandidate(
+        provider="omp",
+        executable=executable,
+        current_version="17.1.3",
+        latest_version="17.1.4",
+        owner="bun",
+        package="@oh-my-pi/pi-coding-agent",
+        update_command=(
+            str(bun_home / "bin" / "bun"),
+            "add",
+            "--global",
+            "@oh-my-pi/pi-coding-agent@17.1.4",
+        ),
+    )
+    calls = 0
+
+    def _run(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert command == list(candidate.update_command)
+            assert kwargs["env"]["BUN_INSTALL"] == str(bun_home)
+            return subprocess.CompletedProcess(command, 0)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="17.1.4\n",
+            stderr="",
+        )
+
+    result = provider_updates.execute_provider_update(candidate, run_fn=_run)
+
+    assert result.success is True
+    assert result.after_version == "17.1.4"
+
+
+def test_execute_bun_update_fails_closed_when_home_cannot_be_revalidated() -> None:
+    candidate = provider_updates.ProviderUpdateCandidate(
+        provider="omp",
+        executable=Path("/missing/omp"),
+        current_version="17.1.3",
+        latest_version="17.1.4",
+        owner="bun",
+        package="@oh-my-pi/pi-coding-agent",
+        update_command=(
+            "/missing/bun",
+            "add",
+            "--global",
+            "@oh-my-pi/pi-coding-agent@17.1.4",
+        ),
+    )
+
+    result = provider_updates.execute_provider_update(
+        candidate,
+        run_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an unbound Bun update must not execute")
+        ),
+    )
+
+    assert result.success is False
+    assert "could not be revalidated" in result.detail
 
 
 def test_check_reports_unchecked_native_provider_without_claiming_all_current(

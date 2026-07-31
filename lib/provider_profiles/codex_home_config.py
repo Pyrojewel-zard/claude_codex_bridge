@@ -18,6 +18,16 @@ from provider_core.memory_projection import (
     memory_projection_result,
     record_memory_projection_event,
 )
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    ensure_private_directory,
+    ensure_private_inheritance_directory,
+)
+from provider_core.inherited_skills import (
+    materialize_required_control_skills,
+    required_control_skill_names,
+    route_inherited_skill_entries,
+)
 from provider_core.projected_assets import (
     copy_projected_tree_to_cache,
     projected_path_is_owned,
@@ -55,12 +65,6 @@ _CODEX_AUTH_SIDECAR_REF_RE = re.compile(
     r'|~/\.codex'
     r')/(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{0,127})'
 )
-_CODEX_MANAGED_SKILL_ENTRY_LABEL_PREFIXES = (
-    f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
-    'codex-skill-overlay:',
-    'codex-role-skill:',
-)
-_CODEX_OWNED_SKILL_NAMES = ('ask',)
 _CODEX_LEGACY_OWNED_SKILL_NAMES = ('ccb_config', 'ccb-config')
 _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('.agents') / 'plugins' / 'marketplace.json',
@@ -129,11 +133,13 @@ def materialize_codex_home_config(
 ) -> Path:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
-    target_home.mkdir(parents=True, exist_ok=True)
-    (target_home / 'sessions').mkdir(parents=True, exist_ok=True)
+    target_home = ensure_private_inheritance_directory(target_home, source_home)
+    ensure_private_directory(target_home / 'sessions')
 
     target_config = target_home / 'config.toml'
     source_config = source_home / 'config.toml'
+    if target_config.is_symlink():
+        target_config.unlink()
     authority = codex_api_authority(profile)
     inherited_assets_enabled = not _role_command_policy_disables_inherited_assets(command_policy)
 
@@ -215,6 +221,10 @@ def materialize_codex_home_config(
         provider='codex',
         target_skills_dir=target_home / 'skills',
     )
+    materialize_required_control_skills(
+        provider='codex',
+        target_dir=target_home / 'skills',
+    )
     _route_inherited_tree(
         source_home / 'commands',
         target_home / 'commands',
@@ -249,6 +259,7 @@ def materialize_codex_home_config(
             target_config,
             source_home=source_home,
         )
+    _bind_source_test_command_path(target_config, project_root=project_root)
     record_memory_projection_event(
         memory_result,
         provider='codex',
@@ -257,6 +268,37 @@ def materialize_codex_home_config(
         agent_name=agent_name,
     )
     return target_config
+
+
+def _bind_source_test_command_path(
+    target_config: Path,
+    *,
+    project_root: Path | None,
+) -> None:
+    if os.environ.get('CCB_TEST_ENTRYPOINT') != '1' or project_root is None:
+        return
+    command_dir = Path(project_root).expanduser().resolve() / '.ccb' / 'bin'
+    if not all(
+        (command_dir / name).is_file()
+        for name in ('ask', 'ccb', 'codex-reconnect')
+    ):
+        return
+    payload = _read_source_config_payload(target_config)
+    raw_policy = payload.get('shell_environment_policy')
+    policy = _clone_mapping(raw_policy) if isinstance(raw_policy, dict) else {}
+    raw_configured = policy.get('set')
+    configured = _clone_mapping(raw_configured) if isinstance(raw_configured, dict) else {}
+    inherited_path = str(configured.get('PATH') or os.environ.get('PATH') or '')
+    path_parts = [str(command_dir)]
+    path_parts.extend(
+        item
+        for item in inherited_path.split(os.pathsep)
+        if item and item != str(command_dir)
+    )
+    configured['PATH'] = os.pathsep.join(path_parts)
+    policy['set'] = configured
+    payload['shell_environment_policy'] = policy
+    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
 
 
 def repair_codex_activity_hooks(
@@ -988,9 +1030,13 @@ def _project_auth_symlink(source: Path, target: Path) -> None:
 
 
 def _write_auth_file(target: Path, api_key: str) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(target.parent)
     payload = json.dumps({'OPENAI_API_KEY': api_key}, ensure_ascii=False, separators=(',', ':'))
-    target.write_text(f'{payload}\n', encoding='utf-8')
+    atomic_write_text(target, f'{payload}\n')
+    try:
+        os.chmod(target, 0o600)
+    except Exception:
+        pass
 
 
 def _materialize_auth_sidecars(
@@ -1025,8 +1071,7 @@ def _materialize_auth_sidecars(
     for name in sorted(requested_sidecars):
         source = source_home / name
         target = target_home / name
-        if source.is_file():
-            _sync_secret_file(source, target)
+        if _sync_secret_file(source, target):
             projected.append(name)
         elif name in previous_sidecars:
             target.unlink(missing_ok=True)
@@ -1064,20 +1109,21 @@ def _is_safe_codex_auth_sidecar_name(name: str) -> bool:
     return lower.endswith('.config.toml') or any(token in lower for token in ('auth', 'credential', 'key', 'token'))
 
 
-def _sync_secret_file(source: Path, target: Path) -> None:
+def _sync_secret_file(source: Path, target: Path) -> bool:
     source = Path(source).expanduser()
     target = Path(target).expanduser()
-    if _same_path(source, target):
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    if not copy_regular_file(source, target):
+        return False
     try:
         os.chmod(target, 0o600)
     except Exception:
         pass
+    return True
 
 
 def _valid_codex_auth_file(path: Path) -> bool:
+    if Path(path).is_symlink():
+        return False
     try:
         payload = json.loads(Path(path).read_text(encoding='utf-8'))
     except Exception:
@@ -1088,9 +1134,11 @@ def _valid_codex_auth_file(path: Path) -> bool:
 def _atomic_sync_secret_file(source: Path, target: Path) -> None:
     source = Path(source).expanduser()
     target = Path(target).expanduser()
-    if _same_path(source, target):
+    if Path(os.path.abspath(source)) == Path(os.path.abspath(target)):
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if not source.is_file() or source.is_symlink():
+        raise ValueError(f'Codex auth source must be a regular file: {source}')
+    ensure_private_directory(target.parent)
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{target.name}.ccb-auth-', dir=str(target.parent))
     os.close(fd)
     tmp_path = Path(tmp_name)
@@ -1189,6 +1237,10 @@ def _sync_file(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
     except Exception:
         pass
+    try:
+        os.chmod(target, 0o600)
+    except Exception:
+        pass
 
 
 def _sync_tree(source: Path, target: Path, *, enabled: bool) -> None:
@@ -1283,26 +1335,19 @@ def _is_managed_skill_projection_dir(target: Path) -> bool:
 def _materialize_inherited_skills(source: Path, target: Path, *, profile, enabled: bool = True) -> None:
     include = _profile_skill_patterns(profile, 'inherited_skill_include')
     exclude = _profile_skill_patterns(profile, 'inherited_skill_exclude')
-    if not include and not exclude:
-        _copy_inherited_tree(
-            source,
-            target,
-            enabled=_inherits_skills(profile) and enabled,
-            label=_CODEX_SKILLS_PROJECTION_LABEL,
-        )
-        _remove_stale_skill_projection_markers(
-            target,
-            label_prefix=f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
-            desired_labels=set(),
-        )
-        return
-    _route_filtered_skill_entries(
+    for legacy_name in _CODEX_LEGACY_OWNED_SKILL_NAMES:
+        _remove_path(Path(target).expanduser() / legacy_name)
+    route_inherited_skill_entries(
         source,
         target,
         enabled=_inherits_skills(profile) and enabled,
-        include=include,
-        exclude=exclude,
-        label_prefix=f'{_CODEX_SKILLS_PROJECTION_LABEL}:',
+        label=_CODEX_SKILLS_PROJECTION_LABEL,
+        exclude=required_control_skill_names('codex'),
+        include_patterns=include,
+        exclude_patterns=exclude,
+        # Codex owns a nested system-skill collection without a top-level
+        # SKILL.md.  Treat it as one immutable projection entry.
+        special_entries=('.system',),
     )
 
 
@@ -1312,41 +1357,6 @@ def _role_command_policy_disables_inherited_assets(command_policy) -> bool:
     mode = str(getattr(command_policy, 'mode', '') or '').strip()
     enforcement = str(getattr(command_policy, 'enforcement', '') or '').strip()
     return mode == 'deny_all_except' and enforcement == 'required'
-
-
-def _route_filtered_skill_entries(
-    source: Path,
-    target: Path,
-    *,
-    enabled: bool,
-    include: tuple[str, ...],
-    exclude: tuple[str, ...],
-    label_prefix: str,
-) -> None:
-    source = Path(source).expanduser()
-    target = Path(target).expanduser()
-    remove_projected_path(target, label=_CODEX_SKILLS_PROJECTION_LABEL)
-    if not enabled or not source.is_dir():
-        _remove_stale_skill_projection_markers(target, label_prefix=label_prefix, desired_labels=set())
-        return
-    desired_labels: set[str] = set()
-    target.mkdir(parents=True, exist_ok=True)
-    for entry in sorted(source.iterdir(), key=lambda item: item.name):
-        if not entry.is_dir():
-            continue
-        skill_name = entry.name
-        if not _matches_skill_patterns(skill_name, include=include, exclude=exclude):
-            continue
-        label = f'{label_prefix}{skill_name}'
-        desired_labels.add(label)
-        route_projected_tree(
-            entry,
-            target / skill_name,
-            enabled=True,
-            label=label,
-            allow_unmarked_replace=False,
-        )
-    _remove_stale_skill_projection_markers(target, label_prefix=label_prefix, desired_labels=desired_labels)
 
 
 def _materialize_skill_overlays(target: Path, *, profile, project_root: Path | None) -> None:
@@ -1434,23 +1444,6 @@ def _remove_stale_skill_projection_markers(target: Path, *, label_prefix: str, d
             label=label,
             marker_path=marker,
         )
-
-
-def _repair_owned_codex_skill_entries(source: Path, target: Path) -> None:
-    if not target.is_dir() or target.is_symlink():
-        return
-    for legacy_name in _CODEX_LEGACY_OWNED_SKILL_NAMES:
-        _remove_path(target / legacy_name)
-    for skill_name in _CODEX_OWNED_SKILL_NAMES:
-        source_skill = source / skill_name
-        if not source_skill.is_dir():
-            continue
-        target_skill = target / skill_name
-        _remove_path(target_skill)
-        try:
-            shutil.copytree(source_skill, target_skill)
-        except Exception:
-            _remove_path(target_skill)
 
 
 def _sync_codex_plugin_projection(

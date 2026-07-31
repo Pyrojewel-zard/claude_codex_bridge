@@ -174,6 +174,7 @@ def _start_submission(
             "request_anchor": req_id,
             "req_id": req_id,
             "work_dir": str(work_dir),
+            "deepseek_home": str(getattr(session, "deepseek_home", "") or ""),
             "started_at": now,
             "last_poll_at": now,
             "prompt_sent": send_error is None,
@@ -233,7 +234,12 @@ def _poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPol
     total_secs = _seconds_between(started_at, now)
     state["total_secs"] = total_secs
 
-    observation = observe_deepseek_session(Path(work_dir), req_id)
+    deepseek_home = _state_str(state, "deepseek_home")
+    observation = observe_deepseek_session(
+        Path(work_dir),
+        req_id,
+        home_candidates=(Path(deepseek_home),) if deepseek_home else None,
+    )
     if observation is None:
         if total_secs >= ANCHOR_WAIT_SECS:
             return _terminal(

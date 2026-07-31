@@ -14,9 +14,9 @@ from provider_backends.claude.execution_runtime.state_machine_runtime import (
     apply_session_rotation,
     build_poll_state,
     finalize_poll_result,
+    is_top_level_user_prompt,
 )
 from provider_execution.base import ProviderPollResult, ProviderSubmission
-
 
 NOW = "2026-07-21T08:00:00Z"
 
@@ -179,6 +179,22 @@ def test_structured_parser_preserves_queue_lifecycle_and_tool_only_uuid() -> Non
     assert tool_only["uuid"] == "assistant-tool"
 
 
+def test_named_main_session_prompt_remains_top_level_but_sidechain_does_not() -> None:
+    main_entry = _user_record("job_current")
+    main_entry["slug"] = "bright-running-otter"
+    main_entry["isSidechain"] = False
+    sidechain_entry = dict(main_entry)
+    sidechain_entry["isSidechain"] = True
+
+    main_event = structured_event(main_entry)
+    sidechain_event = structured_event(sidechain_entry)
+
+    assert main_event is not None
+    assert sidechain_event is not None
+    assert is_top_level_user_prompt(main_event) is True
+    assert is_top_level_user_prompt(sidechain_event) is False
+
+
 def test_deferred_pane_dispatch_does_not_synthesize_activation_or_anchor() -> None:
     sent: list[str] = []
 
@@ -307,7 +323,7 @@ def test_tool_result_and_subagent_user_records_cannot_activate_prompt() -> None:
     assert [item.kind for item in poll.items] == [CompletionItemKind.ANCHOR_SEEN]
 
 
-def test_tool_only_old_turn_is_ignored_but_activated_tool_uuid_binds_boundary() -> None:
+def test_tool_only_turn_duration_cannot_complete_from_prior_process_text() -> None:
     submission = _submission()
     poll = build_poll_state(submission)
 
@@ -325,9 +341,74 @@ def test_tool_only_old_turn_is_ignored_but_activated_tool_uuid_binds_boundary() 
 
     assert poll.last_assistant_uuid == "new-tool-only"
     assert poll.reply_buffer == "working"
+    assert poll.active_assistant_text == ""
+    assert poll.reached_turn_boundary is False
+    assert all(item.kind is not CompletionItemKind.TURN_BOUNDARY for item in poll.items)
+
+
+def test_visible_text_without_stop_reason_completes_on_matching_turn_duration() -> None:
+    submission = _submission()
+    poll = build_poll_state(submission)
+
+    _process_raw(
+        submission,
+        poll,
+        _queued_command("job_current", source_uuid="queue-current"),
+        _assistant("OK", uuid="assistant-short", stop_reason=""),
+    )
+
+    assert poll.reached_turn_boundary is False
+
+    _process_raw(
+        submission,
+        poll,
+        _turn_duration("assistant-short"),
+    )
+
     assert poll.reached_turn_boundary is True
+    assert poll.terminal_reply == "OK"
     assert poll.items[-1].kind is CompletionItemKind.TURN_BOUNDARY
-    assert poll.items[-1].payload["assistant_uuid"] == "new-tool-only"
+    assert poll.items[-1].payload["last_agent_message"] == "OK"
+
+
+def test_pending_same_message_end_turn_survives_restart_until_visible_text() -> None:
+    submission = _submission(anchor_seen=True, prompt_activated=True)
+    poll = build_poll_state(submission)
+    thinking = {
+        "type": "assistant",
+        "uuid": "assistant-thinking",
+        "message": {
+            "id": "msg-late-final",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{"type": "thinking", "thinking": "private"}],
+        },
+    }
+
+    _process_raw(submission, poll, thinking)
+    first = finalize_poll_result(submission, poll, state={"offset": 10})
+    resumed = build_poll_state(first.submission)
+
+    assert resumed.active_assistant_message_id == "msg-late-final"
+    assert resumed.active_assistant_stop_reason == "end_turn"
+    assert resumed.active_assistant_text == ""
+    assert resumed.reached_turn_boundary is False
+
+    final_snapshot = {
+        "type": "assistant",
+        "uuid": "assistant-final",
+        "message": {
+            "id": "msg-late-final",
+            "role": "assistant",
+            "stop_reason": None,
+            "content": [{"type": "text", "text": "final after restart"}],
+        },
+    }
+    _process_raw(first.submission, resumed, final_snapshot)
+
+    assert resumed.reached_turn_boundary is True
+    assert resumed.terminal_reply == "final after restart"
+    assert resumed.items[-1].payload["last_agent_message"] == "final after restart"
 
 
 def test_queue_lifecycle_survives_restart_and_resets_on_session_rotation() -> None:

@@ -2063,7 +2063,7 @@ def test_ccbd_socket_claude_session_boundary_completes_via_tracker(monkeypatch, 
     job_id = submit['job_id']
 
     completed = _wait_for_job_status(client, job_id, 'completed', timeout=3.0)
-    assert completed['reply'] == 'partial\nfinal'
+    assert completed['reply'] == 'final'
     assert completed['completion_reason'] == 'task_complete'
     assert completed['completion_confidence'] == 'observed'
     assert sent and sent[0][0] == '%2'

@@ -6,7 +6,7 @@
 **Codex、Claude、Gemini などの CLI Agent を、見える・制御できる・直接引き継げるワークフローで連携**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.3.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App の詳細、安全境界、ソース</b></summary>
 
-CCB 8.3.1 では Flutter 版 CCB Mobile のソースが [`mobile/`](../mobile/) に含まれ、Android APK は GitHub Releases で公開されています。
+CCB 8.5.2 では Flutter 版 CCB Mobile のソースが [`mobile/`](../mobile/) に含まれ、Android APK は GitHub Releases で公開されています。
 
-- [CCB Mobile v8.3.1 APK をダウンロード](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.3.1/ccb-mobile-v8.3.1.apk)
+- [CCB Mobile v8.5.2 APK をダウンロード](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App ソース：[`mobile/app`](../mobile/app)
 - サーバー gateway ソース：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,16 @@ sidebar のアイデアと示唆を提供してくれた [tmux-agent-sidebar](ht
 ## リリースノート
 
 <details open>
+<summary><b>v8.4.0</b> - 暗号化 Mobile Relay、簡単なペアリング、安定したプロジェクト ID、Codex 再接続</summary>
+
+- エンドツーエンド暗号化 Relay、1 回限りの招待、multiplex stream、公式またはセルフホスト構成を追加しました。
+- Tailscale、private LAN、Relay の選択を `ccb update mobile` に移し、スマートフォン側は QR またはコード入力だけにしました。
+- 署名済み APK を Android に渡す前に、公式 GitHub metadata、サイズ、SHA-256 を検証します。
+- プロジェクト移動後も ID を維持し、システム theme 追従と境界付きの Codex reconnect を追加しました。
+
+</details>
+
+<details>
 <summary><b>v8.3.1</b> - Provider 更新の一元化、安全なキャッシュ廃止、永続的な Config UI アクセス</summary>
 
 - 対応する Provider の更新を `ccb update` に集約し、正確なバージョン確認、辞退、バージョン単位のスキップを提供します。実行中の pane は自動再起動しません。

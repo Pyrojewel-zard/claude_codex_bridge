@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 import shlex
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from provider_core.caller_env import (
 )
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.memory_projection import write_projection_event_and_marker
-from provider_core.inherited_skills import inherits_skills, packaged_inherited_skill_file
+from provider_core.inherited_skills import packaged_inherited_skill_file
+from provider_core.one_way_inheritance import copy_regular_file, ensure_private_directory
+from provider_core.source_home import current_provider_source_home
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
 from provider_profiles import load_resolved_provider_profile
 from project_memory import materialize_runtime_memory_bundle
@@ -77,7 +80,10 @@ def prepare_launch_context(
     payload['project_root'] = str(context.project.project_root)
     payload['workspace_path'] = str(prepared_state.get('run_cwd') or plan.workspace_path)
     payload['agent_events_path'] = str(context.paths.agent_events_path(spec.name))
-    payload['opencode_config_path'] = str(context.paths.agent_provider_state_dir(spec.name, 'opencode') / 'opencode.json')
+    state_dir = context.paths.agent_provider_state_dir(spec.name, 'opencode')
+    payload['opencode_state_dir'] = str(state_dir)
+    payload['opencode_config_path'] = str(state_dir / 'opencode.json')
+    payload.update(_opencode_state_payload(state_dir))
     return payload
 
 
@@ -95,8 +101,22 @@ def build_start_cmd(
     if project_root is None:
         raise RuntimeError('OpenCode launch requires prepare_launch_context before build_start_cmd')
     profile = load_resolved_provider_profile(runtime_dir)
+    state_dir = _path_or_none(launch_context.get('opencode_state_dir'))
+    if state_dir is None:
+        config_path = _path_or_none(launch_context.get('opencode_config_path'))
+        state_dir = config_path.parent if config_path is not None else None
+    if state_dir is None:
+        raise RuntimeError('OpenCode launch requires a managed provider-state directory')
+    state_payload = _opencode_state_payload(state_dir)
+    launch_context.update(state_payload)
+    opencode_env = _opencode_private_env(state_dir)
+    _materialize_opencode_auth(
+        Path(opencode_env['XDG_DATA_HOME']) / 'opencode',
+        profile=profile,
+    )
     opencode_env = {
         'OPENCODE_DISABLE_AUTOUPDATE': 'true',
+        **opencode_env,
         **_opencode_memory_env(_path_or_none(launch_context.get('opencode_config_path')), profile),
     }
     cmd_parts = provider_start_parts('opencode')
@@ -129,7 +149,7 @@ def build_session_payload(
     launch_session_id: str,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
-    del prepared_state
+    prepared = prepared_state or {}
     return {
         'ccb_session_id': launch_session_id,
         'agent_name': spec.name,
@@ -144,7 +164,112 @@ def build_session_payload(
         'work_dir': str(run_cwd),
         'start_dir': str(context.project.project_root),
         'start_cmd': start_cmd,
+        'opencode_state_dir': str(prepared.get('opencode_state_dir') or ''),
+        'opencode_data_home': str(prepared.get('opencode_data_home') or ''),
+        'opencode_storage_root': str(prepared.get('opencode_storage_root') or ''),
+        'opencode_log_root': str(prepared.get('opencode_log_root') or ''),
     }
+
+
+def _opencode_state_payload(state_dir: Path) -> dict[str, str]:
+    state = Path(state_dir).expanduser()
+    data_home = state / 'data'
+    return {
+        'opencode_state_dir': str(state),
+        'opencode_data_home': str(data_home),
+        'opencode_storage_root': str(data_home / 'opencode' / 'storage'),
+        'opencode_log_root': str(data_home / 'opencode' / 'log'),
+    }
+
+
+def _opencode_private_env(state_dir: Path) -> dict[str, str]:
+    state = ensure_private_directory(Path(state_dir).expanduser())
+    home = state / 'home'
+    data_home = state / 'data'
+    config_home = state / 'config'
+    state_home = state / 'state'
+    cache_home = state / 'cache'
+    for path in (
+        home,
+        data_home,
+        data_home / 'opencode',
+        data_home / 'opencode' / 'storage',
+        data_home / 'opencode' / 'log',
+        config_home,
+        state_home,
+        cache_home,
+    ):
+        ensure_private_directory(path)
+    env = {
+        'HOME': str(home),
+        'XDG_DATA_HOME': str(data_home),
+        'XDG_CONFIG_HOME': str(config_home),
+        'XDG_STATE_HOME': str(state_home),
+        'XDG_CACHE_HOME': str(cache_home),
+        'OPENCODE_STORAGE_ROOT': str(data_home / 'opencode' / 'storage'),
+        'OPENCODE_LOG_ROOT': str(data_home / 'opencode' / 'log'),
+    }
+    if 'WSL_DISTRO_NAME' in os.environ:
+        env['USERPROFILE'] = str(home)
+        env['LOCALAPPDATA'] = str(data_home)
+        env['APPDATA'] = str(config_home)
+        additions = (
+            'HOME/p:USERPROFILE/p:LOCALAPPDATA/p:APPDATA/p:'
+            'XDG_DATA_HOME/p:XDG_CONFIG_HOME/p:XDG_STATE_HOME/p:XDG_CACHE_HOME/p:'
+            'OPENCODE_STORAGE_ROOT/p:OPENCODE_LOG_ROOT/p'
+        )
+        existing = os.environ.get('WSLENV', '')
+        env['WSLENV'] = f'{additions}:{existing}' if existing else additions
+    return env
+
+
+def _materialize_opencode_auth(target_root: Path, *, profile) -> None:
+    if profile is not None and not bool(getattr(profile, 'inherit_auth', True)):
+        return
+    source_home = current_provider_source_home()
+    source_roots: list[Path] = []
+    if not os.environ.get('CCB_SOURCE_HOME') and not _managed_provider_caller():
+        for env_name in ('XDG_DATA_HOME', 'LOCALAPPDATA', 'APPDATA'):
+            candidate = _path_or_none(os.environ.get(env_name))
+            if candidate is not None and candidate not in source_roots:
+                source_roots.append(candidate)
+    source_roots.extend([
+        source_home / '.local' / 'share' / 'opencode',
+        source_home / 'Library' / 'Application Support' / 'opencode',
+        source_home / 'AppData' / 'Local' / 'opencode',
+        source_home / 'AppData' / 'Roaming' / 'opencode',
+    ])
+    source_roots = [
+        root if root.name.lower() == 'opencode' else root / 'opencode'
+        for root in source_roots
+    ]
+    for filename in ('auth.json', 'account.json'):
+        source = next(
+            (
+                root / filename
+                for root in source_roots
+                if (root / filename).is_file() and not (root / filename).is_symlink()
+            ),
+            None,
+        )
+        if source is None:
+            continue
+        try:
+            copy_regular_file(source, Path(target_root) / filename)
+        except OSError:
+            continue
+
+
+def _managed_provider_caller() -> bool:
+    return any(
+        str(os.environ.get(name) or '').strip()
+        for name in (
+            'CCB_CALLER_ACTOR',
+            'CCB_CALLER_RUNTIME_DIR',
+            'CCB_SESSION_FILE',
+            'CCB_SESSION_ID',
+        )
+    )
 
 
 def _should_auto_continue(command: ParsedStartCommand, spec: AgentSpec, cmd_parts: list[str]) -> bool:
@@ -187,7 +312,7 @@ def materialize_opencode_memory_config(
     skill_bridge = _bridge_opencode_ask_skill(
         project_root=project_root,
         agent_name=agent_name,
-        enabled=inherits_skills(profile),
+        enabled=True,
     )
     if not inherit_memory and not skill_bridge.instruction:
         _remove_file(config_path)
@@ -734,7 +859,8 @@ def _inherits_memory(profile) -> bool:
 
 
 def _inherits_opencode_context(profile) -> bool:
-    return _inherits_memory(profile) or inherits_skills(profile)
+    del profile
+    return True
 
 
 def _path_or_none(value: object) -> Path | None:

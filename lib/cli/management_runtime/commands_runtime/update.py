@@ -13,7 +13,19 @@ import tempfile
 from release_artifacts import release_artifact_name
 from cli.roles_runtime.commands import cmd_roles
 from cli.services.mobile_host import start_or_replace_mobile_host_service
-from cli.services.mobile_update import DEFAULT_MOBILE_GATEWAY_LISTEN, run_mobile_update_onboarding
+from cli.services.mobile_update import (
+    DEFAULT_MOBILE_GATEWAY_LISTEN,
+    run_mobile_cloudflare_onboarding,
+    run_mobile_lan_onboarding,
+    run_mobile_relay_onboarding,
+    run_mobile_update_onboarding,
+    suggest_lan_listen_address,
+)
+from cli.services.mobile_route_onboarding import (
+    MobileRouteSelection,
+    ensure_guided_relay_credentials,
+    prompt_mobile_route_selection,
+)
 from cli.tools_runtime.workbench import print_workbench_status, update_rich_workbench
 from rolepacks.sources import role_catalog_status
 
@@ -54,7 +66,7 @@ def cmd_update(args, *, script_root: Path) -> int:
     if _update_target_is_rich(args):
         return _update_rich_bundle()
     if _update_target_is_mobile(args):
-        return _update_mobile_bundle(script_root=script_root)
+        return _update_mobile_bundle(script_root=script_root, args=args)
     source_repo_install = is_source_repo_root(script_root)
     install_dir = resolve_managed_install_dir(script_root=script_root)
 
@@ -799,7 +811,119 @@ def _update_rich_bundle() -> int:
     return 0 if result.get("status") in {"ok", "degraded"} else 1
 
 
-def _update_mobile_bundle(*, script_root: Path) -> int:
+def _update_mobile_bundle(*, script_root: Path, args) -> int:
+    requested_route = str(getattr(args, 'route_provider', '') or '').strip()
+    guided_selection = False
+    selection = (
+        MobileRouteSelection(route_provider=requested_route)
+        if requested_route
+        else None
+    )
+    if selection is None:
+        if _stream_is_tty(sys.stdin) and _stream_is_tty(sys.stdout):
+            selection = prompt_mobile_route_selection(
+                read_fn=_read_stdio_prompt,
+                print_fn=print,
+            )
+            if selection is None:
+                return 0
+            guided_selection = True
+        else:
+            print("ℹ️  Non-interactive mobile setup defaults to Tailscale.")
+            print(
+                "   Use --route-provider lan|tailnet|relay explicitly "
+                "to select another route."
+            )
+            selection = MobileRouteSelection(route_provider='tailnet')
+    requested_route = selection.route_provider
+
+    if requested_route == 'relay':
+        if guided_selection:
+            credential_result = ensure_guided_relay_credentials(
+                relay_mode=str(selection.relay_mode or ''),
+                read_fn=_read_stdio_prompt,
+                print_fn=print,
+            )
+            if not credential_result.ready:
+                return 0 if credential_result.cancelled else 1
+        listen = str(getattr(args, 'listen', '') or '').strip() or DEFAULT_MOBILE_GATEWAY_LISTEN
+        public_url = str(getattr(args, 'public_url', '') or '').strip() or None
+
+        def _start_relay_service():
+            return start_or_replace_mobile_host_service(
+                script_root=script_root,
+                listen=listen,
+                public_url=public_url,
+                route_provider='relay',
+                rotate_pairing=True,
+            ).to_record()
+
+        return run_mobile_relay_onboarding(start_service_fn=_start_relay_service)
+
+    if requested_route == 'lan':
+        listen = str(getattr(args, 'listen', '') or '').strip()
+        suggested_listen = suggest_lan_listen_address()
+        if not listen and guided_selection:
+            prompt = (
+                f"LAN listen address [{suggested_listen}]: "
+                if suggested_listen
+                else "LAN listen address (for example 192.168.1.100:8787): "
+            )
+            try:
+                listen = (
+                    _read_stdio_prompt(prompt).strip()
+                    or (suggested_listen or '')
+                )
+            except (EOFError, KeyboardInterrupt):
+                print("")
+                print("Mobile setup cancelled; no gateway was changed.")
+                return 0
+        if not listen:
+            listen = suggested_listen or ''
+        if not listen:
+            print("❌ Could not discover a private LAN address.")
+            print(
+                "   Rerun with a specific address, for example "
+                "`ccb update mobile --route-provider lan "
+                "--listen 192.168.1.100:8787`."
+            )
+            return 1
+        public_url = str(getattr(args, 'public_url', '') or '').strip() or None
+
+        def _start_lan_service():
+            return start_or_replace_mobile_host_service(
+                script_root=script_root,
+                listen=listen,
+                public_url=public_url,
+                route_provider='lan',
+                rotate_pairing=True,
+            ).to_record()
+
+        return run_mobile_lan_onboarding(
+            start_service_fn=_start_lan_service,
+            listen=listen,
+        )
+
+    if requested_route == 'cloudflare_tunnel':
+        listen = str(getattr(args, 'listen', '') or '').strip() or DEFAULT_MOBILE_GATEWAY_LISTEN
+        public_url = str(getattr(args, 'public_url', '') or '').strip() or None
+        if not public_url:
+            print("❌ Cloudflare Tunnel setup requires --public-url https://mobile.example.com.")
+            return 1
+
+        def _start_cloudflare_service():
+            return start_or_replace_mobile_host_service(
+                script_root=script_root,
+                listen=listen,
+                public_url=public_url,
+                route_provider='cloudflare_tunnel',
+                rotate_pairing=True,
+            ).to_record()
+
+        return run_mobile_cloudflare_onboarding(
+            start_service_fn=_start_cloudflare_service,
+        )
+
     def _start_service(commands, _status):
         mobile_serve = tuple(commands.mobile_serve)
         listen = _command_option(mobile_serve, '--listen') or DEFAULT_MOBILE_GATEWAY_LISTEN
@@ -813,7 +937,33 @@ def _update_mobile_bundle(*, script_root: Path) -> int:
             rotate_pairing=True,
         ).to_record()
 
-    return run_mobile_update_onboarding(start_service_fn=_start_service)
+    tailnet_listen = (
+        str(getattr(args, 'listen', '') or '').strip()
+        or DEFAULT_MOBILE_GATEWAY_LISTEN
+    )
+    return run_mobile_update_onboarding(
+        start_service_fn=_start_service,
+        listen=tailnet_listen,
+    )
+
+
+def _stream_is_tty(stream) -> bool:
+    isatty = getattr(stream, 'isatty', None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except OSError:
+        return False
+
+
+def _read_stdio_prompt(prompt: str) -> str:
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    line = sys.stdin.readline()
+    if line == '':
+        raise EOFError
+    return line.rstrip('\r\n')
 
 
 def _command_option(command: tuple[str, ...], option: str) -> str | None:

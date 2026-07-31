@@ -387,6 +387,12 @@ project .ccb
   2. slot replace
   3. workspace reflow
   4. full remount
+- local respawn 只能进入 `recovering/probing`，不能把瞬时
+  `is_alive()` 当作恢复成功
+- 需要跨越 90 秒稳定窗口并获得 respawn 之后的新健康观测，才能写入
+  `recover_succeeded`
+- 连续不稳定恢复必须使用 30s/60s/120s/5m/10m/30m 退避，并在第 6
+  次后打开 `recovery-circuit-open`；显式 restart/remount 才能开始新的恢复序列
 
 `lib/ccbd/app_runtime/policy.py`
 

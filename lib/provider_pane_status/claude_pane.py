@@ -11,7 +11,7 @@ CLAUDE_TOOL_RUNNING_RE = re.compile(
     re.IGNORECASE,
 )
 CLAUDE_SPINNER_RE = re.compile(
-    r"^\s*[✢✳✶✽]\s+.+\((?:\d+\s*h\s*)?(?:\d+\s*m\s*)?\d+\s*s\b.*(?:tokens?|thought)",
+    r"^\s*[^\w\s]\s+.+\((?:\d+\s*h\s*)?(?:\d+\s*m\s*)?\d+\s*s\b.*(?:tokens?|thought)",
     re.IGNORECASE,
 )
 CLAUDE_THOUGHT_RAN_RE = re.compile(
@@ -22,6 +22,8 @@ CLAUDE_VERB_FOR_RE = re.compile(
     r"^\s*[✻✽]\s+\S+\s+for\s+(?:\d+\s*h\s*)?(?:\d+\s*m\s*)?\d+\s*s\b",
     re.IGNORECASE,
 )
+CLAUDE_IDLE_PROMPT_RE = re.compile(r"^\s*❯(?:\s|$)")
+CLAUDE_INTERRUPT_HINT_RE = re.compile(r"\besc\s+to\s+interrupt\b", re.IGNORECASE)
 SCHEDULED_TASK_MARKERS = (
     "running scheduled task",
     "shell still running",
@@ -53,6 +55,7 @@ ERROR_MARKERS = (
     "connection timed out",
 )
 STATUS_CATALOG: dict[str, str] = {
+    "free": "Claude pane shows its current idle input prompt.",
     "working": "Claude pane shows visible model/runtime activity.",
     "tool_running": "Claude pane shows a shell/tool/scheduled task is running.",
     "terminal_summary": "Claude pane shows a past-tense turn summary; this is not completion authority.",
@@ -101,9 +104,16 @@ def parse_claude_pane_status(
 
     normalized = normalize_screen(pane_text or "")
     recent_lines = [line.rstrip() for line in normalized.splitlines() if line.strip()]
-    recent = " ".join(line.strip() for line in recent_lines[-20:]).lower()
-    if not recent:
+    if not recent_lines:
         return ClaudePaneStatus("unknown", "empty_capture")
+
+    idle_prompt_index = _last_idle_prompt_index(recent_lines)
+    evidence_lines = (
+        recent_lines[idle_prompt_index + 1 :]
+        if idle_prompt_index >= 0
+        else recent_lines[-20:]
+    )
+    recent = " ".join(line.strip() for line in evidence_lines).lower()
 
     if _last_tool_running_index(recent_lines) >= 0:
         return ClaudePaneStatus("tool_running", "claude_pane_tool_running", ("tool_running_line",))
@@ -126,6 +136,11 @@ def parse_claude_pane_status(
     matches = _matched(ERROR_MARKERS, _without_nonfatal_ui_errors(recent))
     if matches:
         return ClaudePaneStatus("failed", "provider_error_text", matches)
+
+    if idle_prompt_index >= 0 and not _has_interrupt_hint_after(
+        recent_lines, idle_prompt_index
+    ):
+        return ClaudePaneStatus("free", "claude_pane_idle_prompt", ("idle_prompt",))
 
     if _last_terminal_summary_index(recent_lines) >= 0:
         return ClaudePaneStatus(
@@ -158,6 +173,20 @@ def _last_terminal_summary_index(lines: list[str]) -> int:
         if CLAUDE_THOUGHT_RAN_RE.search(line) or CLAUDE_VERB_FOR_RE.search(line):
             return index
     return -1
+
+
+def _last_idle_prompt_index(lines: list[str]) -> int:
+    for index in range(len(lines) - 1, -1, -1):
+        if CLAUDE_IDLE_PROMPT_RE.search(lines[index]):
+            return index
+    return -1
+
+
+def _has_interrupt_hint_after(lines: list[str], prompt_index: int) -> bool:
+    return any(
+        CLAUDE_INTERRUPT_HINT_RE.search(line)
+        for line in lines[prompt_index + 1 :]
+    )
 
 
 def _matched(markers: tuple[str, ...], text: str) -> tuple[str, ...]:

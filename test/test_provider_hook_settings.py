@@ -59,6 +59,43 @@ def _write_project_memory(project_root: Path, text: str) -> None:
     path.write_text(text, encoding='utf-8')
 
 
+def test_source_test_runtime_materializes_matching_ccb_ask_and_reconnect_shims(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+
+    provider_hooks_module._materialize_source_test_command_shims(project_root)
+
+    ccb_shim = project_root / '.ccb' / 'bin' / 'ccb'
+    ask_shim = project_root / '.ccb' / 'bin' / 'ask'
+    reconnect_shim = project_root / '.ccb' / 'bin' / 'codex-reconnect'
+    assert ccb_shim.is_file()
+    assert ask_shim.is_file()
+    assert reconnect_shim.is_file()
+    assert ccb_shim.read_text(encoding='utf-8').endswith('ccb_test "$@"\n')
+    assert ask_shim.read_text(encoding='utf-8').endswith('ccb_test ask "$@"\n')
+    assert reconnect_shim.read_text(encoding='utf-8').endswith(
+        'bin/codex-reconnect "$@"\n'
+    )
+    assert ccb_shim.stat().st_mode & 0o111
+    assert ask_shim.stat().st_mode & 0o111
+    assert reconnect_shim.stat().st_mode & 0o111
+
+
+def test_release_runtime_does_not_materialize_source_test_command_shims(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    monkeypatch.delenv('CCB_TEST_ENTRYPOINT', raising=False)
+
+    provider_hooks_module._materialize_source_test_command_shims(project_root)
+
+    assert not (project_root / '.ccb' / 'bin').exists()
+
+
 def test_build_hook_command_includes_completion_dir_and_workspace(tmp_path: Path) -> None:
     script_path = tmp_path / 'bin' / 'ccb-provider-finish-hook'
     command = build_hook_command(
@@ -305,7 +342,7 @@ def test_install_claude_hooks_trusts_workspace_in_managed_home(tmp_path: Path) -
         command=command,
     )
 
-    trust_path = home_root / '.claude.json'
+    trust_path = home_root / '.claude' / '.claude.json'
     trust_data = json.loads(trust_path.read_text(encoding='utf-8'))
     assert trust_data[str(workspace.resolve())]['hasTrustDialogAccepted'] is True
     assert trust_data['projects'][str(workspace.resolve())]['hasTrustDialogAccepted'] is True
@@ -394,7 +431,17 @@ def test_prepare_provider_workspace_materializes_claude_mcp_from_source_home(
         refresh_profile=True,
     )
 
-    trust_path = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'claude' / 'home' / '.claude.json'
+    trust_path = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'agent1'
+        / 'provider-state'
+        / 'claude'
+        / 'home'
+        / '.claude'
+        / '.claude.json'
+    )
     payload = json.loads(trust_path.read_text(encoding='utf-8'))
     assert payload['mcpServers']['global-tool']['command'] == 'global-mcp'
     assert payload['projects'][target_project_key]['mcpServers']['project-tool']['command'] == 'project-mcp'
@@ -1198,7 +1245,7 @@ def test_prepare_provider_workspace_materializes_copilot_installed_plugins(
                         'cache_path': str(source_plugin),
                     }
                 ],
-                'loggedInUsers': [{'login': 'must-not-copy'}],
+                'loggedInUsers': [{'login': 'source-user'}],
             },
             indent=2,
         )
@@ -1223,7 +1270,7 @@ def test_prepare_provider_workspace_materializes_copilot_installed_plugins(
     target_plugin = target_home / 'installed-plugins' / 'fixture-marketplace' / 'fixture-plugin'
     config_text = (target_home / 'config.json').read_text(encoding='utf-8')
     payload = json.loads(config_text[config_text.index('{'):])
-    assert 'loggedInUsers' not in payload
+    assert payload['loggedInUsers'] == [{'login': 'source-user'}]
     assert payload['installedPlugins'][0]['cache_path'] == str(target_plugin)
     assert (target_plugin / 'skill.md').read_text(encoding='utf-8') == 'source plugin\n'
     assert (target_home / '.ccb-installed-plugins-projection.json').is_file()
@@ -1499,6 +1546,10 @@ def test_prepare_provider_workspace_uses_account_home_when_current_home_is_manag
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        'provider_backends.claude.launcher_runtime.home.platform.system',
+        lambda: 'Linux',
+    )
     project_root = tmp_path / 'repo'
     workspace = project_root / 'workspace'
     system_home = tmp_path / 'system-home'
