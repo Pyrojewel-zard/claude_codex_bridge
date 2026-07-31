@@ -110,6 +110,9 @@ def _respawn_existing_pane(
                 blocked_at=now_str_fn(),
             )
             return _RespawnOutcome(recovery[1], allow_replacement=False)
+        prepared_start_cmd = str(getattr(session, 'start_cmd', '') or '').strip()
+        if prepared_start_cmd:
+            start_cmd = prepared_start_cmd
         respawn(str(pane_id), cmd=start_cmd, cwd=session.work_dir, remain_on_exit=True)
         if not backend.is_alive(str(pane_id)):
             return _RespawnOutcome('respawn did not revive pane')

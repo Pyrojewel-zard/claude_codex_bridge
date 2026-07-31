@@ -6,7 +6,7 @@
 **Codex、Claude、Gemini などの CLI Agent を、見える・制御できる・直接引き継げるワークフローで連携**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -54,17 +54,19 @@
 
 ## インストール方法
 
-npm でのインストールまたは更新を推奨します。
+npm 管理の CCB は npm でインストールまたは更新します。
 
 ```bash
-npm install -g @seemseam/ccb
+npm install -g @seemseam/ccb@latest
 ```
 
-インストール後は CCB の updater を使います。
+GitHub release パッケージまたはソースからのインストールでは、CCB のトランザクション updater を使います。
 
 ```bash
 ccb update
 ```
+
+npm 管理のインストールでは、`ccb update` は同等の npm コマンドを表示するだけで、vendored payload を直接変更しません。
 
 <details>
 <summary><b>GitHub release パッケージとソースインストールのフォールバック</b></summary>
@@ -180,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App の詳細、安全境界、ソース</b></summary>
 
-CCB 8.2.1 では Flutter 版 CCB Mobile のソースが [`mobile/`](../mobile/) に含まれ、Android APK は GitHub Releases で公開されています。
+CCB 8.5.2 では Flutter 版 CCB Mobile のソースが [`mobile/`](../mobile/) に含まれ、Android APK は GitHub Releases で公開されています。
 
-- [CCB Mobile v8.2.1 APK をダウンロード](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [CCB Mobile v8.5.2 APK をダウンロード](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
 - App ソース：[`mobile/app`](../mobile/app)
 - サーバー gateway ソース：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -261,6 +263,38 @@ sidebar のアイデアと示唆を提供してくれた [tmux-agent-sidebar](ht
 ## リリースノート
 
 <details open>
+<summary><b>v8.4.0</b> - 暗号化 Mobile Relay、簡単なペアリング、安定したプロジェクト ID、Codex 再接続</summary>
+
+- エンドツーエンド暗号化 Relay、1 回限りの招待、multiplex stream、公式またはセルフホスト構成を追加しました。
+- Tailscale、private LAN、Relay の選択を `ccb update mobile` に移し、スマートフォン側は QR またはコード入力だけにしました。
+- 署名済み APK を Android に渡す前に、公式 GitHub metadata、サイズ、SHA-256 を検証します。
+- プロジェクト移動後も ID を維持し、システム theme 追従と境界付きの Codex reconnect を追加しました。
+
+</details>
+
+<details>
+<summary><b>v8.3.1</b> - Provider 更新の一元化、安全なキャッシュ廃止、永続的な Config UI アクセス</summary>
+
+- 対応する Provider の更新を `ccb update` に集約し、正確なバージョン確認、辞退、バージョン単位のスキップを提供します。実行中の pane は自動再起動しません。
+- プロジェクト単位の Claude/Gemini ソフトウェアキャッシュを廃止し、所有権を検証できる旧データだけを削除します。稼働中のプロジェクト、session、認証情報は保持します。
+- token 値を表示せずに、Config UI の固定 loopback ポートと保護された token ソースを設定できます。
+- サーバー停止中も shutdown finalizer を維持し、Rich mode の Yazi をコンパクトな 2 カラム構成にしました。
+- CLI、npm、Linux、macOS、Android とすべてのリリース成果物を 8.3.1 に同期しました。
+
+</details>
+
+<details>
+<summary><b>v8.3.0</b> - 正確な provider turn、job の整合性、プロジェクト内 Mobile ターミナル</summary>
+
+- Kimi、Claude、Qoder をそれぞれのネイティブな turn、activation、session、completion 契約に結び付けました。
+- 正確な active job への follow-up、相関した実行フェーズ、孤立 inbound の診断、終端 cancellation 結果を追加しました。
+- provider 拡張と Copilot plugin を、投影 asset の明示的な ownership 保護付きで継承します。
+- npm 管理インストールの更新を npm に委譲し、marker-only worktree を保守的に廃止します。
+- Mobile の chat と terminal を選択中の project workspace 内に保ち、すべての release surface を 8.3.0 に同期しました。
+
+</details>
+
+<details>
 <summary><b>v8.2.1</b> - 決定的な起動、操作可能な認証復旧、Android バックグラウンド接続</summary>
 
 - 起動世代フェンス、有限の readiness 証明、操作数とタイムラインの診断を追加しました。

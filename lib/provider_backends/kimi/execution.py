@@ -21,8 +21,8 @@ from provider_execution.common import build_item, error_submission, send_prompt_
 
 from provider_core.protocol import request_anchor_for_job
 from .hindsight import recall_hindsight_memories, retain_hindsight_turn
-from .session import load_project_session
-from .native_log import KimiTurnObservation, observe_kimi_turn
+from .session import load_project_session, persist_native_session_binding
+from .native_log import KimiTurnObservation, kimi_code_home, kimi_share_dir, observe_kimi_turn
 
 
 PANE_LINES_DEFAULT = 2000
@@ -149,6 +149,12 @@ def _start_submission(
     if hindsight_recall.context:
         prompt_body = f"{hindsight_recall.context}\n\n{prompt_body}"
     prompt = wrap_native_prompt(prompt_body, req_id)
+    session_share_dir = str(getattr(session, "kimi_share_dir", "") or "").strip()
+    if not session_share_dir:
+        session_share_dir = str(kimi_share_dir())
+    session_code_home = str(getattr(session, "kimi_code_home", "") or "").strip()
+    if not session_code_home:
+        session_code_home = str(kimi_code_home())
     initial_content = _pane_snapshot(backend, pane_id, lines=PANE_LINES_DEFAULT)
     prompt_deferred_until_ready = not _pane_ready_for_input(initial_content)
     send_error: str | None = None
@@ -189,6 +195,10 @@ def _start_submission(
             "request_anchor": req_id,
             "req_id": req_id,
             "work_dir": str(work_dir),
+            "project_session_file": str(getattr(session, "session_file", "") or ""),
+            "ccb_launch_session_id": str(session.data.get("ccb_session_id") or ""),
+            "kimi_share_dir": session_share_dir,
+            "kimi_code_home": session_code_home,
             "hindsight_user_prompt": original_prompt_body,
             "hindsight_recall": hindsight_recall.diagnostics or {},
             "started_at": now,
@@ -259,13 +269,21 @@ def _poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPol
     state["total_secs"] = total_secs
     state["max_wait_secs"] = max_wait_secs
 
-    observation = observe_kimi_turn(Path(work_dir), req_id)
+    share_dir = _state_str(state, "kimi_share_dir")
+    code_home = _state_str(state, "kimi_code_home")
+    observation = observe_kimi_turn(
+        Path(work_dir),
+        req_id,
+        share_candidates=(Path(share_dir),) if share_dir else None,
+        code_home_candidates=(Path(code_home),) if code_home else None,
+    )
     pane_observation = _observe_kimi_pane_turn(backend, pane_id, req_id)
     if pane_observation is not None:
         pane_observation = _stabilize_pane_observation(state, pane_observation, now)
-    if pane_observation is not None and (
-        observation is None or (pane_observation.completed and not observation.completed)
-    ):
+    if pane_observation is not None and observation is None:
+        # Pane text is rescue evidence only. Once the native log owns the
+        # request anchor, a stable-looking input box cannot truncate an
+        # in-progress native answer.
         observation = pane_observation
         state["pane_fallback_observed"] = True
     if observation is None:
@@ -285,6 +303,14 @@ def _poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPol
                 },
             )
         return None
+
+    _persist_observed_native_session(
+        submission,
+        state,
+        observation,
+        work_dir=Path(work_dir),
+        now=now,
+    )
 
     items = []
     session_path = str(observation.session_path or "")
@@ -339,7 +365,10 @@ def _poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPol
             diagnostics_extra={
                 "empty_reply": True,
                 "error_type": "empty_provider_reply",
-                "diagnosis": "Kimi recorded TurnEnd for the submitted CCB_REQ_ID but no assistant reply text was found.",
+                "diagnosis": (
+                    "Kimi recorded a native completion boundary for the submitted "
+                    "CCB_REQ_ID but no assistant reply text was found."
+                ),
                 "session_path": session_path or None,
                 "provider_session_id": observation.session_id,
             },
@@ -420,6 +449,49 @@ def _poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPol
     if items or updated != submission:
         return ProviderPollResult(submission=updated, items=tuple(items))
     return None
+
+
+def _persist_observed_native_session(
+    submission: ProviderSubmission,
+    state: dict[str, object],
+    observation: KimiTurnObservation,
+    *,
+    work_dir: Path,
+    now: str,
+) -> None:
+    native_session_id = str(observation.session_id or "").strip()
+    native_session_path = str(observation.session_path or "").strip()
+    if not observation.request_seen or not native_session_id or not native_session_path:
+        return
+    if (
+        _state_str(state, "bound_native_session_id") == native_session_id
+        and _state_str(state, "bound_native_session_path") == native_session_path
+    ):
+        return
+    session_file = _state_str(state, "project_session_file")
+    ccb_session_id = _state_str(state, "ccb_launch_session_id")
+    share_dir = _state_str(state, "kimi_share_dir")
+    code_home = _state_str(state, "kimi_code_home")
+    if not session_file or not ccb_session_id or not share_dir:
+        state["kimi_session_binding_error"] = "binding_context_missing"
+        return
+    ok, error = persist_native_session_binding(
+        Path(session_file),
+        expected_ccb_session_id=ccb_session_id,
+        agent_name=submission.agent_name,
+        work_dir=work_dir,
+        share_dir=Path(share_dir),
+        code_home=Path(code_home) if code_home else None,
+        native_session_id=native_session_id,
+        native_session_path=Path(native_session_path),
+        observed_at=now,
+    )
+    if not ok:
+        state["kimi_session_binding_error"] = str(error or "binding_write_failed")
+        return
+    state["bound_native_session_id"] = native_session_id
+    state["bound_native_session_path"] = native_session_path
+    state.pop("kimi_session_binding_error", None)
 
 
 def _poll_deferred_prompt(

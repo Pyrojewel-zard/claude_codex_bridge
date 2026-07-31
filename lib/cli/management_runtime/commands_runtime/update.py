@@ -13,24 +13,41 @@ import tempfile
 from release_artifacts import release_artifact_name
 from cli.roles_runtime.commands import cmd_roles
 from cli.services.mobile_host import start_or_replace_mobile_host_service
-from cli.services.mobile_update import DEFAULT_MOBILE_GATEWAY_LISTEN, run_mobile_update_onboarding
+from cli.services.mobile_update import (
+    DEFAULT_MOBILE_GATEWAY_LISTEN,
+    run_mobile_cloudflare_onboarding,
+    run_mobile_lan_onboarding,
+    run_mobile_relay_onboarding,
+    run_mobile_update_onboarding,
+    suggest_lan_listen_address,
+)
+from cli.services.mobile_route_onboarding import (
+    MobileRouteSelection,
+    ensure_guided_relay_credentials,
+    prompt_mobile_route_selection,
+)
 from cli.tools_runtime.workbench import print_workbench_status, update_rich_workbench
 from rolepacks.sources import role_catalog_status
 
 from ..install import (
     download_tarball,
     is_source_repo_root,
+    npm_install_provenance,
+    npm_update_command,
     pick_temp_base_dir,
     resolve_managed_install_dir,
     run_staged_unix_installer,
     safe_extract_tar,
 )
+from ..provider_cache_cleanup import run_post_update_provider_cache_cleanup
+from ..provider_updates import run_provider_update_flow
 from ..versioning import REPO_URL, format_version_info, get_available_versions, get_version_info
 from .matching import find_matching_version, latest_version
 
 
 POST_UPDATE_COMMAND = "__post-update"
 POST_UPDATE_TIMEOUT_SECONDS = 300.0
+POST_UPDATE_WITH_PROVIDERS_TIMEOUT_SECONDS = 60.0 * 60.0
 ENTRYPOINT_SMOKE_TIMEOUT_SECONDS = 30.0
 DEFAULT_CATALOG_ROLE_IDS = ('agentroles.archi', 'agentroles.ccb_self')
 
@@ -49,16 +66,24 @@ def cmd_update(args, *, script_root: Path) -> int:
     if _update_target_is_rich(args):
         return _update_rich_bundle()
     if _update_target_is_mobile(args):
-        return _update_mobile_bundle(script_root=script_root)
+        return _update_mobile_bundle(script_root=script_root, args=args)
     source_repo_install = is_source_repo_root(script_root)
     install_dir = resolve_managed_install_dir(script_root=script_root)
 
     target_version = _resolve_target_version(args)
     if target_version is False:
         return 1
+    npm_provenance = npm_install_provenance(script_root=script_root)
+    if npm_provenance is not None:
+        command = npm_update_command(target_version if isinstance(target_version, str) else None)
+        print("ℹ️  This CCB installation is managed by npm; its vendored release cannot update itself in place.")
+        print(f"   Run: {command}")
+        return 0
 
     current_install_root = script_root if source_repo_install else install_dir
     old_info = get_version_info(current_install_root)
+    provider_mode = _provider_update_mode(args)
+    cache_cleanup_enabled = _cache_cleanup_enabled(args)
     if target_version:
         if source_repo_install:
             print(f"🔄 Installing release v{target_version} from source/dev checkout...")
@@ -70,16 +95,31 @@ def cmd_update(args, *, script_root: Path) -> int:
         else:
             print("🔄 Checking for release updates...")
 
+    resolved_target = target_version or _resolve_latest_release_version()
+    if not resolved_target:
+        print("❌ Could not determine latest release version")
+        return 1
+    if (
+        not source_repo_install
+        and not target_version
+        and _identity_value(old_info, "version") == resolved_target
+    ):
+        _print_update_outcome(old_info, old_info)
+        _run_provider_updates_nonblocking(mode=provider_mode)
+        return 0
     try:
         tmp_base = pick_temp_base_dir(install_dir)
     except Exception as exc:
         print(str(exc))
         return 1
-    resolved_target = target_version or _resolve_latest_release_version()
-    if not resolved_target:
-        print("❌ Could not determine latest release version")
-        return 1
-    code = _update_via_tarball(tmp_base, install_dir=install_dir, target_version=resolved_target, old_info=old_info)
+    code = _update_via_tarball(
+        tmp_base,
+        install_dir=install_dir,
+        target_version=resolved_target,
+        old_info=old_info,
+        provider_mode=provider_mode,
+        cache_cleanup_enabled=cache_cleanup_enabled,
+    )
     if code != 0:
         return code
     if source_repo_install:
@@ -127,7 +167,15 @@ def _resolve_latest_release_version() -> str | None:
     return latest_version(versions)
 
 
-def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: str | None, old_info: dict[str, object]) -> int:
+def _update_via_tarball(
+    tmp_base: Path,
+    *,
+    install_dir: Path,
+    target_version: str | None,
+    old_info: dict[str, object],
+    provider_mode: str = "prompt",
+    cache_cleanup_enabled: bool = True,
+) -> int:
     if not target_version:
         print("❌ Update failed: no release version selected")
         return 1
@@ -193,7 +241,13 @@ def _update_via_tarball(tmp_base: Path, *, install_dir: Path, target_version: st
             print(f"❌ Update failed: {installed_identity_error}")
             return 1
         _print_update_outcome(old_info, new_info)
-        if not _run_post_update_with_new_entrypoint(install_dir=install_dir, old_info=old_info, new_info=new_info):
+        if not _run_post_update_with_new_entrypoint(
+            install_dir=install_dir,
+            old_info=old_info,
+            new_info=new_info,
+            provider_mode=provider_mode,
+            cache_cleanup_enabled=cache_cleanup_enabled,
+        ):
             preserve_backup = _restore_or_retain_backup(install_dir=install_dir, backup_dir=backup_dir)
             return 1
         return 0
@@ -310,7 +364,18 @@ def _restore_or_retain_backup(*, install_dir: Path, backup_dir: Path | None) -> 
 def maybe_handle_post_update_command(tokens: list[str], *, script_root: Path) -> int | None:
     if list(tokens[:1]) != [POST_UPDATE_COMMAND]:
         return None
-    return _run_post_update_provisioning(install_dir=Path(script_root).expanduser())
+    from_version = _post_update_option(tokens, '--from-version', default='unknown')
+    to_version = _post_update_option(tokens, '--to-version', default='unknown')
+    cache_cleanup_enabled = (
+        '--no-cache-cleanup' not in tokens
+        and not _falsey_env('CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED')
+    )
+    return _run_post_update_provisioning(
+        install_dir=Path(script_root).expanduser(),
+        from_version=from_version,
+        to_version=to_version,
+        cache_cleanup_enabled=cache_cleanup_enabled,
+    )
 
 
 def _run_post_update_with_new_entrypoint(
@@ -318,6 +383,8 @@ def _run_post_update_with_new_entrypoint(
     install_dir: Path,
     old_info: dict[str, object],
     new_info: dict[str, object],
+    provider_mode: str = "prompt",
+    cache_cleanup_enabled: bool = True,
 ) -> bool:
     ccb_entry = _installed_ccb_entrypoint(install_dir)
     if not _verify_installed_ccb_entrypoint(ccb_entry):
@@ -333,14 +400,27 @@ def _run_post_update_with_new_entrypoint(
     env = dict(os.environ)
     env["CODEX_INSTALL_PREFIX"] = str(install_dir)
     env["CCB_SKIP_STARTUP_UPDATE_CHECK"] = "1"
+    env["CCB_PROVIDER_UPDATE_FLOW"] = "1"
+    env["CCB_PROVIDER_UPDATE_MODE"] = _normalized_provider_update_mode(provider_mode)
+    env['CCB_POST_UPDATE_CACHE_CLEANUP_FLOW'] = '1'
+    env['CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED'] = '1' if cache_cleanup_enabled else '0'
+    if not cache_cleanup_enabled:
+        command.append('--no-cache-cleanup')
+    timeout = _post_update_timeout_seconds(
+        provider_flow=_normalized_provider_update_mode(provider_mode) != "none",
+        cache_cleanup=cache_cleanup_enabled,
+    )
     try:
-        result = subprocess.run(command, cwd=Path.cwd(), env=env, timeout=_post_update_timeout_seconds())
+        result = subprocess.run(command, cwd=Path.cwd(), env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
         if _post_update_failure_is_required():
-            print(f"❌ Required post-update provisioning timed out after {_post_update_timeout_seconds():g}s.")
+            print(f"❌ Required post-update provisioning timed out after {timeout:g}s.")
             return False
-        print(f"⚠️  Post-update provisioning timed out after {_post_update_timeout_seconds():g}s.")
-        print("   Core update completed; retry optional provisioning with `ccb roles list`.")
+        print(f"⚠️  Post-update provisioning timed out after {timeout:g}s.")
+        print(
+            "   Core update completed; retry Role Pack checks with `ccb roles list` "
+            "and provider checks with `ccb update --providers check`."
+        )
         return True
     except Exception as exc:
         if _post_update_failure_is_required():
@@ -353,7 +433,10 @@ def _run_post_update_with_new_entrypoint(
             print(f"❌ Required post-update provisioning exited with code {result.returncode}.")
             return False
         print(f"⚠️  Post-update provisioning exited with code {result.returncode}.")
-        print("   Core update completed; retry optional provisioning with `ccb roles list`.")
+        print(
+            "   Core update completed; retry Role Pack checks with `ccb roles list` "
+            "and provider checks with `ccb update --providers check`."
+        )
     return True
 
 
@@ -423,8 +506,17 @@ def _post_update_version_label(info: dict[str, object]) -> str:
     return str(value)
 
 
-def _post_update_timeout_seconds() -> float:
-    return _positive_float_env("CCB_POST_UPDATE_TIMEOUT_SECONDS", POST_UPDATE_TIMEOUT_SECONDS)
+def _post_update_timeout_seconds(
+    *,
+    provider_flow: bool = False,
+    cache_cleanup: bool = False,
+) -> float:
+    default = (
+        POST_UPDATE_WITH_PROVIDERS_TIMEOUT_SECONDS
+        if provider_flow or cache_cleanup
+        else POST_UPDATE_TIMEOUT_SECONDS
+    )
+    return _positive_float_env("CCB_POST_UPDATE_TIMEOUT_SECONDS", default)
 
 
 def _entrypoint_smoke_timeout_seconds() -> float:
@@ -456,7 +548,18 @@ def _truthy_env(name: str) -> bool:
     return value in {"1", "true", "on", "yes"}
 
 
-def _run_post_update_provisioning(*, install_dir: Path) -> int:
+def _falsey_env(name: str) -> bool:
+    value = str(os.environ.get(name) or '').strip().lower()
+    return value in {'0', 'false', 'off', 'no'}
+
+
+def _run_post_update_provisioning(
+    *,
+    install_dir: Path,
+    from_version: str = 'unknown',
+    to_version: str = 'unknown',
+    cache_cleanup_enabled: bool = True,
+) -> int:
     failures = 0
     try:
         set_tmux_ui_active(True)
@@ -467,6 +570,26 @@ def _run_post_update_provisioning(*, install_dir: Path) -> int:
     except Exception as exc:
         failures += 1
         print(f"⚠️  Role Pack post-update provisioning failed: {type(exc).__name__}: {exc}")
+    if _truthy_env("CCB_PROVIDER_UPDATE_FLOW"):
+        _run_provider_updates_nonblocking(
+            mode=os.environ.get("CCB_PROVIDER_UPDATE_MODE") or "prompt",
+        )
+    if (
+        cache_cleanup_enabled
+        and _truthy_env('CCB_POST_UPDATE_CACHE_CLEANUP_FLOW')
+        and not (failures and _post_update_failure_is_required())
+    ):
+        try:
+            run_post_update_provider_cache_cleanup(
+                from_version=from_version,
+                to_version=to_version,
+                cwd=Path.cwd(),
+            )
+        except Exception as exc:
+            print(
+                '⚠️  Post-update legacy cache migration failed; '
+                f'the core update is unaffected: {type(exc).__name__}: {exc}'
+            )
     return 1 if failures else 0
 
 
@@ -644,6 +767,43 @@ def _update_target_is_mobile(args) -> bool:
     return str(getattr(args, "target", "") or "").strip().lower() == "mobile"
 
 
+def _provider_update_mode(args) -> str:
+    requested = getattr(args, "providers", None)
+    if requested is None:
+        requested = os.environ.get("CCB_UPDATE_PROVIDERS")
+    return _normalized_provider_update_mode(requested)
+
+
+def _cache_cleanup_enabled(args) -> bool:
+    if _falsey_env('CCB_UPDATE_CACHE_CLEANUP'):
+        return False
+    return bool(getattr(args, 'cache_cleanup', True))
+
+
+def _post_update_option(tokens: list[str], name: str, *, default: str) -> str:
+    for index, token in enumerate(tokens):
+        if token == name and index + 1 < len(tokens):
+            value = str(tokens[index + 1] or '').strip()
+            return value or default
+        prefix = f'{name}='
+        if token.startswith(prefix):
+            value = token[len(prefix):].strip()
+            return value or default
+    return default
+
+
+def _normalized_provider_update_mode(value: object) -> str:
+    normalized = str(value or "prompt").strip().lower()
+    return normalized if normalized in {"prompt", "check", "all", "none"} else "prompt"
+
+
+def _run_provider_updates_nonblocking(*, mode: str) -> None:
+    try:
+        run_provider_update_flow(mode=_normalized_provider_update_mode(mode))
+    except Exception as exc:
+        print(f"⚠️  Provider update management skipped: {type(exc).__name__}: {exc}")
+
+
 def _update_rich_bundle() -> int:
     print("🔧 Installing/updating rich workbench bundle...")
     result = update_rich_workbench()
@@ -651,7 +811,119 @@ def _update_rich_bundle() -> int:
     return 0 if result.get("status") in {"ok", "degraded"} else 1
 
 
-def _update_mobile_bundle(*, script_root: Path) -> int:
+def _update_mobile_bundle(*, script_root: Path, args) -> int:
+    requested_route = str(getattr(args, 'route_provider', '') or '').strip()
+    guided_selection = False
+    selection = (
+        MobileRouteSelection(route_provider=requested_route)
+        if requested_route
+        else None
+    )
+    if selection is None:
+        if _stream_is_tty(sys.stdin) and _stream_is_tty(sys.stdout):
+            selection = prompt_mobile_route_selection(
+                read_fn=_read_stdio_prompt,
+                print_fn=print,
+            )
+            if selection is None:
+                return 0
+            guided_selection = True
+        else:
+            print("ℹ️  Non-interactive mobile setup defaults to Tailscale.")
+            print(
+                "   Use --route-provider lan|tailnet|relay explicitly "
+                "to select another route."
+            )
+            selection = MobileRouteSelection(route_provider='tailnet')
+    requested_route = selection.route_provider
+
+    if requested_route == 'relay':
+        if guided_selection:
+            credential_result = ensure_guided_relay_credentials(
+                relay_mode=str(selection.relay_mode or ''),
+                read_fn=_read_stdio_prompt,
+                print_fn=print,
+            )
+            if not credential_result.ready:
+                return 0 if credential_result.cancelled else 1
+        listen = str(getattr(args, 'listen', '') or '').strip() or DEFAULT_MOBILE_GATEWAY_LISTEN
+        public_url = str(getattr(args, 'public_url', '') or '').strip() or None
+
+        def _start_relay_service():
+            return start_or_replace_mobile_host_service(
+                script_root=script_root,
+                listen=listen,
+                public_url=public_url,
+                route_provider='relay',
+                rotate_pairing=True,
+            ).to_record()
+
+        return run_mobile_relay_onboarding(start_service_fn=_start_relay_service)
+
+    if requested_route == 'lan':
+        listen = str(getattr(args, 'listen', '') or '').strip()
+        suggested_listen = suggest_lan_listen_address()
+        if not listen and guided_selection:
+            prompt = (
+                f"LAN listen address [{suggested_listen}]: "
+                if suggested_listen
+                else "LAN listen address (for example 192.168.1.100:8787): "
+            )
+            try:
+                listen = (
+                    _read_stdio_prompt(prompt).strip()
+                    or (suggested_listen or '')
+                )
+            except (EOFError, KeyboardInterrupt):
+                print("")
+                print("Mobile setup cancelled; no gateway was changed.")
+                return 0
+        if not listen:
+            listen = suggested_listen or ''
+        if not listen:
+            print("❌ Could not discover a private LAN address.")
+            print(
+                "   Rerun with a specific address, for example "
+                "`ccb update mobile --route-provider lan "
+                "--listen 192.168.1.100:8787`."
+            )
+            return 1
+        public_url = str(getattr(args, 'public_url', '') or '').strip() or None
+
+        def _start_lan_service():
+            return start_or_replace_mobile_host_service(
+                script_root=script_root,
+                listen=listen,
+                public_url=public_url,
+                route_provider='lan',
+                rotate_pairing=True,
+            ).to_record()
+
+        return run_mobile_lan_onboarding(
+            start_service_fn=_start_lan_service,
+            listen=listen,
+        )
+
+    if requested_route == 'cloudflare_tunnel':
+        listen = str(getattr(args, 'listen', '') or '').strip() or DEFAULT_MOBILE_GATEWAY_LISTEN
+        public_url = str(getattr(args, 'public_url', '') or '').strip() or None
+        if not public_url:
+            print("❌ Cloudflare Tunnel setup requires --public-url https://mobile.example.com.")
+            return 1
+
+        def _start_cloudflare_service():
+            return start_or_replace_mobile_host_service(
+                script_root=script_root,
+                listen=listen,
+                public_url=public_url,
+                route_provider='cloudflare_tunnel',
+                rotate_pairing=True,
+            ).to_record()
+
+        return run_mobile_cloudflare_onboarding(
+            start_service_fn=_start_cloudflare_service,
+        )
+
     def _start_service(commands, _status):
         mobile_serve = tuple(commands.mobile_serve)
         listen = _command_option(mobile_serve, '--listen') or DEFAULT_MOBILE_GATEWAY_LISTEN
@@ -665,7 +937,33 @@ def _update_mobile_bundle(*, script_root: Path) -> int:
             rotate_pairing=True,
         ).to_record()
 
-    return run_mobile_update_onboarding(start_service_fn=_start_service)
+    tailnet_listen = (
+        str(getattr(args, 'listen', '') or '').strip()
+        or DEFAULT_MOBILE_GATEWAY_LISTEN
+    )
+    return run_mobile_update_onboarding(
+        start_service_fn=_start_service,
+        listen=tailnet_listen,
+    )
+
+
+def _stream_is_tty(stream) -> bool:
+    isatty = getattr(stream, 'isatty', None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except OSError:
+        return False
+
+
+def _read_stdio_prompt(prompt: str) -> str:
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    line = sys.stdin.readline()
+    if line == '':
+        raise EOFError
+    return line.rstrip('\r\n')
 
 
 def _command_option(command: tuple[str, ...], option: str) -> str | None:

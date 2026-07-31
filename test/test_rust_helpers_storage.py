@@ -159,6 +159,7 @@ def test_storage_default_auto_uses_helper_when_available(tmp_path: Path) -> None
     result = scan_storage_inventory(
         [{'root_kind': 'project', 'path': str(root)}],
         env={RUST_HELPER_BIN_ENV: str(helper)},
+        timeout_s=2.0,
     )
 
     assert result.helper_used is True

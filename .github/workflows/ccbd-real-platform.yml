@@ -33,7 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli jsonschema
+          python -m pip install pytest tomli jsonschema \
+            --requirement deploy/mobile-relay/requirements.txt
           brew install tmux
 
       - name: Syntax check
@@ -225,7 +226,8 @@ jobs:
           sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
           python3.11 -m venv /tmp/ccb-ci-py311
           /tmp/ccb-ci-py311/bin/python -m pip install --upgrade pip
-          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli jsonschema
+          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli jsonschema \
+            --requirement deploy/mobile-relay/requirements.txt
           if [ ! -f "$HOME/.cargo/env" ]; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal --default-toolchain stable
@@ -235,6 +237,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           source "$HOME/.cargo/env"
           bin/build-ccb-runtime-accelerator
 
@@ -242,6 +245,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           PYTHONPATH=lib /tmp/ccb-ci-py311/bin/python - <<'PY'
           import tempfile
           from pathlib import Path
@@ -268,6 +272,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           /tmp/ccb-ci-py311/bin/python -m compileall -q lib bin ccb.py
           bash -n test/system_comm_matrix.sh test/system_linux_soak.sh test/system_fastpath_stress.sh
 
@@ -275,6 +280,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           /tmp/ccb-ci-py311/bin/python -m pytest -q -m ccb_lifecycle_smoke \
             test/test_v2_phase2_entrypoint.py \
@@ -284,6 +290,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           /tmp/ccb-ci-py311/bin/python -m pytest -q \
             test/test_v2_storage_paths.py \
             test/test_wsl_path_utils.py \
@@ -295,6 +302,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           bash test/system_comm_matrix.sh
 
@@ -302,10 +310,13 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
+          # The short WSL sample makes nearest-rank p95 equal the maximum.
           CCB_LINUX_SOAK_SECONDS=35 \
           CCB_LINUX_SOAK_KILL_EVERY=2 \
           CCB_LINUX_SOAK_STUB_DELAY=0.2 \
+          CCB_LINUX_SOAK_P95_RECEIPT_MS=2500 \
           CCB_LINUX_SOAK_WATCH_TIMEOUT_S=90 \
             bash test/system_linux_soak.sh
 
@@ -313,6 +324,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           CCB_FASTPATH_STRESS_ASK_COUNT=12 \
           CCB_FASTPATH_STRESS_STUB_DELAY=0.3 \
@@ -324,6 +336,7 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           smoke_root="/mnt/c/Temp/ccb-storage-cleanup-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
           rm -rf "$smoke_root"

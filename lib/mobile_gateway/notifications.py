@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -56,6 +56,7 @@ class MobileNotificationEvent:
     dedupe_key: str
     namespace_epoch: int | None = None
     scope: str | None = None
+    activity_state: str | None = None
 
     def to_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -71,6 +72,8 @@ class MobileNotificationEvent:
             payload['namespace_epoch'] = self.namespace_epoch
         if self.scope:
             payload['scope'] = self.scope
+        if self.activity_state:
+            payload['activity_state'] = self.activity_state
         return payload
 
 
@@ -125,7 +128,13 @@ class MobileNotificationStore:
             )
             existing = {event.dedupe_key for event in completions}
             emitted: list[MobileNotificationEvent] = []
-            for snapshot in snapshots:
+            for raw_snapshot in snapshots:
+                snapshot = replace(
+                    raw_snapshot,
+                    activity_state=_canonical_activity_state(
+                        raw_snapshot.activity_state
+                    ),
+                )
                 key = _snapshot_key(snapshot)
                 prior = agent_states.get(key)
                 completion_sequence = _int(_map(prior).get('completion_sequence'), 0)
@@ -158,7 +167,13 @@ class MobileNotificationStore:
             )
             emitted: list[MobileNotificationEvent] = []
             summary_changed: dict[str, MobileInvalidationSnapshot] = {}
-            for snapshot in snapshots:
+            for raw_snapshot in snapshots:
+                snapshot = replace(
+                    raw_snapshot,
+                    activity_state=_canonical_activity_state(
+                        raw_snapshot.activity_state
+                    ),
+                )
                 key = _snapshot_key_for_invalidation(snapshot)
                 prior = agents.get(key)
                 if prior:
@@ -264,6 +279,11 @@ class MobileNotificationStore:
             completed_at=snapshot.observed_at,
             dedupe_key=':'.join(('invalidation', kind, snapshot.project_id, str(snapshot.namespace_epoch), selected_agent, digest)),
             namespace_epoch=snapshot.namespace_epoch, scope=scope,
+            activity_state=(
+                snapshot.activity_state
+                if kind == INVALIDATION_KIND_AGENT_ACTIVITY
+                else None
+            ),
         )
 
     def _completion_events(self) -> list[MobileNotificationEvent]:
@@ -332,6 +352,17 @@ def _is_task_completion_transition(prior: object, snapshot: MobileNotificationSn
     )
 
 
+def _canonical_activity_state(value: object) -> str:
+    state = str(value or '').strip().lower()
+    if state in {'active', 'pending'}:
+        return 'active'
+    if state in {'idle', 'free'}:
+        return 'idle'
+    if state in {'exception', 'failed'}:
+        return 'failed'
+    return 'unknown'
+
+
 def _snapshot_key(snapshot: MobileNotificationSnapshot) -> str:
     return '\0'.join((snapshot.project_id, snapshot.agent))
 
@@ -376,6 +407,7 @@ def _event_from_record(record: dict[str, object]) -> MobileNotificationEvent | N
         agent=str(record.get('agent') or ''), completed_at=str(record.get('completed_at') or ''),
         dedupe_key=str(record.get('dedupe_key') or ''), namespace_epoch=_optional_int(record.get('namespace_epoch')),
         scope=_optional_text(record.get('scope')),
+        activity_state=_optional_text(record.get('activity_state')),
     )
 
 

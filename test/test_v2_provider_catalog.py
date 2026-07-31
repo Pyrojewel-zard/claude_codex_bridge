@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
-
 from agents.models import RuntimeMode
-from completion.models import CompletionFamily
+from completion.models import CompletionFamily, CompletionSourceKind, SelectorFamily
+from completion.profiles import CompletionManifest
 from provider_core.catalog import (
     CORE_PROVIDER_NAMES,
     OPTIONAL_PROVIDER_NAMES,
@@ -11,8 +11,6 @@ from provider_core.catalog import (
     build_default_provider_catalog,
 )
 from provider_core.manifests import ProviderManifest
-from completion.profiles import CompletionManifest
-from completion.models import CompletionSourceKind, SelectorFamily
 
 
 def test_default_provider_catalog_contains_expected_profiles() -> None:
@@ -33,6 +31,8 @@ def test_default_provider_catalog_contains_expected_profiles() -> None:
         'deepseek',
         'mimo',
         'qwen',
+        'qoder',
+        'qoderclicn',
         'cursor',
         'copilot',
         'crush',
@@ -74,7 +74,13 @@ def test_default_provider_catalog_contains_expected_profiles() -> None:
     assert mimo.completion_source_kind is CompletionSourceKind.STRUCTURED_RESULT_STREAM
     assert mimo.supports_observed_completion is True
     assert mimo.supports_anchor_binding is True
-    for provider in ('qwen', 'cursor', 'copilot', 'crush', 'kiro', 'pi', 'omp', 'zai', 'grok'):
+    pi = catalog.resolve_completion_manifest('pi', RuntimeMode.PANE_BACKED)
+    assert catalog.get('pi').supports_resume is True
+    assert pi.completion_family is CompletionFamily.SESSION_BOUNDARY
+    assert pi.completion_source_kind is CompletionSourceKind.SESSION_EVENT_LOG
+    assert pi.supports_exact_completion is True
+    assert pi.supports_anchor_binding is True
+    for provider in ('qwen', 'qoder', 'qoderclicn', 'cursor', 'copilot', 'crush', 'kiro', 'omp', 'zai', 'grok'):
         native = catalog.resolve_completion_manifest(provider, RuntimeMode.PANE_BACKED)
         assert native.completion_family is CompletionFamily.STRUCTURED_RESULT
         assert native.completion_source_kind is CompletionSourceKind.STRUCTURED_RESULT_STREAM
@@ -130,6 +136,8 @@ def test_provider_catalog_can_build_core_only_catalog() -> None:
         'deepseek',
         'mimo',
         'qwen',
+        'qoder',
+        'qoderclicn',
         'cursor',
         'copilot',
         'crush',

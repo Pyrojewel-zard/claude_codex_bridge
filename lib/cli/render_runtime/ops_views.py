@@ -17,6 +17,7 @@ from .ops_views_basic import (
     render_mobile_serve,
     render_plan_task,
     render_ps,
+    render_relay_operator,
     render_restart,
     render_start,
 )
@@ -43,6 +44,7 @@ __all__ = [
     'render_mobile_serve',
     'render_plan_task',
     'render_ps',
+    'render_relay_operator',
     'render_reload',
     'render_restart',
     'render_start',

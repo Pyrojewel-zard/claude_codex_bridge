@@ -1,6 +1,30 @@
 # Mobile Tmux Control Implementation Status
 
-Date: 2026-06-27
+Date: 2026-07-22
+
+## Public Relay Packages A-D — In Progress
+
+Current phase: local implementation and pre-deployment verification are
+complete enough to prepare the Alibaba staging host. One-time host activation,
+durable phone reconnect proof, multiplexed AEAD unary/Terminal/notification/
+file traffic, managed outbound host connector, Relay QR pairing, shared Flutter
+socket ownership, bounded flow control, transient reconnect, and 25 MiB file
+boundary coverage are present on the dedicated Relay branch.
+
+Last verified locally: Relay-focused Python `108 passed`; full Flutter
+`685 passed`; full Python `5671 passed, 2 skipped`; Flutter analyze and debug
+APK build passed; 50-host/50-phone load smoke passed with no canary
+persistence; APK is `8.3.0+8030000`, SHA-256
+`1a954db32b9bac51536c069cc4a67ece3763f22561181c59e035ee2ac9c956e0`.
+
+Next target: commit the clean local checkpoint, deploy it behind a dedicated
+Alibaba nginx SNI without changing RustDesk/ZeroTier listeners, then execute
+the no-`adb reverse` public WSS Android Emulator matrix. Public Relay remains
+unaccepted until that evidence and the required soak/no-storage audit pass.
+
+Blocked by: DNS `relay.seemlab.top -> 47.120.71.142` and SSH public-key access
+to the ECS deployment account. These are not needed for the remaining local
+checks.
 
 ## Realtime Recovery Package A — In Progress (review correction, 2026-07-10)
 

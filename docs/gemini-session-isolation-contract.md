@@ -18,6 +18,8 @@ This document complements, but does not replace, the project startup contract in
 Storage class naming, diagnostics classification, shared-cache eligibility, and
 cleanup sequencing for managed Gemini files are defined by
 [docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md).
+Authentication projection and logout isolation must also satisfy
+[docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
 
 ## 2. Identity Model
 
@@ -69,6 +71,10 @@ Inside that home, the managed Gemini state is:
   - only when inherited login auth is projected into the managed home
 - `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/google_accounts.json`
   - only when inherited Google login auth is projected into the managed home
+- `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/extensions/`
+  - an agent-local writable seed of source-home Gemini extensions when config
+    inheritance and inherited assets are enabled
+  - must not be a symlink to the source home or another managed agent
 - `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/GEMINI.md`
   - a CCB-generated memory projection when `inherit_memory = true`
   - not a user-editable source file
@@ -105,18 +111,37 @@ When `ccb` starts a managed Gemini agent:
   replacement and derives global memory from `$GEMINI_CLI_HOME/.gemini`
 - it must explicitly set the effective `GEMINI_ROOT`
 - it must ensure `GEMINI_ROOT == <gemini_home>/.gemini/tmp`
-- it must route rebuildable npm/XDG tool caches outside `.ccb` to the
-  user-cache-scoped CCB project path
-  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/`, while
-  keeping `HOME`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`, auth, and sessions inside
-  the managed home
+- it must set `GEMINI_FORCE_FILE_STORAGE=true` and
+  `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true` so OAuth refresh/logout and MCP
+  token writes select private managed files instead of an OS credential store
+- on WSL, it must explicitly set `USERPROFILE == HOME` and forward only the
+  selected managed `HOME`, `USERPROFILE`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`,
+  npm-cache, and XDG-cache roots through `WSLENV`
+- it must route rebuildable npm/XDG tool caches outside `.ccb` to the single
+  user-scoped path `~/.cache/ccb/provider-cache/gemini/`, while keeping
+  `HOME`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`, auth, and sessions inside the
+  managed home
+- it must not create or depend on the retired project-scoped path
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/`
+- when CCB is invoked from a managed Gemini environment whose
+  `XDG_CACHE_HOME` already points at the user-scoped Gemini cache, cache
+  resolution must recover the original user-cache base and must not recursively
+  create `.../xdg/ccb/provider-cache/gemini`
 - it must create the managed home and managed temp root before launching Gemini
 - it must materialize required Gemini auth/config projections into the managed
   home without treating them as conversation identity
 - managed Gemini home materialization is part of startup preparation, before
   hook/trust installation and before launcher command assembly
+- startup must project the packaged `ask` and `ccb-clear` control skills into
+  the managed `.gemini/skills/` directory independently of optional inherited
+  assets
 - managed `settings.json` projection must treat inherited system settings as the
   baseline and preserve managed runtime sections such as `hooks`
+- when config inheritance and inherited assets are enabled, startup must seed
+  `<source-home>/.gemini/extensions/` into the managed `.gemini/extensions/`
+  directory before process launch; a missing source preserves the last valid
+  local seed, while inheritance opt-out removes only the matching CCB-owned
+  projection
 - managed `settings.json` must set `contextFileName` to `GEMINI.md` when
   managed memory is projected so the current Gemini CLI loads the generated
   project memory file from the managed home
@@ -135,8 +160,17 @@ When `ccb` starts a managed Gemini agent:
   credentials into the managed `.gemini/.env` file when `inherit_api` is
   enabled, but only for allowlisted Gemini API environment keys
 - managed login-auth projection must synchronize Gemini OAuth cache artifacts
-  required for non-interactive reuse, such as `oauth_creds.json` and
-  `google_accounts.json`, when login auth inheritance is enabled
+  required for non-interactive reuse, such as `oauth_creds.json`,
+  `google_accounts.json`, `gemini-credentials.json`, and provider OAuth token
+  files, when login auth inheritance is enabled
+- those OAuth/account artifacts are ordinary one-way copies inside the managed
+  home; Gemini refresh or logout may change only the copies and must not update
+  or remove the user's source files
+- when no usable source file exists, CCB may read the known
+  `gemini-cli-oauth` / `main-account` external credential as inheritance input
+  and materialize the compatible legacy OAuth shape in private
+  `.gemini/oauth_creds.json`; Gemini then migrates it to its private encrypted
+  file backend, and CCB never writes or deletes the external entry
 - it may inherit user-session transport variables required for OAuth browser
   callbacks, proxy routing, custom trust stores, and WSL interop; examples
   include `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`,

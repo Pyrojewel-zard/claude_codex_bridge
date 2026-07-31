@@ -110,6 +110,10 @@ class CcbdMountPathMixin:
         return self.ccbd_dir / 'project-view-state.json'
 
     @property
+    def ccbd_config_restart_intent_path(self):
+        return self.ccbd_dir / 'config-restart-intent.json'
+
+    @property
     def ccbd_mobile_dir(self):
         return self.ccbd_dir / 'mobile'
 
@@ -226,6 +230,10 @@ class CcbdOpsPathMixin:
     @property
     def ccbd_reload_handoff_path(self):
         return self.ccbd_dir / 'reload-handoff.json'
+
+    @property
+    def ccbd_active_followups_path(self):
+        return self.ccbd_dir / 'active-followups.jsonl'
 
 
 class CcbdArtifactsPathMixin:

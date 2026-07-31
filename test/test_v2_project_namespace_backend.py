@@ -19,8 +19,10 @@ from ccbd.services.project_namespace_runtime.backend import (
 from terminal_runtime.tmux_readiness import TmuxTransientServerUnavailable
 
 _TMUX_UPDATE_ENVIRONMENT_FOR_TEST = (
-    'TERM TERM_PROGRAM TERM_PROGRAM_VERSION DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR '
-    'WSL_DISTRO_NAME WSL_INTEROP SSH_AUTH_SOCK SSH_CONNECTION KITTY_WINDOW_ID '
+    'TERM TERM_PROGRAM TERM_PROGRAM_VERSION PATH SHELL BROWSER DBUS_SESSION_BUS_ADDRESS '
+    'DESKTOP_SESSION DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR '
+    'XDG_SESSION_DESKTOP XDG_SESSION_TYPE WSL_DISTRO_NAME WSL_INTEROP WSLENV WT_PROFILE_ID '
+    'WT_SESSION SSH_AUTH_SOCK SSH_CONNECTION KITTY_WINDOW_ID '
     'WEZTERM_EXECUTABLE WEZTERM_PANE WEZTERM_UNIX_SOCKET CCB_WORKBENCH_PROFILE '
     'CCB_WORKBENCH_FORCE_RICH CCB_WORKBENCH_ROOT CCB_WORKBENCH_TERMINAL_PROGRAM '
     'CCB_WORKBENCH_TERMINAL_PROGRAM_VERSION CCB_WORKBENCH_YAZI_SAFE_CONFIG '
@@ -104,6 +106,9 @@ class _FlakyBackend:
 def test_prepare_server_then_create_session_and_server_policy_retry_transient_tmux_failures(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
     monkeypatch.setenv('DISPLAY', ':99')
+    monkeypatch.setenv('BROWSER', 'wslview')
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus')
+    monkeypatch.setenv('WT_SESSION', 'windows-terminal-session')
     monkeypatch.setenv('AGENT_ROLES_STORE', '/home/demo/.roles')
     backend = _FlakyBackend()
     backend.fail_once('start-server')
@@ -148,6 +153,14 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
         for call in backend.calls
     )
     assert ('set-environment', '-g', 'DISPLAY', ':99') in backend.calls
+    assert ('set-environment', '-g', 'BROWSER', 'wslview') in backend.calls
+    assert (
+        'set-environment',
+        '-g',
+        'DBUS_SESSION_BUS_ADDRESS',
+        'unix:path=/run/user/1000/bus',
+    ) in backend.calls
+    assert ('set-environment', '-g', 'WT_SESSION', 'windows-terminal-session') in backend.calls
     assert ('set-environment', '-g', 'AGENT_ROLES_STORE', '/home/demo/.roles') in backend.calls
     assert backend.calls.count(('bind-key', 'h', 'select-pane', '-L')) == 1
     assert backend.calls.count(('bind-key', '-r', 'L', 'resize-pane', '-R', '5')) == 1
@@ -194,6 +207,18 @@ def test_fresh_namespace_creates_session_before_server_policy(monkeypatch, tmp_p
         'TERM',
         'TERM_PROGRAM',
         'TERM_PROGRAM_VERSION',
+        'PATH',
+        'SHELL',
+        'BROWSER',
+        'DBUS_SESSION_BUS_ADDRESS',
+        'DESKTOP_SESSION',
+        'XAUTHORITY',
+        'XDG_CURRENT_DESKTOP',
+        'XDG_SESSION_DESKTOP',
+        'XDG_SESSION_TYPE',
+        'WSLENV',
+        'WT_PROFILE_ID',
+        'WT_SESSION',
         'KITTY_WINDOW_ID',
         'WEZTERM_EXECUTABLE',
         'WEZTERM_PANE',

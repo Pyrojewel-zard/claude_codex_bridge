@@ -30,6 +30,12 @@ Date: 2026-06-07
   active job, and B-to-C routing depends on whether B needs C's result.
 - Clarified that each dependent child ask from an active parent uses `--chain`;
   CCB owns continuation propagation after chain edges exist.
+- Moved stable reply and cancellation policy into managed CCB project memory.
+  Ordinary asks now preserve the user body, while `--compact` and `--silence`
+  add only a one-line mode marker; native-provider duplicate guidance and the
+  per-job cancellation paragraph were removed.
+- Aligned inherited ask skills, compatibility cleaners, developer/user manual
+  chapters, and focused tests with the memory-first prompt policy.
 
 ## In Progress
 
@@ -69,3 +75,8 @@ This policy update is ready when:
 - ask route option mapping tests still pass;
 - external `ccb_test` starts from an isolated project and projects updated ask
   skill text into managed provider homes where those providers are configured.
+
+Latest verification (2026-07-30):
+
+- 990 related unit and integration tests passed;
+- source compilation and `git diff --check` passed.

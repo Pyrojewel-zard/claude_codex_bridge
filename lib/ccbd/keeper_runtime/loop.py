@@ -8,11 +8,12 @@ from ccbd.models import LeaseHealth, MountState
 from ccbd.reload_handoff import reload_handoff_allows_signature_mismatch
 from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from ccbd.services.lifecycle import current_socket_inode, lifecycle_from_inspection
+from ccbd.services.runtime_identity import reconcile_runtime_project_identity
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.startup_policy import CONTROL_PLANE_RPC_TIMEOUT_S, STARTUP_TRANSACTION_TIMEOUT_S
 
 from .records import KeeperState
-from .state import compute_project_id, restart_backoff_active
+from .state import restart_backoff_active
 from .support import reap_child_processes, try_acquire_keeper_lock
 
 
@@ -72,7 +73,7 @@ def reconcile_once(app, *, state: KeeperState, start_timeout_s: float) -> Keeper
 def initial_keeper_state(app) -> KeeperState:
     now = app.clock()
     return KeeperState(
-        project_id=compute_project_id(app.project_root),
+        project_id=app.paths.project_id,
         keeper_pid=app.pid,
         started_at=now,
         last_check_at=now,
@@ -106,18 +107,42 @@ def shutdown_requested(app, *, project_id: str) -> bool:
 
 def ensure_project_lifecycle(app, *, inspection, now: str):
     lifecycle = app._lifecycle_store.load()
-    if lifecycle is not None and lifecycle.keeper_pid == app.pid:
+    lease = getattr(inspection, 'lease', None)
+    if (
+        lifecycle is not None
+        and lifecycle.keeper_pid == app.pid
+        and lifecycle.project_id == app.paths.project_id
+        and (
+            lease is None
+            or str(getattr(lease, 'project_id', '') or '') == app.paths.project_id
+        )
+    ):
         return lifecycle
     with app._ownership_guard.startup_lock():
         lifecycle = app._lifecycle_store.load()
+        inspection = app._ownership_guard.inspect()
+        identity_result = reconcile_runtime_project_identity(
+            project_id=app.paths.project_id,
+            lifecycle=lifecycle,
+            inspection=inspection,
+            mount_manager=app._mount_manager,
+            occurred_at=app.clock(),
+            socket_path=str(app.paths.ccbd_socket_path),
+            keeper_pid=app.pid,
+            config_signature=current_config_signature(app),
+        )
+        lifecycle = identity_result.lifecycle
         if lifecycle is None:
             lifecycle = lifecycle_from_inspection(
-                project_id=compute_project_id(app.project_root),
-                inspection=app._ownership_guard.inspect(),
+                project_id=app.paths.project_id,
+                inspection=inspection,
                 occurred_at=app.clock(),
                 config_signature=current_config_signature(app),
                 keeper_pid=app.pid,
             )
+            app._lifecycle_store.save(lifecycle)
+            return lifecycle
+        if identity_result.reconciled:
             app._lifecycle_store.save(lifecycle)
             return lifecycle
         if lifecycle.keeper_pid == app.pid:

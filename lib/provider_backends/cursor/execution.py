@@ -17,6 +17,7 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".cursor-session",
             command_builder=_build_command,
             env_builder=_build_env,
+            private_raw_env_names=("AGENT_CLI_CREDENTIAL_STORE",),
             output_kind="jsonl",
             mode="cursor_run",
             start_failed_reason="cursor_run_start_failed",
@@ -46,7 +47,10 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
 def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     cursor_home = _state_path(request, "cursor_home", fallback="home")
     cursor_home.mkdir(parents=True, exist_ok=True)
-    return {"HOME": str(cursor_home)}
+    return {
+        "HOME": str(cursor_home),
+        "AGENT_CLI_CREDENTIAL_STORE": "file",
+    }
 
 
 def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:

@@ -473,6 +473,11 @@ Rules:
 - provider runtime `pane-crash-*.reason.json` records are paired diagnostics
   for their matching `pane-crash-*.log`; cleanup must remove the reason record
   when retention removes the matching crash log
+- crash capture enforces online per-runtime retention of the newest 50
+  `pane-crash-*.log` files and matching reason sidecars; retention is not
+  deferred until a later `ccb cleanup`
+- pane history is cleared after crash capture and before respawn so a recovered
+  pane does not repeatedly reclassify stale terminal history as a new crash
 
 ### 3.5 Namespace State And Lifecycle
 
@@ -547,10 +552,15 @@ Rules:
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('<agent>')` diagnostics must surface runtime `reconcile_state`,
-  `restart_count`, `last_reconcile_at`, and `last_failure_reason`. A terminal
+  `restart_count`, `recovery_failure_count`, `last_reconcile_at`, and
+  `last_failure_reason`. A terminal
   provider-auth block must report health `provider-auth-revoked`,
   `reconcile_state=blocked`, and the actionable login/remount reason rather
   than collapsing to generic `pane-dead` or `stale`
+- provisional recovery must report `health=recovering` and
+  `reconcile_state=probing`; exhausted automatic recovery must report
+  `health=recovery-circuit-open`, `reconcile_state=blocked`, the consecutive
+  failure count, and the explicit restart/remount action
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
 - `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
 - `ping('ccbd')` must remain available during the post-self-ping
@@ -595,6 +605,53 @@ Rules:
   - `mount_started` details should include `mount_attempt_id` when present
   - superseded finalize paths should remain visible as `mount_superseded`
     instead of collapsing into missing history
+
+#### ProjectView and queue execution-phase diagnostics
+
+ProjectView Comms records and structured queue agent records may expose the
+optional schema-v1 fields `execution_phase`, `execution_phase_reason`, and
+`execution_evidence`. The stable phase vocabulary is `queued`, `injecting`,
+`executing`, `provider_idle_pending_terminal`, `reply_queued`,
+`reply_delivering`, `orphaned`, `terminal`, and `unknown`.
+
+These fields are a read-only correlated projection. A confident non-terminal
+request phase requires exact job, attempt, inbound event, mailbox head/active,
+lease, completion snapshot, agent, and current provider identity joins. A
+correlated reply record and reply-delivery job determine the reply phases.
+Terminal job/completion authority wins over lagging mailbox or lease cleanup;
+missing, stale, contradictory, or mismatched evidence produces `unknown`.
+`execution_evidence` contains only the compact identity and state facts used by
+the resolver and is diagnostics evidence, not scheduling authority.
+
+ProjectView and queue reads must not poll providers, capture extra state solely
+for this projection, mutate authority, or trigger recovery. In particular,
+`orphaned` reports bounded current-session provider-idle evidence without
+automatically cancelling, retrying, restarting, resending, or terminalizing the
+job. Older producers may omit the fields, and CLI, Rust sidebar, and mobile
+clients must fall back to existing mailbox/job/business status fields.
+
+R8 narrows `orphaned` for the Issue260 active-inbound condition. An exact
+Claude idle prompt after the bound request first produces
+`provider_idle_pending_terminal`; it becomes `orphaned` only when the same
+job/attempt/inbound/mailbox/lease/completion anchor and current provider
+session/reference, pane, workspace, and runtime generations are observed idle
+again after at least 30 seconds. Job progress, terminal evidence, active
+provider work, missing or changed lineage, pane/session/generation rotation,
+and ProjectView service restart reset the in-memory observation. The earlier
+job-age threshold only makes the first observation eligible, and cached
+ProjectView responses do not advance the window.
+
+A confirmed Comms row adds `active_inbound_diagnostic` with condition
+`orphaned_active_inbound`, exact job/attempt/inbound/mailbox/lease/provider
+evidence, job age and last progress, observation start/elapsed/required
+seconds, `recommended_action=explicit_comms_recover`, an exact recover target,
+and `automatic_action=none`. Maintenance concern evidence preserves the same
+record; trace merges it only for jobs in the resolved lineage; doctor lists
+the current records; CLI and sidebar consumers render them without rederiving
+the condition. Reading any of these surfaces must not call recovery or mutate
+job, attempt, inbound, mailbox, lease, completion, reply, or provider runtime
+authority. Explicit `comms recover` remains a separate operator action that
+revalidates authority when invoked.
 
 ### 3.6 Doctor Read Path
 

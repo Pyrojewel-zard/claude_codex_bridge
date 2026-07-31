@@ -6,7 +6,11 @@ String projectHomeGatewayProfileKey(GatewayPairedHost profile) {
 
 String projectHomeGatewayProfileLabel(GatewayPairedHost profile) {
   final route = profile.profile.routeProvider.kind.wireName;
-  return '${profile.profile.hostId} / ${profile.profile.deviceId} / $route';
+  final relayMode = profile.profile.routeProvider.relayMode;
+  final routeLabel = route == 'relay' && relayMode != null
+      ? '$route/${relayMode.wireName}'
+      : route;
+  return '${profile.profile.hostId} / ${profile.profile.deviceId} / $routeLabel';
 }
 
 List<GatewayPairedHost> sortProjectHomeGatewayProfiles(

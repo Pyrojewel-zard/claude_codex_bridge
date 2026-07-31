@@ -6,6 +6,7 @@ _STOPPING_GUARDED_OPS = frozenset({
     'start',
     'restore',
     'cancel',
+    'followup',
     'ack',
     'resubmit',
     'retry',

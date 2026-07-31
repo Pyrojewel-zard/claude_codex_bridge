@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
 from completion.models import CompletionSourceKind
 from provider_backends.claude.execution import ClaudeProviderAdapter
-from provider_backends.claude.execution_runtime.polling import poll_submission
+from provider_backends.claude.execution_runtime.polling import (
+    _orphaned_exact_hook,
+    poll_submission,
+)
 from provider_backends.claude.execution_runtime.start import looks_ready
 from provider_execution.base import ProviderPollResult, ProviderSubmission
 
@@ -23,8 +27,126 @@ def _submission() -> ProviderSubmission:
     )
 
 
+def _orphaned_submission(**runtime_overrides: object) -> ProviderSubmission:
+    runtime_state: dict[str, object] = {
+        "state": {},
+        "mode": "active",
+        "completion_dir": "/tmp/completion",
+        "request_anchor": "job_1",
+        "next_seq": 3,
+        "anchor_seen": False,
+        "prompt_activated": False,
+        "prompt_sent": True,
+        "no_wrap": False,
+        "session_path": r"C:\Users\demo\.claude\projects\session-1.jsonl",
+    }
+    runtime_state.update(runtime_overrides)
+    return replace(
+        _submission(),
+        diagnostics={"workspace_path": "C:/work/demo"},
+        runtime_state=runtime_state,
+    )
+
+
+def _orphaned_event(**overrides: object) -> dict[str, object]:
+    event: dict[str, object] = {
+        "schema_version": 1,
+        "record_type": "provider_completion_hook",
+        "provider": "claude",
+        "agent_name": "agent1",
+        "workspace_path": r"C:\work\demo",
+        "req_id": "job_1",
+        "reply": "completed reply",
+        "timestamp": "2026-04-06T00:01:00Z",
+        "status": "completed",
+        "hook_event_name": "Stop",
+        "session_id": "session-1",
+    }
+    event.update(overrides)
+    return event
+
+
+class _PaneBackend:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def get_pane_content(self, pane_id: str, lines: int = 120) -> str:
+        assert pane_id == "%1"
+        assert lines == 80
+        return self.text
+
+
+def test_orphaned_exact_hook_recovers_after_grace_with_independent_proof(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.hook_results_runtime.load_event",
+        lambda completion_dir, request_anchor: _orphaned_event(),
+    )
+    prepared = SimpleNamespace(
+        backend=_PaneBackend("completed\n❯\n"),
+        pane_id="%1",
+    )
+
+    result = _orphaned_exact_hook(
+        _orphaned_submission(),
+        prepared=prepared,
+        now="2026-04-06T00:04:00Z",
+    )
+
+    assert result is not None
+    assert result.decision is not None
+    assert result.decision.reply == "completed reply"
+    assert result.decision.diagnostics["completion_fallback_source"] == "orphaned_exact_hook"
+    assert result.decision.diagnostics["request_anchor_observation_missed"] is True
+    assert result.decision.diagnostics["orphaned_hook_age_s"] == 180.0
+
+
+@pytest.mark.parametrize(
+    ("event_overrides", "runtime_overrides", "pane_text", "now"),
+    [
+        ({}, {}, "completed\n❯\n", "2026-04-06T00:03:59Z"),
+        ({"timestamp": "2026-04-05T23:59:59Z"}, {}, "completed\n❯\n", "2026-04-06T00:04:00Z"),
+        ({"session_id": None}, {}, "completed\n❯\n", "2026-04-06T00:04:00Z"),
+        ({}, {"session_path": ""}, "completed\n❯\n", "2026-04-06T00:04:00Z"),
+        ({"session_id": "other"}, {}, "completed\n❯\n", "2026-04-06T00:04:00Z"),
+        ({}, {"prompt_sent": False}, "completed\n❯\n", "2026-04-06T00:04:00Z"),
+        ({}, {}, "working\nesc to interrupt", "2026-04-06T00:04:00Z"),
+        ({}, {}, "no input prompt", "2026-04-06T00:04:00Z"),
+    ],
+)
+def test_orphaned_exact_hook_rejects_incomplete_or_unsafe_proof(
+    monkeypatch,
+    event_overrides,
+    runtime_overrides,
+    pane_text,
+    now,
+) -> None:
+    event = _orphaned_event(**event_overrides)
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.hook_results_runtime.load_event",
+        lambda completion_dir, request_anchor: event,
+    )
+
+    result = _orphaned_exact_hook(
+        _orphaned_submission(**runtime_overrides),
+        prepared=SimpleNamespace(backend=_PaneBackend(pane_text), pane_id="%1"),
+        now=now,
+    )
+
+    assert result is None
+
+
 def test_poll_submission_returns_hook_result_before_pane_liveness(monkeypatch) -> None:
-    submission = _submission()
+    submission = replace(
+        _submission(),
+        runtime_state={
+            "state": {},
+            "mode": "active",
+            "anchor_seen": True,
+            "prompt_activated": True,
+        },
+    )
     prepared = SimpleNamespace(reader=object(), backend=object(), pane_id="%1")
     hook_result = ProviderPollResult(submission=submission)
     liveness_calls: list[str] = []
@@ -543,6 +665,11 @@ def test_claude_export_runtime_state_preserves_reply_delivery_flags() -> None:
             "raw_buffer": "",
             "session_path": "/tmp/session.jsonl",
             "last_assistant_uuid": "",
+            "prompt_enqueued": True,
+            "queue_dequeue_observed": True,
+            "prompt_activated": True,
+            "prompt_enqueue_uuid": "queue-1",
+            "prompt_activation_uuid": "queue-1",
             "completion_dir": "/tmp/completion",
             "prompt_text": "CCB_REPLY from=agent2 reply=rep_1",
             "prompt_sent": False,
@@ -558,3 +685,8 @@ def test_claude_export_runtime_state_preserves_reply_delivery_flags() -> None:
 
     assert exported["reply_delivery_complete_on_dispatch"] is True
     assert exported["reply_delivery_require_ready"] is True
+    assert exported["prompt_enqueued"] is True
+    assert exported["queue_dequeue_observed"] is True
+    assert exported["prompt_activated"] is True
+    assert exported["prompt_enqueue_uuid"] == "queue-1"
+    assert exported["prompt_activation_uuid"] == "queue-1"

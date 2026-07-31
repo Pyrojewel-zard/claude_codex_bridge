@@ -8,6 +8,7 @@ import pytest
 from agents.models import PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 from agents.models import AgentSpec
 from cli.services.reset_project import reset_project_state
+from project.identity_store import ensure_project_identity, load_project_identity
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
 from workspace.materializer import WorkspaceMaterializer
@@ -42,6 +43,11 @@ def test_reset_project_state_preserves_config_memory_and_same_named_provider_his
     (ccb_dir / 'history' / 'handoff.md').write_text('handoff\n', encoding='utf-8')
     (ccb_dir / 'ccbd' / 'state.json').parent.mkdir(parents=True, exist_ok=True)
     (ccb_dir / 'ccbd' / 'state.json').write_text('{}', encoding='utf-8')
+    identity = ensure_project_identity(
+        project_root,
+        clock=lambda: '2026-07-24T00:00:00Z',
+        id_factory=lambda: 'f' * 64,
+    )
     (ccb_dir / 'agents' / 'agent1' / 'runtime.json').parent.mkdir(parents=True, exist_ok=True)
     (ccb_dir / 'agents' / 'agent1' / 'runtime.json').write_text('{}', encoding='utf-8')
     (ccb_dir / 'agents' / 'agent1' / 'memory.md').write_text('private memory\n', encoding='utf-8')
@@ -112,6 +118,7 @@ def test_reset_project_state_preserves_config_memory_and_same_named_provider_his
     assert summary.preserved_provider_histories == 2
     assert summary.preserved_session_files == 2
     assert summary.preserved_user_files == 3
+    assert load_project_identity(project_root) == identity
     assert seen['project_root'] == project_root.resolve()
     assert ccb_dir.is_dir()
     assert (ccb_dir / 'ccb.config').read_text(encoding='utf-8') == 'cmd; agent1:codex, agent2:claude\n'
@@ -124,6 +131,7 @@ def test_reset_project_state_preserves_config_memory_and_same_named_provider_his
         'ccb.config',
         'ccb_memory.md',
         'history/handoff.md',
+        'project.identity.json',
     ]
 
 

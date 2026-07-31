@@ -3,6 +3,7 @@ from __future__ import annotations
 SUBCOMMANDS = {
     'ask',
     'cancel',
+    'followup',
     'clear',
     'cleanup',
     'kill',
@@ -11,6 +12,7 @@ SUBCOMMANDS = {
     'watch',
     'pend',
     'queue',
+    'relay',
     'trace',
     'resubmit',
     'retry',

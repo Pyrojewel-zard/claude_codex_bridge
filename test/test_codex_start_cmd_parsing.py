@@ -25,6 +25,16 @@ def test_extract_resume_session_id_rejects_invalid_shell_syntax() -> None:
     assert extract_resume_session_id(command) is None
 
 
+def test_extract_resume_session_id_ignores_codex_paths_in_environment_assignments() -> None:
+    command = (
+        'export CCB_CODEX_RUNTIME_DIR=/tmp/provider-runtime/codex '
+        'CCB_CALLER_PROJECT_ID=project-1; '
+        'codex -c disable_paste_burst=true resume sess-exact'
+    )
+
+    assert extract_resume_session_id(command) == 'sess-exact'
+
+
 def test_looks_like_bare_resume_cmd_accepts_simple_resume() -> None:
     assert looks_like_bare_resume_cmd('/usr/local/bin/codex resume sess-789') is True
 

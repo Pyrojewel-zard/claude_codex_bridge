@@ -39,18 +39,7 @@ def structured_event(entry: dict[str, Any]) -> dict[str, Any] | None:
             entry=entry,
         )
 
-    # Emit a zero-text assistant event for assistant entries whose content is
-    # pure tool_use / thinking blocks (no visible text). The completion
-    # detector ignores these for reply extraction, but the state machine needs
-    # them for `last_assistant_uuid` bookkeeping so that a subsequent
-    # system/turn_duration event can match its parent_uuid. This case arises
-    # when the assistant dispatches multiple async CCB asks (pure tool_use
-    # turns) before emitting its final end_turn text summary. Without this
-    # bookkeeping, a prompt delivered via `queue-operation` (busy REPL) can
-    # still miss the turn boundary because the pre-anchor uuid tracker never
-    # sees intermediate assistant tool_use events (structured_event previously
-    # returned None for them since extract_message yields no text).
-    if _is_assistant_tool_use_entry(entry):
+    if _is_assistant_non_text_entry(entry):
         return _event_record(
             role="assistant",
             text="",
@@ -74,44 +63,50 @@ def structured_event(entry: dict[str, Any]) -> dict[str, Any] | None:
             entry=entry,
         )
 
-    # Claude Code CLI queues incoming input when the REPL is busy (cooking / in a
-    # tool_use turn). In that case the prompt is recorded as a
-    # `queue-operation`/`enqueue` entry (with the full prompt in `content`) plus
-    # a later `attachment`/`queued_command` marker. It does NOT synthesize a
-    # `type:"user"` message entry. If we drop the record the completion
-    # detector never sees the anchor marker (`CCB_REQ_ID:`) and the attempt
-    # deadlocks: anchor_seen stays False, assistant events are gated out,
-    # last_assistant_uuid is never updated, and the `turn_duration` system
-    # event can never match. Emit a synthetic user event so the rest of the
-    # pipeline (handle_user_event / anchor detection) works identically to the
-    # idle-REPL path. See docs/claude-queue-operation-completion-deadlock-diagnosis.md.
-    if entry_type == "queue-operation":
-        op = _optional_text(entry.get("operation"))
-        if op == "enqueue":
-            text = str(entry.get("content") or "").strip()
-            if text:
-                return _event_record(
-                    role="user",
-                    text=text,
-                    entry_type=entry_type,
-                    subtype=subtype,
-                    uuid=uuid,
-                    parent_uuid=parent_uuid,
-                    stop_reason=None,
-                    entry=entry,
-                )
-
+    prompt_lifecycle = _prompt_lifecycle_event(
+        entry,
+        entry_type=entry_type,
+        subtype=subtype,
+        uuid=uuid,
+        parent_uuid=parent_uuid,
+    )
+    if prompt_lifecycle is not None:
+        return prompt_lifecycle
     return None
 
 
 def _assistant_stop_reason(entry: dict[str, Any]) -> str | None:
     message = entry.get("message")
-    if not isinstance(message, dict):
-        return None
-    return _optional_text(message.get("stop_reason"), lowercase=False)
+    if isinstance(message, dict):
+        return _optional_text(message.get("stop_reason"), lowercase=False)
+    payload = entry.get("payload")
+    if isinstance(payload, dict):
+        return _optional_text(
+            payload.get("stop_reason") or payload.get("stopReason"),
+            lowercase=False,
+        )
+    return None
 
 
-def _is_assistant_tool_use_entry(entry: dict[str, Any]) -> bool:
+def _assistant_message_id(entry: dict[str, Any]) -> str | None:
+    message = entry.get("message")
+    if isinstance(message, dict):
+        message_id = _optional_text(
+            message.get("id") or message.get("messageId") or message.get("message_id"),
+            lowercase=False,
+        )
+        if message_id:
+            return message_id
+    payload = entry.get("payload")
+    if isinstance(payload, dict):
+        return _optional_text(
+            payload.get("id") or payload.get("messageId") or payload.get("message_id"),
+            lowercase=False,
+        )
+    return None
+
+
+def _is_assistant_non_text_entry(entry: dict[str, Any]) -> bool:
     if str(entry.get("type") or "").strip().lower() != "assistant":
         return False
     message = entry.get("message")
@@ -122,17 +117,59 @@ def _is_assistant_tool_use_entry(entry: dict[str, Any]) -> bool:
     content = message.get("content")
     if not isinstance(content, list) or not content:
         return False
-    for item in content:
-        if not isinstance(item, dict):
-            return False
-        ctype = str(item.get("type") or "").strip().lower()
-        if ctype in {"text", "tool_result"}:
-            # Has real visible text → extract_message would have caught it.
-            return False
-        if ctype in {"tool_use", "thinking", "thinking_delta"}:
-            continue
-        return False
-    return True
+    allowed = {"thinking", "thinking_delta", "tool_use"}
+    return all(
+        isinstance(item, dict) and str(item.get("type") or "").strip().lower() in allowed
+        for item in content
+    )
+
+
+def _prompt_lifecycle_event(
+    entry: dict[str, Any],
+    *,
+    entry_type: str,
+    subtype: str | None,
+    uuid: str | None,
+    parent_uuid: str | None,
+) -> dict[str, Any] | None:
+    if entry_type == "queue-operation":
+        operation = _optional_text(entry.get("operation"))
+        if operation not in {"enqueue", "dequeue"}:
+            return None
+        text = str(entry.get("content") or "").strip() if operation == "enqueue" else ""
+        event = _event_record(
+            role="prompt_lifecycle",
+            text=text,
+            entry_type=entry_type,
+            subtype=subtype,
+            uuid=uuid,
+            parent_uuid=parent_uuid,
+            stop_reason=None,
+            entry=entry,
+        )
+        event["prompt_phase"] = "enqueued" if operation == "enqueue" else "dequeued"
+        return event
+
+    if entry_type != "attachment":
+        return None
+    attachment = entry.get("attachment")
+    if not isinstance(attachment, dict):
+        return None
+    if str(attachment.get("type") or "").strip().lower() != "queued_command":
+        return None
+    event = _event_record(
+        role="prompt_lifecycle",
+        text=str(attachment.get("prompt") or "").strip(),
+        entry_type=entry_type,
+        subtype=subtype,
+        uuid=uuid,
+        parent_uuid=parent_uuid,
+        stop_reason=None,
+        entry=entry,
+    )
+    event["prompt_phase"] = "activated"
+    event["source_uuid"] = _optional_text(attachment.get("source_uuid"), lowercase=False)
+    return event
 
 
 def _event_record(
@@ -146,7 +183,7 @@ def _event_record(
     stop_reason: str | None,
     entry: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    event = {
         "role": role,
         "text": text,
         "entry_type": entry_type,
@@ -156,6 +193,27 @@ def _event_record(
         "stop_reason": stop_reason,
         "entry": entry,
     }
+    subagent_id = _optional_text(
+        entry.get("subagent_id") or entry.get("agentId") or entry.get("agent_id"),
+        lowercase=False,
+    )
+    # Claude 2.1.x writes ``slug`` as the human-readable session name on
+    # ordinary top-level records.  It is not subagent identity.
+    subagent_name = _optional_text(
+        entry.get("subagent_name") or entry.get("agentName"),
+        lowercase=False,
+    )
+    if subagent_id:
+        event["subagent_id"] = subagent_id
+    if subagent_name:
+        event["subagent_name"] = subagent_name
+    if bool(entry.get("isSidechain")):
+        event["is_sidechain"] = True
+    if role == "assistant":
+        message_id = _assistant_message_id(entry)
+        if message_id:
+            event["message_id"] = message_id
+    return event
 
 
 def _optional_text(value: object, *, lowercase: bool = True) -> str | None:

@@ -45,14 +45,18 @@ These providers enter CCB as optional built-in managed providers:
   same command authority as foreground launchers. Provider home/session authority
   remains isolated and must not be broadly passed through by prefix.
 
-Next-wave runtime should split visible pane startup from ask execution:
+Most next-wave runtimes split visible pane startup from ask execution:
 
-- `qwen`, `copilot`, `cursor`, `grok`, and `pi` use per-job subprocess
+- `qwen`, `copilot`, `cursor`, and `grok` use per-job subprocess
   execution with JSONL/stream-json parsing.
 - `crush` and `kiro` use per-job subprocess execution with process exit plus
   stdout as the completion signal.
 - Visible panes still use simple tmux launchers for user observation and
   runtime maintenance.
+- Pi is the deliberate exception: new asks execute in its managed visible
+  pane and an official Pi extension writes exact-request lifecycle evidence.
+  The earlier per-job structured subprocess remains the explicit headless
+  rollback and persisted `pi_run` compatibility path.
 - Shared native CLI launchers may derive visible-pane arguments from prepared
   provider-state. Crush uses this to start visible panes with
   `--data-dir <provider-state>/data`, matching the state isolation used by
@@ -67,6 +71,32 @@ Next-wave runtime should split visible pane startup from ask execution:
   upgraded to modern backend shape before registration:
   `manifest.py`, `launcher.py`, `execution.py`, and tests.
 
+## Kimi Restart Session Authority
+
+Kimi conversation continuity is agent-scoped even when multiple Kimi agents
+share one in-place work directory. A fresh managed pane receives neither
+`--continue` nor an invented native session id. Once the completion reader
+observes that agent's exact `CCB_REQ_ID` in a native `wire.jsonl`, it persists
+the native session id/path, normalized work directory, legacy Kimi share root,
+current `.kimi-code` state root, storage layout, and observation time in
+`.kimi-<agent>-session`. The CCB pane-launch id remains a separate
+control-plane identity and is never passed to Kimi.
+
+Each launch also persists a command template containing one CCB-owned
+exact-session insertion point plus the configured Kimi capability command.
+Manual restart and dead-pane recovery validate the agent/project/workdir/share
+binding, exact non-symlinked native layout, and current long-option capability
+before materializing `--session <owned-id>`. Missing, malformed, mismatched,
+storage-drifted, or unsupported authority fails fresh and clears only the
+carried binding; it does not inspect credentials or delete provider data.
+Explicit user `--session`, `--resume`, `--continue`, and known versioned short
+controls take precedence and never receive a second automatic selector.
+
+This restart behavior is distinct from the Kimi manifest's
+`supports_resume=false`: the manifest describes recovery of an interrupted CCB
+job, while exact-session selection preserves the provider conversation between
+managed pane launches.
+
 ## Completion Strategy
 
 The current strategy uses provider-native session/event stores or structured
@@ -75,9 +105,12 @@ result streams:
 1. Send a wrapped prompt to the managed provider pane.
 2. The prompt contains `CCB_REQ_ID: <job_id>`.
 3. Do not ask Kimi, DeepSeek/DeepCode, or AGY to print `CCB_DONE`.
-4. Kimi polls `wire.jsonl`, binds the turn by `CCB_REQ_ID`, emits
-   `ASSISTANT_FINAL` from `ContentPart`, and emits `TURN_BOUNDARY` on
-   native `TurnEnd`.
+4. Kimi polls both owned legacy `.kimi` and current `.kimi-code` `wire.jsonl`
+   layouts, binds the turn by an exact leading `CCB_REQ_ID` header, emits
+   `ASSISTANT_FINAL` from native text parts, and emits `TURN_BOUNDARY` on
+   `TurnEnd`, successful terminal `step.end`, or a reply-bearing next-turn
+   boundary. Once native evidence owns the anchor, pane scraping cannot
+   override an in-progress native reply.
 5. DeepSeek polls DeepCode `sessions-index.json` and session jsonl, binds the
    user message by `CCB_REQ_ID`, emits `ASSISTANT_FINAL` from assistant
    messages, and emits `TURN_BOUNDARY` on native `status=completed`.
@@ -94,9 +127,13 @@ result streams:
    `step_finish` with `part.reason=stop`.
 8. Qwen asks parse `stream-json` or JSON output and terminalize from
    result/final assistant envelopes.
-9. Cursor asks parse `agent --print --output-format stream-json` envelopes and
+9. Qoder asks use documented print mode, an agent-local `--config-dir`, and a
+   deterministic UUID session id. Only a non-error native `result` envelope
+   with a normal stop reason completes the job; auth/error envelopes and a
+   clean exit without `result` fail closed.
+10. Cursor asks parse `agent --print --output-format stream-json` envelopes and
    terminalize from final result/completion events.
-10. Copilot asks parse `--output-format json` JSONL in prompt mode and
+11. Copilot asks parse `--output-format json` JSONL in prompt mode and
    terminalize from the final prompt-mode result event.
 11. Crush asks collect stdout from `crush run --quiet` and trust process exit;
    source evidence shows `crush run` itself exits only after a matching
@@ -104,8 +141,11 @@ result streams:
 12. Kiro asks initially collect stdout from `kiro-cli chat --no-interactive
    --wrap never` and treat process exit as completion until a stable structured
    chat event source is found.
-13. Pi asks parse `pi --mode json` JSONL and terminalize from native
-   `turn_end` events carrying assistant message content.
+13. Pi asks are dispatched to the managed visible pane and terminalize only
+   from the exact bound extension `agent_settled` event. `turn_end`,
+   `agent_end`, assistant text, and tool events are progress; the latest
+   settled visible text is the reply. Persisted/headless rollback jobs retain
+   the `pi --mode json` process-exit fence.
 14. Grok asks parse official `grok --no-auto-update -p ... --output-format
    streaming-json --session-id <job>` output. CCB accepts both generic
    assistant/result envelopes and JSON-RPC style `session/update`
@@ -137,7 +177,10 @@ Current behavior:
   and passes it to Kimi with `--skills-dir`. Because Kimi treats any
   `--skills-dir` as replacement for default discovery, CCB first passes
   existing default Kimi project/user skill directories, then appends managed
-  inherited and role skill roots.
+  inherited and role skill roots. CCB appends the packaged inherited root only
+  when it created/owns that projection or adopted an exact source symlink; an
+  unmarked directory or foreign marker is preserved and is not claimed as the
+  packaged root.
 - OpenCode does not expose a stable `--skills-dir` equivalent in the observed
   CLI help. CCB writes `.ccb/runtime/skills/<agent>/opencode/ask.md` and appends
   that path to generated `opencode.json.instructions` alongside the memory
@@ -150,8 +193,16 @@ Current behavior:
 - Pi should prefer native skills/resources if CCB later projects richer ask
   guidance; first landing keeps prompt wrapping and isolates Pi global/session
   state with `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`.
-- Copilot should project inherited ask guidance through `--plugin-dir`, using
-  plugin metadata compatible with Copilot's local plugin discovery.
+- Copilot startup inherits already-installed user plugins through the native
+  `config.json.installedPlugins` surface: CCB allowlists plugin metadata,
+  rebases `cache_path`, and copies each validated source tree into the
+  agent-local `COPILOT_HOME`. Aggregate and per-tree markers permit refresh or
+  cleanup only while both metadata and tree content remain unchanged; local
+  divergence transfers ownership to the user. CCB does not copy auth,
+  settings, permissions, sessions, plugin data, MCP secrets, or marketplace
+  cache, and routes the latter to agent-local `COPILOT_CACHE_HOME`. Packaged
+  ask guidance continues to use prompt wrapping until a separate CCB-owned
+  Copilot plugin is explicitly designed.
 - Cursor should project inherited ask guidance through repeatable
   `--plugin-dir` if the installed bundle accepts the same local plugin shape;
   otherwise use prompt wrapping in the first slice.

@@ -36,7 +36,7 @@ from .provider_profiles import parse_provider_profile
 from .topology import parse_sidebar, parse_sidebar_view, parse_tool_windows
 
 
-_TOP_LEVEL_KEYS = frozenset({'version', 'workflow', 'ui', 'tool_windows', 'maintenance'})
+_TOP_LEVEL_KEYS = frozenset({'version', 'workflow', 'ui', 'tool_windows', 'maintenance', 'config_ui'})
 _FORBIDDEN_STATIC_KEYS = frozenset({'windows', 'agents', 'default_agents', 'layout', 'cmd_enabled', 'loop'})
 _WORKFLOW_KEYS = frozenset(
     {'mode', 'profile', 'entry_role', 'defaults', 'provider_defaults', 'runtime', 'resident', 'dynamic'}
@@ -234,6 +234,9 @@ def _validate_top_level(document: dict[str, Any]) -> None:
     unknown = sorted(set(document) - _TOP_LEVEL_KEYS)
     if unknown:
         _fail('v3_unknown_field', unknown[0], f'unknown top-level field: {unknown[0]}')
+    from .validation import validate_config_ui_settings
+
+    validate_config_ui_settings(document.get('config_ui'))
 
 
 def _parse_defaults(value: object) -> dict[str, dict[str, object]]:

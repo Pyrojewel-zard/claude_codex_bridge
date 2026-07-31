@@ -11,12 +11,16 @@ OUT_SHA="$OUT_TAR.sha256"
 write_sha256_file() {
   local path="$1"
   local output="$2"
+  local directory
+  local filename
+  directory="$(dirname "$path")"
+  filename="$(basename "$path")"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$path" > "$output"
+    (cd "$directory" && sha256sum "$filename") > "$output"
     return
   fi
   if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$path" > "$output"
+    (cd "$directory" && shasum -a 256 "$filename") > "$output"
     return
   fi
   if command -v python3 >/dev/null 2>&1; then
@@ -29,7 +33,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 digest = hashlib.sha256(path.read_bytes()).hexdigest()
-print(f"{digest}  {path}")
+print(f"{digest}  {path.name}")
 PY
     return
   fi

@@ -75,7 +75,7 @@ def ensure_daemon_started(context: CliContext) -> DaemonHandle:
             record_running_intent_fn=_record_running_intent,
             ensure_keeper_started_fn=_ensure_keeper_started,
             inspect_daemon_fn=inspect_daemon,
-            connect_compatible_daemon_fn=_connect_compatible_daemon,
+            connect_compatible_daemon_fn=_connect_start_compatible_daemon,
             should_restart_unreachable_daemon_fn=_should_restart_unreachable_daemon,
             restart_unreachable_daemon_fn=_restart_unreachable_daemon,
             incompatible_daemon_error_fn=_incompatible_daemon_error,
@@ -325,17 +325,33 @@ def _connect_compatible_daemon(
     inspection,
     *,
     restart_on_mismatch: bool,
+    honor_config_restart_intent: bool = False,
     socket_path=None,
 ) -> DaemonHandle | None:
     return _connect_compatible_daemon_runtime_impl(
         context,
         inspection,
         restart_on_mismatch=restart_on_mismatch,
+        honor_config_restart_intent=honor_config_restart_intent,
         socket_path=socket_path,
         probe_client_factory=_build_probe_control_plane_client,
         runtime_client_factory=_build_control_plane_client,
         daemon_matches_project_config_fn=_daemon_matches_project_config,
         shutdown_incompatible_daemon_fn=_shutdown_incompatible_daemon,
+    )
+
+
+def _connect_start_compatible_daemon(
+    context: CliContext,
+    inspection,
+    *,
+    restart_on_mismatch: bool,
+) -> DaemonHandle | None:
+    return _connect_compatible_daemon(
+        context,
+        inspection,
+        restart_on_mismatch=restart_on_mismatch,
+        honor_config_restart_intent=True,
     )
 
 

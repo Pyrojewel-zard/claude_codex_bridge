@@ -13,6 +13,14 @@ from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, 
 from provider_execution.common import build_item, request_anchor_from_runtime_state
 from provider_execution.reliability import CompletionReliabilityPolicy
 from terminal_runtime import get_backend_for_session
+from provider_execution.followups import (
+    ActiveFollowupCapability,
+    ActiveFollowupRequest,
+    ActiveFollowupResult,
+    unsupported_active_followup_capability,
+)
+
+from .app_server_followup import app_server_socket_ready, steer_active_turn
 
 from .comm import CodexLogReader
 from .execution_runtime import poll_submission as _poll_submission
@@ -102,6 +110,12 @@ class CodexProviderAdapter:
             'reply_delivery_complete_on_dispatch': submission.runtime_state.get(
                 'reply_delivery_complete_on_dispatch'
             ),
+            'codex_app_server_enabled': submission.runtime_state.get('codex_app_server_enabled'),
+            'codex_app_server_socket': submission.runtime_state.get('codex_app_server_socket'),
+            'codex_app_server_remote_marker': submission.runtime_state.get(
+                'codex_app_server_remote_marker'
+            ),
+            'active_followup_ids': submission.runtime_state.get('active_followup_ids') or [],
         }
 
     def resume(
@@ -121,6 +135,148 @@ class CodexProviderAdapter:
             load_session_fn=_load_session,
             backend_for_session_fn=get_backend_for_session,
             reader_factory=_reader_factory,
+        )
+
+    def active_followup_capability(self, submission: ProviderSubmission) -> ActiveFollowupCapability:
+        state = dict(submission.runtime_state)
+        if str(state.get('mode') or '').strip().lower() != 'active':
+            return unsupported_active_followup_capability(
+                'codex_active_followup_requires_managed_active_mode',
+                mechanism='codex_app_server_turn_steer',
+            )
+        if not bool(state.get('codex_app_server_enabled')):
+            return unsupported_active_followup_capability(
+                'codex_legacy_tui_missing_expected_turn_precondition',
+                mechanism='codex_legacy_tui',
+            )
+        socket_path = _normalized_path(state.get('codex_app_server_socket'))
+        remote_marker = _normalized_path(state.get('codex_app_server_remote_marker'))
+        if not _remote_marker_matches(remote_marker, socket_path):
+            return unsupported_active_followup_capability(
+                'codex_managed_remote_tui_unconfirmed',
+                mechanism='codex_app_server_turn_steer',
+            )
+        if socket_path is None or not app_server_socket_ready(socket_path):
+            return unsupported_active_followup_capability(
+                'codex_managed_app_server_unavailable',
+                mechanism='codex_app_server_turn_steer',
+            )
+        thread_id = _thread_id_for_submission(state)
+        turn_id = str(state.get('bound_turn_id') or '').strip()
+        if not thread_id or not turn_id or not bool(state.get('anchor_seen')):
+            return unsupported_active_followup_capability(
+                'codex_active_turn_not_bound',
+                mechanism='codex_app_server_turn_steer',
+                diagnostics={
+                    'thread_bound': bool(thread_id),
+                    'turn_bound': bool(turn_id),
+                    'anchor_seen': bool(state.get('anchor_seen')),
+                },
+            )
+        return ActiveFollowupCapability(
+            supported=True,
+            mechanism='codex_app_server_turn_steer',
+            provider_turn_ref=_active_turn_ref(thread_id, turn_id),
+            diagnostics={'thread_id': thread_id, 'turn_id': turn_id},
+        )
+
+    def inject_active_followup(
+        self,
+        submission: ProviderSubmission,
+        *,
+        request: ActiveFollowupRequest,
+        now: str,
+    ) -> ActiveFollowupResult:
+        del now
+        capability = self.active_followup_capability(submission)
+        if not capability.supported or not capability.provider_turn_ref:
+            terminal = capability.reason in {
+                'codex_active_turn_not_bound',
+                'codex_managed_app_server_unavailable',
+            }
+            return ActiveFollowupResult(
+                submission=submission,
+                status='terminal' if terminal else 'rejected',
+                reason=capability.reason,
+                mechanism=capability.mechanism,
+                provider_turn_ref=capability.provider_turn_ref,
+                diagnostics=dict(capability.diagnostics),
+            )
+        if request.expected_provider_turn_ref != capability.provider_turn_ref:
+            return ActiveFollowupResult(
+                submission=submission,
+                status='terminal',
+                reason='codex_active_turn_binding_changed',
+                mechanism=capability.mechanism,
+                provider_turn_ref=capability.provider_turn_ref,
+                diagnostics=dict(capability.diagnostics),
+            )
+        state = dict(submission.runtime_state)
+        delivered = [
+            str(value)
+            for value in state.get('active_followup_ids', ())
+            if str(value).strip()
+        ]
+        if request.followup_id in delivered:
+            return ActiveFollowupResult(
+                submission=submission,
+                status='injected',
+                reason='provider_turn_steered_idempotent_replay',
+                mechanism=capability.mechanism,
+                provider_turn_ref=capability.provider_turn_ref,
+                diagnostics={
+                    **dict(capability.diagnostics),
+                    'client_user_message_id': request.followup_id,
+                    'replayed_from_persisted_delivery': True,
+                },
+            )
+        thread_id = str(capability.diagnostics.get('thread_id') or '')
+        turn_id = str(capability.diagnostics.get('turn_id') or '')
+        response = steer_active_turn(
+            str(state.get('codex_app_server_socket') or ''),
+            thread_id=thread_id,
+            turn_id=turn_id,
+            followup_id=request.followup_id,
+            message=_wrapped_active_followup(request),
+            timeout_s=2.0,
+        )
+        if not response.accepted:
+            terminal = response.reason in {
+                'provider_turn_not_active',
+                'app_server_steer_turn_mismatch',
+            }
+            ambiguous = response.reason in {
+                'app_server_steer_response_missing',
+                'app_server_websocket_failed',
+                'app_server_websocket_timeout',
+            }
+            return ActiveFollowupResult(
+                submission=submission,
+                status='accepted' if ambiguous else ('terminal' if terminal else 'rejected'),
+                reason=response.reason,
+                mechanism=capability.mechanism,
+                provider_turn_ref=capability.provider_turn_ref,
+                diagnostics={
+                    **dict(capability.diagnostics),
+                    'app_server_error': response.error,
+                },
+            )
+        if request.followup_id not in delivered:
+            delivered.append(request.followup_id)
+        updated = replace(
+            submission,
+            runtime_state={**state, 'active_followup_ids': delivered},
+        )
+        return ActiveFollowupResult(
+            submission=updated,
+            status='injected',
+            reason='provider_turn_steered',
+            mechanism=capability.mechanism,
+            provider_turn_ref=capability.provider_turn_ref,
+            diagnostics={
+                **dict(capability.diagnostics),
+                'client_user_message_id': request.followup_id,
+            },
         )
 
 
@@ -144,6 +300,42 @@ def _reader_factory(session, preferred_log: Path | None):
     if session_root is not None:
         kwargs["root"] = session_root
     return CodexLogReader(**kwargs)
+
+
+def _normalized_path(value: object) -> Path | None:
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).expanduser()
+    except Exception:
+        return None
+
+
+def _thread_id_for_submission(state: dict[str, object]) -> str:
+    path = _normalized_path(state.get('session_path'))
+    return extract_session_id(path) if path is not None else ''
+
+
+def _active_turn_ref(thread_id: str, turn_id: str) -> str:
+    return f'codex:{thread_id}:{turn_id}'
+
+
+def _remote_marker_matches(marker_path: Path | None, socket_path: Path | None) -> bool:
+    if marker_path is None or socket_path is None:
+        return False
+    try:
+        return marker_path.is_file() and marker_path.read_text(encoding='utf-8').strip() == str(socket_path)
+    except OSError:
+        return False
+
+
+def _wrapped_active_followup(request: ActiveFollowupRequest) -> str:
+    return (
+        f'[CCB_ACTIVE_FOLLOWUP {request.followup_id}]\n'
+        'Apply this correction to the current active job. Do not treat it as a new task.\n\n'
+        f'{request.message}'
+    )
 
 
 def _locked_reader_for_log(session, log_path: Path, *, work_dir: Path) -> CodexLogReader | None:

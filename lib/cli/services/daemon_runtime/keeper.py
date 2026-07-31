@@ -17,6 +17,7 @@ from ccbd.keeper import (
 from ccbd.services.lifecycle import CcbdLifecycleStore, lifecycle_from_inspection
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
+from ccbd.services.runtime_identity import reconcile_runtime_project_identity
 from ccbd.system import utc_now
 from runtime_env.control_plane import control_plane_env
 
@@ -83,6 +84,16 @@ def record_running_intent(context) -> bool:
         # clear and this transaction.
         ShutdownIntentStore(context.paths).clear()
         current = store.load()
+        inspection = guard.inspect()
+        identity_result = reconcile_runtime_project_identity(
+            project_id=context.project.project_id,
+            lifecycle=current,
+            inspection=inspection,
+            mount_manager=manager,
+            occurred_at=utc_now(),
+            socket_path=str(context.paths.ccbd_socket_path),
+        )
+        current = identity_result.lifecycle
         lifecycle_missing = current is None
         if current is None:
             current = lifecycle_from_inspection(
@@ -91,7 +102,11 @@ def record_running_intent(context) -> bool:
                 occurred_at=utc_now(),
             )
         startup_requested = current.desired_state != 'running' or current.phase != 'mounted'
-        if not lifecycle_missing and current.desired_state == 'running':
+        if (
+            not lifecycle_missing
+            and not identity_result.reconciled
+            and current.desired_state == 'running'
+        ):
             return startup_requested
         store.save(
             current.with_updates(

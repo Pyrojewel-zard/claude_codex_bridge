@@ -13,7 +13,7 @@ from cli.models_start import ParsedStartCommand
 from cli.parser import CliParser, CliUsageError
 
 from .commands_runtime import cmd_update
-from .install import find_install_dir
+from .install import find_install_dir, npm_install_provenance, npm_update_command
 from .startup_update_refresh import schedule_background_update_refresh
 from .startup_update_state import (
     defer_update_prompt,
@@ -73,12 +73,18 @@ def prompt_for_startup_update(
     local_info: dict[str, object],
     stdout: TextIO,
     stdin,
+    npm_command: str | None = None,
 ) -> str:
     latest = str(state.get("latest_version") or "").strip()
     current = str(local_info.get("version") or "").strip()
     print(f"📦 Release update available: v{latest} (current v{current})", file=stdout)
-    print("   [y] upgrade now  [Enter/n] continue  [s] silence this version", file=stdout)
-    stdout.write("Upgrade now? [y/N/s]: ")
+    if npm_command:
+        print(f"   npm-managed install; update with: {npm_command}", file=stdout)
+        print("   [y] show npm command  [Enter/n] continue  [s] silence this version", file=stdout)
+        stdout.write("Show npm update command? [y/N/s]: ")
+    else:
+        print("   [y] upgrade now  [Enter/n] continue  [s] silence this version", file=stdout)
+        stdout.write("Upgrade now? [y/N/s]: ")
     stdout.flush()
     try:
         reply = str(stdin.readline() or "")
@@ -158,12 +164,26 @@ def _handle_prompted_update(
     relaunch_fn,
     now: float,
 ) -> int | None:
-    choice = prompt_for_startup_update(state, local_info=local_info, stdout=stdout, stdin=stdin)
+    values = dict(env if env is not None else os.environ)
+    npm_provenance = npm_install_provenance(script_root=script_root, env=values)
+    npm_command = npm_update_command(str(state.get("latest_version") or "").strip()) if npm_provenance else None
+    choice = prompt_for_startup_update(
+        state,
+        local_info=local_info,
+        stdout=stdout,
+        stdin=stdin,
+        npm_command=npm_command,
+    )
     if choice == "s":
         silence_update_version(install_dir, state)
         return None
     if choice != "y":
         defer_update_prompt(install_dir, state, now=now)
+        return None
+    if npm_command:
+        defer_update_prompt(install_dir, state, now=now)
+        print("ℹ️  npm owns this CCB installation; no vendored files were changed.", file=stdout)
+        print(f"   Run: {npm_command}", file=stdout)
         return None
     return _update_and_relaunch(
         state,

@@ -166,6 +166,7 @@ def submit_callback_continuation(
         return latest
     existing_continuation = _existing_continuation_job(dispatcher, latest)
     if existing_continuation is not None:
+        _repair_pending_continuation_attempt(dispatcher, latest, existing_continuation)
         persisted_reply = _latest_child_reply(dispatcher, latest)
         state = (
             CallbackEdgeState.DONE
@@ -229,14 +230,31 @@ def repair_callback_edges(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
     if dispatcher._message_bureau is None:
         return ()
     repaired: list[CallbackEdgeRecord] = []
-    for edge in dispatcher._message_bureau.pending_callback_edges():
+    for edge in _latest_callback_edges(dispatcher):
+        latest = edge
+        if latest.state in {
+            CallbackEdgeState.DONE,
+            CallbackEdgeState.FAILED,
+            CallbackEdgeState.TIMED_OUT,
+        }:
+            continue
         latest = dispatcher._message_bureau.callback_edge(edge.edge_id) or edge
+        if latest.state is CallbackEdgeState.CONTINUATION_SUBMITTED:
+            existing_continuation = _existing_continuation_job(dispatcher, latest)
+            if existing_continuation is not None and _repair_pending_continuation_attempt(
+                dispatcher,
+                latest,
+                existing_continuation,
+            ):
+                repaired.append(latest)
+            continue
         if latest.state in _TERMINAL_CALLBACK_STATES:
             continue
         if latest.continuation_job_id:
             continue
         existing_continuation = _existing_continuation_job(dispatcher, latest)
         if existing_continuation is not None:
+            _repair_pending_continuation_attempt(dispatcher, latest, existing_continuation)
             reply = _latest_child_reply(dispatcher, latest)
             reply_job = _job_for_reply(dispatcher, reply)
             repaired.append(
@@ -267,6 +285,34 @@ def repair_callback_edges(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
             )
         )
     return tuple(repaired)
+
+
+def _latest_callback_edges(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
+    latest: dict[str, CallbackEdgeRecord] = {}
+    for edge in dispatcher._message_bureau._callback_edge_store.list_all():
+        latest[edge.edge_id] = edge
+    return tuple(latest.values())
+
+
+def _repair_pending_continuation_attempt(dispatcher, edge: CallbackEdgeRecord, job) -> bool:
+    if job.status not in {JobStatus.ACCEPTED, JobStatus.QUEUED}:
+        return False
+    bureau = dispatcher._message_bureau
+    existing_attempt = bureau._attempt_store.get_latest_by_job_id(job.job_id)
+    existing_inbound = None
+    if existing_attempt is not None:
+        existing_inbound = bureau._inbound_store.get_latest_for_attempt(
+            job.agent_name,
+            existing_attempt.attempt_id,
+        )
+    if existing_attempt is not None and existing_inbound is not None:
+        return False
+    bureau.record_retry_attempt(
+        edge.parent_message_id,
+        job,
+        accepted_at=job.created_at or edge.updated_at,
+    )
+    return existing_attempt is None or existing_inbound is None
 
 
 def sweep_callback_timeouts(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
@@ -355,6 +401,29 @@ def delegated_terminal_job(job, edge: CallbackEdgeRecord):
             'suppress_reply': True,
             'chain_edge_id': edge.edge_id,
             'chain_child_job_id': edge.child_job_id,
+        },
+    )
+
+
+def terminalize_cancelled_parent_edge(
+    dispatcher,
+    edge: CallbackEdgeRecord,
+    *,
+    parent_job,
+    updated_at: str,
+) -> CallbackEdgeRecord:
+    latest = dispatcher._message_bureau.callback_edge(edge.edge_id) or edge
+    if latest.state in _TERMINAL_CALLBACK_STATES:
+        return latest
+    return dispatcher._message_bureau.update_callback_edge(
+        latest,
+        state=CallbackEdgeState.FAILED,
+        updated_at=updated_at,
+        diagnostics={
+            **dict(latest.diagnostics or {}),
+            'failure_reason': 'chain_parent_cancelled',
+            'parent_cancelled': True,
+            'cancelled_parent_job_id': parent_job.job_id,
         },
     )
 
@@ -770,10 +839,12 @@ def _reply_summary(decision: CompletionDecision) -> str:
 
 
 def _strip_ccb_guidance(body: str) -> str:
-    marker = '\n\nCCB reply guidance:'
-    if marker not in body:
-        return body
-    return body.split(marker, 1)[0].rstrip()
+    indexes = [
+        index
+        for marker in ('\n\nCCB_REPLY_MODE:', '\n\nCCB reply guidance:')
+        if (index := body.find(marker)) >= 0
+    ]
+    return body[: min(indexes)].rstrip() if indexes else body
 
 
 __all__ = [
@@ -790,6 +861,7 @@ __all__ = [
     'request_callback_route',
     'sweep_callback_timeouts',
     'submit_callback_continuation',
+    'terminalize_cancelled_parent_edge',
     'validate_nested_ask_request',
     'validate_callback_request',
 ]

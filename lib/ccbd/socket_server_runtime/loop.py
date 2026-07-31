@@ -99,13 +99,20 @@ def stop_worker(server) -> None:
 
 def stop_maintenance_worker(server) -> None:
     worker = getattr(server, '_maintenance_thread', None)
-    if worker is None:
-        return
-    server._maintenance_pending_event.set()
-    if worker is not threading.current_thread():
-        worker.join(timeout=_WORKER_JOIN_TIMEOUT_S)
-    if not worker.is_alive():
-        server._maintenance_thread = None
+    if worker is not None:
+        server._maintenance_pending_event.set()
+        if worker is not threading.current_thread():
+            worker.join(timeout=_WORKER_JOIN_TIMEOUT_S)
+        if not worker.is_alive():
+            server._maintenance_thread = None
+    # The request worker is stopped before this function during serve-loop
+    # teardown, so every response finalizer has now been queued.  Drain any
+    # finalizer that arrived after the maintenance lane observed stop_event;
+    # stop-all must not lose namespace destruction to that shutdown race.
+    run_after_response_actions(
+        server,
+        shutdown_only=server._stop_event.is_set(),
+    )
 
 
 def enqueue_connection(server, conn) -> None:
@@ -190,7 +197,12 @@ def maintenance_worker_loop(server, *, interval: float, on_tick) -> None:
         while True:
             timeout = next_timeout(next_tick_at=next_tick_at, on_tick=on_tick)
             woke_for_pending = server._maintenance_pending_event.wait(timeout=timeout)
+            # A shutdown signal can race the request worker between preparing
+            # a stop-all response and queueing its destructive finalizer.  Any
+            # shutdown-required action already queued remains mandatory after
+            # stop_event; ordinary bootstrap actions must still fail closed.
             if server._stop_event.is_set():
+                run_after_response_actions(server, shutdown_only=True)
                 break
             run_after_response_actions(server)
             if server._stop_event.is_set():
@@ -290,8 +302,8 @@ def run_queued_maintenance_ticks(*, on_tick, tick_count: int) -> None:
         on_tick()
 
 
-def run_after_response_actions(server) -> None:
-    for action in server.pop_after_response_actions():
+def run_after_response_actions(server, *, shutdown_only: bool = False) -> None:
+    for action in server.pop_after_response_actions(shutdown_only=shutdown_only):
         try:
             action()
         except Exception as exc:

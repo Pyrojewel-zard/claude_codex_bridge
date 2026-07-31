@@ -1,7 +1,7 @@
 # Public Relay Invitation And Alibaba Cloud Deployment
 
-Date: 2026-07-15
-Status: Planning; architecture shaped, production implementation not started
+Date: 2026-07-22
+Status: In progress; local Packages A-D implemented, public deployment unaccepted
 
 ## Purpose
 
@@ -113,6 +113,17 @@ relay signing keys, and database backups are operational secrets and must be
 owner-readable only. "No data storage" in product language must be stated as
 "no CCB business payload storage," not as zero security metadata.
 
+Package B admission key material is deployment-owned configuration, not
+database state. Operators must provide it with `--secrets`, with
+`CCB_RELAY_ADMISSION_SECRETS`, or with both
+`CCB_RELAY_VERIFIER_KEY_B64` and `CCB_RELAY_CAPABILITY_KEY_B64`; the same key
+material must be present after restart. The admission database stores only a
+non-secret fingerprint of those keys and fails closed if the fingerprint is
+missing on a populated database or changes across restart. The SQLite
+database, WAL, and SHM files must be owner-only. Raw invitation values,
+verifier keys, and capability keys must not appear in logs, audit rows, or
+database files.
+
 ## Abuse And Resource Controls
 
 - one invite activates one host; no universal invite or client-embedded key;
@@ -149,6 +160,15 @@ remain necessary even after protocol validation.
 - add short-lived session capability verification and host revocation;
 - add concurrency, expiry, crash-boundary, migration, and log-redaction tests.
 
+Current candidate evidence, 2026-07-22:
+[history/public-relay-ab-package-20260722.md](../history/public-relay-ab-package-20260722.md).
+This is a local Package A/B implementation checkpoint only: it freezes the v2
+crypto/admission boundaries, adds shared Python/Dart vectors, transactional
+SQLite/WAL one-time invitation storage, host PoP session capabilities, and
+operator-local CLI rendering. It does not claim Package C/D relay service,
+host connector, public WSS, Android public-route acceptance, or Alibaba Cloud
+deployment.
+
 ### Package C: Production Relay Service
 
 - replace the in-memory-only public boundary with an async TLS/WSS relay
@@ -184,6 +204,21 @@ remain necessary even after protocol validation.
 - document incident response, key rotation, database backup, host revocation,
   and complete service shutdown;
 - expand capacity only from observed metrics.
+
+## Current Implementation Checkpoint
+
+Local Packages A-D are implemented on the dedicated Relay branch as of
+2026-07-22. The checkpoint includes one-time host activation, persistent
+payload-free admission metadata, host and phone proof-of-possession,
+single-use QR bootstrap followed by a durable host-signed phone grant,
+AEAD-protected unary and multiplexed stream traffic, Terminal and notification
+streams, bounded file chunks, shared Flutter socket ownership, reconnect, and
+managed outbound host-connector startup.
+
+The current local evidence is recorded in
+[public-relay-stream-package-20260722.md](../history/public-relay-stream-package-20260722.md).
+This does not complete Package E: no public DNS/TLS endpoint, Alibaba Cloud
+service, or no-`adb reverse` Android Emulator acceptance has passed yet.
 
 ## Execution Order And Review Ownership
 
@@ -281,3 +316,13 @@ The public relay is beta-ready only after every P0 gate in
 [public-relay-android-emulator-acceptance.md](public-relay-android-emulator-acceptance.md)
 passes against the same source commit, APK hash, relay deployment, and real
 server-wide dedicated test project.
+
+## Historical Deployment Preflight (2026-07-22)
+
+The 2026-07-22 read-only preflight identified Alibaba Cloud target
+`47.120.71.142`, confirmed the existing RustDesk-related public port surface,
+and found that the historical local SSH key was no longer authorized. At that
+checkpoint, source still contained only the non-networked local relay harness;
+later implementation status is recorded above. No remote change was made
+during the preflight. See
+[the preflight record](../history/public-relay-aliyun-preflight-20260722.md).

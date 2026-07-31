@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 import mimetypes
 from pathlib import Path
@@ -25,6 +26,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ccbd.api_models import DeliveryScope, MessageEnvelope
 from ccbd.socket_client import CcbdClientError
+from provider_pane_status.control_messages import (
+    clean_provider_local_control_message,
+)
+from .activity_watch import (
+    MobileAgentActivityProbe,
+    probe_mobile_agent_activity,
+)
 from .notifications import (
     MobileInvalidationSnapshot,
     MobileNotificationSnapshot,
@@ -453,6 +461,7 @@ class MobileGatewayService:
         push_sender_timeout_seconds: float = 2.0,
         push_sender_max_workers: int = 4,
         push_diagnostic: Mapping[str, object] | None = None,
+        agent_activity_probe: Callable[..., MobileAgentActivityProbe] | None = None,
     ) -> None:
         self._project_id = str(project_id)
         self._project_root = Path(project_root)
@@ -472,6 +481,9 @@ class MobileGatewayService:
         self._terminal_session_factory = terminal_session_factory or create_tmux_terminal_session
         self._terminal_history_factory = terminal_history_factory or create_tmux_terminal_history
         self._terminal_message_sender = terminal_message_sender or send_tmux_pane_message
+        self._agent_activity_probe = (
+            agent_activity_probe or probe_mobile_agent_activity
+        )
         self._push_diagnostic = dict(push_diagnostic or {})
         self._mobile_dir = Path(mobile_dir) if mobile_dir is not None else None
         self._pairing_store = pairing_store
@@ -511,6 +523,8 @@ class MobileGatewayService:
         self._invalidation_audit = {
             'watch_refreshes': 0,
             'watch_targets_checked': 0,
+            'watch_activity_probes': 0,
+            'watch_activity_probe_failures': 0,
             'watch_project_view_calls': 0,
             'watch_conversation_requests': 0,
             'ccbd_project_view_requests': 0,
@@ -823,11 +837,12 @@ class MobileGatewayService:
         *,
         force: bool = False,
     ) -> None:
-        """Refresh the shared selected-agent file-metadata watcher.
+        """Refresh the shared selected-agent provider-evidence watcher.
 
-        This has no ccbd RPC path: it reads only bounded native transcript
-        metadata for subscribed targets. Project view/conversation remains an
-        explicit REST action, so idle SSE clients do not create hidden polling.
+        This has no ccbd RPC path: it reads only CCB-owned binding/activity
+        records, a bounded provider pane tail, and native transcript metadata
+        for subscribed targets. Project view/conversation remains an explicit
+        REST action, so idle SSE clients do not create hidden project scans.
         """
         now = self._monotonic_clock()
         with self._invalidation_watch_lock:
@@ -1428,12 +1443,16 @@ class MobileGatewayService:
                 close_reason = 'invalid_open'
                 return
             terminal_token = str(open_frame.get('token') or '')
+            resume_cursor = _optional_int(open_frame.get('resume_cursor'))
             record = store.authenticate_terminal_token(
                 terminal_id=terminal_id,
                 terminal_token=terminal_token,
-                resume_cursor=_optional_int(open_frame.get('resume_cursor')),
+                resume_cursor=resume_cursor,
             )
-            attach_target = self._terminal_attach_target(record)
+            attach_target = self._terminal_attach_target(
+                record,
+                include_history=resume_cursor is None,
+            )
             session = self._terminal_session_factory(attach_target)
             connection.send_json(
                 {
@@ -1817,6 +1836,24 @@ class MobileGatewayService:
             project = self._project_registry.get(target.project_id)
             if project is None:
                 continue
+            activity_state = 'unknown'
+            try:
+                probe = self._agent_activity_probe(
+                    project_root=project.project_root,
+                    project_id=target.project_id,
+                    agent=target.agent,
+                    provider=target.provider,
+                    namespace_epoch=target.namespace_epoch,
+                    now=self._clock(),
+                )
+                activity_state = str(
+                    getattr(probe, 'activity_state', '') or 'unknown'
+                ).strip().lower()
+                with self._invalidation_watch_lock:
+                    self._invalidation_audit['watch_activity_probes'] += 1
+            except Exception:
+                with self._invalidation_watch_lock:
+                    self._invalidation_audit['watch_activity_probe_failures'] += 1
             # Native fingerprints use stat/read of provider-owned local files;
             # no ccbd project_view or mobile conversation HTTP/RPC occurs here.
             fingerprint = _agent_native_conversation_cache_fingerprint(
@@ -1828,7 +1865,7 @@ class MobileGatewayService:
                 project_short_name=target.project_short_name,
                 namespace_epoch=target.namespace_epoch,
                 agent=target.agent,
-                activity_state='unknown',
+                activity_state=activity_state,
                 conversation_fingerprint=digest,
                 observed_at=self._clock(),
             ))
@@ -2057,7 +2094,12 @@ class MobileGatewayService:
             future.cancel()
             raise MobileGatewayError('project activity unavailable', status_code=503) from exc
 
-    def _terminal_attach_target(self, record: dict[str, object]) -> TerminalAttachTarget:
+    def _terminal_attach_target(
+        self,
+        record: dict[str, object],
+        *,
+        include_history: bool,
+    ) -> TerminalAttachTarget:
         project = self._require_project(str(record.get('project_id') or ''))
         view_payload = self._request_project_view(project)
         view = _map(view_payload.get('view'))
@@ -2082,6 +2124,7 @@ class MobileGatewayService:
             pane_id=pane_id,
             geometry=TerminalGeometry.from_mapping(record.get('geometry')),
             target_summary=target_summary,
+            include_history=include_history,
         )
 
     def _handle_terminal_frame(
@@ -2124,7 +2167,7 @@ class MobileGatewayService:
         return 'unsupported_terminal_frame'
 
 
-def parse_listen_address(value: str | None) -> ListenAddress:
+def parse_listen_address(value: str | None, *, allow_lan: bool = False) -> ListenAddress:
     text = str(value or '').strip()
     if not text:
         return ListenAddress()
@@ -2140,7 +2183,12 @@ def parse_listen_address(value: str | None) -> ListenAddress:
     if port < 0 or port > 65535:
         raise ValueError('listen port must be between 0 and 65535')
     if not _is_loopback_host(host):
-        raise ValueError('mobile gateway only supports loopback listen addresses')
+        if not allow_lan:
+            raise ValueError('mobile gateway only supports loopback listen addresses for this route provider')
+        if not _is_private_lan_host(host):
+            raise ValueError(
+                'LAN mobile gateway listen address must be a specific private or link-local IP address'
+            )
     return ListenAddress(host=host, port=port)
 
 
@@ -2632,6 +2680,19 @@ def _project_health_refresh_failed(payload: dict[str, object]) -> bool:
 def _is_loopback_host(host: str) -> bool:
     normalized = host.strip().lower()
     return normalized in {'localhost', '127.0.0.1', '::1'}
+
+
+def _is_private_lan_host(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    return bool(
+        (address.is_private or address.is_link_local)
+        and not address.is_unspecified
+        and not address.is_multicast
+        and not address.is_reserved
+    )
 
 
 def _utc_now() -> str:
@@ -3142,7 +3203,7 @@ def _claude_native_conversation_items(
                     agent=agent,
                     mobile_files_dir=mobile_files_dir,
                 )
-                body = _clean_native_message_text(body)
+                body = _clean_provider_native_message_text(body)
                 if not body:
                     continue
                 item_id = (
@@ -4467,6 +4528,8 @@ def _clean_native_message_text(text: str) -> str:
         stripped = line.strip()
         if _CCB_REQ_LINE_RE.match(line):
             continue
+        if stripped.startswith('CCB_REPLY_MODE:'):
+            continue
         if stripped == 'CCB reply guidance:':
             skipping_reply_guidance = True
             continue
@@ -4478,30 +4541,13 @@ def _clean_native_message_text(text: str) -> str:
     return '\n'.join(lines).strip()
 
 
-_CODEX_LOCAL_COMMAND_CAVEAT_RE = re.compile(
-    r'^\s*<local-command-caveat>.*?</local-command-caveat>\s*$',
-    re.IGNORECASE | re.DOTALL,
-)
-_CODEX_LOCAL_COMMAND_RE = re.compile(
-    r'^\s*<command-name>(?P<name>.*?)</command-name>\s*'
-    r'<command-message>.*?</command-message>\s*'
-    r'<command-args>(?P<args>.*?)</command-args>\s*$',
-    re.IGNORECASE | re.DOTALL,
-)
+def _clean_provider_native_message_text(text: str) -> str:
+    cleaned = _clean_native_message_text(text)
+    return clean_provider_local_control_message(cleaned)
 
 
 def _clean_codex_native_message_text(text: str) -> str:
-    cleaned = _clean_native_message_text(text)
-    if not cleaned or _CODEX_LOCAL_COMMAND_CAVEAT_RE.fullmatch(cleaned):
-        return ''
-    command = _CODEX_LOCAL_COMMAND_RE.fullmatch(cleaned)
-    if command is None:
-        return cleaned
-    name = command.group('name').strip()
-    if name.casefold() == '/clear':
-        return ''
-    args = command.group('args').strip()
-    return f'{name} {args}'.strip()
+    return _clean_provider_native_message_text(text)
 
 
 def _agent_history_conversation_items(

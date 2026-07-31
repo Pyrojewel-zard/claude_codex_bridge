@@ -16,6 +16,7 @@ from provider_backends.codex.session_authority import (
 )
 from provider_backends.codex.start_cmd import strip_resume_start_cmd
 from provider_sessions.files import safe_write_session
+from provider_core.inherited_skills import materialize_required_control_skills
 from provider_profiles.codex_home_config import materialize_codex_home_config, repair_codex_activity_hooks
 
 from .diagnostics import ensure_codex_diagnostic_log_filter
@@ -92,10 +93,17 @@ def prepare_codex_home_overrides(
             runtime_dir=runtime_dir,
             workspace_path=workspace_path,
         )
+    materialize_required_control_skills(
+        provider='codex',
+        target_dir=layout.codex_home / 'skills',
+    )
 
     overrides = {
         'CODEX_HOME': str(layout.codex_home),
         'CODEX_SESSION_ROOT': str(layout.session_root),
+        # Some Codex builds consult this independently from CODEX_HOME.
+        # Pin it as well so SQLite state never falls back to the caller's home.
+        'CODEX_SQLITE_HOME': str(layout.codex_home),
     }
     ensure_codex_diagnostic_log_filter(layout.codex_home, runtime_dir=runtime_dir)
 
@@ -103,7 +111,7 @@ def prepare_codex_home_overrides(
         # We are running inside WSL. The target executable might be a Windows binary (via interop).
         # Set USERPROFILE to the same isolated path and instruct WSLENV to automatically translate paths.
         overrides['USERPROFILE'] = str(layout.codex_home)
-        wslenv_additions = "CODEX_HOME/p:CODEX_SESSION_ROOT/p:USERPROFILE/p"
+        wslenv_additions = "CODEX_HOME/p:CODEX_SESSION_ROOT/p:CODEX_SQLITE_HOME/p:USERPROFILE/p"
         existing_wslenv = os.environ.get("WSLENV", "")
         if existing_wslenv:
             overrides['WSLENV'] = f"{wslenv_additions}:{existing_wslenv}"

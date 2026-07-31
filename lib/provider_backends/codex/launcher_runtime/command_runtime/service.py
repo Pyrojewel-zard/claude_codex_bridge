@@ -16,6 +16,8 @@ from provider_backends.codex.session_authority import (
 )
 from provider_profiles.codex_home_config import codex_api_authority
 
+from ..session_paths import session_file_for_runtime_dir
+
 
 def build_start_cmd(
     command,
@@ -28,6 +30,8 @@ def build_start_cmd(
     provider_start_parts_fn: Callable[[str], list[str]],
     load_resume_session_id_fn: Callable[..., str | None],
     build_codex_shell_prefix_fn: Callable[..., list[str]],
+    supports_managed_app_server_fn: Callable[[tuple[str, ...]], bool] | None = None,
+    build_managed_app_server_command_fn: Callable[..., tuple[str, dict[str, object]]] | None = None,
     prepared_state: dict[str, object] | None = None,
 ) -> str:
     profile = load_resolved_provider_profile_fn(runtime_dir)
@@ -43,12 +47,13 @@ def build_start_cmd(
         agent_name=spec.name,
         workspace_path=_path_or_none(launch_context.get('workspace_path')),
     )
+    provider_start_parts = provider_start_parts_fn('codex')
     codex_args = _codex_args(
         command,
         spec,
         runtime_dir,
         profile=profile,
-        provider_start_parts_fn=provider_start_parts_fn,
+        provider_start_parts=provider_start_parts,
         load_resume_session_id_fn=load_resume_session_id_fn,
     )
     env_map = _env_map(
@@ -62,8 +67,25 @@ def build_start_cmd(
     exports = ' '.join(f'{key}={shlex.quote(str(value))}' for key, value in env_map.items() if str(value).strip())
     if exports:
         prefix_parts.append(f'export {exports}')
-    cmd = ' '.join(shlex.quote(str(part)) for part in codex_args)
-    cmd = apply_provider_command_template(cmd, spec.provider_command_template)
+    managed_enabled = bool(
+        not str(spec.provider_command_template or '').strip()
+        and supports_managed_app_server_fn is not None
+        and build_managed_app_server_command_fn is not None
+        and supports_managed_app_server_fn(tuple(provider_start_parts))
+    )
+    if managed_enabled:
+        cmd, managed_state = build_managed_app_server_command_fn(codex_args, runtime_dir=runtime_dir)
+        launch_context.update(managed_state)
+        launch_context['codex_app_server_env'] = dict(env_map)
+        launch_context['codex_app_server_unset_env'] = [
+            part.split(None, 1)[1]
+            for part in prefix_parts
+            if part.startswith('unset ') and len(part.split(None, 1)) == 2
+        ]
+    else:
+        launch_context['codex_app_server_enabled'] = False
+        cmd = ' '.join(shlex.quote(str(part)) for part in codex_args)
+        cmd = apply_provider_command_template(cmd, spec.provider_command_template)
     if prefix_parts:
         return f"{'; '.join(prefix_parts)}; {cmd}"
     return cmd
@@ -85,8 +107,8 @@ def _path_or_none(value: object) -> Path | None:
         return None
 
 
-def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_parts_fn, load_resume_session_id_fn) -> list[str]:
-    codex_args = provider_start_parts_fn('codex')
+def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_parts, load_resume_session_id_fn) -> list[str]:
+    codex_args = list(provider_start_parts)
     codex_args.extend(['-c', 'disable_paste_burst=true'])
     if role_command_policy_requires_enforcement(role_command_policy_for_spec(spec)):
         codex_args.extend(['--ask-for-approval', 'never', '--sandbox', 'read-only'])
@@ -124,6 +146,12 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
     if codex_api_authority(profile) is not None:
         explicit_env.pop('OPENAI_BASE_URL', None)
         explicit_env.pop('OPENAI_API_BASE', None)
+    session_file = session_file_for_runtime_dir(runtime_dir)
+    session_binding_env = (
+        {'CCB_SESSION_FILE': str(session_file)}
+        if session_file is not None
+        else {}
+    )
     return {
         **provider_user_session_env(),
         **inherited_api_env,
@@ -134,6 +162,7 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
         'CODEX_OUTPUT_FIFO': str(artifacts.output_fifo),
         'CODEX_TERMINAL': 'tmux',
         **codex_home_overrides,
+        **session_binding_env,
         **caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id),
     }
 

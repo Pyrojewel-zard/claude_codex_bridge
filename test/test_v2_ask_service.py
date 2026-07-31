@@ -773,7 +773,8 @@ def test_submit_ask_spills_large_body_before_daemon_submit(monkeypatch: pytest.M
     artifact_text = artifact_path.read_text(encoding='utf-8')
     assert artifact_text.startswith('alpha-')
     assert 'omega' in artifact_text
-    assert 'CCB reply guidance:' in artifact_text
+    assert 'CCB reply guidance:' not in artifact_text
+    assert 'CCB_REPLY_MODE:' not in artifact_text
 
 
 def test_submit_ask_forces_small_body_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -826,28 +827,20 @@ def test_submit_ask_forces_small_body_artifact(monkeypatch: pytest.MonkeyPatch, 
     artifact_path = Path(str(artifact['path']))
     assert artifact_path.exists()
     artifact_text = artifact_path.read_text(encoding='utf-8')
-    assert artifact_text.startswith('short task')
-    assert 'CCB reply guidance:' in artifact_text
+    assert artifact_text == 'short task'
 
 
-def test_message_with_reply_guidance_appends_compact_default() -> None:
+def test_message_with_reply_guidance_leaves_default_ask_unchanged() -> None:
     body = message_with_reply_guidance('review the diff', message_type='ask')
 
-    assert body.startswith('review the diff\n\nCCB reply guidance:')
-    assert 'Answer directly and concisely.' in body
-    assert 'Include only relevant conclusions' in body
-    assert 'CCB nested ask routing:' not in body
-    assert 'ask --chain' not in body
-    assert 'no more than' not in body
+    assert body == 'review the diff'
 
 
-def test_message_with_reply_guidance_appends_explicit_compact_guidance() -> None:
+def test_message_with_reply_guidance_appends_only_compact_mode_metadata() -> None:
     body = message_with_reply_guidance('review the diff', message_type='ask', compact=True)
 
-    assert body.startswith('review the diff\n\nCCB reply guidance:')
-    assert 'Distill aggressively and lead with the answer.' in body
-    assert 'Keep only details needed for this ask.' in body
-    assert 'Omit empty sections' in body
+    assert body == 'review the diff\n\nCCB_REPLY_MODE: compact'
+    assert 'CCB reply guidance:' not in body
 
 
 def test_message_with_reply_guidance_respects_explicit_output_requirements() -> None:
@@ -879,12 +872,21 @@ def test_message_with_reply_guidance_respects_additional_english_output_requirem
     assert body == 'Run the audit. Include everything and leave nothing out.'
 
 
-def test_message_with_reply_guidance_uses_silent_hint_for_silenced_asks() -> None:
+def test_message_with_reply_guidance_appends_only_silent_mode_metadata() -> None:
     body = message_with_reply_guidance('run smoke test', message_type='ask', silence_on_success=True)
 
-    assert 'Silent-on-success requested.' in body
-    assert 'Reply with the shortest useful status.' in body
-    assert 'CCB nested ask routing:' not in body
+    assert body == 'run smoke test\n\nCCB_REPLY_MODE: silent'
+    assert 'CCB reply guidance:' not in body
+
+
+def test_message_with_reply_guidance_does_not_duplicate_existing_reply_mode() -> None:
+    body = message_with_reply_guidance(
+        'run smoke test\n\nCCB_REPLY_MODE: compact',
+        message_type='ask',
+        compact=True,
+    )
+
+    assert body == 'run smoke test\n\nCCB_REPLY_MODE: compact'
 
 
 def test_ask_guidance_source_has_no_literal_chinese_characters() -> None:

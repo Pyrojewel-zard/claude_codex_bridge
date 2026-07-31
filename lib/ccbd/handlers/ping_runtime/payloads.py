@@ -24,6 +24,9 @@ def build_agent_payload(*, project_id: str, agent_name: str, registry, inspectio
             'desired_state': _inspection_desired_state(inspection),
             'reconcile_state': getattr(runtime, 'reconcile_state', None) if runtime is not None else None,
             'restart_count': getattr(runtime, 'restart_count', 0) if runtime is not None else 0,
+            'recovery_failure_count': (
+                getattr(runtime, 'recovery_failure_count', 0) if runtime is not None else 0
+            ),
             'last_reconcile_at': getattr(runtime, 'last_reconcile_at', None) if runtime is not None else None,
             'last_failure_reason': getattr(runtime, 'last_failure_reason', None) if runtime is not None else None,
             **capability,

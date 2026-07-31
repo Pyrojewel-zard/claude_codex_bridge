@@ -11,9 +11,12 @@ coding CLIs:
 - `deepseek`: DeepSeek-oriented Deep Code CLI, command `deepcode`.
 - `mimo`: Xiaomi MiMo Code CLI, command `mimo`.
 
-Next-wave research also covers five requested CLIs:
+Next-wave research also covers additional requested CLIs:
 
 - `qwen`: Qwen Code CLI, command `qwen`.
+- `qoder`: Qoder CLI, command `qodercli`.
+- `qoderclicn`: Qoder CLI CN, npm package `@qodercn-ai/qoderclicn`, command
+  `qoderclicn`, Node `>=20`.
 - `copilot`: GitHub Copilot CLI, command `copilot`.
 - `cursor`: Cursor Agent CLI, command `agent`.
 - `kiro`: Kiro CLI, command `kiro-cli`.
@@ -62,6 +65,9 @@ override the shipped contracts.
   AGY ready-gated prompt delivery, late transcript/pane fallback, and
   coalesced-request diagnostics needed to approach OpenCode-style reply
   attribution stability.
+- [topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md):
+  active Pi visible-pane execution, exact `agent_settled` completion, legacy
+  headless migration, timeout, restore, rollback, and test contract.
 - [history/next-wave-cli-lab-2026-06-13.md](history/next-wave-cli-lab-2026-06-13.md):
   local install/source lab record for Qwen, Copilot, Cursor, Kiro, and Crush.
 - [history/pi-provider-landing-2026-06-13.md](history/pi-provider-landing-2026-06-13.md):
@@ -72,13 +78,14 @@ override the shipped contracts.
 In scope:
 
 - Provider keys `kimi`, `deepseek`, and `mimo`.
-- Next-wave provider keys `qwen`, `copilot`, `cursor`, `kiro`, `crush`,
+- Next-wave provider keys `qwen`, `qoder`, `qoderclicn`, `copilot`, `cursor`, `kiro`, `crush`,
   `pi`, and `grok`, plus Z.ai CLI provider key `zai`.
 - Default executables `kimi`, `deepcode`, and `mimo`.
-- Default next-wave executables `qwen`, `copilot`, `agent`, `kiro-cli`,
+- Default next-wave executables `qwen`, `qodercli`, `qoderclicn`, `copilot`, `agent`, `kiro-cli`,
   `crush`, `pi`, `grok`, and `zai`.
 - `KIMI_START_CMD`, `DEEPSEEK_START_CMD`, and `MIMO_START_CMD` overrides.
-- Next-wave command overrides `QWEN_START_CMD`, `COPILOT_START_CMD`,
+- Next-wave command overrides `QWEN_START_CMD`, `QODER_START_CMD`,
+  `QODERCLICN_START_CMD`, `COPILOT_START_CMD`,
   `CURSOR_START_CMD`, `KIRO_START_CMD`, `CRUSH_START_CMD`,
   `GROK_START_CMD`, and `PI_START_CMD`; Z.ai uses `ZAI_START_CMD`.
 - Managed tmux pane startup using the existing simple tmux runtime path.
@@ -90,8 +97,10 @@ In scope:
 - MiMo ask execution through native `mimo run --format json` result events,
   using `part.text` plus `step_finish` / `part.reason=stop` as completion
   evidence.
-- Pi ask execution through native `pi --mode json` events, using `turn_end`
-  with assistant message content as completion evidence.
+- Pi ask execution in the managed visible pane, using an exact-request
+  provider-local lifecycle sidecar and `agent_settled` as terminal authority;
+  the 8.5.0 `pi --mode json` subprocess remains the explicit rollback and
+  persisted-job compatibility path.
 - AGY completion alignment to Antigravity transcript logs, so AGY no longer
   relies on `CCB_DONE` as its primary completion signal.
 - AGY prompt delivery hardening so CCB waits for an input-ready Antigravity pane
@@ -101,6 +110,9 @@ In scope:
   providers.
 - Kimi-specific receipt hardening, no-captured-reply diagnostics, trace
   visibility, and execution-resume metadata clarification.
+- Kimi provider-conversation continuity through observation-bound per-agent
+  native session ownership and exact-session restart, without workdir-global
+  `--continue` inference.
 - Z.ai CLI (`zai`) provider registration using the shared native CLI subprocess
   path and `zai --prompt` headless execution.
 - Grok Build CLI (`grok`) provider registration using the shared native CLI

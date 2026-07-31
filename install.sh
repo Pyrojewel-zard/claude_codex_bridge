@@ -117,6 +117,9 @@ msg() {
     pip_index_fallback)
       en_msg="WARN: pip could not reach the primary package index; retrying with: $1"
       zh_msg="警告：pip 无法访问主软件源；正在改用备用源重试：$1" ;;
+    pip_download_retry)
+      en_msg="WARN: pip download was interrupted; retrying ($1/$2)"
+      zh_msg="警告：pip 下载中断；正在重试（$1/$2）" ;;
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
@@ -321,6 +324,7 @@ SCRIPTS_TO_LINK=(
   bin/ccb-runtime-accelerator
   bin/ccb-rs-helper
   bin/ccb-provider-activity-hook
+  bin/codex-reconnect
   bin/ctx-transfer
   ccb
 )
@@ -379,6 +383,8 @@ usage() {
 Usage:
   ./install.sh install    # Install or update Codex dual-window tools
   ./install.sh uninstall  # Uninstall installed content
+  ./install.sh runtime-bootstrap
+                          # Internal: prepare only the release-local Python runtime
 
 Optional environment variables:
   CODEX_INSTALL_PREFIX     Install directory (default: ~/.local/share/codex-dual)
@@ -742,6 +748,16 @@ pip_failure_allows_index_fallback() {
     "$pip_log" 2>/dev/null
 }
 
+pip_failure_allows_same_index_retry() {
+  local pip_log="$1"
+  if [[ "$pip_log" == "/dev/null" ]]; then
+    return 0
+  fi
+  grep -Eiq \
+    'IncompleteRead|ProtocolError|ChunkedEncodingError|Connection (aborted|broken|error|refused|reset)|ConnectionResetError|ConnectTimeout|ReadTimeout|TimeoutError|timed out|ProxyError|NameResolutionError|NewConnectionError|Temporary failure|Name or service not known|nodename nor servname|Network is (down|unreachable)|No route to host|Max retries exceeded|RemoteDisconnected|Remote end closed connection' \
+    "$pip_log" 2>/dev/null
+}
+
 pip_index_display_url() {
   printf '%s\n' "$1" | sed -E 's#(https?://)[^/@]+@#\1***@#'
 }
@@ -791,6 +807,17 @@ pip_install_with_index_fallback() {
   local fallback_index=""
   fallback_index="$(pip_fallback_index_url 2>/dev/null || true)"
   if [[ -z "$fallback_index" || "$fallback_index" == "$primary_index" ]]; then
+    local attempt=1
+    local max_attempts=3
+    while (( attempt < max_attempts )) && pip_failure_allows_same_index_retry "$pip_log"; do
+      attempt=$((attempt + 1))
+      msg pip_download_retry "$attempt" "$max_attempts"
+      if pip_install_once "$python_cmd" "$pip_log" "write" "$primary_index" "$@"; then
+        return 0
+      else
+        first_status=$?
+      fi
+    done
     return "$first_status"
   fi
 
@@ -804,6 +831,73 @@ pip_install_with_index_fallback() {
   else
     return $?
   fi
+}
+
+mobile_relay_requirements_path() {
+  local requirements="$REPO_ROOT/deploy/mobile-relay/requirements.txt"
+  if [[ ! -f "$requirements" ]]; then
+    return 1
+  fi
+  printf '%s\n' "$requirements"
+}
+
+python_has_mobile_relay_dependencies() {
+  local python_cmd="$1"
+  "$python_cmd" - <<'PY' >/dev/null 2>&1
+import aiohttp  # noqa: F401
+from cryptography.hazmat.primitives.asymmetric import ed25519, x25519  # noqa: F401
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305  # noqa: F401
+PY
+}
+
+install_mobile_relay_dependencies_for_python() {
+  local python_cmd="$1"
+  if [[ "${CCB_INSTALL_MOBILE_RELAY_DEPS:-1}" == "0" ]]; then
+    echo "INFO: Mobile Relay dependency install skipped by CCB_INSTALL_MOBILE_RELAY_DEPS=0"
+    return 0
+  fi
+  if python_has_mobile_relay_dependencies "$python_cmd"; then
+    echo "OK: Mobile Relay Python dependencies available"
+    return 0
+  fi
+
+  local requirements
+  requirements="$(mobile_relay_requirements_path 2>/dev/null || true)"
+  if [[ -z "$requirements" ]]; then
+    echo "ERROR: Mobile Relay dependency manifest is missing" >&2
+    echo "   Expected: $REPO_ROOT/deploy/mobile-relay/requirements.txt" >&2
+    return 1
+  fi
+
+  local pip_log pip_log_cleanup=0
+  pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-mobile-relay-pip.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-mobile-relay-pip.XXXXXX.log" 2>/dev/null || true)"
+  if [[ -z "$pip_log" ]]; then
+    pip_log="/dev/null"
+  else
+    pip_log_cleanup=1
+  fi
+
+  echo "Installing Mobile Relay Python dependencies"
+  if pip_install_with_index_fallback \
+      "$python_cmd" "$pip_log" --requirement "$requirements" &&
+     python_has_mobile_relay_dependencies "$python_cmd"; then
+    if [[ "$pip_log_cleanup" -eq 1 ]]; then
+      rm -f "$pip_log"
+    fi
+    echo "OK: Mobile Relay Python dependencies installed"
+    return 0
+  fi
+
+  echo "ERROR: Failed to install required Mobile Relay Python dependencies" >&2
+  if [[ "$pip_log_cleanup" -eq 1 && -s "$pip_log" ]]; then
+    tail -20 "$pip_log" | sed 's/^/     /' >&2
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 ]]; then
+    rm -f "$pip_log"
+  fi
+  echo "   Manual install:" >&2
+  echo "   $python_cmd -m pip install --requirement '$requirements'" >&2
+  return 1
 }
 
 tomli_manual_install_command() {
@@ -1241,7 +1335,7 @@ resolve_source_kind() {
     echo "$build_info_source_kind"
     return
   fi
-  if [[ -d "$REPO_ROOT/.git" ]]; then
+  if [[ -d "$REPO_ROOT/.git" || -f "$REPO_ROOT/.git" ]]; then
     echo "source"
   else
     echo "release"
@@ -1299,7 +1393,7 @@ use_managed_venv() {
     1|true|yes|on) return 0 ;;
     0|false|no|off) return 1 ;;
   esac
-  [[ "$(resolve_install_mode)" == "release" && "$(detect_platform)" == "macos" ]]
+  [[ "$(resolve_install_mode)" == "release" ]]
 }
 
 resolve_live_source_root() {
@@ -1837,7 +1931,42 @@ install_managed_venv() {
   fi
   install_tomli_for_python "$venv_python"
   install_watchdog_for_python "$venv_python"
+  install_mobile_relay_dependencies_for_python "$venv_python"
   echo "OK: Managed Python venv ready"
+}
+
+runtime_bootstrap() {
+  if install_uses_live_source; then
+    echo "ERROR: runtime-bootstrap is only supported for a packaged CCB release." >&2
+    exit 1
+  fi
+  local release_root install_root
+  release_root="$(canonical_existing_parent_path "$REPO_ROOT")"
+  install_root="$(canonical_existing_parent_path "$INSTALL_PREFIX")"
+  if [[ "$install_root" != "$release_root" ]]; then
+    echo "ERROR: runtime-bootstrap must target its own packaged release tree." >&2
+    echo "   Release tree : $REPO_ROOT" >&2
+    echo "   Install prefix: $INSTALL_PREFIX" >&2
+    exit 1
+  fi
+
+  # npm owns its vendored release tree and must not run the full installer,
+  # which also writes global wrappers, skills, settings, and tmux assets.
+  # Force the release-local runtime policy here so an inherited user setting
+  # cannot leave the vendored payload without its required Python packages.
+  CCB_USE_MANAGED_VENV=1 \
+  CCB_INSTALL_TOMLI=1 \
+  CCB_INSTALL_MOBILE_RELAY_DEPS=1 \
+    install_managed_venv
+
+  local venv_python
+  venv_python="$(managed_venv_python)"
+  if ! PYTHON_BIN="$venv_python" python_has_toml_reader || \
+     ! python_has_mobile_relay_dependencies "$venv_python"; then
+    echo "ERROR: Managed Python runtime validation failed: $venv_python" >&2
+    exit 1
+  fi
+  echo "OK: Release-local Python runtime ready"
 }
 
 write_live_source_wrapper() {
@@ -1954,6 +2083,7 @@ write_python_entrypoint_wrapper() {
 if [[ "\${TERM:-}" == "xterm-ghostty" ]]; then
   export TERM=xterm-256color
 fi
+export CCB_PYTHON="$python_path"
 exec "$python_path" "$absolute_source" "\$@"
 EOF
   chmod +x "$destination_path" 2>/dev/null || true
@@ -2007,6 +2137,11 @@ write_ccb_launcher_release_wrapper() {
   else
     launcher_path="$INSTALL_PREFIX/bin/_ccb-python"
     body_path="$INSTALL_PREFIX/$body_name"
+  fi
+  if use_managed_venv; then
+    write_python_entrypoint_wrapper \
+      "$(managed_venv_python)" "$body_path" "$destination_path"
+    return 0
   fi
   mkdir -p "$(dirname "$destination_path")"
   clear_installed_path "$destination_path"
@@ -2356,6 +2491,11 @@ verify_installed_entrypoints() {
     echo "   Path: $BIN_DIR/ask"
     exit 1
   fi
+  if ! "$BIN_DIR/codex-reconnect" --help >/dev/null 2>&1; then
+    echo "ERROR: installed codex-reconnect entrypoint failed runtime smoke check"
+    echo "   Path: $BIN_DIR/codex-reconnect"
+    exit 1
+  fi
   echo "OK: Installed entrypoints passed runtime smoke check"
 }
 
@@ -2559,12 +2699,11 @@ install_droid_skills() {
     rm -rf "$skills_dst/$legacy_skill"
   done
 
-  echo "Installing Droid/Factory ask skill..."
+  echo "Installing Droid/Factory control skills..."
   for skill_dir in "$skills_src"/*/; do
     [[ -d "$skill_dir" ]] || continue
     local skill_name
     skill_name=$(basename "$skill_dir")
-    [[ "$skill_name" == "ask" ]] || continue
 
     if [[ ! -f "$skill_dir/SKILL.md" ]]; then
       continue
@@ -3278,6 +3417,7 @@ install_requirements() {
   else
     install_tomli
     install_watchdog
+    install_mobile_relay_dependencies_for_python "$PYTHON_BIN"
   fi
   require_terminal_backend
 }
@@ -3420,7 +3560,7 @@ provision_role_packs() {
   if install_uses_live_source; then
     ccb_entry="$(resolve_live_source_root)/ccb"
   else
-    ccb_entry="$INSTALL_PREFIX/ccb"
+    ccb_entry="$BIN_DIR/ccb"
   fi
   if [[ ! -x "$ccb_entry" ]]; then
     echo "WARN: Role Pack provisioning skipped; ccb entrypoint not executable: $ccb_entry"
@@ -3664,7 +3804,7 @@ uninstall_claude_skills() {
 uninstall_codex_skills() {
   local skills_dst
   skills_dst="$(resolve_codex_source_home)/skills"
-  local ccb_skills="ask ccb-config ccb-clear"
+  local ccb_skills="ask ccb-config ccb-clear reconnect"
   local legacy_skills="ccb_config ping pend autonew all-plan file-op"
 
   if [[ ! -d "$skills_dst" ]]; then
@@ -3685,7 +3825,7 @@ uninstall_codex_skills() {
 
 uninstall_droid_skills() {
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
-  local ccb_skills="ask"
+  local ccb_skills="ask ccb-clear"
   local legacy_skills="ping pend autonew all-plan"
 
   if [[ ! -d "$skills_dst" ]]; then
@@ -3807,6 +3947,9 @@ main() {
     install)
       confirm_root_install_if_needed
       install_all
+      ;;
+    runtime-bootstrap)
+      runtime_bootstrap
       ;;
     uninstall)
       uninstall_all

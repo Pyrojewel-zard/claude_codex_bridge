@@ -73,7 +73,7 @@ def load_helper_manifest(path: Path, *, store: JsonStore | None = None) -> Provi
 
 def save_helper_manifest(path: Path, manifest: ProviderHelperManifest, *, store: JsonStore | None = None) -> Path:
     current_store = store or JsonStore()
-    current_store.save(path, manifest, serializer=lambda value: value.to_record())
+    current_store.save_if_changed(path, manifest, serializer=lambda value: value.to_record())
     return path
 
 

@@ -506,8 +506,9 @@ Acceptance criteria:
 
 ## Phase 5: Relay-First Remote Alpha
 
-Status: In Progress after app/UI emulator regression completion; real local
-CCB backend matrix is the next gate.
+Status: In Progress. Local Relay Packages A-D and their protocol/load gates
+are implemented; Alibaba deployment and the no-`adb reverse` public Android
+Emulator matrix are the next gates.
 
 Goal: support real remote use when the phone is outside the server LAN without
 requiring ordinary users to own a domain, configure Cloudflare, open router

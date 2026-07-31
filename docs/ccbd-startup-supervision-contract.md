@@ -32,6 +32,9 @@ Managed Codex conversation isolation rules live in [docs/codex-session-isolation
 
 Managed Claude conversation isolation rules live in [docs/claude-session-isolation-contract.md](/home/bfly/yunwei/ccb_source/docs/claude-session-isolation-contract.md). Startup behavior must honor that provider-state contract rather than inferring Claude identity from shared `work_dir` or global `~/.claude`.
 
+Common provider asset projection and effective-root rules live in
+[docs/provider-asset-projection-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-asset-projection-contract.md).
+
 ## 2. Problem Statement
 
 The current codebase already contains pieces of the required behavior:
@@ -97,6 +100,24 @@ Out of scope:
 
 - One `.ccb` anchor defines one project control-plane scope.
 - The directory that owns `.ccb/` is the only authority root for that project.
+- `.ccb/project.identity.json` defines the anchor's stable `project_id` and
+  stable project slug once that record exists. The recorded `bound_root` is a
+  replaceable locator used to detect relocation or copying; it must not be
+  hashed again to redefine project identity.
+- New empty anchors receive a random 256-bit project ID. A pre-identity legacy
+  anchor preserves its current path-derived ID when its existing anchor content
+  or current runtime authority agrees with the current root, or adopts the
+  unanimous legacy ID when inactive runtime evidence points to a previous root
+  that no longer exists.
+- Conflicting legacy IDs or a foreign legacy binding that cannot be proven to
+  be an inactive move must fail closed instead of silently minting another ID.
+- Moving or renaming an inactive anchor must preserve its project ID and slug,
+  update its root binding, and advance its binding epoch.
+- A copied identity whose previously bound root still exists must fail closed
+  until an explicit project-fork workflow gives the copy a distinct identity.
+- Relocation must fail closed while recorded backend authority is still live;
+  a live keeper, ccbd PID, or connectable ccbd socket must not be silently
+  reinterpreted as inactive move residue.
 - Project lifecycle state must live under that project's `.ccb/` only.
 - Startup, supervision, and shutdown must be reasoned per project anchor, never globally.
 - CCB-managed tmux servers must be started with an isolated tmux config so user-level
@@ -118,8 +139,17 @@ Out of scope:
 - An `UNMOUNTED` lease whose `project_id` no longer matches the current anchor
   is copied/moved-project residue, not live backend authority; startup may
   supersede it with a fresh generation for the current anchor.
-- A mounted lease with a different `project_id` must still fail closed unless a
-  separate explicit shutdown/cleanup path has first made it unmounted.
+- A stale or dead mounted lease and lifecycle whose `project_id` no longer
+  matches the current stable anchor identity may be marked unmounted and
+  rebuilt under the current identity inside the startup lock. The replacement
+  must preserve monotonic generation and must recompute the effective socket
+  locator from the current `PathLayout`.
+- Keeper lifecycle reconciliation must validate both `keeper_pid` and
+  `project_id`; matching a copied keeper PID alone must never carry a foreign
+  lifecycle ID into a new startup fence.
+- A live mounted lease with a different `project_id` must still fail closed;
+  only a startup-lock reconciliation that proves the lease stale or dead may
+  mark it unmounted before takeover.
 - A second `ccbd` may only replace the current one through explicit takeover rules.
 - Once takeover has replaced the recorded lease holder, the previous daemon must treat that lease as lost authority:
   - heartbeat refresh must not succeed against a replaced holder
@@ -221,6 +251,23 @@ Rules:
   - helper manifests and runtime records may define ownership for cleanup and restart purposes
   - runtime authority and helper ownership must be written from the same agent-authority update path; later outer-layer field patching must not leave helper ownership on an older daemon/runtime generation
   - helper pids, detached parents, or process names alone are evidence only
+  - a managed Codex app-server used by the visible TUI is a child of the
+    slot-owned Codex bridge process group; its socket and pid live only in that
+    agent's provider-runtime directory
+  - Codex startup may attach the TUI with `--remote` only after the owned Unix
+    socket is ready; otherwise the TUI falls back to its ordinary local mode and
+    exact active-turn follow-up remains unavailable
+  - the remote branch writes an owned marker containing the exact socket path;
+    capability requires that marker plus a live WebSocket, and the local
+    fallback branch must leave no marker
+  - an overlong or unsupported preferred app-server socket path uses the
+    existing runtime-socket placement policy with a hash of the full agent
+    provider-runtime directory; cleanup owns that exact effective socket
+  - app-server startup failure, bridge shutdown, and project stop/kill must
+    terminate the exact child and remove the owned socket/pid/marker; the
+    project stop path repeats this cleanup after process termination so a
+    forced bridge exit cannot leave false capability evidence; neither a stale
+    socket nor a helper pid advertises follow-up capability
 - configured-agent provider session files are agent-scoped by `.ccb/ccb.config` logical agent name
 - provider-base session files such as `.codex-session` or `.claude-session` are legacy or unscoped evidence only:
   - they must not be reinterpreted as a configured agent's identity
@@ -319,9 +366,111 @@ Managed provider startup mutation rules:
   - `build_session_payload` receives the same final `prepared_state` used by
     command assembly
 - provider bootstrap config needed for managed launches must live under `.ccb/agents/<agent>/provider-state/<provider>/` or an explicit validated provider-profile runtime home
-- managed OpenCode startup writes `.ccb/agents/<agent>/provider-state/opencode/opencode.json` as a generated `OPENCODE_CONFIG` file; it reads and merges project `opencode.json` without modifying that project file, uses project-relative memory instructions through `.ccb/runtime/memory/<agent>.md`, uses project-relative inherited ask skill instructions through `.ccb/runtime/skills/<agent>/opencode/ask.md`, disables OpenCode autoupdate for managed panes so startup and job delivery cannot be blocked by an interactive update prompt, and injects `--continue` only when the effective restore policy is not fresh and the configured command does not already contain an explicit OpenCode session selector
+- provider authentication inheritance must satisfy
+  [docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md):
+  source user state is read-only inheritance input, managed homes are the only
+  writable provider state, and logout/token refresh must never propagate back
+  to the user's provider environment
+- visible and headless provider launches must overwrite `HOME` plus every
+  applicable provider/XDG/storage root with agent-local managed values; WSL
+  launches must also pin Windows-facing `USERPROFILE` and app-data roots where
+  the provider uses them
+- credential or account paths must not be symlinks, junctions, mounts, hard
+  links, or other writable aliases to user state; recognized legacy aliases
+  must be detached without traversing their source
+- managed Codex startup must write `check_for_update_on_startup = false` into
+  the generated agent-local `CODEX_HOME/config.toml`; managed Claude startup
+  must export `DISABLE_AUTOUPDATER=1`, `DISABLE_LOGIN_COMMAND=1`, and
+  `DISABLE_LOGOUT_COMMAND=1`; managed Gemini startup must write both
+  `general.enableAutoUpdate = false` and
+  `general.enableAutoUpdateNotification = false` into the generated
+  agent-local `.gemini/settings.json`. Managed Grok receives
+  `GROK_DISABLE_AUTOUPDATER=1`; managed Droid receives
+  `FACTORYD_DISABLE_AUTO_UPDATE=1`; managed AGY receives
+  `AGY_CLI_DISABLE_AUTO_UPDATE=1`. All managed provider processes also
+  receive `NO_UPDATE_NOTIFIER=1` for CLIs using the common Node
+  update-notifier convention. These overrides apply only to CCB-managed
+  provider processes and must not modify the user's provider-global
+  configuration.
+  Provider version checks and upgrades belong to the explicit `ccb update`
+  flow, never to pane startup or job delivery.
+- managed Gemini and Qwen must each enable both of their supported file-storage
+  switches so OAuth refresh/logout cannot select an external OS credential
+  backend
+- managed Codex launch must export the canonical agent-scoped
+  `CCB_SESSION_FILE` path into that Codex process. The value points to the
+  existing project session authority so opt-in tools such as the inherited
+  `reconnect` skill can bind the exact project tmux socket and pane after
+  generic `TMUX` variables are sanitized. It must not be inherited from the
+  caller shell or treated as backend/startup authority.
+- managed Claude startup must use the user-installed Provider executable and
+  must not create/copy/hash/link a CCB project-scoped binary cache; recognized
+  legacy CCB cache links may be detached during preparation without deleting
+  cache payload
+- managed Gemini startup routes rebuildable npm/XDG cache to one user-scoped
+  `~/.cache/ccb/provider-cache/gemini/` tree and must not create the retired
+  `~/.cache/ccb/projects/<project-id>/provider-cache/gemini/` route
+- managed OpenCode startup writes `.ccb/agents/<agent>/provider-state/opencode/opencode.json` as a generated `OPENCODE_CONFIG` file; it reads and merges project `opencode.json` without modifying that project file, pins agent-local HOME/XDG data/config/state/cache plus structured storage/log roots, projects auth/account artifacts as one-way copies into that managed data root, uses project-relative memory instructions through `.ccb/runtime/memory/<agent>.md`, uses project-relative inherited ask skill instructions through `.ccb/runtime/skills/<agent>/opencode/ask.md`, disables OpenCode autoupdate for managed panes so startup and job delivery cannot be blocked by an interactive update prompt, and injects `--continue` only when the effective restore policy is not fresh and the configured command does not already contain an explicit OpenCode session selector
+- managed Kimi startup must not infer conversation authority from work-directory
+  recency or inject `--continue`: `.kimi-<agent>-session` owns a native Kimi
+  session only after that agent's exact `CCB_REQ_ID` is observed in the native
+  `wire.jsonl`; the record stores the native session id/path, normalized work
+  directory, Kimi share root, and observation time separately from
+  `ccb_session_id`
+- managed Kimi pane restart and dead-pane recovery must validate the current
+  project, agent, work directory, share root, exact native layout, and current
+  CLI exact-session capability before materializing `--session <owned-id>` (or
+  the capability-confirmed stable long equivalent) at the single persisted
+  command-template insertion point; first launch, reset, missing/malformed/
+  mismatched/symlinked authority, storage drift, a missing command template,
+  or an unsupported CLI starts fresh and clears the carried native binding
+  without deleting provider-owned data
+- explicit user Kimi session-control arguments remain authoritative and must
+  not receive a second automatic selector; Kimi's provider manifest
+  `supports_resume=false` continues to describe interrupted in-flight CCB job
+  restoration and does not prohibit exact provider-conversation continuity
+  between managed pane launches
 - managed MiMo startup writes `.ccb/agents/<agent>/provider-state/mimo/mimocode.json` as a generated `MIMOCODE_CONFIG` file, uses per-agent `MIMOCODE_HOME` under `.ccb/agents/<agent>/provider-state/mimo/home`, uses project-relative memory instructions through `.ccb/runtime/memory/<agent>.md`, uses project-relative inherited ask skill instructions through `.ccb/runtime/skills/<agent>/mimo/ask.md`, and disables MiMo autoupdate/analysis in managed panes
-- managed Qwen, Cursor, Copilot, Crush, Grok, Kiro, Pi, and Z.ai startup uses the shared native CLI launcher shape: provider state under `.ccb/agents/<agent>/provider-state/<provider>/`, session payloads that record `<provider>_state_dir`, `<provider>_home`, and `<provider>_data_dir`, and start-command overrides through `QWEN_START_CMD`, `CURSOR_START_CMD`, `COPILOT_START_CMD`, `CRUSH_START_CMD`, `GROK_START_CMD`, `KIRO_START_CMD`, `PI_START_CMD`, and `ZAI_START_CMD`; managed Grok startup may project system `.grok/auth.json` and `.grok/config.toml` into the agent-scoped Grok home when inheritance is enabled, while Grok sessions and runtime output remain under the managed home; Grok asks use provider-native headless output and must tolerate both streaming JSON events and aggregated JSON output, with optional model/effort overrides from session data or `CCB_GROK_MODEL` / `CCB_GROK_EFFORT`; Grok success requires a provider-native terminal event such as streaming `type=end` with `stopReason=EndTurn` or the documented compatible native turn-end shape, and a zero process exit without native terminal evidence must close as `incomplete/grok_native_terminal_missing`, never as completed; `CCB_REQ_ID` remains request-attribution metadata, while model-printed `CCB_DONE`, CCB turn-end text, process exit, and the normalized internal `TURN_BOUNDARY` item are not Grok completion authority
+- managed Copilot preparation reads only validated source
+  `config.json.installedPlugins` entries, rebases their `cache_path` values,
+  and transactionally seeds exact agent-local plugin trees under
+  `.ccb/agents/<agent>/provider-state/copilot/home/installed-plugins/`; it must
+  preserve authentication, settings, permissions, sessions, plugin data, MCP
+  state, unowned conflicts, and locally diverged metadata or tree content;
+  interactive and headless launches both use that agent-local `COPILOT_HOME`
+  and set `COPILOT_CACHE_HOME` to the agent-local
+  `.ccb/agents/<agent>/provider-state/copilot/data/cache/`
+- managed Qwen, Cursor, Copilot, Crush, Grok, Kiro, Pi, and Z.ai startup uses the shared native CLI launcher shape: provider state under `.ccb/agents/<agent>/provider-state/<provider>/`, session payloads that record `<provider>_state_dir`, `<provider>_home`, and `<provider>_data_dir`, managed `HOME` for visible and headless processes, and start-command overrides through `QWEN_START_CMD`, `CURSOR_START_CMD`, `COPILOT_START_CMD`, `CRUSH_START_CMD`, `GROK_START_CMD`, `KIRO_START_CMD`, `PI_START_CMD`, and `ZAI_START_CMD`; known login files are allowlisted one-way projections into those homes, while unknown formats require login inside the private managed home rather than a writable fallback to global provider state; managed Grok startup may project system `.grok/auth.json` and `.grok/config.toml` into the agent-scoped Grok home when inheritance is enabled, while Grok sessions and runtime output remain under the managed home; Grok asks use provider-native headless output and must tolerate both streaming JSON events and aggregated JSON output, with optional model/effort overrides from session data or `CCB_GROK_MODEL` / `CCB_GROK_EFFORT`; Grok success requires a provider-native terminal event such as streaming `type=end` with `stopReason=EndTurn` or the documented compatible native turn-end shape, and a zero process exit without native terminal evidence must close as `incomplete/grok_native_terminal_missing`, never as completed; `CCB_REQ_ID` remains request-attribution metadata, while model-printed `CCB_DONE`, CCB turn-end text, process exit, and the normalized internal `TURN_BOUNDARY` item are not Grok completion authority
+- managed Pi and OMP asks use provider-specific structured one-shot observers.
+  Pi `0.82.1` requires a final `agent_settled`; OMP `17.1.6` requires
+  `agent_end.isTerminal=true`. In both cases `turn_end` is progress only,
+  successful semantic completion must still wait for process exit and output
+  closure, and zero exit without the required native event closes as
+  `incomplete` rather than completed. Older event shapes fail closed.
+- managed Qoder and Qoder CLI CN startup must resolve the final explicit or
+  managed `--config-dir` before projecting skills; optional system skills, Role
+  skills, and packaged `ask`/`ccb-clear` controls target that same effective
+  root for both visible and headless execution. The released provider key
+  `qoderclicn` remains stable. An explicit config root equal to the source
+  account's `.qoder` or `.qoder-cn` root remains external user authority and
+  must not be mutated by CCB projection.
+- managed AGY must use private agent-local `.gemini` and `.antigravity`
+  directories. It may copy allowlisted authentication/config files from the
+  user's Windows provider home, but it must not symlink or junction either
+  managed directory back to that source.
+- managed Droid must set the OS `HOME` and `FACTORY_HOME_OVERRIDE` to
+  `.ccb/agents/<agent>/provider-state/droid/home/`, set `FACTORY_HOME` to its
+  `.factory/` child, and set `FACTORY_DISABLE_KEYRING=true`; known v2 keyring
+  material may be read only and converted into private `auth.v2.file` plus
+  `auth.v2.key`
+- managed Cursor must set `AGENT_CLI_CREDENTIAL_STORE=file`; on macOS it may
+  read Cursor's split token services and create only the private
+  `<managed-home>/.cursor/auth.json`. Managed Copilot must set
+  `COPILOT_DISABLE_KEYTAR=1`.
+- managed Kiro may snapshot the known source SQLite database only through a
+  read-only connection and retain only auth/config tables. Kiro must fail
+  closed on macOS while its current CLI exposes no private credential-store
+  switch.
 - managed Grok visible startup defaults to `--minimal`; when agent
   `startup_args` explicitly contains `--fullscreen`, CCB suppresses only that
   injected `--minimal` default before appending user arguments, while unrelated
@@ -332,6 +481,13 @@ Managed provider startup mutation rules:
   - examples include `CCB_SESSION_ID`, `CCB_SESSION_FILE`, `CCB_CALLER_*`, `CODEX_*`, `CLAUDE_*`, `GEMINI_*`, `OPENCODE_*`, and equivalent provider runtime markers
   - those variables are runtime-local evidence for the currently running managed agent process, not startup authority for a new or existing project backend
   - provider runtime environment must be injected only into the managed provider process being launched, not leaked into project-scoped control-plane subprocesses
+  - when the caller is itself a managed provider pane, daemon and tmux
+    control-plane subprocesses must restore the real source-user `HOME`, repair
+    XDG roots that point into managed state/cache, and discard injected
+    provider API authority; the managed pane environment must not become a
+    reverse configuration source; this applies to nonstandard managed homes
+    identified by CCB caller/session markers as well as standard provider-state
+    path shapes, and unresolved source-user homes fail closed
 - that provider-runtime scrub must still preserve ordinary user-session variables needed for the project command pane to behave like the user's shell:
   - examples include `PATH`, `SHELL`, `DISPLAY`, `WAYLAND_DISPLAY`,
     `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, and `SSH_AUTH_SOCK`
@@ -342,6 +498,11 @@ Managed provider startup mutation rules:
   - examples include `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
     `CODEX_CA_CERTIFICATE`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `BROWSER`,
     `WSL_INTEROP`, and `WSL_DISTRO_NAME`
+  - the project tmux namespace must refresh shell and desktop transport state
+    for command, tool, and sidebar panes; at minimum this includes `PATH`,
+    `SHELL`, `BROWSER`, desktop display/session IPC variables, and WSL/Windows
+    Terminal interop markers, so a sidebar child such as `ccb config ui` does
+    not run with a stale or daemon-only desktop environment
   - those variables are user-session transport or shell-usability state, not managed-provider session authority
   - this allowance must not reopen provider runtime authority inheritance;
     managed variables such as `CODEX_HOME`, `CODEX_SESSION_ROOT`,
@@ -678,6 +839,8 @@ Foreground command split:
   - must require interactive confirmation
   - must clear and rebuild project-owned runtime state, logs, workspaces, and mail/message residue
   - must preserve `.ccb/ccb.config` exactly when it exists
+  - must preserve `.ccb/project.identity.json` exactly when it exists so reset
+    rebuilds runtime state without changing project identity or stable slug
   - must preserve user-owned `.ccb/ccb_memory.md`, `.ccb/history/`, and
     `.ccb/agents/<agent>/memory.md` files
   - must preserve managed provider conversation history for the same normalized
@@ -817,6 +980,9 @@ When a desired agent's pane dies, the daemon must reconcile it in the background
 7. otherwise tear down stale binding authority
 8. relaunch runtime through the normal launch path
 9. persist recovery result and retry/backoff state
+10. treat an immediately live replacement pane as provisional, then require a
+    post-respawn health observation across the stability window before
+    publishing recovery success
 
 Important rule:
 
@@ -824,12 +990,34 @@ Important rule:
 - when `cmd` is enabled, pane death or slot drift for `cmd` must also be detected and repaired on heartbeat even if no user command is running in that pane
 - `cmd` recovery must first try session-preserving local slot replacement inside the current workspace window before escalating to project reflow
 - ordinary `pane-dead` / `pane-missing` recovery must not use project-server destruction as the first-line path
+- `respawn_pane()` returning and an immediate `is_alive()` check prove only
+  that recovery entered `health=recovering` / `reconcile_state=probing`; they
+  must not emit `recover_succeeded`
+- a probe succeeds only after at least 90 seconds and at least one healthy pane
+  observation whose `last_seen_at` is later than the recovery attempt; queued
+  work must remain accepted but undispatched while the runtime is probing
+- unstable automatic pane recovery uses consecutive-failure backoff of
+  30 seconds, 60 seconds, 120 seconds, 5 minutes, 10 minutes, then 30 minutes.
+  Six consecutive attempts without a stable probe open
+  `health=recovery-circuit-open` / `reconcile_state=blocked`; heartbeat must
+  then stop respawning, logging crashes, appending recovery attempts, and
+  starting dispatcher work until an explicit restart/remount creates a fresh
+  mount attempt
+- `restart_count` remains cumulative diagnostics; `recovery_failure_count`
+  counts only the current consecutive unstable recovery series and resets
+  after a stable probe or a fresh explicit mount attempt
 - a provider-declared terminal recovery block is not ordinary pane death. For
   revoked Codex auth, runtime authority must transition to degraded health
   `provider-auth-revoked` with `reconcile_state=blocked`, preserve the
   actionable login/remount reason, and stop heartbeat recovery, replacement
   pane creation, dispatcher starts, and further `restart_count` increments
   until an explicit remount repairs or replaces that authority
+- a Claude crash containing `No conversation found to continue` may repair
+  only the CCB-owned persisted `--continue` argument and stale Claude session
+  id/path before respawn; it must not mutate provider authentication
+- a Codex crash containing `failed to connect to remote app server` is a
+  managed-helper failure, not a successful local pane recovery. It must fail
+  closed with an actionable single-agent restart/remount reason
 - a still-present, exact-owned `pane-dead` Agent leaf is not a namespace
   recreate reason.  Namespace identity and healthy peer runtime identity must
   remain unchanged while the dead target alone is prepared and respawned
@@ -960,6 +1148,7 @@ That means:
 - shutdown-style RPC handlers that return an after-response finalizer must enqueue that finalizer even when writing the response fails; `stop_all` may destroy the tmux pane that issued `ccb kill`, and a disconnected client must not prevent backend unmount/finalization
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown
 - CLI remote-stop shutdown helpers must snapshot structured control-plane pids and record shutdown intent before sending `stop_all`; they must also keep tracking any current `ccbd` and project `keeper` pids still published by the project lease during the bounded shutdown wait so a missed pre-stop snapshot cannot leave a live backend behind
+- if the keeper closes the control-plane transport after shutdown intent is recorded but before `stop_all` or `shutdown` returns, the CLI must continue through bounded local pid cleanup and lifecycle finalization; this transport loss is not proof of success, but it must not surface as a raw socket error or abort authoritative cleanup
 - CLI remote-stop shutdown helpers must not treat lifecycle `phase=unmounted` alone as terminal; after a successful `stop_all` response they must also wait for the recorded and currently published `ccbd` / project `keeper` pids to exit, terminate lingering control-plane pids with the same bounded pid-tree cleanup used by the local shutdown path, and persist lifecycle `phase=unmounted` / `desired_state=stopped`
 - orphan process collection must include structured control-plane pid authority from `.ccb/ccbd/lease.json`, `.ccb/ccbd/keeper.json`, and `.ccb/ccbd/lifecycle.json`; `/proc` command-line matching is only a fallback evidence source and must not be the only way to find ccbd/keeper residue
 - control-plane `/proc` fallback matching must be scoped to CCB control-plane commands for the same `--project <project_root>`; it must not broadly kill every process whose command line mentions the project root
@@ -991,7 +1180,8 @@ At minimum, the supervision model must distinguish these states:
 For desired agents, `recovering` and `degraded` are not the same:
 
 - `recovering`
-  - daemon currently owns a live reconcile attempt
+  - daemon owns a live reconcile attempt or a provisional replacement pane is
+    inside its stability window; dispatcher starts remain blocked
 - `degraded`
   - agent is not healthy and no active recovery has yet succeeded
 - `blocked`
@@ -1077,7 +1267,9 @@ Path:
 
 Required purpose:
 
-- append-only record of pane death detection, relaunch attempts, recovery failures, and success transitions
+- append-only record of pane death detection, relaunch attempts,
+  `recover_probing`, recovery failures, circuit-open blocks, and stable success
+  transitions
 
 ### 7.4 Agent Runtime Authority
 
@@ -1092,6 +1284,7 @@ Required fields beyond current baseline:
 - `desired_state`
 - `reconcile_state`
 - `restart_count`
+- `recovery_failure_count`
 - `last_reconcile_at`
 - `last_failure_reason`
 - optional `runtime_owner_pid`
@@ -1265,7 +1458,31 @@ Write semantics:
   handoff trust, but must not by themselves trigger daemon restart while the
   modern daemon remains mounted and connectable
 
-### 7.10 Diagnostics Bundle
+### 7.10 Config Restart Intent
+
+Path:
+
+- `.ccb/ccbd/config-restart-intent.json`
+
+Required purpose:
+
+- Config UI may explicitly classify an active-config edit as restart-bound.
+  This is a foreground-start instruction, not generic config drift and not
+  keeper authority.
+- The record contains the active config file digest plus the current daemon
+  instance and generation, but never API keys, URLs, env values, or other
+  config contents.
+- Keeper must leave the mounted daemon running until the user next starts CCB.
+- The next foreground `ccb` must stop that recorded daemon holder and start a
+  fresh generation even when an earlier faulty reload already published the
+  target config signature.
+- A successful start clears the intent only after the fresh lease reports the
+  current active config signature. A changed target, failed start, or reused
+  daemon holder leaves the intent pending.
+- Ordinary manual file edits without this explicit intent retain the existing
+  reload-pending behavior and must not restart the daemon automatically.
+
+### 7.11 Diagnostics Bundle
 
 Command:
 
@@ -1393,6 +1610,15 @@ Runtime supervision:
 - `ensure_pane()` succeeds
 - `ensure_pane()` fails and relaunch succeeds
 - repeated relaunch failure enters backoff/recovering state
+- an immediately live respawn remains probing and cannot drain queued work
+- a healthy post-respawn observation completes only after the 90-second
+  stability window
+- six unstable respawns open the recovery circuit and repeated heartbeats add
+  no further attempts
+- explicit restart/remount clears the consecutive recovery circuit counter
+- Claude missing-conversation repair removes only CCB-owned continuation state
+- Codex managed-helper loss blocks rather than respawning forever
+- crash artifacts remain bounded during repeated failure
 
 Shutdown:
 

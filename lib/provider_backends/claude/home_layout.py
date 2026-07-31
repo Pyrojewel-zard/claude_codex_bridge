@@ -12,6 +12,7 @@ class ClaudeHomeLayout:
     projects_root: Path
     session_env_root: Path
     trust_path: Path
+    legacy_trust_path: Path
     settings_path: Path
     auth_path: Path
     credentials_path: Path
@@ -25,7 +26,10 @@ def claude_layout_for_home(home_root: Path) -> ClaudeHomeLayout:
         claude_dir=claude_dir,
         projects_root=claude_dir / 'projects',
         session_env_root=claude_dir / 'session-env',
-        trust_path=root / '.claude.json',
+        # When CLAUDE_CONFIG_DIR is explicit, current Claude Code releases read
+        # this state file from the config directory rather than from HOME.
+        trust_path=claude_dir / '.claude.json',
+        legacy_trust_path=root / '.claude.json',
         settings_path=claude_dir / 'settings.json',
         auth_path=root / '.config' / 'claude-code' / 'auth.json',
         credentials_path=claude_dir / '.credentials.json',

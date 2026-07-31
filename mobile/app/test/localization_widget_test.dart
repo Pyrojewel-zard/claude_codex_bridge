@@ -9,30 +9,16 @@ import 'package:ccb_mobile/features/project_home/project_home_scaffold_host.dart
 
 void main() {
   testWidgets('onboarding follows Chinese locale', (tester) async {
-    final gatewayUrlController = TextEditingController(
-      text: 'https://desktop.tailnet.ts.net',
-    );
-    final pairingCodeController = TextEditingController(text: 'code');
-    final deviceNameController = TextEditingController(text: 'Phone');
-    final routeKind = ValueNotifier<RouteProviderKind>(
-      RouteProviderKind.tailnet,
-    );
-    addTearDown(gatewayUrlController.dispose);
-    addTearDown(pairingCodeController.dispose);
-    addTearDown(deviceNameController.dispose);
-    addTearDown(routeKind.dispose);
+    final connectionCodeController = TextEditingController();
+    addTearDown(connectionCodeController.dispose);
 
     await tester.pumpWidget(
       _localizedApp(
         locale: const Locale('zh'),
         child: ProjectHomeOnboardingScaffold(
-          gatewayUrlController: gatewayUrlController,
-          pairingCodeController: pairingCodeController,
-          deviceNameController: deviceNameController,
-          routeKindListenable: routeKind,
+          connectionCodeController: connectionCodeController,
           claiming: false,
           loadingProfiles: false,
-          onRouteKindChanged: (_) {},
           onScan: () {},
           onClaim: () {},
         ),
@@ -41,18 +27,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('连接 CCB Mobile'), findsOneWidget);
-    expect(find.text('安装 Tailscale'), findsOneWidget);
     expect(find.text('在电脑上运行一条命令'), findsOneWidget);
     expect(find.text('扫描二维码'), findsOneWidget);
     expect(find.text('扫描电脑二维码'), findsOneWidget);
+    expect(find.text('输入连接码'), findsOneWidget);
+    expect(find.text('激活 CCB 官方 Relay'), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('gateway-pairing-panel')));
+    final pairingPanel = find.byKey(const ValueKey('gateway-pairing-panel'));
+    await tester.ensureVisible(pairingPanel);
+    await tester.pumpAndSettle();
+    await tester.tap(pairingPanel);
     await tester.pumpAndSettle();
 
-    expect(find.text('网关地址'), findsOneWidget);
-    expect(find.text('配对码'), findsOneWidget);
-    expect(find.text('设备名称'), findsOneWidget);
-    expect(find.text('路由'), findsOneWidget);
+    expect(find.text('连接码'), findsOneWidget);
+    expect(find.text('使用连接码连接'), findsOneWidget);
+    expect(find.text('网关地址'), findsNothing);
+    expect(find.text('配对码'), findsNothing);
+    expect(find.text('设备名称'), findsNothing);
+    expect(find.text('路由'), findsNothing);
   });
 
   testWidgets('server project list follows Chinese locale', (tester) async {

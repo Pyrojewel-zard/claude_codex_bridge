@@ -172,14 +172,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-    await tester.enterText(
-      find.byKey(const ValueKey('pairing-device-name-field')),
-      'Pixel Fold QR',
-    );
     tester
-        .widget<OutlinedButton>(
-          find.byKey(const ValueKey('gateway-pairing-scan-button')),
+        .widget<FilledButton>(
+          find.byKey(const ValueKey('project-home-onboarding-scan-button')),
         )
         .onPressed!();
     await tester.pumpAndSettle();
@@ -195,7 +190,7 @@ void main() {
       'lifecycle',
       'notify',
     });
-    expect(seenDeviceName, 'Pixel Fold QR');
+    expect(seenDeviceName, 'Phone');
     final stored = await profileStore.read(
       hostId: 'proj-demo',
       deviceId: 'dev-qr',
@@ -283,17 +278,26 @@ void main() {
     await tester.pumpAndSettle();
 
     await expandTile(tester, const ValueKey('gateway-pairing-panel'));
-    await tester.enterText(
-      find.byKey(const ValueKey('gateway-url-field')),
-      'http://127.0.0.1:8787',
+    final connectionPairing = GatewayPairingPayload(
+      pairingCode: 'pair-code',
+      claimEndpoint: Uri.parse('http://127.0.0.1:8787/v1/pairing/claim'),
+      routeProvider: RouteProviderKind.lan,
+      gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+      scopes: const {
+        'view',
+        'content',
+        'focus',
+        'message_submit',
+        'file_upload',
+        'file_download',
+        'terminal_input',
+        'lifecycle',
+        'notify',
+      },
     );
     await tester.enterText(
-      find.byKey(const ValueKey('pairing-code-field')),
-      'pair-code',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('pairing-device-name-field')),
-      'Pixel Fold',
+      find.byKey(const ValueKey('connection-code-field')),
+      connectionPairing.toConnectionCode(),
     );
     tester
         .widget<FilledButton>(
@@ -318,7 +322,7 @@ void main() {
       'lifecycle',
       'notify',
     });
-    expect(seenDeviceName, 'Pixel Fold');
+    expect(seenDeviceName, 'Phone');
     await openCurrentProject(tester);
 
     await tester.tap(find.byKey(const ValueKey('agent-lead')));

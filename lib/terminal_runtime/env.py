@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from provider_core.platform_info import is_windows as _platform_is_windows
+from runtime_env.control_plane import scrub_managed_provider_runtime_env
 
 
 def env_float(name: str, default: float) -> float:
@@ -50,7 +51,7 @@ def subprocess_kwargs() -> dict:
 
 
 def isolated_tmux_env(env: dict[str, str] | None = None) -> dict[str, str]:
-    isolated = tmux_compatible_env(env)
+    isolated = scrub_managed_provider_runtime_env(tmux_compatible_env(env))
     for key in (
         "TMUX",
         "TMUX_PANE",

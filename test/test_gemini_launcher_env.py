@@ -13,7 +13,6 @@ from provider_backends.gemini.launcher_runtime.home import (
 )
 from provider_profiles import ResolvedProviderProfile
 from agents.models import AgentSpec
-from storage.paths import PathLayout
 
 
 def test_build_gemini_env_prefix_clears_non_inherited_api_and_exports_filtered_keys() -> None:
@@ -114,31 +113,134 @@ def test_prepare_gemini_home_overrides_keeps_cli_home_aligned_with_projected_sta
     env = prepare_gemini_home_overrides(runtime_dir, None)
 
     expected_home = tmp_path / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'gemini' / 'home'
-    expected_cache = tmp_path / 'xdg-cache' / 'ccb' / 'projects' / PathLayout(tmp_path).project_id[:16] / 'provider-cache' / 'gemini'
+    expected_cache = tmp_path / 'xdg-cache' / 'ccb' / 'provider-cache' / 'gemini'
     assert env['HOME'] == str(expected_home)
     assert env['GEMINI_CLI_HOME'] == str(expected_home)
     assert env['GEMINI_ROOT'] == str(expected_home / '.gemini' / 'tmp')
     assert env['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
     assert env['npm_config_cache'] == str(expected_cache / 'npm')
     assert env['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
+    assert env['GEMINI_FORCE_FILE_STORAGE'] == 'true'
+    assert env['GEMINI_FORCE_ENCRYPTED_FILE_STORAGE'] == 'true'
     assert (expected_cache / 'npm').is_dir()
     assert (expected_cache / 'xdg').is_dir()
     assert (expected_home / '.gemini' / 'settings.json').is_file()
     assert not (expected_home / '.gemini' / '.gemini' / 'settings.json').exists()
 
 
-def test_prepare_gemini_home_overrides_uses_runtime_local_cache_without_project_context(tmp_path) -> None:
+def test_prepare_gemini_home_overrides_pins_windows_home_under_wsl(tmp_path, monkeypatch) -> None:
     runtime_dir = tmp_path / 'runtime'
-    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSLENV', 'EXISTING/u')
 
     env = prepare_gemini_home_overrides(runtime_dir, None, refresh_home=False)
 
-    expected_cache = runtime_dir / 'rebuildable-cache' / 'gemini'
+    assert env['USERPROFILE'] == env['HOME']
+    wslenv = env['WSLENV'].split(':')
+    for name in (
+        'HOME/p',
+        'USERPROFILE/p',
+        'GEMINI_CLI_HOME/p',
+        'GEMINI_ROOT/p',
+        'NPM_CONFIG_CACHE/p',
+        'npm_config_cache/p',
+        'XDG_CACHE_HOME/p',
+        'GEMINI_FORCE_FILE_STORAGE',
+        'GEMINI_FORCE_ENCRYPTED_FILE_STORAGE',
+    ):
+        assert name in wslenv
+    assert wslenv[-1] == 'EXISTING/u'
+
+
+def test_prepare_gemini_home_overrides_uses_user_cache_without_project_context(tmp_path, monkeypatch) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'xdg-cache'))
+
+    env = prepare_gemini_home_overrides(runtime_dir, None, refresh_home=False)
+
+    expected_cache = tmp_path / 'xdg-cache' / 'ccb' / 'provider-cache' / 'gemini'
     assert env['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
     assert env['npm_config_cache'] == str(expected_cache / 'npm')
     assert env['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
     assert (expected_cache / 'npm').is_dir()
     assert (expected_cache / 'xdg').is_dir()
+    assert not (tmp_path / 'xdg-cache' / 'ccb' / 'projects').exists()
+
+
+def test_prepare_gemini_home_overrides_does_not_nest_managed_xdg_cache(tmp_path, monkeypatch) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    expected_cache = tmp_path / 'xdg-cache' / 'ccb' / 'provider-cache' / 'gemini'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(expected_cache / 'xdg'))
+
+    env = prepare_gemini_home_overrides(runtime_dir, None, refresh_home=False)
+
+    assert env['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
+    assert env['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
+    assert not (expected_cache / 'xdg' / 'ccb').exists()
+
+
+def test_prepare_gemini_home_overrides_migrates_legacy_managed_xdg_without_nesting(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    cache_home = tmp_path / 'xdg-cache'
+    legacy_cache = (
+        cache_home
+        / 'ccb'
+        / 'projects'
+        / '0123456789abcdef'
+        / 'provider-cache'
+        / 'gemini'
+    )
+    monkeypatch.setenv('XDG_CACHE_HOME', str(legacy_cache / 'xdg'))
+
+    env = prepare_gemini_home_overrides(runtime_dir, None, refresh_home=False)
+
+    expected_cache = cache_home / 'ccb' / 'provider-cache' / 'gemini'
+    assert env['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
+    assert env['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
+    assert not (legacy_cache / 'xdg' / 'ccb').exists()
+
+
+def test_prepare_gemini_home_overrides_shares_one_user_cache_across_projects(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'xdg-cache'))
+    runtime_a = tmp_path / 'project-a' / '.ccb' / 'agents' / 'gemini' / 'provider-runtime' / 'gemini'
+    runtime_b = tmp_path / 'project-b' / '.ccb' / 'agents' / 'gemini' / 'provider-runtime' / 'gemini'
+    runtime_a.mkdir(parents=True, exist_ok=True)
+    runtime_b.mkdir(parents=True, exist_ok=True)
+
+    env_a = prepare_gemini_home_overrides(runtime_a, None, refresh_home=False)
+    env_b = prepare_gemini_home_overrides(runtime_b, None, refresh_home=False)
+
+    expected_cache = tmp_path / 'xdg-cache' / 'ccb' / 'provider-cache' / 'gemini'
+    assert env_a['NPM_CONFIG_CACHE'] == env_b['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
+    assert env_a['XDG_CACHE_HOME'] == env_b['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
+
+
+def test_prepare_gemini_home_overrides_uses_source_home_cache_from_managed_home(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    source_home = tmp_path / 'source-home'
+    managed_home = tmp_path / '.ccb' / 'agents' / 'caller' / 'provider-state' / 'gemini' / 'home'
+    monkeypatch.delenv('XDG_CACHE_HOME', raising=False)
+    monkeypatch.setenv('HOME', str(managed_home))
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+
+    env = prepare_gemini_home_overrides(runtime_dir, None, refresh_home=False)
+
+    expected_cache = source_home / '.cache' / 'ccb' / 'provider-cache' / 'gemini'
+    assert env['NPM_CONFIG_CACHE'] == str(expected_cache / 'npm')
+    assert env['XDG_CACHE_HOME'] == str(expected_cache / 'xdg')
 
 
 def test_resolve_gemini_home_layout_rejects_non_managed_persisted_home(tmp_path) -> None:

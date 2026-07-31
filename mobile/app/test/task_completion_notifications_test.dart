@@ -93,6 +93,24 @@ void main() {
       expect(first, 1840802715);
     });
 
+    test('agent activity invalidation preserves its low-sensitive state', () {
+      final event = TaskCompletionNotificationEvent.fromJson({
+        'id': 'mnotif_42',
+        'kind': TaskCompletionNotificationEvent.agentActivityChangedKind,
+        'project_id': 'proj-demo',
+        'project_short_name': 'demo',
+        'agent': 'mobile',
+        'completed_at': '2026-06-30T12:00:00Z',
+        'dedupe_key': 'activity:42',
+        'namespace_epoch': 4,
+        'scope': 'agent',
+        'activity_state': 'active',
+      });
+
+      expect(event.activityState, 'active');
+      expect(event.toJson()['activity_state'], 'active');
+    });
+
     test(
       'missing notify scope does not request permission or subscribe',
       () async {

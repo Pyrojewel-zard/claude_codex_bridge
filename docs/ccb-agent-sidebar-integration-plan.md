@@ -666,6 +666,16 @@ Phase 1 `ProjectView` schema draft:
       "sender": "agent2",
       "target": "agent1",
       "status": "running",
+      "execution_phase": "executing",
+      "execution_phase_reason": "provider_active",
+      "execution_evidence": {
+        "job_id": "job_abc123",
+        "attempt_job_id": "job_abc123",
+        "completion_job_id": "job_abc123",
+        "completion_anchor_seen": true,
+        "provider_state": "active",
+        "provider_identity_current": true
+      },
       "callback": true,
       "short_reason": null
     }
@@ -698,7 +708,12 @@ Schema rules:
 - minimal Comms rendering may show only `sender>target status_label` when optional preview fields are absent.
 - `comms.status` follows CCB job status values: `accepted`, `queued`, `running`, `completed`, `cancelled`, `failed`, or `incomplete`.
 - `comms.business_status` is the internal display phase, while `status_label` stays short for the sidebar: `send`, `work`, `back`, `done`, or `fail`.
-- the sidebar colors only the short status label: yellow for `send/back`, green for `work`, blue for `done`, red for `fail`, gray for unknown.
+- `comms.execution_phase` is an optional correlated projection and is one of `queued`, `injecting`, `executing`, `provider_idle_pending_terminal`, `reply_queued`, `reply_delivering`, `orphaned`, `terminal`, or `unknown`.
+- when `execution_phase` is present, the sidebar prefers it for Comms status text and color; older producers may omit it, so the client falls back to `status_label`, `business_status`, and `status` in that order.
+- `execution_phase_reason` is a stable diagnostic reason, and `execution_evidence` contains the compact job/attempt/inbound/mailbox/lease/completion/provider/reply identity facts used by `ccbd`; the sidebar must not rederive a phase from those facts.
+- `active_inbound_diagnostic` is an optional bounded R8 envelope for `orphaned_active_inbound`. The sidebar deserializes its condition, reason, exact ids, observation window, manual recommendation, and `automatic_action=none`; it displays `condition:reason` and does not extend the observation window.
+- `unknown` is the required fail-closed phase for missing, stale, contradictory, or non-exact identity evidence. `orphaned` is diagnostic and must not make the sidebar trigger automatic cancel, retry, restart, resend, or terminalization.
+- the sidebar colors only the preferred compact phase or legacy status label: active execution is green, pending/delivery phases are yellow, terminal is blue, orphaned is red, and unknown is gray.
 - normal terminal rows hide routine `short_reason` values such as `hook_stop` or `task_complete`; abnormal rows keep their short reason.
 
 The TUI may inspect tmux only for its own pane identity or terminal sizing when needed. State rendering and focus changes should go through `ccbd`; the TUI should not scan arbitrary tmux sessions to create state.
@@ -782,6 +797,10 @@ Recommended optional fields for Phase 1:
 - `comms[].updated_at`
 - `comms[].callback`
 - `comms[].short_reason`
+- `comms[].execution_phase`
+- `comms[].execution_phase_reason`
+- `comms[].execution_evidence`
+- `comms[].active_inbound_diagnostic`
 
 Rules:
 
@@ -952,6 +971,16 @@ Header controls:
 
 - `⚙`: launch the current project's loopback-only `ccb config ui`
 - `×`: kill the current project
+
+Both controls share the same mouse-down routing and right-aligned hit-test
+surface. The settings action additionally launches an asynchronous child and
+must therefore expose `opening`, ready URL, browser-open fallback, and process
+failure states instead of silently suppressing a second click while its child
+is active. The project tmux environment must carry desktop and WSL interop
+state into the sidebar. WSL host openers (`wslview`, then Windows shell
+fallbacks) and macOS `open` take priority over the generic Python browser
+registry, and an opener counts as successful only after it avoids an immediate
+non-zero exit.
 
 Restart is intentionally keyboard-only because it is disruptive and should not
 share the prominent header click surface with ordinary settings access.
@@ -1955,8 +1984,8 @@ Current implementation notes:
 - `tools/ccb-agent-sidebar` is an independent Rust crate, not a root Cargo workspace.
 - The binary parses `--ccbd-socket`, `--project-root`, and `--pane-window`.
 - The client sends ccbd RPC requests using the existing newline-delimited JSON protocol and reads `project_view`.
-- The model layer deserializes the Phase 1 ProjectView window, agent, and Comms rows, including compact job id/reason, display status, reply-delivery, and body-preview fields when present.
-- The TUI renders the window/agent tree plus compact two-line Comms panel. It preserves `activity_symbol`/`activity_color` supplied by ProjectView, colors compact Comms status labels, and falls back to the fixed Phase 1 state table only when optional fields are absent.
+- The model layer deserializes the Phase 1 ProjectView window, agent, and Comms rows, including compact job id/reason, display status, correlated execution phase, bounded active-inbound diagnostic, reply-delivery, and body-preview fields when present.
+- The TUI renders the window/agent tree plus compact two-line Comms panel. It preserves `activity_symbol`/`activity_color` supplied by ProjectView, prefers optional correlated execution phases for compact Comms text/color, displays a bounded active-inbound `condition:reason`, and falls back to legacy status fields when the phase is absent.
 - Keyboard navigation supports `j`/`k`/arrows, deliberate `r` pane restart,
   `Ctrl-L` refresh, `Enter` focus through ccbd RPC, `Tab`
   return-to-current-window focus through ccbd RPC, and `q`/`Esc` exit for

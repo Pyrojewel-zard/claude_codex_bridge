@@ -15,7 +15,7 @@ from project.discovery import (
     load_workspace_binding,
     project_ccb_dir,
 )
-from project.ids import compute_project_id
+from project.identity_store import ensure_project_identity
 
 
 @dataclass(frozen=True)
@@ -90,11 +90,12 @@ def _resolved_path(path: Path) -> Path:
 
 
 def _project_context(cwd: Path, root: Path, *, source: str) -> ProjectContext:
+    identity = ensure_project_identity(root)
     return ProjectContext(
         cwd=cwd,
         project_root=root,
         config_dir=project_ccb_dir(root),
-        project_id=compute_project_id(root),
+        project_id=identity.project_id,
         source=source,
     )
 

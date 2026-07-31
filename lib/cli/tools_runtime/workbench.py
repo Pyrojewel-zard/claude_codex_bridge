@@ -27,6 +27,9 @@ DETACHED_TMUX_ENV_KEYS = (
     'CCB_TMUX_SOCKET',
     'CCB_TMUX_SOCKET_PATH',
 )
+XCURSOR_COMPAT_ASSET_NAMES = ('pointer', 'hand2', 'left_ptr')
+XCURSOR_COMPAT_FALLBACK_THEMES = ('default', 'Adwaita', 'breeze_cursors', 'Breeze')
+XCURSOR_COMPAT_MAX_ASSET_BYTES = 4 * 1024 * 1024
 RICH_DEPENDENCIES: tuple[dict[str, object], ...] = (
     {
         'id': 'wezterm',
@@ -801,6 +804,7 @@ def provision_workbench(*, profile: str = DEFAULT_PROFILE, binary_result: dict[s
     _write_yazi_config(paths, rich=False)
     _write_yazi_config(paths, rich=True)
     _write_wezterm_config(paths)
+    _prepare_wayland_cursor_compat(paths)
     _write_wrappers(paths)
     _write_bin_links(paths)
     status = _build_status(paths, profile=profile, installed=True)
@@ -881,7 +885,10 @@ def launch_workbench(*, profile: str = DEFAULT_PROFILE, dry_run: bool = False) -
         status['reason'] = 'workbench bundle is disabled; run `ccb tools enable workbench --profile rich` first'
         status['launch_status'] = 'disabled'
         return status
-    completed = subprocess.Popen([str(paths['wrapper']), 'terminal'], env=_detached_terminal_env())
+    completed = _spawn_detached_terminal(
+        [str(paths['wrapper']), 'terminal'],
+        env=_detached_terminal_env(),
+    )
     _record_launch(paths, pid=completed.pid, command=[str(paths['wrapper']), 'terminal'])
     status['launch_status'] = 'started'
     status['launch_pid'] = completed.pid
@@ -917,7 +924,11 @@ def launch_rich_ccb(*, script_root: Path, cwd: Path, start_args: list[str] | tup
         '-lc',
         f'{entrypoint_command}; exec "${{SHELL:-/bin/sh}}" -l',
     ]
-    process = subprocess.Popen(command, cwd=str(cwd), env=_detached_terminal_env())
+    process = _spawn_detached_terminal(
+        command,
+        cwd=cwd,
+        env=_detached_terminal_env(),
+    )
     _record_launch(paths, pid=process.pid, command=command)
     status['launch_status'] = 'started'
     status['launch_pid'] = process.pid
@@ -1061,6 +1072,8 @@ def _paths() -> dict[str, Path]:
         'yazi_rich_profile': profiles / 'yazi-rich',
         'wezterm_profile': profiles / 'wezterm',
         'wezterm_config': profiles / 'wezterm' / 'wezterm.lua',
+        'wezterm_xcursor_root': profiles / 'wezterm' / 'xcursor',
+        'wezterm_cursor_asset': profiles / 'wezterm' / 'xcursor' / '.ccb-assets' / 'hand',
         'manifest': root / 'manifest.json',
         'binary_manifest': root / 'binary-bundles.json',
         'state_root': state_home / 'ccb' / 'tools' / 'workbench',
@@ -1077,13 +1090,148 @@ def _detached_terminal_env(environ: dict[str, str] | None = None) -> dict[str, s
     return env
 
 
+def _spawn_detached_terminal(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen:
+    """Start a GUI terminal without inheriting shell job-control or stdio."""
+    return subprocess.Popen(
+        command,
+        cwd=str(cwd) if cwd is not None else None,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
 def _ensure_dirs(paths: dict[str, Path]) -> None:
-    for key in ('bin_dir', 'bin_link_dir', 'yazi_safe_profile', 'yazi_rich_profile', 'wezterm_profile', 'state_root', 'cache_root'):
+    for key in (
+        'bin_dir',
+        'bin_link_dir',
+        'yazi_safe_profile',
+        'yazi_rich_profile',
+        'wezterm_profile',
+        'wezterm_xcursor_root',
+        'state_root',
+        'cache_root',
+    ):
         paths[key].mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_wayland_cursor_compat(
+    paths: dict[str, Path],
+    *,
+    environ: dict[str, str] | None = None,
+) -> Path | None:
+    """Keep a private valid cursor asset for WezTerm's Wayland `hand` lookup."""
+    if platform.system() != 'Linux':
+        return None
+    asset = paths['wezterm_cursor_asset']
+    source = _find_xcursor_pointer(environ=environ)
+    if source is None:
+        return asset if _valid_xcursor_asset(asset) else None
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    temporary = asset.with_name(f'.{asset.name}.{os.getpid()}.tmp')
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.chmod(0o644)
+        os.replace(temporary, asset)
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+    return asset
+
+
+def _find_xcursor_pointer(*, environ: dict[str, str] | None = None) -> Path | None:
+    env = environ if environ is not None else os.environ
+    roots = _xcursor_search_roots(env)
+    requested = _safe_xcursor_theme_name(str(env.get('XCURSOR_THEME') or 'default'))
+    themes = [requested, *XCURSOR_COMPAT_FALLBACK_THEMES]
+    pending = [theme for index, theme in enumerate(themes) if theme and theme not in themes[:index]]
+    visited: set[str] = set()
+    while pending:
+        theme = pending.pop(0)
+        if theme in visited:
+            continue
+        visited.add(theme)
+        for root in roots:
+            cursor_dir = root / theme / 'cursors'
+            for name in XCURSOR_COMPAT_ASSET_NAMES:
+                candidate = cursor_dir / name
+                if _valid_xcursor_asset(candidate):
+                    try:
+                        return candidate.resolve(strict=True)
+                    except OSError:
+                        continue
+            for inherited in _xcursor_inherited_themes(root / theme / 'index.theme'):
+                if inherited not in visited and inherited not in pending:
+                    pending.append(inherited)
+    return None
+
+
+def _xcursor_search_roots(environ: dict[str, str]) -> tuple[Path, ...]:
+    configured = str(environ.get('XCURSOR_PATH') or '').strip()
+    home = Path(str(environ.get('HOME') or Path.home())).expanduser()
+    data_home = Path(str(environ.get('XDG_DATA_HOME') or home / '.local' / 'share')).expanduser()
+    candidates = [Path(value).expanduser() for value in configured.split(':') if value]
+    candidates.extend(
+        [
+            home / '.icons',
+            data_home / 'icons',
+            Path('/usr/share/icons'),
+            Path('/usr/share/pixmaps'),
+        ]
+    )
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(candidate)
+    return tuple(roots)
+
+
+def _safe_xcursor_theme_name(value: str) -> str:
+    text = str(value or '').strip()
+    if text and all(character.isalnum() or character in '._+-' for character in text):
+        return text
+    return 'default'
+
+
+def _xcursor_inherited_themes(index_path: Path) -> tuple[str, ...]:
+    try:
+        lines = index_path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except OSError:
+        return ()
+    for line in lines:
+        key, separator, value = line.partition('=')
+        if separator and key.strip().lower() == 'inherits':
+            themes = [_safe_xcursor_theme_name(item) for item in value.split(',')]
+            return tuple(theme for index, theme in enumerate(themes) if theme and theme not in themes[:index])
+    return ()
+
+
+def _valid_xcursor_asset(path: Path) -> bool:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    return path.is_file() and 0 < size <= XCURSOR_COMPAT_MAX_ASSET_BYTES
 
 
 def _normalize_workbench_theme(value: str | None) -> str:
     key = str(value or '').strip().lower().replace('_', '-').replace(' ', '-')
+    if key in {'system', 'system-default', 'auto', 'os'}:
+        return 'system'
     if key in {'', 'default', 'dark', 'nord', 'contrast'}:
         return 'dark'
     if key in {'light', 'latte', 'catppuccin-latte'}:
@@ -1104,6 +1252,37 @@ def _ensure_theme_preference(paths: dict[str, Path]) -> None:
         return
     requested = os.environ.get('CCB_WORKBENCH_THEME') or os.environ.get('CCB_TMUX_THEME_PROFILE') or 'dark'
     save_theme_preference(preference_for_theme(requested) or default_theme_preference())
+
+
+def _wezterm_theme_config_candidates(path: Path) -> tuple[str, ...]:
+    candidates = [str(path)]
+    configured = str(
+        os.environ.get('CCB_WORKBENCH_THEME_CONFIG_WINDOWS') or ''
+    ).strip()
+    if configured:
+        candidates.append(configured)
+    elif _is_wsl():
+        wslpath = shutil.which('wslpath')
+        if wslpath:
+            try:
+                completed = subprocess.run(
+                    [wslpath, '-w', str(path)],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            converted = (
+                completed.stdout.strip()
+                if completed is not None and completed.returncode == 0
+                else ''
+            )
+            if converted:
+                candidates.append(converted)
+    return tuple(dict.fromkeys(candidates))
 
 
 def _write_preview_helpers(paths: dict[str, Path]) -> None:
@@ -1226,20 +1405,32 @@ def _write_yazi_config(paths: dict[str, Path], *, rich: bool) -> None:
     lines = [
         '# CCB managed Yazi profile. Do not edit; regenerate with `ccb tools install workbench`.',
         '',
-        '[preview]',
-        'wrap = "yes"',
-        'tab_size = 2',
-        'max_width = 1200',
-        'max_height = 1600',
-        'image_delay = 20',
-        'image_filter = "triangle"',
-        'image_quality = 75',
-        '',
-        '[plugin]',
-        f'{previewers_key} = [',
-        f'  {{ url = "*.md", run = \'piper -- {md} "$1"\' }},',
-        f'  {{ url = "*.markdown", run = \'piper -- {md} "$1"\' }},',
     ]
+    if rich:
+        lines.extend(
+            [
+                '[mgr]',
+                'ratio = [0, 4, 3]',
+                '',
+            ]
+        )
+    lines.extend(
+        [
+            '[preview]',
+            'wrap = "yes"',
+            'tab_size = 2',
+            'max_width = 1200',
+            'max_height = 1600',
+            'image_delay = 20',
+            'image_filter = "triangle"',
+            'image_quality = 75',
+            '',
+            '[plugin]',
+            f'{previewers_key} = [',
+            f'  {{ url = "*.md", run = \'piper -- {md} "$1"\' }},',
+            f'  {{ url = "*.markdown", run = \'piper -- {md} "$1"\' }},',
+        ]
+    )
     if rich:
         lines.extend(
             [
@@ -1353,6 +1544,10 @@ return M
 
 
 def _write_wezterm_config(paths: dict[str, Path]) -> None:
+    theme_config_candidates = '\n'.join(
+        f'  "{_lua_string(candidate)}",'
+        for candidate in _wezterm_theme_config_candidates(paths['theme_config'])
+    )
     paths['wezterm_config'].write_text(
         f'''-- {GENERATED_MARKER}
 local wezterm = require("wezterm")
@@ -1363,7 +1558,18 @@ config.check_for_updates = false
 config.window_close_confirmation = "NeverPrompt"
 config.warn_about_missing_glyphs = false
 config.use_ime = true
-local theme_config_path = "{_lua_string(str(paths['theme_config']))}"
+local theme_config_paths = {{
+{theme_config_candidates}
+}}
+local theme_config_path = theme_config_paths[1]
+for _, candidate in ipairs(theme_config_paths) do
+  local file = io.open(candidate, "r")
+  if file then
+    file:close()
+    theme_config_path = candidate
+    break
+  end
+end
 if wezterm.add_to_config_reload_watch_list then
   wezterm.add_to_config_reload_watch_list(theme_config_path)
 end
@@ -1375,6 +1581,8 @@ end
 local themes = {{
   dark = {{
     tmux_profile = "default",
+    ansi = {{ "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0" }},
+    brights = {{ "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4" }},
     foreground = "#d8dee9",
     background = "#1f2328",
     cursor_bg = "#88c0d0",
@@ -1397,6 +1605,8 @@ local themes = {{
   }},
   latte = {{
     tmux_profile = "light",
+    ansi = {{ "#5c5f77", "#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#8839ef", "#179299", "#acb0be" }},
+    brights = {{ "#6c6f85", "#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#8839ef", "#179299", "#4c4f69" }},
     foreground = "#4c4f69",
     background = "#eff1f5",
     cursor_bg = "#4c4f69",
@@ -1419,6 +1629,8 @@ local themes = {{
   }},
   solarized_light = {{
     tmux_profile = "light",
+    ansi = {{ "#073642", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198", "#eee8d5" }},
+    brights = {{ "#002b36", "#cb4b16", "#586e75", "#657b83", "#839496", "#6c71c4", "#93a1a1", "#fdf6e3" }},
     foreground = "#657b83",
     background = "#fdf6e3",
     cursor_bg = "#586e75",
@@ -1441,6 +1653,8 @@ local themes = {{
   }},
   tokyo_night_light = {{
     tmux_profile = "light",
+    ansi = {{ "#0f0f14", "#8c4351", "#485e30", "#8f5e15", "#34548a", "#5a4a78", "#0f4b6e", "#828594" }},
+    brights = {{ "#9699a3", "#8c4351", "#485e30", "#8f5e15", "#34548a", "#5a4a78", "#0f4b6e", "#343b58" }},
     foreground = "#343b58",
     background = "#d5d6db",
     cursor_bg = "#34548a",
@@ -1463,6 +1677,8 @@ local themes = {{
   }},
   gruvbox_light = {{
     tmux_profile = "light",
+    ansi = {{ "#fbf1c7", "#cc241d", "#98971a", "#d79921", "#458588", "#b16286", "#689d6a", "#7c6f64" }},
+    brights = {{ "#928374", "#9d0006", "#79740e", "#b57614", "#076678", "#8f3f71", "#427b58", "#3c3836" }},
     foreground = "#3c3836",
     background = "#fbf1c7",
     cursor_bg = "#3c3836",
@@ -1485,6 +1701,8 @@ local themes = {{
   }},
   rose_pine_dawn = {{
     tmux_profile = "light",
+    ansi = {{ "#f2e9e1", "#b4637a", "#286983", "#ea9d34", "#56949f", "#907aa9", "#d7827e", "#797593" }},
+    brights = {{ "#9893a5", "#b4637a", "#286983", "#ea9d34", "#56949f", "#907aa9", "#d7827e", "#575279" }},
     foreground = "#575279",
     background = "#faf4ed",
     cursor_bg = "#575279",
@@ -1507,6 +1725,10 @@ local themes = {{
   }},
 }}
 local theme_aliases = {{
+  ["system"] = "system",
+  ["system-default"] = "system",
+  ["auto"] = "system",
+  ["os"] = "system",
   [""] = "dark",
   ["default"] = "dark",
   ["dark"] = "dark",
@@ -1535,6 +1757,22 @@ local function normalize_theme(value)
   local key = string.lower(tostring(value or "")):gsub("%s+", "-")
   return theme_aliases[key] or "dark"
 end
+local function system_theme()
+  if wezterm.gui and wezterm.gui.get_appearance then
+    local ok, appearance = pcall(wezterm.gui.get_appearance)
+    if ok and tostring(appearance):find("Dark") then
+      return "dark"
+    end
+    if ok and tostring(appearance) ~= "" then
+      return "latte"
+    end
+  end
+  local fallback = string.lower(tostring(os.getenv("CCB_SYSTEM_THEME") or ""))
+  if fallback:find("light") then
+    return "latte"
+  end
+  return "dark"
+end
 local function read_theme_file(path)
   local file = io.open(path, "r")
   if not file then
@@ -1560,6 +1798,9 @@ local function read_theme_file(path)
 end
 local requested_theme = read_theme_file(theme_config_path) or os.getenv("CCB_WORKBENCH_THEME") or os.getenv("CCB_TMUX_THEME_PROFILE") or "dark"
 local theme_name = normalize_theme(requested_theme)
+if theme_name == "system" then
+  theme_name = system_theme()
+end
 local theme = themes[theme_name] or themes.dark
 config.font = wezterm.font_with_fallback({{
   "JetBrains Mono",
@@ -1598,6 +1839,8 @@ config.window_frame = {{
   inactive_titlebar_bg = theme.frame_inactive,
 }}
 config.colors = {{
+  ansi = theme.ansi,
+  brights = theme.brights,
   foreground = theme.foreground,
   background = theme.background,
   cursor_bg = theme.cursor_bg,
@@ -1728,6 +1971,40 @@ configure_input_method_env() {{
       ;;
   esac
 }}
+configure_wayland_cursor_env() {{
+  [ "${{is_wsl:-0}}" = 0 ] || return 0
+  if [ -z "${{WAYLAND_DISPLAY:-}}" ] && [ "${{XDG_SESSION_TYPE:-}}" != wayland ]; then
+    return 0
+  fi
+  cursor_asset={_shell_quote(str(paths['wezterm_cursor_asset']))}
+  cursor_overlay_root={_shell_quote(str(paths['wezterm_xcursor_root']))}
+  [ -r "$cursor_asset" ] || return 0
+  cursor_theme="${{XCURSOR_THEME:-default}}"
+  case "$cursor_theme" in
+    ""|*[!A-Za-z0-9._+-]*) cursor_theme=default ;;
+  esac
+  cursor_dir="$cursor_overlay_root/$cursor_theme/cursors"
+  if [ ! -r "$cursor_dir/hand" ]; then
+    mkdir -p "$cursor_dir" || return 0
+    cursor_tmp="$cursor_dir/.hand.$$"
+    if cp "$cursor_asset" "$cursor_tmp" 2>/dev/null; then
+      mv -f "$cursor_tmp" "$cursor_dir/hand"
+    else
+      rm -f "$cursor_tmp"
+      return 0
+    fi
+  fi
+  if [ -n "${{XCURSOR_PATH:-}}" ]; then
+    case ":$XCURSOR_PATH:" in
+      *":$cursor_overlay_root:"*) ;;
+      *) export XCURSOR_PATH="$cursor_overlay_root:$XCURSOR_PATH" ;;
+    esac
+  else
+    cursor_data_home="${{XDG_DATA_HOME:-${{HOME:-}}/.local/share}}"
+    export XCURSOR_PATH="$cursor_overlay_root:${{HOME:-}}/.icons:$cursor_data_home/icons:/usr/share/icons:/usr/share/pixmaps"
+  fi
+  export CCB_WORKBENCH_XCURSOR_COMPAT=1
+}}
 check_linux_inotify_capacity() {{
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
@@ -1760,6 +2037,7 @@ raise SystemExit(75 if err in (errno.EMFILE, errno.ENFILE) else 0)
 normalize_workbench_theme() {{
   key="$(printf '%s' "${{1:-}}" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | tr ' ' '-')"
   case "$key" in
+    system|system-default|auto|os) printf '%s\\n' system ;;
     ""|default|dark|nord|contrast) printf '%s\\n' dark ;;
     light|latte|catppuccin-latte) printf '%s\\n' latte ;;
     solarized|solarized-light) printf '%s\\n' solarized_light ;;
@@ -1768,6 +2046,48 @@ normalize_workbench_theme() {{
     rose-pine-dawn) printf '%s\\n' rose_pine_dawn ;;
     *) printf '%s\\n' dark ;;
   esac
+}}
+detect_system_workbench_theme() {{
+  explicit="$(printf '%s' "${{CCB_SYSTEM_THEME:-}}" | tr '[:upper:]' '[:lower:]')"
+  case "$explicit" in
+    *light*) printf '%s\\n' latte; return 0 ;;
+    *dark*) printf '%s\\n' dark; return 0 ;;
+  esac
+  case "$(printf '%s' "${{GTK_THEME:-${{QT_STYLE_OVERRIDE:-}}}}" | tr '[:upper:]' '[:lower:]')" in
+    *dark*) printf '%s\\n' dark; return 0 ;;
+  esac
+  if command -v powershell.exe >/dev/null 2>&1; then
+    windows_light="$(powershell.exe -NoProfile -NonInteractive -Command "(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize' -Name AppsUseLightTheme).AppsUseLightTheme" 2>/dev/null | tr -d '\\r\\n ' || true)"
+    case "$windows_light" in
+      0) printf '%s\\n' dark; return 0 ;;
+      1) printf '%s\\n' latte; return 0 ;;
+    esac
+  fi
+  if command -v defaults >/dev/null 2>&1; then
+    if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -qi dark; then
+      printf '%s\\n' dark
+    else
+      printf '%s\\n' latte
+    fi
+    return 0
+  fi
+  if command -v gsettings >/dev/null 2>&1; then
+    system_scheme="$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null || true)"
+    if printf '%s' "$system_scheme" | grep -qi dark; then
+      printf '%s\\n' dark
+      return 0
+    fi
+    gtk_theme="$(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null || true)"
+    if [ -n "$gtk_theme" ]; then
+      if printf '%s' "$gtk_theme" | grep -qi dark; then
+        printf '%s\\n' dark
+      else
+        printf '%s\\n' latte
+      fi
+      return 0
+    fi
+  fi
+  printf '%s\\n' dark
 }}
 theme_config_file={_shell_quote(str(paths['theme_config']))}
 read_workbench_theme_config() {{
@@ -1781,11 +2101,14 @@ read_workbench_theme_config() {{
   fi
   sed -n 's/.*"theme"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$theme_config_file" 2>/dev/null | sed -n '1p'
 }}
-requested_theme="${{CCB_WORKBENCH_THEME:-${{CCB_TMUX_THEME_PROFILE:-}}}}"
+requested_theme="$(read_workbench_theme_config)"
 if [ -z "$requested_theme" ]; then
-  requested_theme="$(read_workbench_theme_config)"
+  requested_theme="${{CCB_WORKBENCH_THEME:-${{CCB_TMUX_THEME_PROFILE:-}}}}"
 fi
 workbench_theme="$(normalize_workbench_theme "${{requested_theme:-dark}}")"
+if [ "$workbench_theme" = system ]; then
+  workbench_theme="$(detect_system_workbench_theme)"
+fi
 case "$workbench_theme" in
   dark) workbench_tmux_theme=default ;;
   *) workbench_tmux_theme=light ;;
@@ -1855,6 +2178,7 @@ case "$cmd" in
       exit 127
     fi
     configure_input_method_env
+    configure_wayland_cursor_env
     if [ "$#" -eq 0 ]; then
       set -- "${{SHELL:-/bin/sh}}" -lc 'ccb-yazi-rich "$PWD"'
     fi
@@ -2083,6 +2407,7 @@ def _component_statuses(
     yazi = _tool_component('yazi', ('yazi',))
     ya = _tool_component('ya', ('ya',))
     wezterm = _wezterm_component()
+    wayland_cursor = _wayland_cursor_component(paths)
     pdf_text = _tool_component('pdf_text', ('pdftotext', 'pdfinfo'), require_all=True)
     pdf_image = _tool_component('pdf_image', ('pdftoppm', 'pdftocairo'))
     image_preview = _image_component(paths)
@@ -2095,6 +2420,7 @@ def _component_statuses(
         'config': config,
         'terminal': terminal,
         'wezterm': wezterm,
+        'wayland_cursor': wayland_cursor,
         'yazi': yazi,
         'ya': ya,
         'markdown': markdown,
@@ -2138,6 +2464,18 @@ def _wezterm_component() -> dict[str, object]:
             result['tool'] = 'windows-native'
         return result
     return {'status': 'missing', 'missing': 'wezterm', 'reason': 'wezterm helper not found'}
+
+
+def _wayland_cursor_component(paths: dict[str, Path]) -> dict[str, object]:
+    if platform.system() != 'Linux':
+        return {'status': 'not_applicable'}
+    asset = paths['wezterm_cursor_asset']
+    if _valid_xcursor_asset(asset):
+        return {'status': 'ok', 'tool': str(asset)}
+    return {
+        'status': 'unavailable',
+        'reason': 'no local XCursor pointer asset was available for the optional Wayland hand-cursor overlay',
+    }
 
 
 def _terminal_component() -> dict[str, object]:
@@ -2242,6 +2580,7 @@ def _status_paths(paths: dict[str, Path]) -> dict[str, object]:
         'yazi_safe_config': str(paths['yazi_safe_profile']),
         'yazi_rich_config': str(paths['yazi_rich_profile']),
         'wezterm_config': str(paths['wezterm_config']),
+        'wezterm_xcursor_root': str(paths['wezterm_xcursor_root']),
         'state_root': str(paths['state_root']),
         'theme_config': str(paths['theme_config']),
         'cache_root': str(paths['cache_root']),
@@ -2394,6 +2733,9 @@ def _print_status(status: dict[str, object], stdout: TextIO) -> None:
         'wezterm_tool',
         'wezterm_tools',
         'wezterm_reason',
+        'wayland_cursor_status',
+        'wayland_cursor_tool',
+        'wayland_cursor_reason',
         'yazi_status',
         'yazi_tools',
         'yazi_reason',
@@ -2421,6 +2763,7 @@ def _print_status(status: dict[str, object], stdout: TextIO) -> None:
         'yazi_safe_config',
         'yazi_rich_config',
         'wezterm_config',
+        'wezterm_xcursor_root',
         'state_root',
         'cache_root',
     ):

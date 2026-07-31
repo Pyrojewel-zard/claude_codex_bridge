@@ -22,6 +22,7 @@ from completion.models import (
 from project.ids import compute_project_id
 
 from .base import ProviderPollResult, ProviderSubmission
+from .followups import ActiveFollowupCapability, ActiveFollowupRequest, ActiveFollowupResult
 from .fake_runtime import (
     DEFAULT_LATENCY_SECONDS,
     FakeDirective,
@@ -36,7 +37,9 @@ from .fake_runtime import (
 )
 
 
-G5_EXTERNAL_CHAIN_WINDOW_SECONDS = 3.0
+# Keep source/fake Workers active beyond the bounded external chain retry
+# window plus multi-node submission overhead on loaded cross-platform runners.
+G5_EXTERNAL_CHAIN_WINDOW_SECONDS = 8.0
 
 
 class FakeProviderAdapter:
@@ -180,6 +183,50 @@ class FakeProviderAdapter:
         if submission.job_id != job.job_id or submission.provider != job.provider:
             return None
         return submission
+
+    def active_followup_capability(self, submission: ProviderSubmission) -> ActiveFollowupCapability:
+        return ActiveFollowupCapability(
+            supported=True,
+            mechanism='fake_exact_active_turn',
+            provider_turn_ref=submission.job_id,
+            diagnostics={'provider': submission.provider},
+        )
+
+    def inject_active_followup(
+        self,
+        submission: ProviderSubmission,
+        *,
+        request: ActiveFollowupRequest,
+        now: str,
+    ) -> ActiveFollowupResult:
+        del now
+        if request.job_id != submission.job_id or request.expected_provider_turn_ref != submission.job_id:
+            return ActiveFollowupResult(
+                submission=submission,
+                status='terminal',
+                reason='provider_turn_not_active',
+                mechanism='fake_exact_active_turn',
+                provider_turn_ref=submission.job_id,
+            )
+        state = dict(submission.runtime_state)
+        followups = [dict(item) for item in state.get('active_followups', []) if isinstance(item, dict)]
+        if not any(str(item.get('followup_id') or '') == request.followup_id for item in followups):
+            followups.append(
+                {
+                    'followup_id': request.followup_id,
+                    'message': request.message,
+                    'provider_turn_ref': submission.job_id,
+                }
+            )
+        updated = replace(submission, runtime_state={**state, 'active_followups': followups})
+        return ActiveFollowupResult(
+            submission=updated,
+            status='injected',
+            reason='provider_turn_steered',
+            mechanism='fake_exact_active_turn',
+            provider_turn_ref=submission.job_id,
+            diagnostics={'idempotency_key': request.followup_id},
+        )
 
 
 _build_terminal_decision = build_terminal_decision

@@ -9,7 +9,9 @@ import select
 import struct
 import subprocess
 import termios
+import threading
 import time
+import unicodedata
 from typing import Mapping
 
 
@@ -43,6 +45,7 @@ class TerminalAttachTarget:
     geometry: TerminalGeometry
     target_summary: dict[str, object]
     tmux_binary: str = 'tmux'
+    include_history: bool = True
 
     @property
     def command(self) -> list[str]:
@@ -88,7 +91,11 @@ class PaneMessageTarget:
     tmux_binary: str = 'tmux'
 
 
-def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, object]:
+def capture_tmux_pane_text(
+    target: TerminalHistoryTarget,
+    *,
+    timeout: float = 2.0,
+) -> str:
     target = _with_compatible_tmux(target)
     cp = subprocess.run(
         target.command,
@@ -96,13 +103,17 @@ def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, obj
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
-        timeout=2.0,
+        timeout=max(0.05, float(timeout)),
         env=_terminal_client_env(),
     )
     if cp.returncode != 0:
         message = (cp.stderr or '').strip() or 'tmux capture-pane failed'
         raise RuntimeError(message)
-    text = _strip_ansi(cp.stdout or '')
+    return _strip_ansi(cp.stdout or '')
+
+
+def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, object]:
+    text = capture_tmux_pane_text(target)
     return {
         'agent': target.agent,
         'history_scope': 'tmux_scrollback',
@@ -151,36 +162,86 @@ class TmuxTerminalSession:
         self._geometry = target.geometry
         self._closed = False
         self._last_snapshot: bytes | None = None
+        self._initial_read_complete = False
+        self._snapshot_generation = 0
+        self._state_lock = threading.Lock()
         if not target.pane_id:
             raise RuntimeError('terminal target pane evidence is required')
 
     def read(self, timeout_seconds: float = 0.1) -> bytes | None:
-        if self._closed:
-            return None
-        if self._last_snapshot is not None:
+        with self._state_lock:
+            if self._closed:
+                return None
+            initial_read_complete = self._initial_read_complete
+        if initial_read_complete:
             time.sleep(max(0.0, min(float(timeout_seconds), 0.25)))
-        if self._last_snapshot is None:
+        with self._state_lock:
+            if self._closed:
+                return None
+            initial_read = not self._initial_read_complete
+            if initial_read:
+                self._initial_read_complete = True
+            geometry = self._geometry
+            previous = self._last_snapshot
+            snapshot_generation = self._snapshot_generation
+        if initial_read:
+            if not self.target.include_history:
+                snapshot = _capture_tmux_terminal_pane(
+                    self.target,
+                    geometry,
+                    include_history=False,
+                )
+                with self._state_lock:
+                    if self._closed:
+                        return None
+                    self._last_snapshot = snapshot
+                return _render_terminal_snapshot(snapshot, clear_scrollback=True)
             history = _capture_tmux_terminal_pane(
                 self.target,
-                self._geometry,
+                geometry,
                 include_history=True,
             )
             snapshot = _capture_tmux_terminal_pane(
                 self.target,
-                self._geometry,
+                geometry,
                 include_history=False,
             )
-            self._last_snapshot = snapshot
+            with self._state_lock:
+                if self._closed:
+                    return None
+                self._last_snapshot = snapshot
             return _render_terminal_snapshot(history, clear_scrollback=True)
+        if previous is None:
+            snapshot = _capture_tmux_terminal_pane(
+                self.target,
+                geometry,
+                include_history=False,
+            )
+            with self._state_lock:
+                if self._closed:
+                    return None
+                self._last_snapshot = snapshot
+            return _render_terminal_snapshot(snapshot)
         snapshot = _capture_tmux_terminal_pane(
             self.target,
-            self._geometry,
+            geometry,
             include_history=False,
         )
-        if snapshot == self._last_snapshot:
-            return b''
-        self._last_snapshot = snapshot
-        return _render_terminal_snapshot(snapshot)
+        with self._state_lock:
+            if self._closed:
+                return None
+            if snapshot_generation != self._snapshot_generation:
+                self._last_snapshot = snapshot
+                return _render_terminal_snapshot(snapshot)
+            if snapshot == previous:
+                return b''
+            self._last_snapshot = snapshot
+            return _render_terminal_delta(
+                previous,
+                snapshot,
+                columns=geometry.columns,
+                rows=geometry.rows,
+            )
 
     def write(self, data: bytes) -> None:
         if not data:
@@ -197,11 +258,14 @@ class TmuxTerminalSession:
         self.write(str(text).encode('utf-8'))
 
     def resize(self, geometry: TerminalGeometry) -> None:
-        self._geometry = geometry
-        self._last_snapshot = None
+        with self._state_lock:
+            self._geometry = geometry
+            self._last_snapshot = None
+            self._snapshot_generation += 1
 
     def close(self) -> None:
-        self._closed = True
+        with self._state_lock:
+            self._closed = True
 
     def _resize(self, geometry: TerminalGeometry) -> None:
         rows = max(1, int(geometry.rows))
@@ -343,6 +407,70 @@ def _render_terminal_snapshot(
     rendered = text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n')
     clear = b'\x1b[3J' if clear_scrollback else b''
     return b'\x1b[?25l' + clear + b'\x1b[H\x1b[2J' + rendered.encode('utf-8')
+
+
+def _render_terminal_delta(
+    previous: bytes,
+    snapshot: bytes,
+    *,
+    columns: int,
+    rows: int,
+) -> bytes:
+    previous_lines = _terminal_snapshot_lines(previous)
+    snapshot_lines = _terminal_snapshot_lines(snapshot)
+    first_changed = _first_changed_terminal_line(previous_lines, snapshot_lines)
+    if first_changed is None:
+        return b''
+    previous_visual_rows = _terminal_visual_rows(previous_lines, columns)
+    snapshot_visual_rows = _terminal_visual_rows(snapshot_lines, columns)
+    if previous_visual_rows > rows or snapshot_visual_rows > rows:
+        return _render_terminal_snapshot(snapshot, clear_scrollback=True)
+    start_row = _terminal_visual_rows(previous_lines[:first_changed], columns) + 1
+    suffix = '\r\n'.join(snapshot_lines[first_changed:]).encode('utf-8')
+    return (
+        b'\x1b[?25l\x1b[0m'
+        + f'\x1b[{start_row};1H\x1b[0J'.encode('ascii')
+        + suffix
+        + b'\x1b[0m'
+    )
+
+
+def _terminal_snapshot_lines(snapshot: bytes) -> list[str]:
+    text = snapshot.decode('utf-8', errors='replace')
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n').rstrip('\n')
+    return normalized.split('\n') if normalized else []
+
+
+def _first_changed_terminal_line(
+    previous_lines: list[str],
+    snapshot_lines: list[str],
+) -> int | None:
+    for index, (before, after) in enumerate(zip(previous_lines, snapshot_lines)):
+        if before != after:
+            return index
+    if len(previous_lines) != len(snapshot_lines):
+        return min(len(previous_lines), len(snapshot_lines))
+    return None
+
+
+def _terminal_visual_rows(lines: list[str], columns: int) -> int:
+    width = max(1, int(columns))
+    rows = 0
+    for line in lines:
+        display_width = _terminal_display_width(_strip_ansi(line))
+        rows += max(1, (display_width + width - 1) // width)
+    return rows
+
+
+def _terminal_display_width(text: str) -> int:
+    width = 0
+    for character in text:
+        if unicodedata.combining(character):
+            continue
+        if unicodedata.category(character).startswith('C'):
+            continue
+        width += 2 if unicodedata.east_asian_width(character) in {'F', 'W'} else 1
+    return width
 
 
 def _select_tmux_terminal_pane(target: TerminalAttachTarget) -> None:

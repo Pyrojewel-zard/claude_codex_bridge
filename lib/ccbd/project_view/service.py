@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -17,6 +17,7 @@ from ccbd.reload_drain_status import reload_drain_revision, reload_drain_status_
 from ccbd.project_focus.tmux import backend_for_namespace, refresh_sidebar_panes
 from ccbd.services.dispatcher_runtime import comms_recoverability_for_job
 from ccbd.system import parse_utc_timestamp, utc_now
+from execution_phase import derive_execution_phase, execution_phase_evidence_from_records
 from message_bureau import CallbackEdgeState
 from provider_backends.codex.launcher_runtime.command_runtime.home import resolve_codex_home_layout
 from provider_pane_status.codex_pane import (
@@ -55,6 +56,7 @@ PROJECT_VIEW_IDLE_TTL_MS = 5000
 PROJECT_VIEW_COMMS_LIMIT = 8
 CODEX_ACTIVE_NO_PROGRESS_FREE_AFTER_S = 60.0
 CLAUDE_ACTIVE_NO_PROGRESS_FREE_AFTER_S = 60.0
+ORPHANED_ACTIVE_INBOUND_OBSERVATION_S = 30.0
 _RECENT_JOB_RESULT_LIMIT = PROJECT_VIEW_COMMS_LIMIT * 8
 _RECENT_JOB_SCAN_LIMIT_PER_AGENT = 128
 _RECENT_JOB_INITIAL_SCAN_MIN = 8
@@ -92,6 +94,14 @@ class ProjectViewDependencies:
     metrics: object | None = None
 
 
+@dataclass(frozen=True)
+class _ExecutionProviderEvidence:
+    state: str | None
+    identity_current: bool
+    reason: str | None
+    last_progress_at: str | None
+
+
 @dataclass
 class _ProjectViewMetricsContext:
     tmux_command_count: int = 0
@@ -111,6 +121,8 @@ class _ProjectViewBuildContext:
     tmux_snapshot: dict[str, dict[str, object]] = field(default_factory=dict)
     pane_text_by_id: dict[str, str | None] = field(default_factory=dict)
     provider_activity_by_agent: dict[str, object | None] = field(default_factory=dict)
+    execution_provider_by_job_id: dict[str, _ExecutionProviderEvidence] = field(default_factory=dict)
+    orphan_idle_observations: object | None = None
 
     def namespace_backend(self):
         if self.namespace is None or self.deps.namespace_controller is None:
@@ -190,12 +202,20 @@ class _CommsLookup:
     attempt_store: object | None
     reply_store: object | None
     message_store: object | None
+    inbound_store: object | None
+    mailbox_store: object | None
+    lease_store: object | None
+    snapshot_writer: object | None
     attempts_by_job_id: dict[str, object | None] = field(default_factory=dict)
     attempts_by_attempt_id: dict[str, object | None] = field(default_factory=dict)
     attempts_by_message_id: dict[tuple[str, str], object | None] = field(default_factory=dict)
     latest_attempt_by_message_agent: dict[tuple[str, str], object | None] = field(default_factory=dict)
     replies_by_reply_id: dict[str, object | None] = field(default_factory=dict)
     messages_by_message_id: dict[str, object | None] = field(default_factory=dict)
+    inbound_by_attempt: dict[tuple[str, str], object | None] = field(default_factory=dict)
+    mailbox_by_agent: dict[str, object | None] = field(default_factory=dict)
+    lease_by_agent: dict[str, object | None] = field(default_factory=dict)
+    snapshots_by_job_id: dict[str, object | None] = field(default_factory=dict)
 
     def attempt_by_job_id(self, job_id: object) -> object | None:
         key = str(job_id or '').strip()
@@ -258,6 +278,45 @@ class _CommsLookup:
         if key not in self.messages_by_message_id:
             self.messages_by_message_id[key] = _call_store(self.message_store, 'get_latest', key)
         return self.messages_by_message_id[key]
+
+    def inbound_for_attempt(self, agent_name: object, attempt_id: object) -> object | None:
+        agent_key = str(agent_name or '').strip()
+        attempt_key = str(attempt_id or '').strip()
+        if not agent_key or not attempt_key:
+            return None
+        key = (agent_key, attempt_key)
+        if key not in self.inbound_by_attempt:
+            self.inbound_by_attempt[key] = _call_store(
+                self.inbound_store,
+                'get_latest_for_attempt',
+                agent_key,
+                attempt_key,
+            )
+        return self.inbound_by_attempt[key]
+
+    def mailbox_for_agent(self, agent_name: object) -> object | None:
+        key = str(agent_name or '').strip()
+        if not key:
+            return None
+        if key not in self.mailbox_by_agent:
+            self.mailbox_by_agent[key] = _call_store(self.mailbox_store, 'load', key)
+        return self.mailbox_by_agent[key]
+
+    def lease_for_agent(self, agent_name: object) -> object | None:
+        key = str(agent_name or '').strip()
+        if not key:
+            return None
+        if key not in self.lease_by_agent:
+            self.lease_by_agent[key] = _call_store(self.lease_store, 'load', key)
+        return self.lease_by_agent[key]
+
+    def snapshot_for_job(self, job_id: object) -> object | None:
+        key = str(job_id or '').strip()
+        if not key:
+            return None
+        if key not in self.snapshots_by_job_id:
+            self.snapshots_by_job_id[key] = _call_store(self.snapshot_writer, 'load', key)
+        return self.snapshots_by_job_id[key]
 
 
 @dataclass(frozen=True)
@@ -382,12 +441,69 @@ class _ClaudePaneProgressTracker:
         return (str(agent_name or '').strip(), str(pane_id or '').strip())
 
 
+@dataclass(frozen=True)
+class _OrphanIdleObservation:
+    first_observed_at: str
+    observed_for_s: float
+    confirmed: bool
+
+
+@dataclass(frozen=True)
+class _OrphanIdleObservationRecord:
+    signature: tuple[str, ...]
+    first_observed_at: str
+    first_observed_s: float
+
+
+class _OrphanIdleObservationTracker:
+    def __init__(self, *, required_s: float = ORPHANED_ACTIVE_INBOUND_OBSERVATION_S) -> None:
+        self.required_s = max(0.0, float(required_s))
+        self._records: dict[str, _OrphanIdleObservationRecord] = {}
+
+    def observe(
+        self,
+        *,
+        job_id: str,
+        signature: tuple[str, ...] | None,
+        qualifies: bool,
+        observed_at: str,
+    ) -> _OrphanIdleObservation | None:
+        key = str(job_id or '').strip()
+        observed_s = _timestamp_s(observed_at)
+        if not key or not qualifies or not signature or observed_s is None:
+            if key:
+                self._records.pop(key, None)
+            return None
+        record = self._records.get(key)
+        if record is None or record.signature != signature or observed_s < record.first_observed_s:
+            record = _OrphanIdleObservationRecord(
+                signature=signature,
+                first_observed_at=observed_at,
+                first_observed_s=observed_s,
+            )
+            self._records[key] = record
+        elapsed = max(0.0, observed_s - record.first_observed_s)
+        return _OrphanIdleObservation(
+            first_observed_at=record.first_observed_at,
+            observed_for_s=round(elapsed, 3),
+            confirmed=elapsed >= self.required_s,
+        )
+
+    def retain_job_ids(self, job_ids: set[str]) -> None:
+        retained = {str(job_id or '').strip() for job_id in job_ids}
+        retained.discard('')
+        for job_id in tuple(self._records):
+            if job_id not in retained:
+                self._records.pop(job_id, None)
+
+
 class ProjectViewService:
     def __init__(self, deps: ProjectViewDependencies) -> None:
         self._deps = deps
         self._sequence_cache = deps.sequence_cache or ProjectViewSequenceCache()
         self._codex_pane_progress = _CodexPaneProgressTracker()
         self._claude_pane_progress = _ClaudePaneProgressTracker()
+        self._orphan_idle_observations = _OrphanIdleObservationTracker()
         self._cached_response: _CachedProjectViewResponse | None = None
         self._sidebar_refresh_lock = threading.Lock()
         self._sidebar_refresh_pending = False
@@ -437,6 +553,7 @@ class ProjectViewService:
             metrics_context=metrics_context,
             codex_pane_progress=self._codex_pane_progress,
             claude_pane_progress=self._claude_pane_progress,
+            orphan_idle_observations=self._orphan_idle_observations,
         )
         response = {
             'view': view,
@@ -503,10 +620,16 @@ def build_project_view(
     metrics_context: _ProjectViewMetricsContext | None = None,
     codex_pane_progress: _CodexPaneProgressTracker | None = None,
     claude_pane_progress: _ClaudePaneProgressTracker | None = None,
+    orphan_idle_observations: _OrphanIdleObservationTracker | None = None,
 ) -> dict[str, object]:
     lease = deps.mount_manager.load_state()
     namespace = deps.namespace_state_store.load()
-    context = _ProjectViewBuildContext(deps=deps, namespace=namespace, metrics_context=metrics_context)
+    context = _ProjectViewBuildContext(
+        deps=deps,
+        namespace=namespace,
+        metrics_context=metrics_context,
+        orphan_idle_observations=orphan_idle_observations,
+    )
     focus = _focus_snapshot(context)
     tmux_snapshot = _tmux_snapshot(context)
     namespace_mounted = lease is not None and lease.mount_state is MountState.MOUNTED
@@ -756,6 +879,12 @@ def _agent_view(
         ),
         now=generated_at,
     )
+    if job is not None:
+        context.execution_provider_by_job_id[str(job.job_id)] = _execution_provider_state(
+            provider_activity=provider_activity,
+            provider_runtime_status=provider_runtime_status,
+            job=job,
+        )
     _record_inferred_provider_failure(
         deps=deps,
         agent_name=agent_name,
@@ -807,6 +936,60 @@ def _provider_runtime_source(provider: object, runtime_status: object | None) ->
     if provider_name in {'codex', 'claude'}:
         return f'{provider_name}_runtime'
     return None
+
+
+def _execution_provider_state(
+    *,
+    provider_activity,
+    provider_runtime_status,
+    job,
+) -> _ExecutionProviderEvidence:
+    activity_current = provider_activity is not None and _provider_activity_is_current(provider_activity, job=job)
+    last_progress_at = (
+        str(getattr(provider_activity, 'updated_at', '') or '').strip()
+        if activity_current
+        else str(getattr(job, 'updated_at', '') or '').strip()
+    ) or None
+    runtime_source = str(getattr(provider_runtime_status, 'source', '') or '').strip().lower()
+    if runtime_source in {'pane', 'session'}:
+        state = _execution_provider_state_token(getattr(provider_runtime_status, 'state', None))
+        return _ExecutionProviderEvidence(
+            state=state,
+            identity_current=state is not None,
+            reason=str(getattr(provider_runtime_status, 'reason', '') or '').strip() or None,
+            last_progress_at=last_progress_at,
+        )
+    if activity_current:
+        state = _execution_provider_state_token(getattr(provider_activity, 'state', None))
+        return _ExecutionProviderEvidence(
+            state=state,
+            identity_current=state is not None,
+            reason=str(getattr(provider_activity, 'reason', '') or '').strip() or None,
+            last_progress_at=last_progress_at,
+        )
+    return _ExecutionProviderEvidence(None, False, None, last_progress_at)
+
+
+def _execution_provider_state_token(value: object) -> str | None:
+    token = str(value or '').strip().lower()
+    if token in {'active', 'working', 'thinking', 'tool_running'}:
+        return 'active'
+    if token in {'pending', 'start', 'waiting_for_user'}:
+        return 'pending'
+    if token in {'idle', 'free'}:
+        return 'idle'
+    if token in {'failed', 'api_error', 'pane_dead', 'interrupted'}:
+        return 'failed'
+    return None
+
+
+def _provider_activity_is_current(provider_activity, *, job) -> bool:
+    activity_at = str(getattr(provider_activity, 'updated_at', '') or '').strip()
+    job_started_at = str(getattr(job, 'created_at', '') or '').strip()
+    try:
+        return parse_utc_timestamp(activity_at) >= parse_utc_timestamp(job_started_at)
+    except Exception:
+        return False
 
 
 def _codex_runtime_status(
@@ -897,7 +1080,7 @@ def _claude_runtime_status(
     generated_at: str,
     progress_tracker: _ClaudePaneProgressTracker | None = None,
 ) -> ClaudeRuntimeStatus:
-    activity_status = claude_activity_status(provider_activity)
+    activity_status = claude_activity_status(provider_activity, now=generated_at)
     session_status = read_claude_session_status(
         _claude_transcript_path(runtime),
         min_mtime_s=_job_updated_epoch_for_session_floor(current_job),
@@ -1481,10 +1664,14 @@ def _comms_view(
     )
     configured_agents = _configured_agent_names(dispatcher)
     lineage_for_recoverability = _recoverability_lineage_lookup(dispatcher, comms_lookup)
+    if isinstance(context.orphan_idle_observations, _OrphanIdleObservationTracker):
+        context.orphan_idle_observations.retain_job_ids(
+            {str(getattr(job, 'job_id', '') or '').strip() for job in jobs}
+        )
     rows = []
     for job in jobs:
         reply_delivery = reply_deliveries.get(job.job_id)
-        running_recover_hint = _running_recover_hint(context, job=job, generated_at=generated_at)
+        running_observation = _running_recovery_observation(context, job=job, generated_at=generated_at)
         rows.append(
             (
                 _comm_sort_key(job, reply_delivery),
@@ -1493,7 +1680,10 @@ def _comms_view(
                     job,
                     reply_delivery=reply_delivery,
                     configured_agents=configured_agents,
-                    running_recover_hint=running_recover_hint,
+                    comms_lookup=comms_lookup,
+                    context=context,
+                    running_observation=running_observation,
+                    generated_at=generated_at,
                     lineage_for_recoverability=lineage_for_recoverability,
                 ),
             )
@@ -1575,6 +1765,10 @@ def _comms_lookup(dispatcher) -> _CommsLookup:
         attempt_store=getattr(control, '_attempt_store', None) if control is not None else None,
         reply_store=getattr(control, '_reply_store', None) if control is not None else None,
         message_store=getattr(control, '_message_store', None) if control is not None else None,
+        inbound_store=getattr(control, '_inbound_store', None) if control is not None else None,
+        mailbox_store=getattr(control, '_mailbox_store', None) if control is not None else None,
+        lease_store=getattr(control, '_lease_store', None) if control is not None else None,
+        snapshot_writer=getattr(dispatcher, '_snapshot_writer', None),
     )
 
 
@@ -1647,17 +1841,28 @@ def _with_reply_delivery_sources(
     return tuple(by_id.values())
 
 
-def _running_recover_hint(context: _ProjectViewBuildContext, *, job, generated_at: str) -> str | None:
+@dataclass(frozen=True)
+class _RunningRecoveryObservation:
+    direct_hint: str | None = None
+    exact_idle_candidate: bool = False
+
+
+def _running_recovery_observation(
+    context: _ProjectViewBuildContext,
+    *,
+    job,
+    generated_at: str,
+) -> _RunningRecoveryObservation:
     if getattr(job, 'status', None) is not JobStatus.RUNNING:
-        return None
+        return _RunningRecoveryObservation()
     agent_name = str(getattr(job, 'agent_name', '') or '').strip()
     deps = context.deps
     runtime = deps.registry.get(agent_name) if agent_name else None
     if runtime is None:
-        return None
+        return _RunningRecoveryObservation()
     provider = str(getattr(deps.config.agents.get(agent_name), 'provider', '') or '').strip().lower()
     if provider != 'claude':
-        return None
+        return _RunningRecoveryObservation()
     pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None))
     age = _job_age_seconds(generated_at, getattr(job, 'updated_at', None))
     if (
@@ -1665,16 +1870,16 @@ def _running_recover_hint(context: _ProjectViewBuildContext, *, job, generated_a
         and age > PROVIDER_INPUT_STUCK_AFTER_S
         and provider_prompt_idle_after_request(pane_text, getattr(job, 'job_id', None))
     ):
-        return 'provider_prompt_idle'
+        return _RunningRecoveryObservation(exact_idle_candidate=True)
     if (
         age is not None
         and age > PROVIDER_INPUT_STUCK_AFTER_S
         and provider_prompt_input_stuck(pane_text, getattr(job, 'job_id', None))
     ):
-        return 'provider_prompt_input_stuck'
+        return _RunningRecoveryObservation(direct_hint='provider_prompt_input_stuck')
     if age is not None and age > 120 and provider_prompt_idle(pane_text):
-        return 'provider_prompt_idle_stale'
-    return None
+        return _RunningRecoveryObservation(direct_hint='provider_prompt_idle_stale')
+    return _RunningRecoveryObservation()
 
 
 def _job_age_seconds(now: str, timestamp: str | None) -> float | None:
@@ -1813,14 +2018,17 @@ def _reply_delivery_source_job_id(
     job,
     *,
     comms_lookup: _CommsLookup | None = None,
+    allow_body_fallback: bool = True,
 ) -> str | None:
     if comms_lookup is None:
         comms_lookup = _comms_lookup(dispatcher)
-    return (
+    structured = (
         _reply_delivery_source_job_id_from_reply_record(dispatcher, job, comms_lookup=comms_lookup)
         or _reply_delivery_source_job_id_from_message_origin(dispatcher, job, comms_lookup=comms_lookup)
-        or _reply_delivery_source_job_id_from_body(job)
     )
+    if structured or not allow_body_fallback:
+        return structured
+    return _reply_delivery_source_job_id_from_body(job)
 
 
 def _reply_delivery_source_job_id_from_reply_record(
@@ -1946,9 +2154,22 @@ def _comm_record(
     *,
     reply_delivery,
     configured_agents: frozenset[str],
-    running_recover_hint: str | None = None,
+    comms_lookup: _CommsLookup,
+    context: _ProjectViewBuildContext,
+    running_observation: _RunningRecoveryObservation,
+    generated_at: str,
     lineage_for_recoverability=None,
 ) -> dict[str, object]:
+    execution_projection = _execution_phase_projection(
+        job,
+        reply_delivery=reply_delivery,
+        configured_agents=configured_agents,
+        comms_lookup=comms_lookup,
+        context=context,
+        running_observation=running_observation,
+        generated_at=generated_at,
+    )
+    running_recover_hint = execution_projection.running_recover_hint
     business_status, status_label = _comm_business_status(
         job,
         reply_delivery=reply_delivery,
@@ -1981,9 +2202,210 @@ def _comm_record(
         'reply_delivery_job_id': reply_delivery.job_id if reply_delivery is not None else None,
         'chain': bool(getattr(job.request, 'reply_to', None)),
         'short_reason': _short_reason(job),
+        **execution_projection.phase_record,
+        **(
+            {'active_inbound_diagnostic': execution_projection.active_inbound_diagnostic}
+            if execution_projection.active_inbound_diagnostic is not None
+            else {}
+        ),
         **({'attachments': attachments} if attachments else {}),
         **recoverability.to_record(),
     }
+
+
+@dataclass(frozen=True)
+class _ExecutionPhaseProjection:
+    phase_record: dict[str, object]
+    running_recover_hint: str | None
+    active_inbound_diagnostic: dict[str, object] | None
+
+
+def _execution_phase_projection(
+    job,
+    *,
+    reply_delivery,
+    configured_agents: frozenset[str],
+    comms_lookup: _CommsLookup,
+    context: _ProjectViewBuildContext,
+    running_observation: _RunningRecoveryObservation,
+    generated_at: str,
+) -> _ExecutionPhaseProjection:
+    job_id = str(getattr(job, 'job_id', '') or '').strip()
+    agent_name = str(getattr(job, 'agent_name', '') or '').strip()
+    attempt = comms_lookup.attempt_by_job_id(job_id)
+    inbound = comms_lookup.inbound_for_attempt(agent_name, getattr(attempt, 'attempt_id', None))
+    mailbox = comms_lookup.mailbox_for_agent(agent_name)
+    lease = comms_lookup.lease_for_agent(agent_name)
+    completion = comms_lookup.snapshot_for_job(job_id)
+    provider_evidence = context.execution_provider_by_job_id.get(
+        job_id,
+        _ExecutionProviderEvidence(None, False, None, None),
+    )
+    if running_observation.exact_idle_candidate:
+        provider_evidence = _ExecutionProviderEvidence(
+            state='idle',
+            identity_current=True,
+            reason='exact_request_idle_prompt',
+            last_progress_at=provider_evidence.last_progress_at,
+        )
+    structured_source_job_id = None
+    if reply_delivery is not None:
+        structured_source_job_id = _reply_delivery_source_job_id(
+            context.deps.dispatcher,
+            reply_delivery,
+            comms_lookup=comms_lookup,
+            allow_body_fallback=False,
+        )
+    evidence = execution_phase_evidence_from_records(
+        job=job,
+        attempt=attempt,
+        inbound=inbound,
+        mailbox=mailbox,
+        lease=lease,
+        completion=completion,
+        provider_state=provider_evidence.state,
+        provider_identity_current=provider_evidence.identity_current,
+        orphan_suspected=False,
+        reply_expected=_expects_reply_delivery(job, configured_agents),
+        reply_delivery=reply_delivery,
+        reply_delivery_source_job_id=structured_source_job_id,
+    )
+    initial_result = derive_execution_phase(evidence)
+    runtime = context.deps.registry.get(agent_name) if agent_name else None
+    signature = _orphan_observation_signature(evidence=evidence, job=job, runtime=runtime)
+    tracker = context.orphan_idle_observations
+    observation = (
+        tracker.observe(
+            job_id=job_id,
+            signature=signature,
+            qualifies=(
+                running_observation.exact_idle_candidate
+                and initial_result.phase == 'provider_idle_pending_terminal'
+            ),
+            observed_at=generated_at,
+        )
+        if isinstance(tracker, _OrphanIdleObservationTracker)
+        else None
+    )
+    confirmed = observation is not None and observation.confirmed
+    result = derive_execution_phase(replace(evidence, orphan_suspected=True)) if confirmed else initial_result
+    running_recover_hint = 'provider_prompt_idle' if confirmed else running_observation.direct_hint
+    diagnostic = None
+    if confirmed and observation is not None:
+        diagnostic = _active_inbound_diagnostic(
+            job=job,
+            attempt=attempt,
+            inbound=inbound,
+            mailbox=mailbox,
+            lease=lease,
+            provider_evidence=provider_evidence,
+            generated_at=generated_at,
+            observation=observation,
+            required_observation_s=tracker.required_s,
+        )
+    return _ExecutionPhaseProjection(
+        phase_record=result.to_record(),
+        running_recover_hint=running_recover_hint,
+        active_inbound_diagnostic=diagnostic,
+    )
+
+
+def _orphan_observation_signature(*, evidence, job, runtime) -> tuple[str, ...] | None:
+    session_id = str(getattr(runtime, 'session_id', None) or '').strip()
+    session_ref = str(getattr(runtime, 'session_ref', None) or '').strip()
+    if not session_id and not session_ref:
+        return None
+    session_identity = f'session_id={session_id};session_ref={session_ref}'
+    values = (
+        evidence.job_id,
+        evidence.job_agent,
+        getattr(job, 'updated_at', None),
+        evidence.attempt_id,
+        evidence.attempt_job_id,
+        evidence.attempt_agent,
+        evidence.inbound_event_id,
+        evidence.inbound_attempt_id,
+        evidence.inbound_agent,
+        evidence.mailbox_agent,
+        evidence.mailbox_active_inbound_event_id,
+        evidence.lease_agent,
+        evidence.lease_inbound_event_id,
+        evidence.completion_job_id,
+        evidence.completion_agent,
+        getattr(runtime, 'project_id', None),
+        getattr(runtime, 'agent_name', None),
+        session_identity,
+        getattr(runtime, 'pane_id', None),
+        getattr(runtime, 'workspace_path', None),
+        getattr(runtime, 'binding_generation', None),
+        getattr(runtime, 'daemon_generation', None),
+        getattr(runtime, 'runtime_generation', None),
+    )
+    normalized = tuple(str(value or '').strip() for value in values)
+    if any(not value for value in normalized):
+        return None
+    return normalized
+
+
+def _active_inbound_diagnostic(
+    *,
+    job,
+    attempt,
+    inbound,
+    mailbox,
+    lease,
+    provider_evidence: _ExecutionProviderEvidence,
+    generated_at: str,
+    observation: _OrphanIdleObservation,
+    required_observation_s: float,
+) -> dict[str, object]:
+    job_id = str(getattr(job, 'job_id', '') or '').strip()
+    return {
+        'condition_kind': 'orphaned_active_inbound',
+        'reason': 'provider_idle_without_terminal',
+        'confidence': 'correlated_bounded_observation',
+        'job_id': job_id,
+        'job_status': _enum_token(getattr(job, 'status', None)),
+        'job_age_s': _nonnegative_age(generated_at, getattr(job, 'created_at', None)),
+        'job_last_progress_at': str(getattr(job, 'updated_at', '') or '').strip() or None,
+        'attempt_id': str(getattr(attempt, 'attempt_id', '') or '').strip() or None,
+        'attempt_state': _enum_token(getattr(attempt, 'attempt_state', None)),
+        'inbound_event_id': str(getattr(inbound, 'inbound_event_id', '') or '').strip() or None,
+        'inbound_status': _enum_token(getattr(inbound, 'status', None)),
+        'mailbox_state': _enum_token(getattr(mailbox, 'mailbox_state', None)),
+        'mailbox_head_event_type': str(getattr(mailbox, 'head_event_type', '') or '').strip() or None,
+        'mailbox_head_inbound_event_id': str(
+            getattr(mailbox, 'head_inbound_event_id', '') or ''
+        ).strip() or None,
+        'mailbox_active_inbound_event_id': str(
+            getattr(mailbox, 'active_inbound_event_id', '') or ''
+        ).strip() or None,
+        'lease_state': _enum_token(getattr(lease, 'lease_state', None)),
+        'lease_inbound_event_id': str(getattr(lease, 'inbound_event_id', '') or '').strip() or None,
+        'provider_state': provider_evidence.state,
+        'provider_reason': provider_evidence.reason,
+        'provider_last_progress_at': provider_evidence.last_progress_at,
+        'provider_observed_at': generated_at,
+        'observation_started_at': observation.first_observed_at,
+        'observed_for_s': observation.observed_for_s,
+        'required_observation_s': float(required_observation_s),
+        'recommended_action': 'explicit_comms_recover',
+        'recover_target': {
+            'job_id': job_id,
+            'block_reason': 'provider_prompt_idle',
+        },
+        'automatic_action': 'none',
+    }
+
+
+def _enum_token(value: object) -> str | None:
+    text = str(getattr(value, 'value', value) or '').strip().lower()
+    return text or None
+
+
+def _nonnegative_age(now: str, timestamp: str | None) -> float | None:
+    age = _job_age_seconds(now, timestamp)
+    return round(max(0.0, age), 3) if age is not None else None
 
 
 def _comm_attachments(job) -> list[dict[str, object]]:

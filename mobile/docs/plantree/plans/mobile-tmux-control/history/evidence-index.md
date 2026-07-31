@@ -2,6 +2,50 @@
 
 Date: 2026-06-29
 
+## 2026-07-22: Public Relay Encrypted Stream Package
+
+Evidence:
+
+- [public-relay-stream-package-20260722.md](public-relay-stream-package-20260722.md)
+
+Result:
+
+- Local protocol checkpoint: encrypted inner request/response and bounded
+  Terminal/notification streams pass Python real-socket and Dart transport
+  tests.
+- File chunking, host activation/bootstrap lifecycle, Android Emulator, and
+  public WSS acceptance remain open and are not claimed.
+
+## 2026-07-22: Public Relay Package D Local Implementation
+
+Evidence:
+
+- [public-relay-d-package-20260722.md](public-relay-d-package-20260722.md)
+
+Result:
+
+- Local Package D implementation checkpoint only: Python outbound host
+  connector, loopback operation allowlist, v2 E2EE request/response proxy,
+  Flutter socket transport surface, and local docs are present.
+- Python relay connector/service/crypto/admission focused tests passed.
+- Flutter/Dart execution, public Alibaba WSS, and Android public-route
+  acceptance are not claimed.
+
+## 2026-07-22: Public Relay Package A/B Candidate
+
+Evidence:
+
+- [public-relay-ab-package-20260722.md](public-relay-ab-package-20260722.md)
+
+Result:
+
+- Local Package A/B implementation checkpoint only: relay crypto protocol v2,
+  deterministic Python/Dart vectors, SQLite/WAL one-time invitation store,
+  host PoP session capabilities, and local operator CLI are covered by Python
+  and Flutter tests.
+- No production relay listener, public WSS acceptance, Android public-route
+  acceptance, host connector, or cloud deployment is claimed.
+
 ## 2026-07-14: Paseo-Inspired Device-Bound Push Integration
 
 Evidence:

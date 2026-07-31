@@ -5,9 +5,10 @@ from pathlib import Path
 
 from agents.models import AgentState
 from agents.store import AgentRuntimeStore
-from provider_runtime.helper_manifest import clear_helper_manifest
 from cli.services.tmux_cleanup_history import TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import cleanup_project_tmux_orphans_by_socket
+from provider_backends.codex.runtime_artifacts import cleanup_codex_app_server_shutdown_artifacts
+from provider_runtime.helper_manifest import clear_helper_manifest
 from terminal_runtime.tmux import normalize_socket_name
 
 from .models import StopAllExecution, StopAllSummary
@@ -36,6 +37,7 @@ def stop_all_project(
     extra_agent_names = extra_agent_dir_names(paths, configured_agent_names)
     actions_taken: list[str] = []
     deferred_actions = []
+    codex_runtime_dirs: list[Path] = []
 
     if project_namespace is not None:
         def _destroy_namespace() -> None:
@@ -51,6 +53,8 @@ def stop_all_project(
             registry=registry,
             runtime_store=runtime_store,
         )
+        if str(getattr(runtime, 'provider', '') or '').strip().lower() == 'codex':
+            codex_runtime_dirs.append(paths.agent_dir(agent_name) / 'provider-runtime' / 'codex')
         if (
             runtime is not None
             and str(runtime.runtime_ref or '').startswith('tmux:')
@@ -106,6 +110,12 @@ def stop_all_project(
         tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
     )
     terminate_runtime_pids(project_root=project_root, pid_candidates=pid_candidates)
+    cleaned_codex_artifacts = sum(
+        len(cleanup_codex_app_server_shutdown_artifacts(runtime_dir))
+        for runtime_dir in codex_runtime_dirs
+    )
+    if codex_runtime_dirs:
+        actions_taken.append(f'cleanup_codex_app_server_artifacts:{cleaned_codex_artifacts}')
     for agent_name in (*configured_agent_names, *extra_agent_names):
         clear_helper_manifest(paths.agent_helper_path(agent_name))
     actions_taken.append(f'terminate_runtime_pids:{len(pid_candidates)}')

@@ -1,0 +1,14 @@
+{
+  "name": "ccb-fixture-marketplace",
+  "owner": {
+    "name": "CCB Tests"
+  },
+  "plugins": [
+    {
+      "name": "ccb-fixture-plugin",
+      "source": "./plugins/ccb-fixture-plugin",
+      "description": "Offline fixture for managed Claude plugin inheritance",
+      "version": "1.0.0"
+    }
+  ]
+}

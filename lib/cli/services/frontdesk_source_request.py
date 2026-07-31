@@ -78,7 +78,13 @@ def resolve_frontdesk_source_request(context, *, source_job_id: str, job) -> dic
 
 
 def strip_ccb_reply_guidance(body: str) -> str:
-    return str(body or '').split('\n\nCCB reply guidance:', 1)[0]
+    text = str(body or '')
+    indexes = [
+        index
+        for marker in ('\n\nCCB_REPLY_MODE:', '\n\nCCB reply guidance:')
+        if (index := text.find(marker)) >= 0
+    ]
+    return text[: min(indexes)] if indexes else text
 
 
 def compact_text_artifact(value) -> dict[str, object] | None:

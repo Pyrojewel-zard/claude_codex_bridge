@@ -17,6 +17,10 @@ This document complements, but does not replace, the project startup contract in
 Storage class naming, diagnostics classification, shared-cache eligibility, and
 cleanup sequencing for managed Codex files are defined by
 [docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md).
+Authentication projection and logout isolation must also satisfy
+[docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
+Common asset routing, effective-root resolution, and marker ownership follow
+[docs/provider-asset-projection-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-asset-projection-contract.md).
 
 Detailed implementation sequencing lives in
 [docs/codex-managed-home-isolation-plan.md](/home/bfly/yunwei/ccb_source/docs/codex-managed-home-isolation-plan.md).
@@ -55,6 +59,31 @@ The canonical managed Codex runtime artifact layout includes at minimum:
 
 - `.ccb/agents/<agent>/provider-runtime/codex/completion/`
 - `.ccb/agents/<agent>/provider-runtime/codex/bridge.log`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.sock`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.pid`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.stdout.log`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.stderr.log`
+- `.ccb/agents/<agent>/provider-runtime/codex/app-server.remote`
+
+The app-server socket, pid, and remote marker are runtime-ephemeral evidence
+owned by the same agent runtime generation as the Codex bridge. The marker
+contains the exact socket path and is created only by the shell branch that
+executes the visible TUI with `--remote`; a live socket without that matching
+marker must not advertise active-turn follow-up. These files are not
+conversation or job authority. Failed startup, bridge shutdown, and project
+stop/kill must terminate the exact child and remove these owned artifacts.
+Project stop performs an idempotent post-termination cleanup so a bridge that
+reaches forced termination cannot leave a false remote-capability marker.
+
+When the preferred app-server socket exceeds the platform Unix-domain path
+limit or lives on an unsupported filesystem, CCB applies the same bounded
+socket-placement rule as the project control plane. The effective socket is
+`<runtime-socket-root>/app-server-<provider-runtime-hash>.sock`; pid, logs, and
+the remote marker remain in the agent provider-runtime directory, and the
+marker records that exact effective path. The hashed name is derived from the
+full provider runtime directory so two Codex agents cannot share a fallback
+socket. Bridge shutdown and project stop/kill must remove the effective socket
+as well as the local marker and pid.
 
 By default, the managed Codex home is:
 
@@ -150,13 +179,25 @@ When `ccb` starts a managed Codex agent:
 
 - it must explicitly set the effective `CODEX_HOME`
 - it must explicitly set the effective `CODEX_SESSION_ROOT`
+- it must explicitly set `CODEX_SQLITE_HOME == CODEX_HOME`
 - it must ensure `CODEX_SESSION_ROOT == CODEX_HOME/sessions`
+- on WSL, it must explicitly set `USERPROFILE == CODEX_HOME` and forward the
+  managed Codex roots through `WSLENV`; it must not inherit a Windows-side
+  global Codex home
 - it must create the managed home and session root before launching Codex
 - it must materialize required Codex config, credential, and credential-sidecar
   projections into the managed home without treating them as session identity
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart
+- optional source-home skills must be projected as independently marked
+  symlink-first entries inside a local managed `skills/` container; unmarked
+  conflicts are preserved, symlink failure falls back to a marked copy, and
+  Codex's nested `.system` collection is projected as one entry
+- independently of optional skill inheritance, it must verify the packaged
+  `ask`, `ccb-clear`, and Codex-only `reconnect` control skills immediately
+  before process creation; missing or stale named entries are repaired without
+  replacing unrelated skills
 - accepting an already live, identity-proven binding is not a managed launch and
   must not re-project the Codex home underneath that running process; when
   startup must launch or relaunch, it performs the managed-home refresh exactly
@@ -204,6 +245,9 @@ When `ccb` starts a managed Codex agent:
   stale bound-session fields before launch so Codex cannot auto-continue an
   incompatible conversation from the same home
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
+- it must export the canonical agent-scoped `CCB_SESSION_FILE` path into the
+  managed Codex process; this is a pointer to the same session authority that
+  startup owns, not permission to inherit a caller-shell session binding
 - it must create the canonical runtime `completion/` directory and `bridge.log` before the managed launch is considered bootstrap-ready
 - it must not rely on global `~/.codex/sessions` as the default managed session namespace
 
@@ -222,6 +266,21 @@ Project control-plane isolation rule:
 - those variables belong only to the managed Codex runtime process that was launched for one agent generation
 - a fresh project control-plane subprocess must treat such caller-shell variables as contamination, not startup authority
 - only the managed agent session file and managed provider-state under `.ccb/agents/<agent>/provider-state/codex/` may define restore authority for a project-scoped Codex agent
+
+Opt-in disconnect recovery follows the same boundary:
+
+- the inherited `reconnect` skill may start only the bundled
+  `codex-reconnect` watcher for its current Codex thread
+- when ordinary `TMUX` / `TMUX_PANE` variables are sanitized, the watcher must
+  resolve `tmux_socket_path`, `pane_id`, `codex_home`, and
+  `codex_session_id` from the owner-controlled active `CCB_SESSION_FILE`
+- any conflict between that file, `CODEX_THREAD_ID`, `CODEX_HOME`, or an
+  available `CODEX_TMUX_SESSION` must fail closed before a watcher starts
+- CCB-scoped watcher state belongs under the agent's provider runtime
+  directory and is not provider conversation or backend lifecycle authority
+- the watcher may follow CCB's owner-controlled `logs_2.sqlite` symlink only
+  when both the symlink and its resolved regular-file target are owned by the
+  current user
 
 ## 5. Binding Contract
 
@@ -266,6 +325,16 @@ terminalize the job. Codex collaboration `agent_message` and
 `sub_agent_activity` records are internal provider evidence and must not enter
 the caller-visible reply buffer. Caller-visible completion may come only from
 the bound top-level turn's final assistant message or `task_complete`.
+
+An active-job correction may enter that immutable binding only when the visible
+managed TUI is attached to the same agent-scoped app-server and CCB has both the
+managed thread id and bound active turn id. Injection uses native
+`turn/steer(threadId, expectedTurnId, input, clientUserMessageId)`; the expected
+turn id is a required atomic precondition and the follow-up id is the
+idempotency key. A legacy/local TUI, stale or unreachable socket, unbound turn,
+changed turn, or provider refusal must fail closed. Pane input, global session
+search, provider substitution, cancel/resubmit, and a new ordinary job are not
+valid implicit fallbacks for this operation.
 
 Native in-pane Codex session switches are supported only through the managed
 session-switch boundary:

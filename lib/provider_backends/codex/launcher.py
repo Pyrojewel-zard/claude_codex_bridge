@@ -108,6 +108,12 @@ def build_session_payload(
     provider_authority_fingerprint = current_provider_authority_fingerprint(profile)
     if provider_authority_fingerprint:
         payload['codex_provider_authority_fingerprint'] = provider_authority_fingerprint
+    if bool(prepared_state.get('codex_app_server_enabled')):
+        payload['codex_app_server_enabled'] = True
+        payload['codex_app_server_socket'] = str(prepared_state.get('codex_app_server_socket') or '')
+        payload['codex_app_server_remote_marker'] = str(
+            prepared_state.get('codex_app_server_remote_marker') or ''
+        )
     return payload
 
 

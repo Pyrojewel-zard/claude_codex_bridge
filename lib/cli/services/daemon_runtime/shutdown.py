@@ -3,7 +3,7 @@ from __future__ import annotations
 from ccbd.socket_client import CcbdClientError
 
 from .lease import mark_inspected_lease_unmounted
-from .models import CcbdServiceError, KillSummary
+from .models import KillSummary
 
 
 def _request_shutdown_or_mark_unmounted(
@@ -18,9 +18,11 @@ def _request_shutdown_or_mark_unmounted(
     if inspection.socket_connectable:
         try:
             client_factory(context).shutdown()
-        except CcbdClientError as exc:
-            if not force:
-                raise CcbdServiceError(str(exc)) from exc
+        except CcbdClientError:
+            # Shutdown intent is already authoritative.  The keeper may close
+            # the socket between inspection and this best-effort RPC; bounded
+            # pid cleanup and lifecycle finalization below must still run.
+            pass
     else:
         mark_inspected_lease_unmounted(manager, inspection, ownership_guard=guard)
 

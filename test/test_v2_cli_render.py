@@ -641,6 +641,8 @@ def test_render_queue_includes_runtime_health_fields() -> None:
         'agent_name: codex',
         'mailbox_id: mbx_codex',
         'summary_status: ok',
+        'execution_phase: blocked',
+        'execution_phase_reason: None',
         'mailbox_state: blocked',
         'runtime_state: degraded',
         'runtime_health: pane-dead',
@@ -1009,6 +1011,19 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
             'namespace_last_event_socket_path': '/tmp/repo/.ccb/ccbd/tmux.sock',
             'namespace_last_event_session_name': 'ccb-repo',
         },
+        'active_inbound_diagnostics': [
+            {
+                'condition_kind': 'orphaned_active_inbound',
+                'reason': 'provider_idle_without_terminal',
+                'job_id': 'job_orphaned',
+                'inbound_event_id': 'iev_orphaned',
+                'lease_state': 'acquired',
+                'observed_for_s': 30.0,
+                'required_observation_s': 30.0,
+                'recommended_action': 'explicit_comms_recover',
+                'automatic_action': 'none',
+            }
+        ],
         'agents': [
             {
                 'agent_name': 'codex',
@@ -1103,6 +1118,13 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     assert 'ccbd_last_project_view_tmux_command_count: 5.0' in doctor_lines
     assert 'ccbd_last_project_view_capture_pane_count: 1.0' in doctor_lines
     assert 'ccbd_last_project_view_store_scan_count: 2.0' in doctor_lines
+    assert 'active_inbound_diagnostic_count: 1' in doctor_lines
+    assert (
+        'active_inbound_diagnostic: condition=orphaned_active_inbound '
+        'reason=provider_idle_without_terminal job=job_orphaned '
+        'inbound=iev_orphaned lease=acquired observed_for_s=30.0 '
+        'required_s=30.0 recommended_action=explicit_comms_recover automatic_action=none'
+    ) in doctor_lines
     assert 'ccbd_rss_bytes: 123456.0' in doctor_lines
     assert 'ccbd_virtual_memory_bytes: 654321.0' in doctor_lines
     assert 'ccbd_fd_count: 8.0' in doctor_lines
@@ -1526,6 +1548,47 @@ def test_render_trace_appends_kimi_terminal_metadata_when_present() -> None:
         'created=2026-03-30T00:00:00Z updated=2026-03-30T00:05:01Z '
         'terminal_reason=kimi_native_turn_timeout reply_chars=0 total_secs=301.0 '
         'artifact_reply_forced=true receipt_class=no_captured_reply'
+    ) in lines
+
+
+def test_render_trace_includes_orphaned_active_inbound_diagnostic() -> None:
+    lines = render_trace(
+        {
+            'target': 'job_orphaned',
+            'resolved_kind': 'job',
+            'submission_id': None,
+            'message_id': None,
+            'attempt_id': 'att_orphaned',
+            'reply_id': None,
+            'job_id': 'job_orphaned',
+            'message_count': 0,
+            'attempt_count': 1,
+            'reply_count': 0,
+            'event_count': 1,
+            'job_count': 1,
+            'active_inbound_diagnostics': [
+                {
+                    'condition_kind': 'orphaned_active_inbound',
+                    'reason': 'provider_idle_without_terminal',
+                    'job_id': 'job_orphaned',
+                    'attempt_id': 'att_orphaned',
+                    'inbound_event_id': 'iev_orphaned',
+                    'lease_state': 'acquired',
+                    'observed_for_s': 30.0,
+                    'required_observation_s': 30.0,
+                    'recommended_action': 'explicit_comms_recover',
+                    'automatic_action': 'none',
+                }
+            ],
+        }
+    )
+
+    assert (
+        'active_inbound_diagnostic: condition=orphaned_active_inbound '
+        'reason=provider_idle_without_terminal job=job_orphaned '
+        'attempt=att_orphaned inbound=iev_orphaned lease=acquired '
+        'observed_for_s=30.0 required_s=30.0 '
+        'recommended_action=explicit_comms_recover automatic_action=none'
     ) in lines
 
 

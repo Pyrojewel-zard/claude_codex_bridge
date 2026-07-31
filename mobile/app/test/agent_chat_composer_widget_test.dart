@@ -11,6 +11,7 @@ import 'package:xterm/xterm.dart';
 import 'package:ccb_mobile/ccb_mobile.dart';
 import 'package:ccb_mobile/features/agent_chat/agent_chat_controller.dart';
 import 'package:ccb_mobile/features/agent_chat/agent_message_composer.dart';
+import 'package:ccb_mobile/features/agent_chat/agent_turn_sync_tracker.dart';
 import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace.dart';
 import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace_model.dart';
 import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace_view.dart';
@@ -1032,7 +1033,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(TerminalView), findsOneWidget);
-    expect(find.text('demo / lead'), findsOneWidget);
+    expect(find.text('demo'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('return-to-agent-chat-button')),
+      findsOneWidget,
+    );
     expect(
       find.text('tmux -S /tmp/ccb-demo/tmux.sock attach-session -t ccb-demo'),
       findsNothing,
@@ -1828,42 +1833,37 @@ void main() {
     expect(find.text('Check pane'), findsOneWidget);
   });
 
-  testWidgets('paired composer shows working while pane input is pending', (
+  testWidgets('paired composer waits for pane acknowledgement before working', (
     tester,
   ) async {
-    final secureStore = MemorySecureStore();
-    final profileStore = GatewayHostProfileStore(secureStore: secureStore);
-    final host = GatewayPairedHost(
-      profile: GatewayHostProfile(
-        hostId: 'proj-demo',
-        deviceId: 'dev-working-pane',
-        routeProvider: RouteProvider(
-          kind: RouteProviderKind.lan,
-          gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
-        ),
-        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
-      ),
-      deviceToken: 'device-secret',
-      projectId: 'proj-demo',
-    );
-    await profileStore.save(host);
     final terminalTransport = BlockingPasteTerminalTransport(
       writeError: const TerminalTransportException('enter failed'),
     );
     final repository = RecordingGatewayRepository();
+    final agent = _statusAgent(
+      provider: 'claude',
+      activityState: 'idle',
+      activitySource: 'claude_runtime',
+      activityReason: 'claude_pane_idle_prompt',
+    );
+    final view = _workspaceView(agent);
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ProjectHomeScreen(
-          repository: FakeMobileCcbRepository.demo(),
-          profileStore: profileStore,
-          gatewayRepositoryFactory: (profile) => repository,
-          gatewayTerminalTransportFactory: (profile) => terminalTransport,
+        home: Scaffold(
+          body: SelectedAgentWorkspace(
+            repository: repository,
+            terminalTransport: terminalTransport,
+            usePaneInputForMessages: true,
+            view: view,
+            agent: agent,
+            enableComposerCollapse: true,
+            onRefreshView: () async => view,
+          ),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    await activateStoredGatewayProfile(tester);
 
     await tester.enterText(
       find.byKey(const ValueKey('agent-message-composer')),
@@ -1879,18 +1879,10 @@ void main() {
       const Offset(0, -700),
     );
     expect(renderedTextContaining('pending pane send'), findsOneWidget);
-    final workingPlaceholderId = syntheticAgentWorkingConversationItemId(
-      'mobile',
-    );
-    await dragUntilVisible(
-      tester,
-      ValueKey('conversation-item-$workingPlaceholderId'),
-      const Offset(0, -700),
-    );
     expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
     expect(
       find.byKey(const ValueKey('conversation-working-status-text')),
-      findsOneWidget,
+      findsNothing,
     );
 
     terminalTransport.completePaste();
@@ -1901,8 +1893,53 @@ void main() {
     expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
     expect(
       find.byKey(const ValueKey('conversation-working-status-text')),
-      findsOneWidget,
+      findsNothing,
     );
+  });
+
+  testWidgets('Claude local clear does not retain a working placeholder', (
+    tester,
+  ) async {
+    final terminalTransport = RecordingTerminalTransport();
+    final repository = RecordingGatewayRepository();
+    final agent = _statusAgent(
+      provider: 'claude',
+      activityState: 'idle',
+      activitySource: 'claude_runtime',
+      activityReason: 'claude_pane_idle_prompt',
+    );
+    final view = _workspaceView(agent);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SelectedAgentWorkspace(
+            repository: repository,
+            terminalTransport: terminalTransport,
+            usePaneInputForMessages: true,
+            view: view,
+            agent: agent,
+            enableComposerCollapse: true,
+            onRefreshView: () async => view,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      '/clear',
+    );
+    await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+    await tester.pumpAndSettle();
+
+    expect(terminalTransport.sessions.single.pasted, ['/clear']);
+    expect(
+      find.byKey(const ValueKey('conversation-working-status-text')),
+      findsNothing,
+    );
+    expect(find.text('Working...'), findsNothing);
   });
 
   testWidgets('paired terminal output updates status without chat bubble', (
@@ -2279,6 +2316,151 @@ void main() {
     expect(find.text('Idle'), findsNothing);
     expect(find.text('mobile completed'), findsNothing);
   });
+
+  testWidgets(
+    'paired send keeps working through one stale idle reconciliation',
+    (tester) async {
+      final terminalTransport = RecordingTerminalTransport();
+      final repository = RecordingGatewayRepository();
+      var refreshCalls = 0;
+      final baselineTime = DateTime.utc(2026, 7, 28, 10);
+      var view = _workspaceView(
+        _statusAgent(
+          activityState: 'idle',
+          activitySource: 'claude_runtime',
+          activityReason: 'claude_pane_idle_prompt',
+        ),
+        generatedAt: baselineTime,
+        sequence: 10,
+        namespaceEpoch: 4,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                final agent = view.agentByName('mobile')!;
+                return SelectedAgentWorkspace(
+                  repository: repository,
+                  terminalTransport: terminalTransport,
+                  usePaneInputForMessages: true,
+                  view: view,
+                  agent: agent,
+                  enableComposerCollapse: true,
+                  onRefreshView: () async {
+                    refreshCalls += 1;
+                    final refreshed = _workspaceView(
+                      _statusAgent(
+                        activityState: 'idle',
+                        activitySource: 'claude_runtime',
+                        activityReason: 'claude_pane_idle_prompt',
+                      ),
+                      generatedAt: baselineTime.add(const Duration(seconds: 4)),
+                      sequence: 11,
+                      namespaceEpoch: 4,
+                    );
+                    setState(() {
+                      view = refreshed;
+                    });
+                    return refreshed;
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'provider never consumed this turn',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      expect(refreshCalls, 0);
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+
+      expect(refreshCalls, 1);
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsOneWidget,
+      );
+      expect(find.text('mobile completed'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'acknowledged pane send becomes unconfirmed without start evidence',
+    (tester) async {
+      final terminalTransport = RecordingTerminalTransport();
+      final repository = RecordingGatewayRepository();
+      var refreshCalls = 0;
+      final agent = _statusAgent(
+        provider: 'claude',
+        activityState: 'idle',
+        activitySource: 'claude_runtime',
+        activityReason: 'claude_pane_idle_prompt',
+      );
+      final view = _workspaceView(
+        agent,
+        generatedAt: DateTime.utc(2026, 7, 28, 10),
+        sequence: 10,
+        namespaceEpoch: 4,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SelectedAgentWorkspace(
+              repository: repository,
+              terminalTransport: terminalTransport,
+              usePaneInputForMessages: true,
+              view: view,
+              agent: agent,
+              enableComposerCollapse: true,
+              onRefreshView: () async {
+                refreshCalls += 1;
+                return view;
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'provider never starts',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsOneWidget,
+      );
+
+      await tester.pump(agentTurnStartObservationTimeout);
+      await tester.pumpAndSettle();
+
+      expect(refreshCalls, greaterThanOrEqualTo(2));
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsNothing,
+      );
+      expect(find.text('Check pane'), findsOneWidget);
+    },
+  );
 
   testWidgets('idle snapshots do not replay or poll a pending pane send', (
     tester,
@@ -2937,13 +3119,14 @@ class _WorkspaceRefreshStatusHarnessState
 }
 
 CcbAgent _statusAgent({
+  String provider = 'codex',
   String? activityState,
   String? activitySource,
   String? activityReason,
 }) {
   return CcbAgent(
     name: 'mobile',
-    provider: 'codex',
+    provider: provider,
     window: 'main',
     order: 0,
     active: true,
@@ -2995,14 +3178,19 @@ class _FakeFilePicker extends FilePickerPlatform {
   }
 }
 
-CcbProjectView _workspaceView(CcbAgent agent) {
+CcbProjectView _workspaceView(
+  CcbAgent agent, {
+  DateTime? generatedAt,
+  int? sequence,
+  int namespaceEpoch = 7,
+}) {
   return CcbProjectView(
     project: const CcbProject(
       id: 'proj-demo',
       displayName: 'Project',
       root: '/tmp/project',
     ),
-    namespaceEpoch: 7,
+    namespaceEpoch: namespaceEpoch,
     tmuxSocketPath: null,
     tmuxSessionName: null,
     activeWindow: agent.window,
@@ -3012,6 +3200,8 @@ CcbProjectView _workspaceView(CcbAgent agent) {
     contentItems: const [],
     notifications: const [],
     terminalHistories: const {},
+    generatedAt: generatedAt,
+    sequence: sequence,
   );
 }
 

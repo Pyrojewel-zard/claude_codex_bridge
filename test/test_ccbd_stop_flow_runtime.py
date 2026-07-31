@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from agents.models import AgentRuntime, AgentState
 from ccbd.stop_flow_runtime.pid_cleanup import collect_pid_candidates
 from ccbd.stop_flow_runtime.service import stop_all_project
 from cli.services.kill_runtime.pid_cleanup import collect_project_authority_pid_candidates
@@ -52,6 +53,59 @@ def test_stop_all_project_defers_namespace_destroy_until_after_response(tmp_path
     execution.deferred_actions[0]()
 
     assert events == ['destroy:stop_all:True']
+
+
+def test_stop_all_project_removes_codex_app_server_authority_artifacts(tmp_path: Path) -> None:
+    from storage.paths import PathLayout
+
+    paths = PathLayout(tmp_path)
+    runtime_dir = paths.agent_dir('codex') / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / 'app-server.pid').write_text('not-a-live-pid\n', encoding='utf-8')
+    (runtime_dir / 'app-server.remote').write_text('/run/user/1000/ccb-runtime/app-server-test.sock\n', encoding='utf-8')
+    runtime = AgentRuntime(
+        agent_name='codex',
+        state=AgentState.IDLE,
+        pid=None,
+        started_at='2026-07-21T00:00:00Z',
+        last_seen_at='2026-07-21T00:00:00Z',
+        runtime_ref=None,
+        session_ref=None,
+        workspace_path=str(tmp_path),
+        project_id='proj-1',
+        backend_type='tmux',
+        queue_depth=0,
+        socket_path=None,
+        health='healthy',
+        provider='codex',
+    )
+
+    class FakeRegistry:
+        def list_known_agents(self):
+            return ('codex',)
+
+        def get(self, agent_name):
+            assert agent_name == 'codex'
+            return runtime
+
+        def upsert_authority(self, updated):
+            return updated
+
+    execution = stop_all_project(
+        project_root=tmp_path,
+        project_id='proj-1',
+        paths=paths,
+        registry=FakeRegistry(),
+        project_namespace=None,
+        clock=lambda: '2026-07-21T00:00:00Z',
+        force=False,
+        cleanup_project_tmux_orphans_by_socket_fn=lambda **kwargs: (),
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+    )
+
+    assert not (runtime_dir / 'app-server.pid').exists()
+    assert not (runtime_dir / 'app-server.remote').exists()
+    assert 'cleanup_codex_app_server_artifacts:2' in execution.actions_taken
 
 
 def test_extra_agent_dir_names_skips_configured_names(tmp_path: Path) -> None:

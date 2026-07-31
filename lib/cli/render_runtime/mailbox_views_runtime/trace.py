@@ -18,6 +18,9 @@ def render_trace(payload: Mapping[str, object]) -> tuple[str, ...]:
         lines.append(_event_line(event))
     for job in payload.get('jobs') or ():
         lines.append(_job_line(job))
+    for diagnostic in payload.get('active_inbound_diagnostics') or ():
+        if isinstance(diagnostic, Mapping):
+            lines.append(_active_inbound_diagnostic_line(diagnostic))
     return tuple(lines)
 
 
@@ -117,6 +120,22 @@ def _job_extra_fields(job) -> str:
             continue
         fields.append(f'{key}={_format_trace_value(job.get(key))}')
     return ' '.join(fields)
+
+
+def _active_inbound_diagnostic_line(diagnostic: Mapping[str, object]) -> str:
+    return (
+        'active_inbound_diagnostic: '
+        f'condition={diagnostic.get("condition_kind")} '
+        f'reason={diagnostic.get("reason")} '
+        f'job={diagnostic.get("job_id")} '
+        f'attempt={diagnostic.get("attempt_id")} '
+        f'inbound={diagnostic.get("inbound_event_id")} '
+        f'lease={diagnostic.get("lease_state")} '
+        f'observed_for_s={diagnostic.get("observed_for_s")} '
+        f'required_s={diagnostic.get("required_observation_s")} '
+        f'recommended_action={diagnostic.get("recommended_action")} '
+        f'automatic_action={diagnostic.get("automatic_action")}'
+    )
 
 
 def _format_trace_value(value: object) -> str:

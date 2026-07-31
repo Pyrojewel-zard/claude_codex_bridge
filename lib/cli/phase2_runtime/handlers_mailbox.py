@@ -86,9 +86,16 @@ def handle_cancel(context, command, out, services) -> int:
     return 0
 
 
+def handle_followup(context, command, out, services) -> int:
+    payload = services.active_job_followup(context, command)
+    services.write_lines(out, services.render_followup(payload))
+    return 0 if str(payload.get('status') or '') == 'injected' else 3
+
+
 __all__ = [
     'handle_ack',
     'handle_cancel',
+    'handle_followup',
     'handle_inbox',
     'handle_pend',
     'handle_ping',

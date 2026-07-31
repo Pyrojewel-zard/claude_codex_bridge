@@ -48,4 +48,4 @@ Before every ask, decide:
   continuation completion upstream.
 - `ask get`, `pend`, `watch`, and `ping` are diagnostics-only commands for
   explicit debugging requests, not normal ask workflow tools.
-- Do not manually append output-policy text; `ask` injects reply guidance.
+- Do not manually append output-policy text; stable reply policy comes from managed CCB memory, and `ask` adds only requested compact/silent mode metadata.

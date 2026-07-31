@@ -26,6 +26,7 @@ from cli.startup_process_trace import (
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
+from workspace.binding import WorkspaceBindingStore
 from workspace.materializer import WorkspaceMaterializer
 from workspace.planner import WorkspacePlanner
 import pytest
@@ -64,6 +65,7 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
 
     seen: dict[str, object] = {}
+    cleared: list[object] = []
 
     class _FakeClient:
         def start(self, **kwargs):
@@ -79,6 +81,10 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     monkeypatch.setattr(
         'cli.services.start.ensure_daemon_started',
         lambda context: SimpleNamespace(client=_FakeClient(), started=True),
+    )
+    monkeypatch.setattr(
+        'cli.services.start.clear_applied_config_restart_intent',
+        lambda context: cleared.append(context),
     )
 
     summary = start_agents(context, command)
@@ -97,6 +103,7 @@ def test_start_agents_calls_ccbd_start_with_cli_flags(tmp_path: Path, monkeypatc
     assert summary.daemon_started is True
     assert summary.startup_run_id == startup_run_id
     assert summary.socket_path == str(context.paths.ccbd_socket_path)
+    assert cleared == [context]
 
 
 def test_foreground_start_refreshes_sidebar_with_current_cli_when_daemon_is_reused(
@@ -719,6 +726,7 @@ def test_start_agents_retires_removed_merged_worktree_before_start(tmp_path: Pat
     AgentSpecStore(layout).save(spec)
     plan = WorkspacePlanner().plan(spec, bootstrap_project(project_root))
     WorkspaceMaterializer().materialize(plan)
+    WorkspaceBindingStore().save(plan)
 
     command = ParsedStartCommand(project=None, agent_names=(), restore=True, auto_permission=True)
     context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
@@ -771,6 +779,7 @@ def test_start_agents_blocks_removed_unmerged_worktree_before_start(tmp_path: Pa
     (plan.workspace_path / 'feature.txt').write_text('worktree-only\n', encoding='utf-8')
     subprocess.run(['git', '-C', str(plan.workspace_path), 'add', '.'], check=True)
     subprocess.run(['git', '-C', str(plan.workspace_path), 'commit', '-m', 'worktree'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    WorkspaceBindingStore().save(plan)
 
     command = ParsedStartCommand(project=None, agent_names=(), restore=True, auto_permission=True)
     context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)

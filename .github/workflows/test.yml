@@ -29,7 +29,8 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli jsonschema
+          python -m pip install pytest tomli jsonschema \
+            --requirement deploy/mobile-relay/requirements.txt
 
       - name: Install tmux
         if: runner.os != 'Windows'
@@ -52,6 +53,10 @@ jobs:
       - name: Run tests
         run: pytest test/ -v --tb=short -m "not provider_blackbox"
         shell: bash
+        env:
+          # macOS AF_UNIX paths are limited; RUNNER_TEMP can make pytest's
+          # per-test socket paths exceed that limit after /var resolves.
+          TMPDIR: /tmp
 
       - name: Guard dynamic layout provider matrix smoke
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
@@ -349,7 +354,8 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli jsonschema
+          python -m pip install pytest tomli jsonschema \
+            --requirement deploy/mobile-relay/requirements.txt
 
       - name: Install tmux
         shell: bash
@@ -419,7 +425,8 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli jsonschema
+          python -m pip install pytest tomli jsonschema \
+            --requirement deploy/mobile-relay/requirements.txt
 
       - name: Install tmux
         shell: bash
@@ -492,14 +499,16 @@ jobs:
 
           test -d "$smoke_root/install/.venv"
           test -x "$smoke_root/install/bin/_ccb-python"
-          "$smoke_root/install/bin/_ccb-python" --resolve >/dev/null
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/ccb"
+          managed_python="$smoke_root/install/.venv/bin/python"
+          CCB_PYTHON="$managed_python" \
+            "$smoke_root/install/bin/_ccb-python" --resolve | grep -F "$managed_python"
+          grep -F "$managed_python" "$smoke_root/bin/ccb"
           grep -F "$smoke_root/install/ccb.py" "$smoke_root/bin/ccb"
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/ask"
+          grep -F "$managed_python" "$smoke_root/bin/ask"
           grep -F "$smoke_root/install/bin/ask.py" "$smoke_root/bin/ask"
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/autonew"
+          grep -F "$managed_python" "$smoke_root/bin/autonew"
           grep -F "$smoke_root/install/bin/autonew.py" "$smoke_root/bin/autonew"
-          grep -F "$smoke_root/install/bin/_ccb-python" "$smoke_root/bin/ctx-transfer"
+          grep -F "$managed_python" "$smoke_root/bin/ctx-transfer"
           grep -F "$smoke_root/install/bin/ctx-transfer.py" "$smoke_root/bin/ctx-transfer"
           test -x "$smoke_root/bin/ccb"
           test -x "$smoke_root/bin/ask"
@@ -554,7 +563,8 @@ jobs:
           sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
           python3.11 -m venv /tmp/ccb-ci-py311
           /tmp/ccb-ci-py311/bin/python -m pip install --upgrade pip
-          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli jsonschema
+          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli jsonschema \
+            --requirement deploy/mobile-relay/requirements.txt
           if [ ! -f "$HOME/.cargo/env" ]; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal --default-toolchain stable
@@ -564,18 +574,21 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           source "$HOME/.cargo/env"
           bin/build-ccb-runtime-accelerator
 
       - name: Syntax check in WSL
         shell: wsl-bash {0}
         run: |
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           /tmp/ccb-ci-py311/bin/python -m compileall -q lib bin ccb.py
 
       - name: Smoke ccb startup from /mnt/c in WSL
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
 
           repo="$(pwd)"
           project="/mnt/c/Temp/ccb-wsl-mnt-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
@@ -653,6 +666,7 @@ jobs:
       - name: Run tests in WSL with tmux
         shell: wsl-bash {0}
         run: |
+          export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python
           export TERM=xterm-256color
           export PATH="/tmp/ccb-ci-py311/bin:$PATH"
           python -m pytest test/ -v --tb=short -m "not provider_blackbox"

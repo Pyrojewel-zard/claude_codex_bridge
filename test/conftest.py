@@ -28,7 +28,9 @@ def pytest_configure() -> None:
 def _write_provider_stub_launchers(bin_dir: Path) -> None:
     stub_path = (repo_root / "test" / "stubs" / "provider_stub.py").resolve()
     python_exe = sys.executable
-    providers = ("codex", "gemini", "claude", "opencode", "droid", "agy", "kimi", "deepcode", "grok")
+    providers = (
+        "codex", "gemini", "claude", "opencode", "droid", "agy", "kimi", "deepcode", "grok", "qodercli", "qoderclicn",
+    )
     for provider in providers:
         posix_launcher = bin_dir / provider
         posix_launcher.write_text(
@@ -51,7 +53,13 @@ def _write_provider_stub_launchers(bin_dir: Path) -> None:
 
 
 def _stub_provider_name(provider: str) -> str:
-    return "deepseek" if provider == "deepcode" else provider
+    if provider == "deepcode":
+        return "deepseek"
+    if provider == "qodercli":
+        return "qoder"
+    if provider == "qoderclicn":
+        return "qoderclicn"
+    return provider
 
 
 @pytest.fixture(autouse=True)
@@ -84,8 +92,22 @@ def _install_provider_stubs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
         "CCB_CALLER_PROJECT_ID",
         "CCB_CALLER_PROJECT_ROOT",
         "CCB_CALLER_RUNTIME_DIR",
+        "CCB_SESSION_FILE",
         "CCB_SESSION_ID",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_PROJECTS_ROOT",
+        "CLAUDE_PROJECT_ROOT",
+        "CLAUDE_SESSION_ENV_ROOT",
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        "CODEX_HOME",
         "CODEX_RUNTIME_DIR",
+        "CODEX_SESSION_ROOT",
+        "CODEX_SQLITE_HOME",
+        "GEMINI_CLI_HOME",
+        "GEMINI_ROOT",
+        "OPENCODE_LOG_ROOT",
+        "OPENCODE_RUNTIME_DIR",
+        "OPENCODE_STORAGE_ROOT",
     ):
         monkeypatch.delenv(name, raising=False)
 

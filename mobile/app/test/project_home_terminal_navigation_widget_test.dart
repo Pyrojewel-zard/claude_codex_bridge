@@ -57,10 +57,21 @@ void main() {
       CcbTerminalTargetKind.agent,
     );
 
-    await tester.pageBack();
+    await tester.tap(find.byKey(const ValueKey('return-to-agent-chat-button')));
     await tester.pumpAndSettle();
 
     expect(find.byType(TerminalView), findsNothing);
+    expect(
+      find.byKey(const ValueKey('agent-message-composer')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('project-list-screen')), findsOneWidget);
   });
 
   testWidgets(
@@ -97,6 +108,44 @@ void main() {
       expect(find.text('Project view is stale'), findsNothing);
     },
   );
+
+  testWidgets('paired terminal rejects a pane changed during target reread', (
+    tester,
+  ) async {
+    final profileStore = await _profileStoreWithHost();
+    final gatewayRepository = _TerminalNavigationRepository(
+      initialPayload: demoPayloadWithReviewWindow(),
+      focusedPayload: _payloadWithLeadPane('%9'),
+    )..returnFocusedView = false;
+    final terminalTransport = RecordingTerminalTransport();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository(
+            projectViewPayload: demoPayloadWithReviewWindow(),
+          ),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('agent-lead')));
+    await tester.pumpAndSettle();
+    gatewayRepository.returnFocusedView = true;
+    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
+    await tester.pumpAndSettle();
+
+    expect(terminalTransport.requests, isEmpty);
+    expect(
+      find.byKey(const ValueKey('agent-terminal-target-error')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Project view is stale'), findsOneWidget);
+  });
 
   testWidgets('paired terminal navigation does not depend on focus success', (
     tester,
@@ -148,16 +197,17 @@ void main() {
 
     expect(repository.focusAgentCalls, isEmpty);
     expect(find.byType(TerminalView), findsOneWidget);
-    expect(find.text('demo / lead'), findsOneWidget);
+    expect(find.text('demo'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('return-to-agent-chat-button')),
+      findsOneWidget,
+    );
 
-    await tester.pageBack();
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
     expect(find.byType(TerminalView), findsNothing);
-    expect(
-      find.byKey(const ValueKey('agent-message-composer')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('project-list-screen')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('agent-workspace-mode-switch')),
       findsNothing,
@@ -205,6 +255,19 @@ Map<String, Object?> _payloadWithoutNamespaceEpoch() {
   return payload;
 }
 
+Map<String, Object?> _payloadWithLeadPane(String paneId) {
+  final payload =
+      jsonDecode(jsonEncode(demoPayloadWithReviewWindow()))
+          as Map<String, Object?>;
+  final view = payload['view']! as Map<String, Object?>;
+  final agents = view['agents']! as List<Object?>;
+  final lead = agents.cast<Map<String, Object?>>().firstWhere(
+    (agent) => agent['name'] == 'lead',
+  );
+  lead['pane_id'] = paneId;
+  return payload;
+}
+
 class _TerminalNavigationRepository implements MobileCcbRepository {
   _TerminalNavigationRepository({
     required Map<String, Object?> initialPayload,
@@ -219,6 +282,7 @@ class _TerminalNavigationRepository implements MobileCcbRepository {
   final CcbProjectView _focused;
   final Object? focusError;
   final focusAgentCalls = <(String, String, int)>[];
+  bool? returnFocusedView;
 
   @override
   Future<CcbProjectView> focusAgent({
@@ -245,6 +309,10 @@ class _TerminalNavigationRepository implements MobileCcbRepository {
 
   @override
   Future<CcbProjectView> getProjectView(String projectId) async {
+    final forced = returnFocusedView;
+    if (forced != null) {
+      return forced ? _focused : _initial;
+    }
     if (projectId == _focused.project.id) {
       return _focused;
     }

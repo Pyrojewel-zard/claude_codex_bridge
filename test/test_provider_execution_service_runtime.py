@@ -12,9 +12,19 @@ from completion.models import (
     CompletionSourceKind,
     CompletionStatus,
 )
-from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
-from provider_execution.registry import build_default_execution_registry
-from provider_execution.reliability import CompletionReliabilityPolicy, adapter_reliability_policy
+from provider_execution.base import (
+    ProviderPollResult,
+    ProviderRuntimeContext,
+    ProviderSubmission,
+)
+from provider_execution.registry import (
+    ProviderExecutionRegistry,
+    build_default_execution_registry,
+)
+from provider_execution.reliability import (
+    CompletionReliabilityPolicy,
+    adapter_reliability_policy,
+)
 from provider_execution.service import ExecutionService
 from provider_execution.service_runtime.persistence import persist_submission
 from provider_execution.service_runtime.polling import poll_updates
@@ -82,6 +92,76 @@ def test_default_pane_backed_providers_wait_indefinitely_without_terminal_eviden
         policy = adapter_reliability_policy(adapter)
         assert policy is not None
         assert policy.no_terminal_timeout_s == 0.0
+
+
+def test_pi_waits_indefinitely_without_terminal_evidence_by_default() -> None:
+    registry = build_default_execution_registry(
+        include_optional=True,
+        include_test_doubles=False,
+    )
+
+    adapter = registry.get("pi")
+    assert adapter is not None
+    policy = adapter_reliability_policy(adapter)
+    assert policy is not None
+    assert policy.primary_authority == "pi_extension_agent_settled"
+    assert policy.no_terminal_timeout_s == 0.0
+
+
+def test_execution_service_captures_provider_cancel_evidence_without_mutating_active() -> None:
+    captured: list[tuple[ProviderSubmission, str]] = []
+
+    class Adapter:
+        provider = "fake"
+
+        def capture_cancel_evidence(self, submission, *, now):
+            captured.append((submission, now))
+            return _decision(reply="reply already on disk")
+
+    service = ExecutionService(
+        ProviderExecutionRegistry([Adapter()]),
+        clock=lambda: "2026-04-06T00:00:02Z",
+    )
+    submission = _submission()
+    service._active["job_1"] = submission
+
+    evidence = service.capture_cancel_evidence("job_1")
+
+    assert evidence is not None
+    assert evidence.reply == "reply already on disk"
+    assert captured == [(submission, "2026-04-06T00:00:02Z")]
+    assert service._active["job_1"] is submission
+
+
+def test_execution_service_cancel_evidence_is_best_effort_and_requires_reply() -> None:
+    class Adapter:
+        provider = "fake"
+
+        def capture_cancel_evidence(self, submission, *, now):
+            raise RuntimeError("broken optional evidence reader")
+
+    service = ExecutionService(
+        ProviderExecutionRegistry([Adapter()]),
+        clock=lambda: "2026-04-06T00:00:02Z",
+    )
+    service._active["job_1"] = _submission()
+
+    assert service.capture_cancel_evidence("job_1") is None
+    assert service.capture_cancel_evidence("missing") is None
+
+    class EmptyAdapter:
+        provider = "fake"
+
+        def capture_cancel_evidence(self, submission, *, now):
+            return _decision(reply="")
+
+    empty_service = ExecutionService(
+        ProviderExecutionRegistry([EmptyAdapter()]),
+        clock=lambda: "2026-04-06T00:00:02Z",
+    )
+    empty_service._active["job_1"] = _submission()
+
+    assert empty_service.capture_cancel_evidence("job_1") is None
 
 
 def test_poll_updates_processes_terminal_result_and_cleans_active_state(monkeypatch) -> None:

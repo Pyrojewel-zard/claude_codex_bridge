@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -21,13 +22,16 @@ from agents.models import (
     SkillOverlaySpec,
     WorkspaceMode,
 )
+from cli.services.role_command_policy import RoleCommandPolicy
 import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
-from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
+import provider_backends.droid.home as droid_home_runtime
 from provider_backends.droid.home import materialize_droid_home_config
-from provider_backends.kiro.home import materialize_kiro_home_config
+import provider_backends.gemini.launcher_runtime.home as gemini_home_runtime
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+from provider_backends.qwen.home import materialize_qwen_home_config
 import provider_core.projected_assets as projected_assets
+import provider_core.projected_settings as projected_settings
 import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
 from provider_profiles import materialize_provider_profile, validate_provider_runtime_home_uniqueness
@@ -67,6 +71,104 @@ def _latest_agent_event(layout: PathLayout, agent_name: str, event_type: str) ->
         if event.get('event_type') == event_type:
             return event
     raise AssertionError(f'{event_type} event not found: {events}')
+
+
+def test_source_test_codex_shell_path_prefers_project_command_shims(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    command_dir = project_root / '.ccb' / 'bin'
+    command_dir.mkdir(parents=True)
+    for name in ('ask', 'ccb', 'codex-reconnect'):
+        (command_dir / name).write_text('#!/bin/sh\n', encoding='utf-8')
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'config.toml').write_text(
+        '[shell_environment_policy.set]\nKEEP = "yes"\nPATH = "/user/bin:/usr/bin"\n',
+        encoding='utf-8',
+    )
+    target_home = tmp_path / 'target-home'
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((target_home / 'config.toml').read_text(encoding='utf-8'))
+    configured = config['shell_environment_policy']['set']
+    assert configured['KEEP'] == 'yes'
+    assert configured['PATH'].split(os.pathsep) == [
+        str(command_dir.resolve()),
+        '/user/bin',
+        '/usr/bin',
+    ]
+
+
+def test_source_test_codex_shell_path_supports_missing_user_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    command_dir = project_root / '.ccb' / 'bin'
+    command_dir.mkdir(parents=True)
+    for name in ('ask', 'ccb', 'codex-reconnect'):
+        (command_dir / name).write_text('#!/bin/sh\n', encoding='utf-8')
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'config.toml').write_text('model = "gpt-test"\n', encoding='utf-8')
+    target_home = tmp_path / 'target-home'
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+    monkeypatch.setenv('PATH', '/user/bin:/usr/bin')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((target_home / 'config.toml').read_text(encoding='utf-8'))
+    assert config['shell_environment_policy']['set']['PATH'].split(os.pathsep) == [
+        str(command_dir.resolve()),
+        '/user/bin',
+        '/usr/bin',
+    ]
+
+
+def test_release_codex_shell_path_preserves_user_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    command_dir = project_root / '.ccb' / 'bin'
+    command_dir.mkdir(parents=True)
+    for name in ('ask', 'ccb'):
+        (command_dir / name).write_text('#!/bin/sh\n', encoding='utf-8')
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'config.toml').write_text(
+        '[shell_environment_policy.set]\nPATH = "/user/bin:/usr/bin"\n',
+        encoding='utf-8',
+    )
+    target_home = tmp_path / 'target-home'
+    monkeypatch.delenv('CCB_TEST_ENTRYPOINT', raising=False)
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((target_home / 'config.toml').read_text(encoding='utf-8'))
+    assert config['shell_environment_policy']['set']['PATH'] == '/user/bin:/usr/bin'
 
 
 def _write_codex_plugin_source(
@@ -110,6 +212,71 @@ def _write_codex_plugin_source(
     (plugin_root / 'plugins' / plugin_name / 'skills' / plugin_name / 'SKILL.md').write_text(
         skill_body,
         encoding='utf-8',
+    )
+
+
+def _write_droid_plugin_source(home: Path) -> None:
+    plugin_root = home / 'plugins'
+    marketplace_root = plugin_root / 'marketplaces' / 'test-marketplace'
+    cache_root = plugin_root / 'cache' / 'test-marketplace' / 'test-plugin' / '1.0.0'
+    (marketplace_root / '.factory-plugin').mkdir(parents=True, exist_ok=True)
+    (cache_root / '.factory-plugin').mkdir(parents=True, exist_ok=True)
+    (marketplace_root / '.factory-plugin' / 'marketplace.json').write_text(
+        json.dumps({'name': 'test-marketplace', 'plugins': []}),
+        encoding='utf-8',
+    )
+    (cache_root / '.factory-plugin' / 'plugin.json').write_text(
+        json.dumps({'name': 'test-plugin', 'version': '1.0.0'}),
+        encoding='utf-8',
+    )
+    (plugin_root / 'known_marketplaces.json').write_text(
+        json.dumps(
+            {
+                'test-marketplace': {
+                    'source': {'source': 'directory', 'path': str(marketplace_root)},
+                    'installLocation': str(marketplace_root),
+                }
+            }
+        ),
+        encoding='utf-8',
+    )
+    (plugin_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'schemaVersion': 1,
+                'plugins': {
+                    'test-plugin@test-marketplace': [
+                        {
+                            'scope': 'user',
+                            'installPath': str(cache_root),
+                            'version': '1.0.0',
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+    (home / 'settings.json').write_text(
+        json.dumps({'enabledPlugins': {'test-plugin@test-marketplace': True}}),
+        encoding='utf-8',
+    )
+
+
+def _hard_role_policy(tmp_path: Path) -> RoleCommandPolicy:
+    return RoleCommandPolicy(
+        role_id='test.hard',
+        path=tmp_path / 'command-surface.toml',
+        mode='deny_all_except',
+        enforcement='required',
+        if_unsupported='fail_mount',
+        generic_shell=False,
+        generic_ccb=False,
+        supported_providers=('claude',),
+        provider_tools=(),
+        allowed_effects=(),
+        forbidden_effects=(),
+        allowed=(),
     )
 
 
@@ -166,6 +333,30 @@ def test_refresh_codex_auth_projection_preserves_target_when_source_is_invalid(
     assert (target_home / 'auth.json').read_text(encoding='utf-8') == target_auth
 
 
+def test_refresh_codex_auth_projection_rejects_symlink_source(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    external_home = tmp_path / 'external'
+    source_home.mkdir()
+    target_home.mkdir()
+    external_home.mkdir()
+    external_auth = external_home / 'auth.json'
+    external_auth.write_text('{"tokens":{"refresh_token":"external"}}\n', encoding='utf-8')
+    (source_home / 'auth.json').symlink_to(external_auth)
+    target_auth = '{"tokens":{"refresh_token":"agent-local"}}\n'
+    (target_home / 'auth.json').write_text(target_auth, encoding='utf-8')
+
+    result = codex_home_config.refresh_codex_auth_projection(
+        target_home,
+        source_home=source_home,
+    )
+
+    assert result.refreshed is False
+    assert 'missing or invalid' in result.detail
+    assert (target_home / 'auth.json').read_text(encoding='utf-8') == target_auth
+    assert external_auth.read_text(encoding='utf-8') == '{"tokens":{"refresh_token":"external"}}\n'
+
+
 def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-codex-home'
@@ -186,7 +377,8 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     (source_home / 'company-codex-api-key').write_text('company-key\n', encoding='utf-8')
     (source_home / 'company-codex.config.toml').write_text('profile = "company"\n', encoding='utf-8')
     (source_home / 'company-extra-token').write_text('extra-token\n', encoding='utf-8')
-    (source_home / 'skills' / 'demo.md').write_text('demo skill\n', encoding='utf-8')
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('demo skill\n', encoding='utf-8')
     (source_home / 'commands' / 'demo.md').write_text('demo command\n', encoding='utf-8')
     _write_codex_plugin_source(source_home)
     monkeypatch.setenv('CODEX_HOME', str(source_home))
@@ -247,7 +439,8 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
         workspace_path=project_root,
     )
     assert (runtime_home / 'company-codex-api-key').read_text(encoding='utf-8') == 'company-key-v2\n'
-    assert (runtime_home / 'skills' / 'demo.md').is_file()
+    assert (runtime_home / 'skills' / 'demo' / 'SKILL.md').is_file()
+    assert (runtime_home / 'skills' / 'demo.ccb-projection.json').is_file()
     assert not (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'commands').is_symlink()
@@ -271,6 +464,7 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
         '\n'.join(
             [
                 'model = "gpt-5.5"',
+                'check_for_update_on_startup = true',
                 '',
                 '[features]',
                 'external_migration = true',
@@ -294,6 +488,8 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+    config = tomllib.loads(config_text)
+    assert config['check_for_update_on_startup'] is False
 
 
 def test_materialize_codex_profile_marks_project_and_workspace_trusted(tmp_path: Path, monkeypatch) -> None:
@@ -606,6 +802,7 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
         '\n'.join(
             [
                 'model = "gpt-5.5"',
+                'check_for_update_on_startup = true',
                 '',
                 '[features]',
                 'external_migration = true',
@@ -633,6 +830,8 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+    config = tomllib.loads(config_text)
+    assert config['check_for_update_on_startup'] is False
     assert '[projects."/tmp/demo"]' in config_text
     assert 'trust_level = "trusted"' in config_text
     assert f'[projects."{project_root.resolve()}"]' in config_text
@@ -733,7 +932,9 @@ def test_materialize_codex_home_config_falls_back_to_marked_copy_when_symlink_fa
 
     assert not (target_home / 'skills').is_symlink()
     assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'demo skill\n'
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert not (target_home / 'skills' / 'demo').is_symlink()
+    assert (target_home / 'skills' / 'demo.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
 def test_materialize_codex_home_config_filters_inherited_skills(tmp_path: Path) -> None:
@@ -753,11 +954,84 @@ def test_materialize_codex_home_config_filters_inherited_skills(tmp_path: Path) 
         source_home=source_home,
     )
 
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
     assert not (target_home / 'skills' / 'trellis-check').exists()
     assert not (target_home / 'skills' / 'trellis-start').exists()
     assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_keeps_required_skills_when_optional_tree_has_broken_symlink(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    source_skills = source_home / 'skills'
+    (source_skills / 'custom').mkdir(parents=True)
+    (source_skills / 'custom' / 'SKILL.md').write_text('custom\n', encoding='utf-8')
+    try:
+        (source_skills / 'broken-role-skill').symlink_to(
+            tmp_path / 'missing-role-skill',
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+        assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
+        assert (target_home / 'skills' / f'{skill_name}.ccb-projection.json').is_file()
+    assert (source_skills / 'broken-role-skill').is_symlink()
+
+
+def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is_disabled(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills' / 'optional').mkdir(parents=True)
+    (source_home / 'skills' / 'optional' / 'SKILL.md').write_text('optional\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(
+            inherit_skills=False,
+            inherit_commands=False,
+            inherit_memory=False,
+        ),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills' / 'optional').exists()
+    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+        assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
+
+
+def test_materialize_codex_home_config_projects_system_skill_collection_as_one_entry(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    system_skill = source_home / 'skills' / '.system' / 'skill-creator'
+    system_skill.mkdir(parents=True)
+    (system_skill / 'SKILL.md').write_text('system skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    target_system = target_home / 'skills' / '.system'
+    assert target_system.is_symlink()
+    assert (target_system / 'skill-creator' / 'SKILL.md').read_text(encoding='utf-8') == 'system skill\n'
+    assert (target_home / 'skills' / '.system.ccb-projection.json').is_file()
 
 
 def test_materialize_codex_home_config_restores_full_inherited_skills_after_filter(tmp_path: Path) -> None:
@@ -782,11 +1056,13 @@ def test_materialize_codex_home_config_restores_full_inherited_skills_after_filt
         source_home=source_home,
     )
 
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'trellis-check' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-check\n'
     assert (target_home / 'skills' / 'trellis-start' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-start\n'
-    assert not (target_home / 'skills' / 'ask.ccb-projection.json').exists()
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'trellis-check.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'trellis-start.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
 def test_materialize_codex_home_config_projects_skill_overlays(tmp_path: Path) -> None:
@@ -814,7 +1090,7 @@ def test_materialize_codex_home_config_projects_skill_overlays(tmp_path: Path) -
         source_home=source_home,
     )
 
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'trellis-check' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-check\n'
     assert (target_home / 'skills' / 'trellis-start' / 'SKILL.md').read_text(encoding='utf-8') == 'trellis-start\n'
     assert (target_home / 'skills' / 'trellis-check.ccb-projection.json').is_file()
@@ -825,8 +1101,8 @@ def test_materialize_codex_home_config_projects_skill_overlays(tmp_path: Path) -
 def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
-    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
-    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('source skill\n', encoding='utf-8')
     (target_home / 'skills').mkdir(parents=True, exist_ok=True)
     (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
 
@@ -838,7 +1114,9 @@ def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path:
 
     assert not (target_home / 'skills').is_symlink()
     assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
-    assert not (target_home / 'skills' / 'demo.md').exists()
+    assert (target_home / 'skills' / 'demo').is_symlink()
+    assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert (target_home / 'skills' / 'demo.ccb-projection.json').is_file()
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
@@ -847,6 +1125,10 @@ def test_materialize_codex_home_config_repairs_owned_skills_in_user_asset_dir(tm
     target_home = tmp_path / 'managed-codex-home'
     (source_home / 'skills' / 'ask').mkdir(parents=True, exist_ok=True)
     (source_home / 'skills' / 'ask' / 'SKILL.md').write_text('name: ask\n', encoding='utf-8')
+    (source_home / 'skills' / 'ccb-clear').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'ccb-clear' / 'SKILL.md').write_text('name: ccb-clear\n', encoding='utf-8')
+    (source_home / 'skills' / 'reconnect').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'reconnect' / 'SKILL.md').write_text('name: reconnect\n', encoding='utf-8')
     (target_home / 'skills').mkdir(parents=True, exist_ok=True)
     (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
     (target_home / 'skills' / 'ccb_config').mkdir(parents=True, exist_ok=True)
@@ -867,13 +1149,18 @@ def test_materialize_codex_home_config_repairs_owned_skills_in_user_asset_dir(tm
     )
 
     assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'name: ask\n'
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
+    assert 'name: ccb-clear' in (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').read_text(encoding='utf-8')
+    assert 'name: reconnect' in (target_home / 'skills' / 'reconnect' / 'SKILL.md').read_text(encoding='utf-8')
     assert not (target_home / 'skills' / 'ccb_config').exists()
     assert not (target_home / 'skills' / 'ccb-config').exists()
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
-def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_path: Path) -> None:
+def test_materialize_codex_home_config_detaches_user_asset_symlink_without_mutating_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
     user_assets = tmp_path / 'user-skills'
@@ -887,25 +1174,10 @@ def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_p
     except OSError:
         pytest.skip('symlink creation is not available in this test environment')
 
-    codex_home_config.materialize_codex_home_config(
-        target_home,
-        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
-        source_home=source_home,
-    )
+    def fail_symlink(*args, **kwargs):
+        raise OSError('symlink disabled')
 
-    assert (target_home / 'skills').is_symlink()
-    assert (target_home / 'skills').resolve() == user_assets.resolve()
-    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
-    assert not (target_home / 'skills.ccb-projection.json').exists()
-
-
-def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_path: Path) -> None:
-    source_home = tmp_path / 'system-codex-home'
-    target_home = tmp_path / 'managed-codex-home'
-    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
-    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
-    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
-    (target_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    monkeypatch.setattr(Path, 'symlink_to', fail_symlink)
 
     codex_home_config.materialize_codex_home_config(
         target_home,
@@ -914,20 +1186,62 @@ def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_p
     )
 
     assert not (target_home / 'skills').is_symlink()
-    assert (target_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert (user_assets / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (user_assets / 'ask').exists()
+    assert (target_home / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'reconnect' / 'SKILL.md').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
-def test_materialize_codex_home_config_leaves_source_home_assets_in_place(tmp_path: Path) -> None:
+def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    source_skill = source_home / 'skills' / 'demo'
+    target_skill = target_home / 'skills' / 'demo'
+    source_skill.mkdir(parents=True, exist_ok=True)
+    target_skill.mkdir(parents=True, exist_ok=True)
+    (source_skill / 'SKILL.md').write_text('source skill\n', encoding='utf-8')
+    (target_skill / 'SKILL.md').write_text('source skill\n', encoding='utf-8')
+    (target_home / 'skills.ccb-projection.json').write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_projected_asset',
+                'label': 'codex-inherited-skills',
+                'source': str(source_home / 'skills'),
+                'mode': 'copy',
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills' / 'demo').is_symlink()
+    assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert (target_home / 'skills' / 'demo.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_rejects_source_home_as_writable_target(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     (source_home / 'skills').mkdir(parents=True, exist_ok=True)
     (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
 
-    codex_home_config.materialize_codex_home_config(
-        source_home,
-        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
-        source_home=source_home,
-    )
+    with pytest.raises(ValueError, match='inheritance target must differ from source'):
+        codex_home_config.materialize_codex_home_config(
+            source_home,
+            profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+            source_home=source_home,
+        )
 
     assert not (source_home / 'skills').is_symlink()
     assert (source_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
@@ -972,6 +1286,12 @@ def test_materialize_codex_home_config_migrates_current_legacy_plugin_copy_to_sh
     shutil.copytree(source_home / '.tmp' / 'plugins', target_home / '.tmp' / 'plugins')
     (target_home / '.tmp' / 'plugins' / 'plugins-clone-residue').mkdir(parents=True, exist_ok=True)
     (target_home / '.tmp' / 'plugins.sha').write_text('shared-plugin-sha\n', encoding='utf-8')
+    projected_assets.write_projected_marker(
+        target_home / '.tmp' / 'plugins',
+        label='codex-plugin-bundle',
+        mode='copy',
+        source=source_home / '.tmp' / 'plugins',
+    )
 
     codex_home_config.materialize_codex_home_config(
         target_home,
@@ -1533,6 +1853,404 @@ def test_materialize_codex_profile_refreshes_plugin_projection_when_source_chang
     assert not (runtime_home / '.tmp' / 'plugins.sha').exists()
 
 
+def test_materialize_codex_home_seeds_writable_current_plugin_layout(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    first_target_home = tmp_path / 'target-agent1'
+    second_target_home = tmp_path / 'target-agent2'
+    marketplace_root = source_home / '.tmp' / 'marketplaces'
+    plugin_cache_root = source_home / 'plugins' / 'cache'
+    (marketplace_root / 'demo' / '.agents' / 'plugins').mkdir(parents=True)
+    (plugin_cache_root / 'demo' / 'demo' / '1.0.0' / '.codex-plugin').mkdir(parents=True)
+    (marketplace_root / 'demo' / '.agents' / 'plugins' / 'marketplace.json').write_text('{}\n', encoding='utf-8')
+    (plugin_cache_root / 'demo' / 'demo' / '1.0.0' / '.codex-plugin' / 'plugin.json').write_text(
+        '{}\n',
+        encoding='utf-8',
+    )
+
+    codex_home_config.materialize_codex_home_config(first_target_home, source_home=source_home)
+    codex_home_config.materialize_codex_home_config(second_target_home, source_home=source_home)
+
+    first_marketplaces = first_target_home / '.tmp' / 'marketplaces'
+    first_cache = first_target_home / 'plugins' / 'cache'
+    second_marketplaces = second_target_home / '.tmp' / 'marketplaces'
+    second_cache = second_target_home / 'plugins' / 'cache'
+    for target in (first_marketplaces, first_cache, second_marketplaces, second_cache):
+        assert target.is_dir()
+        assert not target.is_symlink()
+
+    assert first_marketplaces.resolve() != marketplace_root.resolve()
+    assert first_cache.resolve() != plugin_cache_root.resolve()
+    assert first_marketplaces.resolve() != second_marketplaces.resolve()
+    assert first_cache.resolve() != second_cache.resolve()
+    assert (first_marketplaces / 'demo' / '.agents' / 'plugins' / 'marketplace.json').is_file()
+    assert (first_cache / 'demo' / 'demo' / '1.0.0' / '.codex-plugin' / 'plugin.json').is_file()
+
+    (first_cache / 'agent1-runtime-state.json').write_text('{}\n', encoding='utf-8')
+    assert not (plugin_cache_root / 'agent1-runtime-state.json').exists()
+    assert not (second_cache / 'agent1-runtime-state.json').exists()
+
+
+def test_materialize_codex_home_migrates_marked_current_plugin_symlink_to_local_seed(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_cache = source_home / 'plugins' / 'cache'
+    (source_cache / 'demo').mkdir(parents=True)
+    (source_cache / 'demo' / 'plugin.json').write_text('{}\n', encoding='utf-8')
+    target_cache = target_home / 'plugins' / 'cache'
+    target_cache.parent.mkdir(parents=True)
+    target_cache.symlink_to(source_cache, target_is_directory=True)
+    projected_assets.write_projected_marker(
+        target_cache,
+        label='codex-plugin-bundle',
+        mode='symlink',
+        source=source_cache,
+    )
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert target_cache.is_dir()
+    assert not target_cache.is_symlink()
+    assert (target_cache / 'demo' / 'plugin.json').is_file()
+    (target_cache / 'local-runtime.json').write_text('{}\n', encoding='utf-8')
+    assert not (source_cache / 'local-runtime.json').exists()
+    marker = json.loads(Path(f'{target_cache}.ccb-projection.json').read_text(encoding='utf-8'))
+    assert marker['mode'] == 'copy-seed'
+    assert marker['source_fingerprint']
+
+
+def test_materialize_codex_home_preserves_unmarked_current_plugin_targets(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_cache = source_home / 'plugins' / 'cache'
+    target_cache = target_home / 'plugins' / 'cache'
+    (source_cache / 'source-plugin').mkdir(parents=True)
+    (source_cache / 'source-plugin' / 'plugin.json').write_text('{"source":true}\n', encoding='utf-8')
+    (target_cache / 'user-plugin').mkdir(parents=True)
+    (target_cache / 'user-plugin' / 'plugin.json').write_text('{"user":true}\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert (target_cache / 'user-plugin' / 'plugin.json').is_file()
+    assert not (target_cache / 'source-plugin').exists()
+    assert not Path(f'{target_cache}.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_refreshes_only_marked_current_plugin_seed(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_cache = source_home / 'plugins' / 'cache'
+    source_file = source_cache / 'demo' / 'plugin.json'
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text('{"version":1}\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+    target_cache = target_home / 'plugins' / 'cache'
+    target_file = target_cache / 'demo' / 'plugin.json'
+    (target_cache / 'provider-local.json').write_text('{}\n', encoding='utf-8')
+    source_file.write_text('{"version":22}\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert target_file.read_text(encoding='utf-8') == '{"version":22}\n'
+    assert not (target_cache / 'provider-local.json').exists()
+
+    shutil.rmtree(source_cache)
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert target_file.read_text(encoding='utf-8') == '{"version":22}\n'
+
+
+def test_materialize_codex_home_preserves_unmarked_legacy_plugin_bundle(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    _write_codex_plugin_source(source_home, sha='source-sha')
+    target_tree = target_home / '.tmp' / 'plugins'
+    target_tree.mkdir(parents=True)
+    (target_tree / 'user-owned.txt').write_text('keep\n', encoding='utf-8')
+    target_sha = target_home / '.tmp' / 'plugins.sha'
+    target_sha.write_text('user-sha\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert (target_tree / 'user-owned.txt').read_text(encoding='utf-8') == 'keep\n'
+    assert target_sha.read_text(encoding='utf-8') == 'user-sha\n'
+    assert not Path(f'{target_tree}.ccb-projection.json').exists()
+
+
+def test_seed_projected_tree_preserves_last_seed_when_source_disappears(tmp_path: Path) -> None:
+    source = tmp_path / 'source'
+    target = tmp_path / 'target'
+    source.mkdir()
+    (source / 'state.json').write_text('{"version":1}\n', encoding='utf-8')
+    assert projected_assets.seed_projected_tree(source, target, label='test-seed')
+
+    shutil.rmtree(source)
+
+    assert not projected_assets.seed_projected_tree(source, target, label='test-seed')
+    assert (target / 'state.json').read_text(encoding='utf-8') == '{"version":1}\n'
+
+
+def test_seed_projected_tree_rolls_back_when_marker_update_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / 'source'
+    target = tmp_path / 'target'
+    source.mkdir()
+    source_file = source / 'state.json'
+    source_file.write_text('{"version":1}\n', encoding='utf-8')
+    assert projected_assets.seed_projected_tree(source, target, label='test-seed')
+    source_file.write_text('{"version":22}\n', encoding='utf-8')
+
+    monkeypatch.setattr(projected_assets, '_write_projection_marker', lambda *args, **kwargs: False)
+
+    assert not projected_assets.seed_projected_tree(source, target, label='test-seed')
+    assert (target / 'state.json').read_text(encoding='utf-8') == '{"version":1}\n'
+
+
+def test_project_json_mapping_fields_tracks_only_owned_entries(tmp_path: Path) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    target.write_text(
+        json.dumps({'theme': 'dark', 'enabledPlugins': {'local-plugin': True}}),
+        encoding='utf-8',
+    )
+
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins'] == {'local-plugin': True, 'source-plugin': True}
+
+    source.unlink()
+    preserved_text = target.read_text(encoding='utf-8')
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == preserved_text
+    assert marker.is_file()
+
+    source.write_text('{malformed', encoding='utf-8')
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == preserved_text
+    assert marker.is_file()
+
+    source.write_text(
+        json.dumps({'enabledPlugins': {'source-plugin': False, 'second-source-plugin': True}}),
+        encoding='utf-8',
+    )
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins']['source-plugin'] is False
+    payload['enabledPlugins']['source-plugin'] = True
+    target.write_text(json.dumps(payload), encoding='utf-8')
+
+    source.write_text(
+        json.dumps({'enabledPlugins': {'source-plugin': True, 'second-source-plugin': False}}),
+        encoding='utf-8',
+    )
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins'] == {
+        'local-plugin': True,
+        'source-plugin': True,
+        'second-source-plugin': False,
+    }
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        enabled=False,
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    assert payload['theme'] == 'dark'
+    assert payload['enabledPlugins'] == {'local-plugin': True, 'source-plugin': True}
+    assert not marker.exists()
+
+
+def test_project_json_mapping_fields_preserves_deleted_owned_null_entry(tmp_path: Path) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': None}}), encoding='utf-8')
+
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    payload['enabledPlugins'].pop('source-plugin')
+    target.write_text(json.dumps(payload), encoding='utf-8')
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert json.loads(target.read_text(encoding='utf-8')) == {}
+    assert not marker.exists()
+
+
+def test_project_json_mapping_fields_rolls_back_when_marker_write_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    original = '{"theme":"dark"}\n'
+    target.write_text(original, encoding='utf-8')
+    real_atomic_write = projected_settings.atomic_write_text
+
+    def fail_marker(path: Path, text: str, *, encoding: str = 'utf-8') -> None:
+        if Path(path) == marker:
+            raise OSError('marker write failed')
+        real_atomic_write(path, text, encoding=encoding)
+
+    monkeypatch.setattr(projected_settings, 'atomic_write_text', fail_marker)
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == original
+    assert not marker.exists()
+
+
+def test_project_json_mapping_fields_restores_existing_marker_after_failed_update(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    assert projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    original_target = target.read_text(encoding='utf-8')
+    original_marker = marker.read_text(encoding='utf-8')
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': False}}), encoding='utf-8')
+    real_atomic_write = projected_settings.atomic_write_text
+
+    def fail_after_marker_write(path: Path, text: str, *, encoding: str = 'utf-8') -> None:
+        real_atomic_write(path, text, encoding=encoding)
+        if Path(path) == marker:
+            raise OSError('marker update failed after write')
+
+    monkeypatch.setattr(projected_settings, 'atomic_write_text', fail_after_marker_write)
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == original_target
+    assert marker.read_text(encoding='utf-8') == original_marker
+
+
+def test_project_json_mapping_fields_preserves_foreign_marker_and_target(tmp_path: Path) -> None:
+    source = tmp_path / 'source-settings.json'
+    target = tmp_path / 'target-settings.json'
+    marker = tmp_path / 'plugin-settings-marker.json'
+    source.write_text(json.dumps({'enabledPlugins': {'source-plugin': True}}), encoding='utf-8')
+    original = '{"enabledPlugins":{"local-plugin":true}}\n'
+    target.write_text(original, encoding='utf-8')
+    marker.write_text(
+        json.dumps({'record_type': 'user-owned', 'label': 'test-plugin-settings'}),
+        encoding='utf-8',
+    )
+
+    assert not projected_settings.project_json_mapping_fields(
+        source,
+        target,
+        fields=('enabledPlugins',),
+        label='test-plugin-settings',
+        marker_path=marker,
+    )
+    assert target.read_text(encoding='utf-8') == original
+    assert json.loads(marker.read_text(encoding='utf-8'))['record_type'] == 'user-owned'
+
+
+def test_rebase_json_path_fields_rolls_back_all_files_after_write_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_root = tmp_path / 'source-plugins'
+    target_root = tmp_path / 'target-plugins'
+    first = target_root / 'installed_plugins.json'
+    second = target_root / 'known_marketplaces.json'
+    first.parent.mkdir(parents=True)
+    original_first = json.dumps({'installPath': str(source_root / 'cache' / 'plugin')})
+    original_second = json.dumps({'installLocation': str(source_root / 'marketplaces' / 'market')})
+    first.write_text(original_first, encoding='utf-8')
+    second.write_text(original_second, encoding='utf-8')
+    real_atomic_write = projected_settings.atomic_write_text
+
+    def fail_after_second_write(path: Path, text: str, *, encoding: str = 'utf-8') -> None:
+        real_atomic_write(path, text, encoding=encoding)
+        if Path(path) == second:
+            raise OSError('second registry write failed')
+
+    monkeypatch.setattr(projected_settings, 'atomic_write_text', fail_after_second_write)
+
+    assert not projected_settings.rebase_json_path_fields(
+        (first, second),
+        source_root=source_root,
+        target_root=target_root,
+        fields=('installPath', 'installLocation'),
+    )
+    assert first.read_text(encoding='utf-8') == original_first
+    assert second.read_text(encoding='utf-8') == original_second
+
+
 def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marker(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-codex-home'
@@ -1680,141 +2398,6 @@ def test_materialize_claude_profile_keeps_runtime_home_managed_by_agent_state(tm
     assert profile.runtime_home is None
 
 
-def test_route_claude_binary_cache_links_empty_versions_dir(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'linked_empty'
-    assert versions.is_symlink()
-    assert versions.resolve() == (shared_cache / 'versions').resolve()
-    assert (versions.parent / 'versions.ccb-projection.json').is_file()
-
-
-def test_route_claude_binary_cache_refuses_conflicting_shared_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    (versions / '2.1.137').mkdir(parents=True, exist_ok=True)
-    (versions / '2.1.137' / 'claude').write_text('local binary\n', encoding='utf-8')
-    shared_version = shared_cache / 'versions' / '2.1.137'
-    shared_version.mkdir(parents=True, exist_ok=True)
-    (shared_version / 'claude').write_text('different shared binary\n', encoding='utf-8')
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    assert result['status'] == 'skipped'
-    assert result['reason'] == 'shared_version_content_conflict'
-    assert versions.is_dir()
-    assert not versions.is_symlink()
-    assert (versions / '2.1.137' / 'claude').read_text(encoding='utf-8') == 'local binary\n'
-    assert (shared_version / 'claude').read_text(encoding='utf-8') == 'different shared binary\n'
-
-
-def test_route_claude_binary_cache_migrates_executable_version_files(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.mkdir(parents=True, exist_ok=True)
-    binary = versions / '2.1.139'
-    binary.write_text('current executable\n', encoding='utf-8')
-    binary.chmod(0o755)
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    shared_binary = shared_cache / 'versions' / '2.1.139'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'migrated'
-    assert result['version_names'] == ('2.1.139',)
-    assert versions.is_symlink()
-    assert versions.resolve() == (shared_cache / 'versions').resolve()
-    assert shared_binary.read_text(encoding='utf-8') == 'current executable\n'
-    assert shared_binary.stat().st_mode & 0o111
-
-
-def test_route_claude_binary_cache_migrates_legacy_shared_symlink(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    legacy_cache = tmp_path / 'legacy-shared-cache' / 'claude'
-    external_cache = tmp_path / 'external-cache' / 'claude'
-    legacy_versions = legacy_cache / 'versions'
-    legacy_binary = legacy_versions / '2.1.139'
-    legacy_binary.parent.mkdir(parents=True, exist_ok=True)
-    legacy_binary.write_text('legacy executable\n', encoding='utf-8')
-    legacy_binary.chmod(0o755)
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(legacy_versions, target_is_directory=True)
-
-    result = route_claude_binary_cache(home, external_cache)
-
-    external_binary = external_cache / 'versions' / '2.1.139'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'migrated_symlink'
-    assert versions.is_symlink()
-    assert versions.resolve() == (external_cache / 'versions').resolve()
-    assert external_binary.read_text(encoding='utf-8') == 'legacy executable\n'
-    assert legacy_binary.exists()
-
-
-def test_route_claude_binary_cache_points_existing_shared_home_to_latest_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    shared_versions = shared_cache / 'versions'
-    old_binary = shared_versions / '2.1.139'
-    new_binary = shared_versions / '2.1.140'
-    old_binary.parent.mkdir(parents=True, exist_ok=True)
-    old_binary.write_text('old executable\n', encoding='utf-8')
-    new_binary.write_text('new executable\n', encoding='utf-8')
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(shared_versions, target_is_directory=True)
-    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (home / '.local' / 'bin' / 'claude').symlink_to(old_binary)
-
-    result = route_claude_binary_cache(home, shared_cache)
-
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'already_shared'
-    assert result['active_version_name'] == '2.1.140'
-    assert (home / '.local' / 'bin' / 'claude').resolve() == new_binary.resolve()
-
-
-def test_route_claude_binary_cache_prefers_source_home_active_version(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
-    source_home = tmp_path / 'source-home'
-    shared_cache = tmp_path / 'shared-cache' / 'claude'
-    shared_versions = shared_cache / 'versions'
-    old_shared = shared_versions / '2.1.139'
-    newer_shared = shared_versions / '2.1.140'
-    source_active = source_home / '.local' / 'share' / 'claude' / 'versions' / '2.1.138'
-    old_shared.parent.mkdir(parents=True, exist_ok=True)
-    old_shared.write_text('old shared executable\n', encoding='utf-8')
-    newer_shared.write_text('newer shared executable\n', encoding='utf-8')
-    source_active.parent.mkdir(parents=True, exist_ok=True)
-    source_active.write_text('source active executable\n', encoding='utf-8')
-    source_active.chmod(0o755)
-    (source_home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (source_home / '.local' / 'bin' / 'claude').symlink_to(source_active)
-    versions = home / '.local' / 'share' / 'claude' / 'versions'
-    versions.parent.mkdir(parents=True, exist_ok=True)
-    versions.symlink_to(shared_versions, target_is_directory=True)
-    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
-    (home / '.local' / 'bin' / 'claude').symlink_to(newer_shared)
-
-    result = route_claude_binary_cache(home, shared_cache, source_home=source_home)
-
-    copied_active = shared_versions / '2.1.138'
-    assert result['status'] == 'ok'
-    assert result['reason'] == 'already_shared'
-    assert result['active_version_name'] == '2.1.138'
-    assert copied_active.read_text(encoding='utf-8') == 'source active executable\n'
-    assert copied_active.stat().st_mode & 0o111
-    assert (home / '.local' / 'bin' / 'claude').resolve() == copied_active.resolve()
-
-
 def test_materialize_claude_home_config_projects_system_settings_into_managed_home(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
@@ -1874,7 +2457,11 @@ def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path
     assert trust['customApiKeyResponses']['approved'] == ['system-api-key']
 
 
-def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(tmp_path: Path) -> None:
+def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_credentials = source_home / '.claude' / '.credentials.json'
@@ -1902,7 +2489,7 @@ def test_materialize_claude_home_config_refreshes_login_metadata_without_replaci
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_trust = source_home / '.claude.json'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     source_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     source_trust.write_text(
@@ -1947,6 +2534,67 @@ def test_materialize_claude_home_config_refreshes_login_metadata_without_replaci
     assert 'primaryApiKey' not in payload
 
 
+def test_materialize_claude_home_config_migrates_843_legacy_trust_state(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_trust = source_home / '.claude.json'
+    legacy_trust = target_home / '.claude.json'
+    active_trust = target_home / '.claude' / '.claude.json'
+    source_trust.parent.mkdir(parents=True, exist_ok=True)
+    legacy_trust.parent.mkdir(parents=True, exist_ok=True)
+    active_trust.parent.mkdir(parents=True, exist_ok=True)
+    source_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'source@example.test'},
+                'hasCompletedOnboarding': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    legacy_trust.write_text(
+        json.dumps(
+            {
+                'projects': {
+                    '/legacy/workspace': {
+                        'hasTrustDialogAccepted': True,
+                        'allowedTools': ['Bash'],
+                    },
+                },
+                'legacyOnly': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    active_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'partial@example.test'},
+                'projects': {
+                    '/active/workspace': {'hasTrustDialogAccepted': True},
+                },
+                'activeOnly': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert layout.trust_path == active_trust
+    assert layout.legacy_trust_path == legacy_trust
+    assert not legacy_trust.exists()
+    assert payload['oauthAccount']['emailAddress'] == 'source@example.test'
+    assert payload['hasCompletedOnboarding'] is True
+    assert payload['legacyOnly'] is True
+    assert payload['activeOnly'] is True
+    assert payload['projects']['/legacy/workspace']['allowedTools'] == ['Bash']
+    assert payload['projects']['/active/workspace']['hasTrustDialogAccepted'] is True
+
+
 def test_materialize_claude_home_config_projects_mcp_config_into_managed_workspace(
     tmp_path: Path,
 ) -> None:
@@ -1955,7 +2603,7 @@ def test_materialize_claude_home_config_projects_mcp_config_into_managed_workspa
     project_root = tmp_path / 'repo'
     workspace = project_root / '.ccb' / 'workspaces' / 'clauder'
     source_trust = source_home / '.claude.json'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     source_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     project_root.mkdir(parents=True, exist_ok=True)
@@ -2051,7 +2699,7 @@ def test_materialize_claude_home_config_strips_mcp_config_when_config_not_inheri
     target_home = tmp_path / 'managed-home'
     workspace = tmp_path / 'repo' / '.ccb' / 'workspaces' / 'clauder'
     source_trust = source_home / '.claude.json'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     source_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -2112,7 +2760,7 @@ def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inhe
 ) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
-    target_trust = target_home / '.claude.json'
+    target_trust = target_home / '.claude' / '.claude.json'
     target_trust.parent.mkdir(parents=True, exist_ok=True)
     target_trust.write_text(
         json.dumps(
@@ -2151,14 +2799,25 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
     calls: list[list[str]] = []
 
     class Result:
-        returncode = 0
-        stdout = json.dumps({'claudeAiOauth': {'refreshToken': 'keychain-refresh-token'}})
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
 
     def fake_run(argv, **kwargs):
         calls.append([str(part) for part in argv])
         assert kwargs['capture_output'] is True
         assert kwargs['text'] is True
-        return Result()
+        command = str(argv[1])
+        service = str(argv[argv.index('-s') + 1])
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            return Result(
+                0,
+                json.dumps({'claudeAiOauth': {'refreshToken': 'keychain-refresh-token'}}),
+            )
+        if command == 'add-generic-password':
+            return Result(0)
+        return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
@@ -2178,9 +2837,21 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         'Claude Code-credentials',
         '-w',
     ]
+    managed_service = claude_home_runtime._managed_macos_keychain_service(layout)
+    assert managed_service != 'Claude Code-credentials'
+    assert any(
+        call[1] == 'add-generic-password'
+        and call[call.index('-s') + 1] == managed_service
+        for call in calls
+    )
+    assert not any(
+        call[1] in {'add-generic-password', 'delete-generic-password'}
+        and call[call.index('-s') + 1] == 'Claude Code-credentials'
+        for call in calls
+    )
 
 
-def test_materialize_claude_home_config_projects_macos_keychain_preferences(
+def test_materialize_claude_home_config_does_not_project_macos_keychain_preferences(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2198,10 +2869,11 @@ def test_materialize_claude_home_config_projects_macos_keychain_preferences(
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
-    assert target_plist.read_text(encoding='utf-8') == source_plist.read_text(encoding='utf-8')
+    assert not target_plist.exists()
+    assert source_plist.is_file()
 
 
-def test_materialize_claude_home_config_projects_macos_keychains_when_preferences_absent(
+def test_materialize_claude_home_config_never_links_macos_keychains_when_preferences_absent(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2215,8 +2887,29 @@ def test_materialize_claude_home_config_projects_macos_keychains_when_preference
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_keychains = target_home / 'Library' / 'Keychains'
-    assert target_keychains.is_symlink()
-    assert target_keychains.resolve() == source_keychains.resolve()
+    assert not target_keychains.exists()
+    assert not target_keychains.is_symlink()
+
+
+def test_materialize_claude_home_config_detaches_legacy_macos_keychains_link(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_keychains = source_home / 'Library' / 'Keychains'
+    target_keychains = target_home / 'Library' / 'Keychains'
+    source_keychains.mkdir(parents=True, exist_ok=True)
+    target_keychains.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(source_keychains, target_keychains)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert not target_keychains.exists()
+    assert not target_keychains.is_symlink()
+    assert source_keychains.is_dir()
 
 
 def test_materialize_claude_home_config_does_not_copy_keychain_preferences_on_non_darwin(
@@ -2303,8 +2996,11 @@ def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_serv
     def fake_run(argv, **kwargs):
         calls.append([str(part) for part in argv])
         service = calls[-1][calls[-1].index('-s') + 1]
-        if service == 'Claude Code':
+        command = str(argv[1])
+        if command == 'find-generic-password' and service == 'Claude Code':
             return Result(0, json.dumps({'claudeAiOauth': {'refreshToken': 'legacy-refresh-token'}}))
+        if command == 'add-generic-password':
+            return Result(0)
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
@@ -2316,8 +3012,13 @@ def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_serv
 
     payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
     assert payload['claudeAiOauth']['refreshToken'] == 'legacy-refresh-token'
-    queried_services = [call[call.index('-s') + 1] for call in calls]
-    assert queried_services == ['Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code']
+    queried_services = [
+        call[call.index('-s') + 1]
+        for call in calls
+        if call[1] == 'find-generic-password'
+    ]
+    assert queried_services[:3] == ['Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code']
+    assert queried_services[3] == claude_home_runtime._managed_macos_keychain_service(layout)
     assert all('-a' in call for call in calls)
 
 
@@ -2361,8 +3062,11 @@ def test_materialize_claude_home_config_reads_explicit_macos_keychain_override(
     def fake_run(argv, **_kwargs):
         calls.append([str(part) for part in argv])
         service = calls[-1][calls[-1].index('-s') + 1]
-        if service == 'Claude Code-credentials-account-a':
+        command = str(argv[1])
+        if command == 'find-generic-password' and service == 'Claude Code-credentials-account-a':
             return Result(0, json.dumps({'claudeAiOauth': {'refreshToken': 'override-refresh-token'}}))
+        if command == 'add-generic-password':
+            return Result(0)
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
@@ -2376,6 +3080,12 @@ def test_materialize_claude_home_config_reads_explicit_macos_keychain_override(
     payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
     assert payload['claudeAiOauth']['refreshToken'] == 'override-refresh-token'
     assert calls[0][calls[0].index('-s') + 1] == 'Claude Code-credentials-account-a'
+    assert any(
+        call[1] == 'add-generic-password'
+        and call[call.index('-s') + 1]
+        == claude_home_runtime._managed_macos_keychain_service(layout)
+        for call in calls
+    )
 
 
 def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(tmp_path: Path) -> None:
@@ -2640,10 +3350,45 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
         source_home=source_home,
     )
 
-    assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
+    assert 'name: ask' in (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
+    assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'commands' / 'ask.md').read_text(encoding='utf-8') == 'ask command\n'
-    assert (layout.claude_dir / 'skills.ccb-projection.json').is_file()
+    assert (layout.claude_dir / 'skills' / 'ask.ccb-projection.json').is_file()
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
+
+
+def test_materialize_claude_home_config_preserves_unmarked_skills_and_commands(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    target_claude_dir = target_home / '.claude'
+    (source_claude_dir / 'skills' / 'source-skill').mkdir(parents=True)
+    (source_claude_dir / 'commands').mkdir(parents=True)
+    (source_claude_dir / 'skills' / 'source-skill' / 'SKILL.md').write_text('source\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'source.md').write_text('source\n', encoding='utf-8')
+    (target_claude_dir / 'skills' / 'user-skill').mkdir(parents=True)
+    (target_claude_dir / 'commands').mkdir(parents=True)
+    (target_claude_dir / 'skills' / 'user-skill' / 'SKILL.md').write_text('user\n', encoding='utf-8')
+    (target_claude_dir / 'commands' / 'user.md').write_text('user\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+    )
+    materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (layout.claude_dir / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
+    assert (layout.claude_dir / 'commands' / 'user.md').read_text(encoding='utf-8') == 'user\n'
+    assert (layout.claude_dir / 'skills' / 'source-skill').is_symlink()
+    assert (layout.claude_dir / 'skills' / 'source-skill.ccb-projection.json').is_file()
+    assert not (layout.claude_dir / 'commands' / 'source.md').exists()
+    assert not (layout.claude_dir / 'skills.ccb-projection.json').exists()
+    assert not (layout.claude_dir / 'commands.ccb-projection.json').exists()
 
 
 def test_materialize_claude_home_config_merges_profile_mcp_server_overrides(tmp_path: Path) -> None:
@@ -2714,7 +3459,8 @@ def test_materialize_claude_home_config_removes_stale_profile_disabled_mcp_witho
     target_home = tmp_path / 'managed-home'
     source_home.mkdir(parents=True, exist_ok=True)
     target_home.mkdir(parents=True, exist_ok=True)
-    (target_home / '.claude.json').write_text(
+    (target_home / '.claude' / '.claude.json').parent.mkdir(parents=True, exist_ok=True)
+    (target_home / '.claude' / '.claude.json').write_text(
         json.dumps(
             {
                 'mcpServers': {
@@ -2766,68 +3512,324 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     materialize_droid_home_config(target_home, source_home=source_home)
 
     assert (target_home / 'sessions').is_dir()
-    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
-    assert (target_home / 'skills.ccb-projection.json').is_file()
+    assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
+    assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
 
 
-def test_materialize_kiro_home_config_creates_isolated_layout(tmp_path: Path) -> None:
-    source_home = tmp_path / 'system-home'
-    target_home = tmp_path / 'managed-kiro-home'
-    (source_home / '.kiro' / 'settings').mkdir(parents=True, exist_ok=True)
-    (source_home / '.kiro' / 'settings' / 'cli.json').write_text(
-        '{"model":"kirocli"}\n', encoding='utf-8'
+def test_materialize_droid_home_config_preserves_unmarked_inherited_skills(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    target_home = tmp_path / 'managed-factory-home'
+    (source_home / 'skills' / 'source-skill').mkdir(parents=True)
+    (source_home / 'skills' / 'source-skill' / 'SKILL.md').write_text('source\n', encoding='utf-8')
+    (target_home / 'skills' / 'user-skill').mkdir(parents=True)
+    (target_home / 'skills' / 'user-skill' / 'SKILL.md').write_text('user\n', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    assert (target_home / 'skills' / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
+    assert (target_home / 'skills' / 'source-skill').is_symlink()
+    assert (target_home / 'skills' / 'source-skill.ccb-projection.json').is_file()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_droid_home_config_copies_auth_without_linking_source(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-factory'
+    target_home = tmp_path / 'managed-factory'
+    source_home.mkdir(parents=True)
+    (source_home / 'auth.encrypted').write_text('source-auth\n', encoding='utf-8')
+    (source_home / 'auth.v2.file').write_text('source-v2-auth\n', encoding='utf-8')
+    (source_home / 'auth.v2.key').write_text('source-v2-key\n', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    target_auth = target_home / 'auth.encrypted'
+    assert target_auth.read_text(encoding='utf-8') == 'source-auth\n'
+    target_auth.write_text('managed-auth\n', encoding='utf-8')
+    assert (source_home / 'auth.encrypted').read_text(encoding='utf-8') == 'source-auth\n'
+    assert (target_home / 'auth.v2.file').read_text(encoding='utf-8') == 'source-v2-auth\n'
+    assert (target_home / 'auth.v2.key').read_text(encoding='utf-8') == 'source-v2-key\n'
+
+
+def test_materialize_droid_home_config_reads_current_factory_home_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_os_home = tmp_path / 'source-os-home'
+    source_factory_home = source_os_home / '.factory'
+    target_factory_home = tmp_path / 'managed-os-home' / '.factory'
+    source_factory_home.mkdir(parents=True)
+    (source_factory_home / 'auth.encrypted').write_text(
+        'source-auth\n',
+        encoding='utf-8',
     )
-    (source_home / '.kiro' / 'settings' / 'survey_state.json').write_text(
-        '{"seen":true}\n', encoding='utf-8'
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.delenv('FACTORY_HOME', raising=False)
+    monkeypatch.delenv('FACTORY_ROOT', raising=False)
+    monkeypatch.setenv('FACTORY_HOME_OVERRIDE', str(source_os_home))
+
+    materialize_droid_home_config(target_factory_home)
+
+    assert (target_factory_home / 'auth.encrypted').read_text(encoding='utf-8') == (
+        'source-auth\n'
     )
-    # Session directory in source must NOT be copied into the isolated home
-    # (multi-agent isolation requires that each agent maintain its own sessions).
-    (source_home / '.kiro' / 'sessions' / 'cli').mkdir(parents=True, exist_ok=True)
-    (source_home / '.kiro' / 'sessions' / 'cli' / 'shared.jsonl').write_text('leak\n', encoding='utf-8')
-
-    materialize_kiro_home_config(target_home, source_home=source_home)
-
-    # KIRO_HOME itself acts as ~/.kiro: sessions/settings/agents live directly under it.
-    assert (target_home / 'sessions').is_dir()
-    assert (target_home / 'settings').is_dir()
-    assert (target_home / 'agents').is_dir()
-    # Settings preferences are inherited so the CLI does not reset per agent.
-    assert (target_home / 'settings' / 'cli.json').read_text(
-        encoding='utf-8'
-    ) == '{"model":"kirocli"}\n'
-    assert (target_home / 'settings' / 'survey_state.json').read_text(
-        encoding='utf-8'
-    ) == '{"seen":true}\n'
-    # Sessions must remain per-agent — no source leak.
-    assert not (target_home / 'sessions' / 'cli').exists()
 
 
-def test_materialize_kiro_home_config_is_idempotent(tmp_path: Path) -> None:
+def test_materialize_droid_home_config_converts_read_only_keyring_auth_to_private_files(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'source-factory'
+    target_home = tmp_path / 'managed-factory'
+    source_ciphertext = source_home / 'auth.v2.keyring'
+    source_ciphertext.parent.mkdir(parents=True)
+    source_ciphertext.write_text('source-keyring-ciphertext\n', encoding='utf-8')
+    key_text = base64.b64encode(b'k' * 32).decode('ascii')
+    keyring_calls: list[tuple[str, str]] = []
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(droid_home_runtime, '_system_factory_home', lambda: source_home)
+
+    def fake_read(service: str, account: str, **_kwargs) -> str:
+        keyring_calls.append((service, account))
+        return key_text
+
+    monkeypatch.setattr(droid_home_runtime, 'read_keyring_password', fake_read)
+
+    materialize_droid_home_config(target_home)
+
+    assert keyring_calls == [('Factory CLI', 'auth-encryption-key')]
+    assert (target_home / 'auth.v2.file').read_text(encoding='utf-8') == (
+        'source-keyring-ciphertext\n'
+    )
+    assert (target_home / 'auth.v2.key').read_text(encoding='utf-8').strip() == key_text
+    assert source_ciphertext.read_text(encoding='utf-8') == 'source-keyring-ciphertext\n'
+    (target_home / 'auth.v2.file').unlink()
+    assert source_ciphertext.is_file()
+
+
+def test_materialize_droid_home_config_rejects_invalid_keyring_key(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'source-factory'
+    target_home = tmp_path / 'managed-factory'
+    source_home.mkdir(parents=True)
+    (source_home / 'auth.v2.keyring').write_text('ciphertext\n', encoding='utf-8')
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(droid_home_runtime, '_system_factory_home', lambda: source_home)
+    monkeypatch.setattr(
+        droid_home_runtime,
+        'read_keyring_password',
+        lambda *_args, **_kwargs: 'not-a-factory-key',
+    )
+
+    materialize_droid_home_config(target_home)
+
+    assert not (target_home / 'auth.v2.file').exists()
+    assert not (target_home / 'auth.v2.key').exists()
+
+
+def test_materialize_droid_home_config_seeds_agent_local_plugins_and_rebases_registry_paths(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    first_home = tmp_path / 'managed-factory-home-1'
+    second_home = tmp_path / 'managed-factory-home-2'
+    _write_droid_plugin_source(source_home)
+    first_settings = first_home / 'settings.json'
+    first_settings.parent.mkdir(parents=True)
+    first_settings.write_text(
+        json.dumps({'theme': 'dark', 'enabledPlugins': {'local-plugin': True}}),
+        encoding='utf-8',
+    )
+
+    materialize_droid_home_config(first_home, source_home=source_home)
+    materialize_droid_home_config(second_home, source_home=source_home)
+
+    for target_home in (first_home, second_home):
+        target_plugins = target_home / 'plugins'
+        assert target_plugins.is_dir()
+        assert not target_plugins.is_symlink()
+        installed = json.loads((target_plugins / 'installed_plugins.json').read_text(encoding='utf-8'))
+        install_path = installed['plugins']['test-plugin@test-marketplace'][0]['installPath']
+        assert install_path == str(
+            target_plugins / 'cache' / 'test-marketplace' / 'test-plugin' / '1.0.0'
+        )
+        marketplaces = json.loads(
+            (target_plugins / 'known_marketplaces.json').read_text(encoding='utf-8')
+        )
+        assert marketplaces['test-marketplace']['installLocation'] == str(
+            target_plugins / 'marketplaces' / 'test-marketplace'
+        )
+        settings = json.loads((target_home / 'settings.json').read_text(encoding='utf-8'))
+        assert settings['enabledPlugins']['test-plugin@test-marketplace'] is True
+
+    first_registry = first_home / 'plugins' / 'installed_plugins.json'
+    first_registry.write_text('{"agent":"one"}\n', encoding='utf-8')
+    assert 'agent' not in json.loads(
+        (second_home / 'plugins' / 'installed_plugins.json').read_text(encoding='utf-8')
+    )
+    source_installed = json.loads(
+        (source_home / 'plugins' / 'installed_plugins.json').read_text(encoding='utf-8')
+    )
+    assert source_installed['plugins']['test-plugin@test-marketplace'][0]['installPath'].startswith(
+        str(source_home)
+    )
+
+    materialize_droid_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    assert not (second_home / 'plugins').exists()
+    second_settings = json.loads((second_home / 'settings.json').read_text(encoding='utf-8'))
+    assert 'test-plugin@test-marketplace' not in second_settings.get('enabledPlugins', {})
+
+    materialize_droid_home_config(
+        first_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    disabled_settings = json.loads(first_settings.read_text(encoding='utf-8'))
+    assert disabled_settings['theme'] == 'dark'
+    assert disabled_settings['enabledPlugins'] == {'local-plugin': True}
+
+
+def test_materialize_droid_home_config_removes_owned_projection_for_malformed_registry(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    target_home = tmp_path / 'managed-factory-home'
+    _write_droid_plugin_source(source_home)
+    materialize_droid_home_config(target_home, source_home=source_home)
+    source_registry = source_home / 'plugins' / 'installed_plugins.json'
+    source_registry.write_text('{malformed', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    assert not (target_home / 'plugins').exists()
+    assert not (target_home / 'plugins.ccb-projection.json').exists()
+    assert json.loads((target_home / 'settings.json').read_text(encoding='utf-8')) == {}
+    assert source_registry.read_text(encoding='utf-8') == '{malformed'
+
+
+def test_materialize_gemini_home_config_seeds_isolated_extensions(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
-    target_home = tmp_path / 'managed-kiro-home'
-    (source_home / '.kiro' / 'settings').mkdir(parents=True, exist_ok=True)
-    (source_home / '.kiro' / 'settings' / 'cli.json').write_text('{}\n', encoding='utf-8')
+    source_extension = source_home / '.gemini' / 'extensions' / 'test-extension'
+    source_extension.mkdir(parents=True)
+    (source_extension / 'gemini-extension.json').write_text('{"name":"test-extension"}\n', encoding='utf-8')
+    first_home = tmp_path / 'managed-home-1'
+    second_home = tmp_path / 'managed-home-2'
 
-    materialize_kiro_home_config(target_home, source_home=source_home)
-    # A second run must not raise and must leave the layout intact.
-    materialize_kiro_home_config(target_home, source_home=source_home)
+    first = materialize_gemini_home_config(first_home, source_home=source_home)
+    second = materialize_gemini_home_config(second_home, source_home=source_home)
 
-    assert (target_home / 'settings' / 'cli.json').read_text(encoding='utf-8') == '{}\n'
-    assert (target_home / 'sessions').is_dir()
-    assert (target_home / 'agents').is_dir()
+    first_extensions = first.gemini_dir / 'extensions'
+    second_extensions = second.gemini_dir / 'extensions'
+    assert first_extensions.is_dir() and not first_extensions.is_symlink()
+    assert second_extensions.is_dir() and not second_extensions.is_symlink()
+    (first_extensions / 'test-extension' / 'agent-local.json').write_text('{}\n', encoding='utf-8')
+    assert not (second_extensions / 'test-extension' / 'agent-local.json').exists()
+    assert not (source_extension / 'agent-local.json').exists()
+
+    materialize_gemini_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    assert not second_extensions.exists()
 
 
-def test_materialize_kiro_home_config_survives_missing_source(tmp_path: Path) -> None:
-    source_home = tmp_path / 'nonexistent-source'
-    target_home = tmp_path / 'managed-kiro-home'
+def test_materialize_qwen_home_config_seeds_isolated_extensions(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-qwen-home'
+    source_extension = source_home / 'extensions' / 'test-extension'
+    source_extension.mkdir(parents=True)
+    (source_extension / 'qwen-extension.json').write_text('{"name":"test-extension"}\n', encoding='utf-8')
+    first_home = tmp_path / 'managed-qwen-home-1'
+    second_home = tmp_path / 'managed-qwen-home-2'
 
-    materialize_kiro_home_config(target_home, source_home=source_home)
+    materialize_qwen_home_config(first_home, source_home=source_home)
+    materialize_qwen_home_config(second_home, source_home=source_home)
 
-    assert (target_home / 'sessions').is_dir()
-    assert (target_home / 'settings').is_dir()
-    assert (target_home / 'agents').is_dir()
-    # Nothing to inherit — settings dir is empty.
-    assert list((target_home / 'settings').iterdir()) == []
+    first_extensions = first_home / 'extensions'
+    second_extensions = second_home / 'extensions'
+    assert first_extensions.is_dir() and not first_extensions.is_symlink()
+    assert second_extensions.is_dir() and not second_extensions.is_symlink()
+    (first_extensions / 'test-extension' / 'agent-local.json').write_text('{}\n', encoding='utf-8')
+    assert not (second_extensions / 'test-extension' / 'agent-local.json').exists()
+    assert not (source_extension / 'agent-local.json').exists()
+
+    materialize_qwen_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+    )
+    assert not second_extensions.exists()
+
+
+def test_materialize_qwen_home_config_copies_login_state_one_way(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-qwen'
+    target_home = tmp_path / 'managed-qwen'
+    source_home.mkdir(parents=True)
+    (source_home / 'oauth_creds.json').write_text(
+        '{"refresh_token":"source"}\n',
+        encoding='utf-8',
+    )
+    (source_home / 'settings.json').write_text('{"authType":"oauth"}\n', encoding='utf-8')
+
+    materialize_qwen_home_config(target_home, source_home=source_home)
+
+    target_auth = target_home / 'oauth_creds.json'
+    target_auth.unlink()
+    assert (source_home / 'oauth_creds.json').is_file()
+    assert not target_home.is_symlink()
+
+
+def test_provider_extension_projections_remove_owned_state_for_hard_role_policy(
+    tmp_path: Path,
+) -> None:
+    policy = _hard_role_policy(tmp_path)
+
+    droid_source = tmp_path / 'system-factory-home'
+    droid_target = tmp_path / 'managed-factory-home'
+    _write_droid_plugin_source(droid_source)
+    materialize_droid_home_config(droid_target, source_home=droid_source)
+    materialize_droid_home_config(
+        droid_target,
+        source_home=droid_source,
+        command_policy=policy,
+    )
+    assert not (droid_target / 'plugins').exists()
+    assert json.loads((droid_target / 'settings.json').read_text(encoding='utf-8')) == {}
+
+    gemini_source = tmp_path / 'system-gemini-home'
+    gemini_extension = gemini_source / '.gemini' / 'extensions' / 'test-extension'
+    gemini_extension.mkdir(parents=True)
+    (gemini_extension / 'gemini-extension.json').write_text('{}\n', encoding='utf-8')
+    gemini_target = tmp_path / 'managed-gemini-home'
+    materialize_gemini_home_config(gemini_target, source_home=gemini_source)
+    gemini_layout = materialize_gemini_home_config(
+        gemini_target,
+        source_home=gemini_source,
+        command_policy=policy,
+    )
+    assert not (gemini_layout.gemini_dir / 'extensions').exists()
+
+    qwen_source = tmp_path / 'system-qwen-home'
+    qwen_extension = qwen_source / 'extensions' / 'test-extension'
+    qwen_extension.mkdir(parents=True)
+    (qwen_extension / 'qwen-extension.json').write_text('{}\n', encoding='utf-8')
+    qwen_target = tmp_path / 'managed-qwen-home'
+    materialize_qwen_home_config(qwen_target, source_home=qwen_source)
+    materialize_qwen_home_config(
+        qwen_target,
+        source_home=qwen_source,
+        command_policy=policy,
+    )
+    assert not (qwen_target / 'extensions').exists()
 
 
 def test_materialize_codex_home_config_writes_project_memory_bundle(tmp_path: Path) -> None:
@@ -3023,7 +4025,9 @@ def test_materialize_claude_home_config_respects_inherit_skills_without_disablin
         agent_name='reviewer',
     )
 
-    assert not (layout.claude_dir / 'skills').exists()
+    assert not (layout.claude_dir / 'skills' / 'review').exists()
+    assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     memory_text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
     assert '# CCB Managed Agent Memory' in memory_text
     assert 'claude-md' in memory_text
@@ -3221,7 +4225,11 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     assert not layout.credentials_path.exists()
 
 
-def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(tmp_path: Path) -> None:
+def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.claude' / 'settings.json'
@@ -3321,6 +4329,10 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
                     'GOOGLE_GEMINI_BASE_URL': 'https://chatapi.onechats.ai',
                 },
                 'theme': 'Default',
+                'general': {
+                    'enableAutoUpdate': True,
+                    'enableAutoUpdateNotification': True,
+                },
             },
             ensure_ascii=False,
             indent=2,
@@ -3336,6 +4348,25 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
     assert payload['env']['GOOGLE_API_KEY'] == 'system-google-key'
     assert payload['env']['GOOGLE_GEMINI_BASE_URL'] == 'https://chatapi.onechats.ai'
     assert payload['theme'] == 'Default'
+    assert payload['general']['enableAutoUpdate'] is False
+    assert payload['general']['enableAutoUpdateNotification'] is False
+
+
+def test_materialize_gemini_home_config_disables_autoupdate_without_source_settings(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload == {
+        'general': {
+            'enableAutoUpdate': False,
+            'enableAutoUpdateNotification': False,
+        }
+    }
 
 
 def test_materialize_gemini_home_config_projects_dotenv_api_auth_into_managed_home(tmp_path: Path) -> None:
@@ -3420,6 +4451,84 @@ def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_aut
     assert payload['security']['auth']['selectedType'] == 'oauth-personal'
     assert json.loads((layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
     assert json.loads((layout.gemini_dir / 'google_accounts.json').read_text(encoding='utf-8'))['active'] == 'user@example.test'
+
+
+def test_materialize_gemini_home_config_imports_system_keyring_oauth_one_way(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_settings.parent.mkdir(parents=True)
+    source_settings.write_text(
+        json.dumps(
+            {'security': {'auth': {'selectedType': 'oauth-personal'}}},
+            ensure_ascii=False,
+        ),
+        encoding='utf-8',
+    )
+    stored = json.dumps(
+        {
+            'serverName': 'main-account',
+            'token': {
+                'accessToken': 'source-access-token',
+                'refreshToken': 'source-refresh-token',
+                'tokenType': 'Bearer',
+                'scope': 'scope-a scope-b',
+                'expiresAt': 1234567890,
+            },
+        }
+    )
+    keyring_calls: list[tuple[str, str]] = []
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(gemini_home_runtime, '_system_home_root', lambda: source_home)
+
+    def fake_read(service: str, account: str, **_kwargs) -> str:
+        keyring_calls.append((service, account))
+        return stored
+
+    monkeypatch.setattr(gemini_home_runtime, 'read_keyring_password', fake_read)
+
+    layout = materialize_gemini_home_config(target_home)
+
+    assert keyring_calls == [('gemini-cli-oauth', 'main-account')]
+    projected = json.loads(
+        (layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8')
+    )
+    assert projected == {
+        'access_token': 'source-access-token',
+        'refresh_token': 'source-refresh-token',
+        'token_type': 'Bearer',
+        'scope': 'scope-a scope-b',
+        'expiry_date': 1234567890,
+    }
+    (layout.gemini_dir / 'oauth_creds.json').unlink()
+    assert source_settings.is_file()
+
+
+def test_materialize_gemini_home_config_does_not_query_keyring_for_fixture_source(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'fixture-home'
+    target_home = tmp_path / 'managed-home'
+    settings = source_home / '.gemini' / 'settings.json'
+    settings.parent.mkdir(parents=True)
+    settings.write_text(
+        '{"security":{"auth":{"selectedType":"oauth-personal"}}}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        gemini_home_runtime,
+        'read_keyring_password',
+        lambda *_args, **_kwargs: pytest.fail('explicit fixture must not query OS keyring'),
+    )
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    assert not (layout.gemini_dir / 'oauth_creds.json').exists()
 
 
 def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_when_auth_not_inherited(tmp_path: Path) -> None:

@@ -302,7 +302,11 @@ void main() {
 
     expect(repository.focusAgentCalls, isEmpty);
     expect(find.byType(TerminalView), findsOneWidget);
-    expect(find.text('demo / lead'), findsOneWidget);
+    expect(find.text('demo'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('return-to-agent-chat-button')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('focus failure preserves previous view and shows error', (

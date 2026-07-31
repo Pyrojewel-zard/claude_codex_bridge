@@ -1,19 +1,37 @@
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import os
 import platform
 from pathlib import Path
 import shutil
 import subprocess
+import unicodedata
 
 from provider_core.memory_projection import (
     memory_projection_result,
     record_memory_projection_event,
     text_file_sha256,
 )
-from provider_core.projected_assets import route_projected_tree
+from provider_core.one_way_inheritance import (
+    copy_regular_file,
+    ensure_private_descendant_directory,
+    ensure_private_directory,
+    ensure_private_inheritance_directory,
+)
+from provider_core.inherited_skills import (
+    materialize_required_control_skills,
+    required_control_skill_names,
+    route_inherited_skill_entries,
+)
+from provider_core.projected_assets import (
+    remove_projected_path,
+    route_projected_tree,
+    seed_projected_tree,
+)
+from provider_core.projected_settings import rebase_json_path_fields
 from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
 from rolepacks.projection import project_role_skills_to_home
@@ -59,6 +77,14 @@ _CLAUDE_JSON_MCP_PROJECT_KEYS = (
 _MACOS_KEYCHAIN_CLAUDE_SERVICES = ('Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code')
 _CLAUDE_SKILLS_PROJECTION_LABEL = 'claude-inherited-skills'
 _CLAUDE_COMMANDS_PROJECTION_LABEL = 'claude-inherited-commands'
+_CLAUDE_PLUGIN_SEED_ENV = 'CLAUDE_CODE_PLUGIN_SEED_DIR'
+_CLAUDE_PLUGIN_CACHE_ENV = 'CLAUDE_CODE_PLUGIN_CACHE_DIR'
+_CLAUDE_PLUGIN_SETTINGS_KEYS = ('enabledPlugins', 'extraKnownMarketplaces')
+_CLAUDE_PLUGIN_BOOTSTRAP_LABEL = 'claude-plugin-cache-bootstrap'
+_CLAUDE_RESTRICTED_PLUGIN_ROOT = 'ccb-restricted-plugins'
+_CLAUDE_EMPTY_PLUGIN_SEED = 'ccb-empty-plugin-seed'
+_CLAUDE_EMPTY_PLUGIN_ROOT = 'ccb-empty-plugins'
+_CLAUDE_PLUGIN_PATH_KEYS = ('installLocation', 'installPath')
 
 
 def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
@@ -78,6 +104,7 @@ def prepare_claude_home_overrides(
     runtime_dir: Path,
     profile,
     *,
+    source_home: Path | None = None,
     refresh_home: bool = True,
     auto_permission: bool = False,
     project_root: Path | None = None,
@@ -88,10 +115,16 @@ def prepare_claude_home_overrides(
     command_policy=None,
 ) -> dict[str, str]:
     layout = resolve_claude_home_layout(runtime_dir, profile)
+    source_root = (
+        Path(source_home).expanduser()
+        if source_home is not None
+        else _system_home_root()
+    )
     if refresh_home:
         materialize_claude_home_config(
             layout.home_root,
             profile=profile,
+            source_home=source_root,
             project_root=project_root,
             agent_name=agent_name,
             workspace_path=workspace_path,
@@ -100,11 +133,29 @@ def prepare_claude_home_overrides(
             memory_projection_event_path=memory_projection_event_path,
             memory_projection_marker_path=memory_projection_marker_path,
         )
+    materialize_required_control_skills(
+        provider='claude',
+        target_dir=layout.claude_dir / 'skills',
+    )
     overrides = {
         'HOME': str(layout.home_root),
+        'CLAUDE_CONFIG_DIR': str(layout.claude_dir),
+        # Claude's macOS secure-storage service name is scoped from this path.
+        # Pinning it to the agent-private config root prevents refreshes from
+        # updating the user's ordinary "Claude Code-credentials" entry.
+        'CLAUDE_SECURESTORAGE_CONFIG_DIR': str(layout.claude_dir),
         'CLAUDE_PROJECTS_ROOT': str(layout.projects_root),
         'CLAUDE_PROJECT_ROOT': str(layout.projects_root),
+        'CLAUDE_SESSION_ENV_ROOT': str(layout.session_env_root),
     }
+    overrides.update(
+        _claude_plugin_environment(
+            source_root,
+            layout,
+            profile=profile,
+            command_policy=command_policy,
+        )
+    )
 
     if "WSL_DISTRO_NAME" in os.environ:
         # We are running inside WSL. The target claude executable might be a Windows binary (via interop).
@@ -113,8 +164,12 @@ def prepare_claude_home_overrides(
         # when invoking a Windows executable. Linux executables will ignore WSLENV.
         overrides['USERPROFILE'] = str(layout.home_root)
         wslenv_additions = (
-            "HOME/p:USERPROFILE/p:CLAUDE_PROJECTS_ROOT/p:CLAUDE_PROJECT_ROOT/p:"
-            "ANTHROPIC_AUTH_TOKEN:ANTHROPIC_API_KEY:ANTHROPIC_BASE_URL"
+            "HOME/p:USERPROFILE/p:CLAUDE_CONFIG_DIR/p:"
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR/p:"
+            "CLAUDE_PROJECTS_ROOT/p:CLAUDE_PROJECT_ROOT/p:CLAUDE_SESSION_ENV_ROOT/p:"
+            "CLAUDE_CODE_PLUGIN_SEED_DIR/p:CLAUDE_CODE_PLUGIN_CACHE_DIR/p:"
+            "ANTHROPIC_AUTH_TOKEN:ANTHROPIC_API_KEY:ANTHROPIC_BASE_URL:"
+            "DISABLE_LOGIN_COMMAND:DISABLE_LOGOUT_COMMAND:DISABLE_AUTOUPDATER"
         )
         existing_wslenv = os.environ.get("WSLENV", "")
         if existing_wslenv:
@@ -123,6 +178,81 @@ def prepare_claude_home_overrides(
             overrides['WSLENV'] = wslenv_additions
 
     return overrides
+
+
+def _claude_plugin_environment(
+    source_home: Path,
+    target_layout: ClaudeHomeLayout,
+    *,
+    profile,
+    command_policy,
+) -> dict[str, str]:
+    inherited_plugins_enabled = (
+        _inherits_config(profile)
+        and not role_command_policy_disables_inherited_assets(command_policy)
+    )
+    source_seed_root = Path(source_home).expanduser() / '.claude' / 'plugins'
+    empty_seed_root = target_layout.claude_dir / _CLAUDE_EMPTY_PLUGIN_SEED
+    source_seed_usable = inherited_plugins_enabled and _usable_claude_plugin_seed(source_seed_root)
+    seed_root = source_seed_root if source_seed_usable else empty_seed_root
+    normal_plugin_root = target_layout.claude_dir / 'plugins'
+    if not inherited_plugins_enabled:
+        plugin_root = target_layout.claude_dir / _CLAUDE_RESTRICTED_PLUGIN_ROOT
+    elif source_seed_usable or normal_plugin_root.exists() or normal_plugin_root.is_symlink():
+        plugin_root = normal_plugin_root
+    else:
+        plugin_root = target_layout.claude_dir / _CLAUDE_EMPTY_PLUGIN_ROOT
+    try:
+        if source_seed_usable and _claude_plugin_root_is_bootstrap_safe(plugin_root):
+            if plugin_root.exists():
+                shutil.rmtree(plugin_root)
+            seeded = seed_projected_tree(
+                source_seed_root,
+                plugin_root,
+                label=_CLAUDE_PLUGIN_BOOTSTRAP_LABEL,
+            )
+            if seeded and not rebase_json_path_fields(
+                (
+                    plugin_root / 'installed_plugins.json',
+                    plugin_root / 'known_marketplaces.json',
+                ),
+                source_root=source_seed_root,
+                target_root=plugin_root,
+                fields=_CLAUDE_PLUGIN_PATH_KEYS,
+            ):
+                remove_projected_path(plugin_root, label=_CLAUDE_PLUGIN_BOOTSTRAP_LABEL)
+        plugin_root.mkdir(parents=True, exist_ok=True)
+        (plugin_root / 'cache').mkdir(parents=True, exist_ok=True)
+        empty_seed_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return {}
+    return {
+        _CLAUDE_PLUGIN_SEED_ENV: str(seed_root),
+        _CLAUDE_PLUGIN_CACHE_ENV: str(plugin_root),
+    }
+
+
+def _claude_plugin_root_is_bootstrap_safe(plugin_root: Path) -> bool:
+    if plugin_root.is_symlink():
+        return False
+    if not plugin_root.exists():
+        return True
+    if not plugin_root.is_dir():
+        return False
+    try:
+        return not any(entry.is_symlink() or not entry.is_dir() for entry in plugin_root.rglob('*'))
+    except Exception:
+        return False
+
+
+def _usable_claude_plugin_seed(seed_root: Path) -> bool:
+    return seed_root.is_dir() and any(
+        (
+            (seed_root / 'known_marketplaces.json').is_file(),
+            (seed_root / 'marketplaces').is_dir(),
+            (seed_root / 'cache').is_dir(),
+        )
+    )
 
 
 def materialize_claude_home_config(
@@ -218,18 +348,11 @@ def _prepare_managed_home(
     auto_permission: bool,
     command_policy,
 ) -> dict[str, object]:
-    target_layout.home_root.mkdir(parents=True, exist_ok=True)
-    target_layout.claude_dir.mkdir(parents=True, exist_ok=True)
-    target_layout.projects_root.mkdir(parents=True, exist_ok=True)
-    target_layout.session_env_root.mkdir(parents=True, exist_ok=True)
-
-    if target_layout.home_root == source_home.expanduser():
-        _ensure_trust_file(target_layout.trust_path)
-        return memory_projection_result(
-            status='skipped',
-            reason='source_home_is_target_home',
-            path=target_layout.claude_dir / 'CLAUDE.md',
-        )
+    ensure_private_inheritance_directory(target_layout.home_root, source_home)
+    ensure_private_descendant_directory(target_layout.home_root, Path('.claude'))
+    ensure_private_descendant_directory(target_layout.home_root, Path('.claude') / 'projects')
+    ensure_private_descendant_directory(target_layout.home_root, Path('.claude') / 'session-env')
+    ensure_private_descendant_directory(target_layout.home_root, Path('.config') / 'claude-code')
 
     _materialize_settings(
         source_home,
@@ -276,17 +399,22 @@ def _materialize_inherited_assets(
         enabled=inherited_assets_enabled and _inherits_commands(profile),
         label=_CLAUDE_COMMANDS_PROJECTION_LABEL,
     )
-    _route_inherited_tree(
+    route_inherited_skill_entries(
         source_home / '.claude' / 'skills',
         target_layout.claude_dir / 'skills',
         enabled=inherited_assets_enabled and _inherits_skills(profile),
         label=_CLAUDE_SKILLS_PROJECTION_LABEL,
+        exclude=required_control_skill_names('claude'),
     )
     project_role_skills_to_home(
         project_root=project_root,
         agent_name=agent_name,
         provider='claude',
         target_skills_dir=target_layout.claude_dir / 'skills',
+    )
+    materialize_required_control_skills(
+        provider='claude',
+        target_dir=target_layout.claude_dir / 'skills',
     )
     memory_result = _materialize_claude_memory(
         source_home,
@@ -413,10 +541,9 @@ def _materialize_settings(
     )
     if merged is None:
         return
-    target_layout.settings_path.parent.mkdir(parents=True, exist_ok=True)
-    target_layout.settings_path.write_text(
+    atomic_write_text(
+        target_layout.settings_path,
         json.dumps(merged, ensure_ascii=False, indent=2) + '\n',
-        encoding='utf-8',
     )
 
 
@@ -435,13 +562,23 @@ def _materialize_trust(
     if (
         source_trust.is_file()
         or target_layout.trust_path.exists()
+        or target_layout.legacy_trust_path.exists()
         or profile_servers
         or auto_permission
         or _env_value_present(custom_api_key)
     ):
+        # CCB 8.4.3 exported CLAUDE_CONFIG_DIR but continued writing this state
+        # at HOME/.claude.json.  Claude writes its own partial state at
+        # CLAUDE_CONFIG_DIR/.claude.json, so merge both authorities during the
+        # migration.  The active CLI state wins on conflicts while missing
+        # onboarding, trust, and MCP fields survive from the legacy file.
+        existing = _merge_json_objects(
+            _read_json_object(target_layout.legacy_trust_path),
+            _read_json_object(target_layout.trust_path),
+        )
         merged = _projected_claude_json_payload(
             _read_json_object(source_trust) if source_trust.is_file() else {},
-            existing=_read_json_object(target_layout.trust_path),
+            existing=existing,
             profile=profile,
             project_root=project_root,
             workspace_path=workspace_path,
@@ -455,53 +592,51 @@ def _materialize_trust(
             )
         _approve_claude_custom_api_key(merged, custom_api_key)
         _write_json_object(target_layout.trust_path, merged)
+        _remove_file(target_layout.legacy_trust_path)
     _ensure_trust_file(target_layout.trust_path)
+
+
+def _merge_json_objects(
+    base: dict[str, object],
+    overlay: dict[str, object],
+) -> dict[str, object]:
+    merged = {key: _clone_jsonish(value) for key, value in base.items()}
+    for key, value in overlay.items():
+        previous = merged.get(key)
+        if isinstance(previous, dict) and isinstance(value, dict):
+            merged[key] = _merge_json_objects(previous, value)
+        else:
+            merged[key] = _clone_jsonish(value)
+    return merged
 
 
 def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     if not _inherits_auth(profile):
         _remove_file(target_layout.auth_path)
         _remove_file(target_layout.credentials_path)
+        _remove_managed_macos_keychain_auth(target_layout)
         return
 
     for source_auth, target_auth in _source_auth_paths(source_home, target_layout):
-        if source_auth.is_file():
-            _sync_file(source_auth, target_auth)
+        try:
+            copy_regular_file(source_auth, target_auth)
+        except OSError:
+            pass
     _materialize_macos_keychain_auth(target_layout)
 
 
 def _materialize_macos_keychain_preferences(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+    del source_home, profile
     target = target_layout.home_root / 'Library' / 'Preferences' / 'com.apple.security.plist'
     target_keychains = target_layout.home_root / 'Library' / 'Keychains'
-    if not _inherits_auth(profile):
-        _remove_file(target)
-        _remove_keychains_link(target_keychains)
-        return
-    if platform.system() != 'Darwin':
-        return
-    source = source_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
-    if source.is_file():
-        _sync_file(source, target)
-        return
+    # Older CCB releases linked this path back to the user's real Keychains
+    # directory.  That made a managed provider logout capable of mutating the
+    # external login authority.  Credential inheritance is now copy-only, so
+    # detach any legacy link before doing anything else.
+    _remove_keychains_link(target_keychains)
+    # A copied preference file can itself point Security.framework back to the
+    # user's global keychain database, so remove legacy copies as well.
     _remove_file(target)
-    _materialize_macos_keychains_link(source_home / 'Library' / 'Keychains', target_keychains)
-
-
-def _materialize_macos_keychains_link(source: Path, target: Path) -> None:
-    if not source.is_dir():
-        _remove_keychains_link(target)
-        return
-    try:
-        if target.is_symlink():
-            if target.resolve() == source.resolve():
-                return
-            target.unlink()
-        elif target.exists():
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.symlink_to(source, target_is_directory=True)
-    except Exception:
-        pass
 
 
 def _remove_keychains_link(path: Path) -> None:
@@ -784,9 +919,13 @@ def _clone_jsonish(value: object) -> object:
 
 def _materialize_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None:
     payload = _read_macos_keychain_claude_credentials()
-    if not payload:
+    if payload:
+        _write_json_object(target_layout.credentials_path, payload, mode=0o600)
+    elif platform.system() == 'Darwin':
+        payload = _read_json_object(target_layout.credentials_path)
+    if not payload or not isinstance(payload.get('claudeAiOauth'), dict):
         return
-    _write_json_object(target_layout.credentials_path, payload, mode=0o600)
+    _seed_managed_macos_keychain_auth(target_layout, payload)
 
 
 def _read_macos_keychain_claude_credentials() -> dict[str, object] | None:
@@ -838,6 +977,89 @@ def _macos_keychain_services() -> tuple[str, ...]:
     if override:
         services.insert(0, override)
     return tuple(services)
+
+
+def _managed_macos_keychain_service(target_layout: ClaudeHomeLayout) -> str:
+    storage_root = unicodedata.normalize('NFC', str(target_layout.claude_dir))
+    suffix = hashlib.sha256(storage_root.encode('utf-8')).hexdigest()[:8]
+    base = (
+        'Claude Code-custom-oauth'
+        if os.environ.get('CLAUDE_CODE_CUSTOM_OAUTH_URL')
+        else 'Claude Code-credentials'
+    )
+    return f'{base}-{suffix}'
+
+
+def _seed_managed_macos_keychain_auth(
+    target_layout: ClaudeHomeLayout,
+    payload: dict[str, object],
+) -> None:
+    if platform.system() != 'Darwin':
+        return
+    security = shutil.which('security') or '/usr/bin/security'
+    account = _macos_keychain_account()
+    if not account:
+        raise RuntimeError('cannot isolate Claude login: macOS Keychain account is unavailable')
+    service = _managed_macos_keychain_service(target_layout)
+    if service in _macos_keychain_services():
+        raise RuntimeError('refusing to overwrite the external Claude Keychain login')
+    try:
+        existing = subprocess.run(
+            [security, 'find-generic-password', '-a', account, '-s', service, '-w'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        raise RuntimeError(f'cannot inspect agent-private Claude Keychain login: {exc}') from exc
+    if existing.returncode == 0:
+        return
+    credential_text = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+    try:
+        result = subprocess.run(
+            [
+                security,
+                'add-generic-password',
+                '-U',
+                '-a',
+                account,
+                '-s',
+                service,
+                '-w',
+                credential_text,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        raise RuntimeError(f'cannot seed agent-private Claude Keychain login: {exc}') from exc
+    if result.returncode != 0:
+        raise RuntimeError('cannot seed agent-private Claude Keychain login')
+
+
+def _remove_managed_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None:
+    if platform.system() != 'Darwin':
+        return
+    security = shutil.which('security') or '/usr/bin/security'
+    account = _macos_keychain_account()
+    if not account:
+        return
+    service = _managed_macos_keychain_service(target_layout)
+    if service in _macos_keychain_services():
+        return
+    try:
+        subprocess.run(
+            [security, 'delete-generic-password', '-a', account, '-s', service],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
 
 
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
@@ -903,6 +1125,13 @@ def _merge_settings_payload(
     if role_command_policy_requires_enforcement(command_policy):
         allowlist = list(claude_permission_allowlist(command_policy))
         merged['permissions'] = {'allow': allowlist, 'deny': []}
+
+    if (
+        not _inherits_config(profile)
+        or role_command_policy_disables_inherited_assets(command_policy)
+    ):
+        for key in _CLAUDE_PLUGIN_SETTINGS_KEYS:
+            merged.pop(key, None)
 
     # Claude Code 1.0.43 still iterates the legacy top-level allowedTools
     # array even when the newer permissions.* schema is present.
@@ -1120,10 +1349,9 @@ def _json_object_from_text(value: str) -> dict[str, object]:
 
 
 def _write_json_object(path: Path, payload: dict[str, object], *, mode: int | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
-        encoding='utf-8',
     )
     if mode is not None:
         try:
@@ -1150,10 +1378,9 @@ def _payload_mentions_home_asset(value: object, dirname: str) -> bool:
 
 
 def _ensure_trust_file(path: Path) -> None:
-    if path.exists():
+    if path.exists() and not path.is_symlink():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{}\n', encoding='utf-8')
+    atomic_write_text(path, '{}\n')
 
 
 def _copy_if_missing(source: Path, target: Path) -> None:
@@ -1203,7 +1430,7 @@ def _sync_tree(source: Path, target: Path) -> None:
 
 
 def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
-    route_projected_tree(source, target, enabled=enabled, label=label, allow_unmarked_replace=True)
+    route_projected_tree(source, target, enabled=enabled, label=label)
 
 
 def _system_home_root() -> Path:

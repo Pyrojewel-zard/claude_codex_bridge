@@ -180,6 +180,69 @@ def test_provider_finish_hook_marks_empty_claude_reply_incomplete(tmp_path: Path
     assert "without assistant reply text" in event["diagnostics"]["diagnosis"]
 
 
+def test_provider_finish_hook_marks_claude_stalled_response_failed(
+    tmp_path: Path,
+) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    completion_dir = tmp_path / "completion"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    transcript = tmp_path / "transcript.jsonl"
+    req_id = "job_stalledclaude123"
+    transcript.write_text(
+        json.dumps(
+            {
+                "uuid": "current-user",
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": f"CCB_REQ_ID: {req_id}\n\nRun the task.",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stalled = "API Error: Response stalled mid-stream"
+    payload = {
+        "hook_event_name": "Stop",
+        "transcript_path": str(transcript),
+        "last_assistant_message": stalled,
+        "session_id": "claude-session-1",
+    }
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(project_root / "bin" / "ccb-provider-finish-hook.py"),
+            "--provider",
+            "claude",
+            "--completion-dir",
+            str(completion_dir),
+            "--agent-name",
+            "agent3",
+            "--workspace",
+            str(workspace),
+        ],
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    event = json.loads(
+        (completion_dir / "events" / f"{req_id}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert event["reply"] == stalled
+    assert event["status"] == "failed"
+    assert event["diagnostics"]["reason"] == "claude_response_stalled_mid_stream"
+    assert event["diagnostics"]["response_incomplete"] is True
+    assert event["diagnostics"]["error_type"] == "provider_api_error"
+
+
 def test_provider_finish_hook_uses_outer_claude_req_id_when_body_mentions_old_req_id(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     completion_dir = tmp_path / "completion"

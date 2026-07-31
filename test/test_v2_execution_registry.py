@@ -18,6 +18,8 @@ def test_execution_registry_can_build_core_only_registry() -> None:
         'deepseek',
         'mimo',
         'qwen',
+        'qoder',
+        'qoderclicn',
         'cursor',
         'copilot',
         'crush',
@@ -26,7 +28,6 @@ def test_execution_registry_can_build_core_only_registry() -> None:
         'pi',
         'omp',
         'zai',
-        'grok',
     }
     assert registry.get('codex') is not None
     assert registry.get('claude') is not None
@@ -38,6 +39,8 @@ def test_execution_registry_can_build_core_only_registry() -> None:
     assert registry.get('deepseek') is None
     assert registry.get('mimo') is None
     assert registry.get('qwen') is None
+    assert registry.get('qoder') is None
+    assert registry.get('qoderclicn') is None
     assert registry.get('cursor') is None
     assert registry.get('copilot') is None
     assert registry.get('crush') is None
@@ -46,5 +49,4 @@ def test_execution_registry_can_build_core_only_registry() -> None:
     assert registry.get('pi') is None
     assert registry.get('omp') is None
     assert registry.get('zai') is None
-    assert registry.get('grok') is None
     assert registry.get('fake') is None

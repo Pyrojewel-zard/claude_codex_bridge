@@ -13,9 +13,11 @@ def finalize_poll_result(
     *,
     state: dict[str, object],
 ) -> ProviderPollResult:
+    terminal_reply = str(getattr(poll, "terminal_reply", "") or "")
+    resolved_reply = terminal_reply or poll.reply_buffer
     updated = replace(
         submission,
-        reply=poll.reply_buffer,
+        reply=resolved_reply,
         runtime_state={
             **submission.runtime_state,
             "state": state,
@@ -25,6 +27,24 @@ def finalize_poll_result(
             "raw_buffer": poll.raw_buffer,
             "session_path": poll.session_path,
             "last_assistant_uuid": poll.last_assistant_uuid,
+            "active_assistant_message_id": str(
+                getattr(poll, "active_assistant_message_id", "") or ""
+            ),
+            "active_assistant_text": str(
+                getattr(poll, "active_assistant_text", "") or ""
+            ),
+            "active_assistant_stop_reason": str(
+                getattr(poll, "active_assistant_stop_reason", "") or ""
+            ),
+            "active_assistant_has_tool_use": bool(
+                getattr(poll, "active_assistant_has_tool_use", False)
+            ),
+            "terminal_reply": terminal_reply,
+            "prompt_enqueued": bool(getattr(poll, "prompt_enqueued", False)),
+            "queue_dequeue_observed": bool(getattr(poll, "queue_dequeue_observed", False)),
+            "prompt_activated": bool(getattr(poll, "prompt_activated", False)),
+            "prompt_enqueue_uuid": str(getattr(poll, "prompt_enqueue_uuid", "") or ""),
+            "prompt_activation_uuid": str(getattr(poll, "prompt_activation_uuid", "") or ""),
         },
     )
     if not poll.items:

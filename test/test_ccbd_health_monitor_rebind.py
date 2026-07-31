@@ -121,6 +121,34 @@ def test_rebind_runtime_falls_back_to_session_binding_when_facts_missing(monkeyp
     assert updated.pane_state == 'alive'
 
 
+def test_rebind_runtime_preserves_recovery_probe_until_stability_gate() -> None:
+    runtime = _runtime(
+        state=AgentState.DEGRADED,
+        health='recovering',
+        reconcile_state='probing',
+        recovery_failure_count=2,
+    )
+    monitor = SimpleNamespace(
+        _provider_runtime_facts=lambda runtime, session, binding, pane_id_override=None: None,
+        _clock=lambda: '2026-04-06T00:00:30Z',
+        _registry=SimpleNamespace(upsert=lambda updated: updated),
+        _runtime_service=None,
+    )
+    binding = SimpleNamespace(session_id_attr='session_id', session_path_attr='session_path')
+
+    updated = rebind_runtime(
+        monitor,
+        runtime,
+        session=SimpleNamespace(pane_id='%1', session_id='sid', session_path=None),
+        binding=binding,
+    )
+
+    assert updated.state is AgentState.DEGRADED
+    assert updated.health == 'recovering'
+    assert updated.reconcile_state == 'probing'
+    assert updated.last_seen_at == '2026-04-06T00:00:30Z'
+
+
 def test_runtime_health_preserves_terminal_provider_recovery_block() -> None:
     runtime = _runtime(
         state=AgentState.DEGRADED,
@@ -135,3 +163,19 @@ def test_runtime_health_preserves_terminal_provider_recovery_block() -> None:
     )
 
     assert runtime_health(monitor, runtime) == 'provider-auth-revoked'
+
+
+def test_runtime_health_preserves_open_recovery_circuit() -> None:
+    runtime = _runtime(
+        state=AgentState.DEGRADED,
+        health='recovery-circuit-open',
+        reconcile_state='blocked',
+        recovery_failure_count=6,
+    )
+    monitor = SimpleNamespace(
+        _pane_health=lambda runtime: (_ for _ in ()).throw(
+            AssertionError('open recovery circuit must bypass pane reassessment')
+        ),
+    )
+
+    assert runtime_health(monitor, runtime) == 'recovery-circuit-open'

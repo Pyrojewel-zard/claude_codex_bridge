@@ -17,7 +17,6 @@ void main() {
       final selectedAgent = view.agentByName('mobile');
       var backCalls = 0;
       var detailsCalls = 0;
-      var terminalAgentName = '';
       var collapsed = false;
       var expanded = false;
       var selectedWindowName = '';
@@ -35,9 +34,6 @@ void main() {
           mobileAgentsCollapsed: false,
           onBack: () {
             backCalls += 1;
-          },
-          onOpenTerminal: (agentName) {
-            terminalAgentName = agentName;
           },
           onOpenConnectionDetails: () {
             detailsCalls += 1;
@@ -113,11 +109,6 @@ void main() {
             find.byKey(const ValueKey('connection-details-action')),
           )
           .onPressed!();
-      tester
-          .widget<IconButton>(
-            find.byKey(const ValueKey('open-agent-terminal-button')),
-          )
-          .onPressed!();
       await tester.tap(
         find.byKey(const ValueKey('mobile-agent-switcher-collapse-action')),
       );
@@ -130,7 +121,6 @@ void main() {
 
       expect(backCalls, 1);
       expect(detailsCalls, 1);
-      expect(terminalAgentName, 'mobile');
       expect(collapsed, isTrue);
       expect(expanded, isFalse);
       expect(selectedWindowName, 'review');
@@ -151,7 +141,6 @@ void main() {
           usePaneInputForMessages: true,
           mobileAgentsCollapsed: true,
           onBack: () {},
-          onOpenTerminal: (_) {},
           onOpenConnectionDetails: () {},
           onCollapseAgents: () {},
           onExpandAgents: () {},
@@ -183,11 +172,11 @@ void main() {
       );
     });
 
-    testWidgets('mobile host uses header terminal action without inline tabs', (
+    testWidgets('mobile host toggles terminal content from the header', (
       tester,
     ) async {
       final view = _view();
-      var terminalAgentName = '';
+      final terminalTransport = RecordingTerminalTransport();
 
       await _pump(
         tester,
@@ -195,13 +184,10 @@ void main() {
           view: view,
           selectedAgent: view.agentByName('mobile'),
           repository: RecordingGatewayRepository(),
-          terminalTransport: RecordingTerminalTransport(),
+          terminalTransport: terminalTransport,
           usePaneInputForMessages: true,
           mobileAgentsCollapsed: false,
           onBack: () {},
-          onOpenTerminal: (agentName) {
-            terminalAgentName = agentName;
-          },
           onOpenConnectionDetails: () {},
           onCollapseAgents: () {},
           onExpandAgents: () {},
@@ -224,19 +210,127 @@ void main() {
         find.byKey(const ValueKey('ccb-live-terminal-view')),
         findsNothing,
       );
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'preserved draft',
+      );
 
       await tester.tap(
         find.byKey(const ValueKey('open-agent-terminal-button')),
       );
       await tester.pumpAndSettle();
 
-      expect(terminalAgentName, 'mobile');
+      expect(
+        find.byKey(const ValueKey('ccb-live-terminal-view')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('agent-message-composer')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('return-to-agent-chat-button')),
+        findsOneWidget,
+      );
+      expect(terminalTransport.requests, hasLength(1));
+      expect(terminalTransport.requests.single.target.agent, 'mobile');
+
+      await tester.tap(
+        find.byKey(const ValueKey('return-to-agent-chat-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('agent-message-composer')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('ccb-live-terminal-view')),
         findsNothing,
       );
+      expect(find.text('preserved draft'), findsOneWidget);
+    });
+
+    testWidgets('terminal mode follows the shared selected agent in place', (
+      tester,
+    ) async {
+      final view = _view();
+      final repository = RecordingGatewayRepository();
+      final terminalTransport = RecordingTerminalTransport();
+      var selectedAgent = view.agentByName('mobile');
+      var windowSelectionCalls = 0;
+
+      await _pump(
+        tester,
+        StatefulBuilder(
+          builder: (context, setState) {
+            return ProjectHomeMobileChatScaffoldHost(
+              view: view,
+              selectedAgent: selectedAgent,
+              repository: repository,
+              terminalTransport: terminalTransport,
+              usePaneInputForMessages: true,
+              mobileAgentsCollapsed: false,
+              onBack: () {},
+              onOpenConnectionDetails: () {},
+              onCollapseAgents: () {},
+              onExpandAgents: () {},
+              onWindowSelected: (_) {
+                windowSelectionCalls += 1;
+              },
+              onAgentSelected: (agentName) {
+                setState(() {
+                  selectedAgent = view.agentByName(agentName);
+                });
+              },
+              onRefreshView: () async => null,
+              onTimelineScrollDirectionChanged: (_) {},
+            );
+          },
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('open-agent-terminal-button')),
+      );
+      await tester.pumpAndSettle();
+      expect(terminalTransport.requests, hasLength(1));
+      expect(terminalTransport.requests.single.target.agent, 'mobile');
+
+      await tester.tap(find.byKey(const ValueKey('agent-lead')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(
+        find.byKey(const ValueKey('return-to-agent-chat-button')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('agent-message-composer')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<AgentTerminalPane>(find.byType(AgentTerminalPane))
+            .target
+            .agent,
+        'lead',
+      );
+      expect(terminalTransport.requests, hasLength(2));
+      expect(terminalTransport.requests.last.target.agent, 'lead');
+      expect(repository.focusAgentCalls, isEmpty);
+      expect(repository.focusWindowCalls, isEmpty);
+      expect(terminalTransport.sessions.first.hasOutputListener, isFalse);
+      expect(terminalTransport.sessions.last.hasOutputListener, isTrue);
+
+      await tester.tap(find.byKey(const ValueKey('window-tab-review')));
+      await tester.pumpAndSettle();
+
+      expect(selectedAgent?.name, 'reviewer');
+      expect(windowSelectionCalls, 0);
+      expect(repository.focusWindowCalls, isEmpty);
+      expect(
+        find.byKey(const ValueKey('return-to-agent-chat-button')),
         findsOneWidget,
       );
     });
@@ -259,7 +353,6 @@ void main() {
               usePaneInputForMessages: true,
               mobileAgentsCollapsed: false,
               onBack: () {},
-              onOpenTerminal: (_) {},
               onOpenConnectionDetails: () {},
               onCollapseAgents: () {},
               onExpandAgents: () {},
@@ -315,7 +408,6 @@ void main() {
               usePaneInputForMessages: true,
               mobileAgentsCollapsed: false,
               onBack: () {},
-              onOpenTerminal: (_) {},
               onOpenConnectionDetails: () {},
               onCollapseAgents: () {},
               onExpandAgents: () {},
@@ -360,7 +452,6 @@ void main() {
       var backCalls = 0;
       var detailsCalls = 0;
       var expanded = false;
-      var terminalAgentName = '';
 
       await _pump(
         tester,
@@ -374,9 +465,6 @@ void main() {
           unreadAgentNames: const {'lead'},
           onBack: () {
             backCalls += 1;
-          },
-          onOpenTerminal: (agentName) {
-            terminalAgentName = agentName;
           },
           onOpenConnectionDetails: () {
             detailsCalls += 1;
@@ -442,7 +530,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(expanded, isTrue);
-      expect(terminalAgentName, 'mobile');
+      expect(
+        find.byKey(const ValueKey('return-to-agent-chat-button')),
+        findsOneWidget,
+      );
       expect(backCalls, 1);
       expect(detailsCalls, 1);
     });
@@ -583,6 +674,7 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
         name: 'lead',
         provider: 'codex',
         window: 'main',
+        paneId: '%1',
         order: 0,
         active: false,
         queueDepth: 0,
@@ -591,6 +683,7 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
         name: 'mobile',
         provider: 'codex',
         window: 'main',
+        paneId: '%2',
         order: 1,
         active: true,
         queueDepth: 1,
@@ -599,6 +692,7 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
         name: 'reviewer',
         provider: 'codex',
         window: 'review',
+        paneId: '%3',
         order: 0,
         active: false,
         queueDepth: 0,

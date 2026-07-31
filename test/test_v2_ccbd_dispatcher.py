@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
-import pytest
-
 import ccbd.services.dispatcher_runtime.frontdesk_direct_handoff as direct_handoff
-
+import pytest
 from agents.models import (
     AgentRuntime,
     AgentSpec,
@@ -27,9 +25,8 @@ from ccbd.services.dispatcher_runtime.frontdesk_direct_handoff import (
     recover_frontdesk_direct_handoffs,
     submit_frontdesk_direct_handoff,
 )
-from ccbd.services.runtime import RuntimeService
 from ccbd.services.registry import AgentRegistry
-from completion.tracker import CompletionTrackerService
+from ccbd.services.runtime import RuntimeService
 from completion.models import (
     CompletionConfidence,
     CompletionCursor,
@@ -40,11 +37,11 @@ from completion.models import (
     CompletionState,
     CompletionStatus,
 )
-from completion.tracker import CompletionTrackerView
+from completion.tracker import CompletionTrackerService, CompletionTrackerView
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
-from provider_core.contracts import ProviderSessionBinding
 from provider_core.catalog import build_default_provider_catalog
+from provider_core.contracts import ProviderSessionBinding
 from provider_execution.base import ProviderSubmission
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionRestoreResult, ExecutionService
@@ -1802,11 +1799,48 @@ def test_dispatcher_passes_runtime_context_to_execution_service(tmp_path: Path) 
     assert runtime_context.runtime_ref == 'codex-runtime'
     assert runtime_context.session_ref == 'codex-session'
     assert runtime_context.runtime_pid == 101
-    expected_flag = layout.agent_dir('codex') / 'cancel_flags' / f'{execution_job.job_id}.cancel'
-    assert f'`{expected_flag}`' in execution_job.request.body
+    assert execution_job.request.body == 'hello'
+    assert 'Before each work step' not in execution_job.request.body
     stored_job = dispatcher.get(execution_job.job_id)
     assert stored_job is not None
     assert stored_job.request.body == 'hello'
+
+
+def test_dispatcher_does_not_add_model_cancel_probe_to_pi(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-pi-native-cancel'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('pi')
+    registry = AgentRegistry(layout, config)
+    runtime = _runtime('pi', project_id=ctx.project_id, layout=layout, pid=102)
+    registry.upsert(runtime)
+    execution_service = RecordingExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+
+    dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='pi',
+            from_actor='user',
+            body='hello',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    dispatcher.tick()
+
+    assert len(execution_service.calls) == 1
+    execution_job, _ = execution_service.calls[0]
+    assert execution_job.request.body == 'hello'
+    assert 'Before each work step' not in execution_job.request.body
 
 
 def test_dispatcher_uses_latest_attached_binding_refs(tmp_path: Path) -> None:

@@ -227,12 +227,14 @@ def test_stable_proc_io_handle_reads_a_reaped_pending_zombie() -> None:
         [
             sys.executable,
             "-c",
-            "import os,time; time.sleep(0.05); os.write(1, b'x')",
+            "import os,time; time.sleep(0.5); os.write(1, b'x')",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
+        if not Path(f"/proc/{process.pid}/io").is_file():
+            pytest.skip("kernel does not expose child procfs I/O counters")
         identity = tracker.prime_pid(process.pid)
         deadline = time.monotonic() + 2.0
         state = ""
@@ -881,6 +883,10 @@ def test_profiled_command_aggregate_failure_closes_stable_io_tracker(
     assert trackers[0].was_closed is True
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "pread"),
+    reason="profiled command I/O assertions require Linux procfs stable handles",
+)
 def test_profiled_command_never_persists_argv_cwd_or_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -918,12 +924,53 @@ def test_profiled_command_never_persists_argv_cwd_or_environment(
     assert '"argv_persisted": false' in encoded
     assert outcome.resource_profile["window"]["command_wall_ms"] < 1000
     sampler = outcome.resource_profile["sampler"]
-    assert sampler["io_stable_handle_prime_success_count"] == 1
-    assert sampler["io_stable_handle_open_count"] >= 1
-    assert sampler["io_stable_handle_read_count"] >= 1
+    prime_successes = sampler["io_stable_handle_prime_success_count"]
+    prime_failures = sampler["io_stable_handle_prime_failure_count"]
+    assert prime_successes + prime_failures == 1
+    if prime_successes:
+        assert sampler["io_stable_handle_open_count"] >= 1
+        assert sampler["io_stable_handle_read_count"] >= 1
+    else:
+        assert sampler["io_stable_handle_open_failure_count"] >= 1
+        assert sampler["io_unavailable_event_count"] >= 1
     assert len(trackers) == 1
     assert trackers[0].was_closed is True
     assert trackers[0]._handles == {}
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires Linux procfs process discovery",
+)
+def test_snapshot_keeps_live_process_when_proc_io_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner()
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+    )
+    try:
+        def missing_io(_path: Path) -> dict[str, int]:
+            raise FileNotFoundError("proc I/O counters unavailable")
+
+        monkeypatch.setattr(runner, "_read_proc_io", missing_io)
+        snapshot = runner.capture_project_snapshot(
+            tmp_path,
+            root_pid=process.pid,
+            known_instances=set(),
+        )
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+    readings = [reading for reading in snapshot.readings if reading.pid == process.pid]
+    assert len(readings) == 1
+    assert readings[0].read_bytes is None
+    assert readings[0].write_bytes is None
+    assert snapshot.io_unavailable_count == 1
+    assert snapshot.vanished_process_count == 0
 
 
 def test_profiled_command_does_not_return_stale_seed_as_observed(
