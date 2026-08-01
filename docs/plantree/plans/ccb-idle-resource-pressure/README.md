@@ -56,8 +56,9 @@ project manually.
 1. [roadmap.md](roadmap.md)
 2. [topics/idle-resource-pressure-solution.md](topics/idle-resource-pressure-solution.md)
 3. [topics/worker-execution-goal.md](topics/worker-execution-goal.md)
-4. [topics/pr234-runtime-accelerator-review.md](topics/pr234-runtime-accelerator-review.md)
-5. Related baseline:
+4. [topics/callback-ledger-read-amplification.md](topics/callback-ledger-read-amplification.md)
+5. [topics/pr234-runtime-accelerator-review.md](topics/pr234-runtime-accelerator-review.md)
+6. Related baseline:
    [../../baseline/storage-and-state.md](../../baseline/storage-and-state.md),
    [../../baseline/runtime-flows.md](../../baseline/runtime-flows.md)
 6. Related performance plan:
@@ -90,6 +91,11 @@ Local diagnosis on 2026-06-23 found:
   stability, backoff/circuit breaking, and online crash-log retention are now
   implemented in the working tree; this is distinct from ordinary idle
   heartbeat pressure.
+- On 2026-08-01, a long-lived project exposed callback-ledger read
+  amplification: a 18.8 MB ledger made one idle dispatcher tick take about
+  26.8 seconds and kept `ccbd` near 91% CPU. The working-tree fix keeps JSONL
+  as authority, adds a file-signature-invalidated latest-edge memory view, and
+  limits recovery scans to actionable callback states.
 
 ## Status
 

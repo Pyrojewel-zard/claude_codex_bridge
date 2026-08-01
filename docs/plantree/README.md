@@ -36,7 +36,7 @@ to resume across agents and sessions.
 | [windows-wezterm-native](plans/windows-wezterm-native/README.md) | Planning | Evaluate and stage a Windows-native WezTerm mux backend for current CCB without tmux-based communication. |
 | [python-rust-hybrid-performance](plans/python-rust-hybrid-performance/README.md) | In progress | Stage performance-oriented Rust helpers around the current Python control plane without a full rewrite. |
 | [ccb-runtime-performance](plans/ccb-runtime-performance/README.md) | In progress | Attribute startup, high-load, and pane-interaction CPU/latency across CCB core, shell/tmux, provider processes, and UI paths before selecting optimization work. |
-| [ccb-idle-resource-pressure](plans/ccb-idle-resource-pressure/README.md) | Planning | Reduce SSD writes, memory use, and idle CPU when many CCB providers remain mounted but unused. |
+| [ccb-idle-resource-pressure](plans/ccb-idle-resource-pressure/README.md) | In progress | Reduce SSD writes, memory use, and idle CPU when many CCB providers remain mounted but unused. |
 | [rolepack-system](plans/rolepack-system/README.md) | Planning | Define a host-neutral Role Pack system for reusable agent roles, with CCB installation, projection, and governance as the first adapter. |
 | [provider-memory-ownership](plans/provider-memory-ownership/README.md) | In progress | Replace ad hoc provider memory bundling with a source ownership manifest across Claude, Codex, and OpenCode. |
 | [agent-roles-open-source](plans/agent-roles-open-source/README.md) | Planning | Plan the public `agent-roles` GitHub project as a spec-first RolePack standard with templates, reference roles, and future host adapters. |

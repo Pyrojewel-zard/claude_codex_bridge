@@ -6,6 +6,9 @@ from message_bureau import (
     AttemptRecord,
     AttemptState,
     AttemptStore,
+    CallbackEdgeRecord,
+    CallbackEdgeState,
+    CallbackEdgeStore,
     MessageRecord,
     MessageState,
     MessageStore,
@@ -13,7 +16,39 @@ from message_bureau import (
     ReplyStore,
     ReplyTerminalStatus,
 )
+from storage.jsonl_store import JsonlStore
 from storage.paths import PathLayout
+
+
+class CountingJsonlStore(JsonlStore):
+    def __init__(self) -> None:
+        self.read_all_calls = 0
+        self.find_last_calls = 0
+
+    def read_all(self, *args, **kwargs):
+        self.read_all_calls += 1
+        return super().read_all(*args, **kwargs)
+
+    def find_last(self, *args, **kwargs):
+        self.find_last_calls += 1
+        return super().find_last(*args, **kwargs)
+
+
+def _callback_edge(*, state: CallbackEdgeState = CallbackEdgeState.PENDING) -> CallbackEdgeRecord:
+    return CallbackEdgeRecord(
+        edge_id='cb-1',
+        parent_job_id='job-parent',
+        parent_message_id='msg-parent',
+        parent_agent='codex',
+        child_job_id='job-child',
+        child_message_id='msg-child',
+        callback_target_agent='codex',
+        original_caller='user',
+        original_task_id='task-1',
+        state=state,
+        created_at='2026-03-30T11:00:00Z',
+        updated_at='2026-03-30T11:00:00Z',
+    )
 
 
 def test_message_store_tracks_latest_state_per_message(tmp_path: Path) -> None:
@@ -127,3 +162,32 @@ def test_attempt_and_reply_stores_support_message_and_agent_queries(tmp_path: Pa
     assert latest_reply.agent_name == 'agent1'
     assert latest_reply.reply_artifact == {'path': '/tmp/reply.txt', 'bytes': 5000, 'sha256': 'abc'}
     assert [reply.reply_id for reply in reply_store.list_message('msg-1')] == ['rep-1']
+
+
+def test_callback_edge_store_reuses_latest_index_and_detects_external_append(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-callback-index')
+    backend = CountingJsonlStore()
+    store = CallbackEdgeStore(layout, store=backend)
+    pending = _callback_edge()
+
+    store.append(pending)
+    assert store.get_latest(pending.edge_id) == pending
+    assert store.get_latest_for_child_job(pending.child_job_id) == pending
+    assert store.list_latest() == (pending,)
+    assert backend.read_all_calls == 1
+    assert backend.find_last_calls == 0
+
+    done = store.update(pending, state=CallbackEdgeState.DONE, updated_at='2026-03-30T11:00:01Z')
+    assert store.get_latest(done.edge_id) == done
+    assert store.list_latest() == (done,)
+    assert backend.read_all_calls == 1
+
+    external = CallbackEdgeStore(layout)
+    child_completed = external.update(
+        done,
+        state=CallbackEdgeState.CHILD_COMPLETED,
+        updated_at='2026-03-30T11:00:02Z',
+    )
+    assert store.get_latest(done.edge_id) == child_completed
+    assert backend.read_all_calls == 2
+    assert backend.find_last_calls == 0

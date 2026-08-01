@@ -20,8 +20,9 @@ from agents.models import (
     RuntimeMode,
     WorkspaceMode,
 )
-from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope
+from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope, TargetKind
 from ccbd.services.dispatcher import DispatchError, JobDispatcher
+from ccbd.services.dispatcher_runtime.callbacks import repair_callback_edges
 from ccbd.services.dispatcher_runtime.cancel_flags import cancel_flag_path
 from ccbd.services.dispatcher_runtime.finalization_runtime.persistence import persist_terminal_completion
 from ccbd.services.dispatcher_runtime.polling_service import _validate_provider_completion_decision
@@ -50,8 +51,10 @@ from mailbox_kernel import (
 from message_bureau import (
     AttemptState,
     AttemptStore,
+    CallbackEdgeRecord,
     CallbackEdgeState,
     CallbackEdgeStore,
+    MessageBureauFacade,
     MessageState,
     MessageStore,
     ReplyStore,
@@ -894,9 +897,11 @@ def test_dispatcher_cancelled_chain_child_submits_one_parent_continuation_withou
     assert restarted.watch(parent_job_id, start_line=0)['reply'] == 'final after child cancellation'
 
 
+@pytest.mark.parametrize('persist_submitted_edge', [False, True])
 def test_dispatcher_restart_repairs_continuation_interrupted_before_mailbox_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    persist_submitted_edge: bool,
 ) -> None:
     project_root = tmp_path / 'repo-chain-continuation-mailbox-repair'
     ctx = _bootstrap_test_project(project_root)
@@ -955,6 +960,15 @@ def test_dispatcher_restart_repairs_continuation_interrupted_before_mailbox_reco
     continuation_job_id = continuation_jobs[0].job_id
     assert continuation_jobs[0].status is JobStatus.QUEUED
     assert AttemptStore(layout).get_latest_by_job_id(continuation_job_id) is None
+    if persist_submitted_edge:
+        CallbackEdgeStore(layout).append(
+            replace(
+                partial_edge,
+                state=CallbackEdgeState.CONTINUATION_SUBMITTED,
+                continuation_job_id=continuation_job_id,
+                continuation_message_id=partial_edge.parent_message_id,
+            )
+        )
 
     restarted = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:01Z')
     assert restarted.tick() == ()
@@ -983,6 +997,137 @@ def test_dispatcher_restart_repairs_continuation_interrupted_before_mailbox_reco
     ) == 1
     restarted.complete(continuation_job_id, _decision(reply='final after restart repair'))
     assert restarted.watch(parent_job_id, start_line=0)['reply'] == 'final after restart repair'
+
+
+def test_dispatcher_callback_repair_does_not_rescan_historical_continuations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-callback-repair-bounded-history'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    callback_store = CallbackEdgeStore(layout)
+    bureau = MessageBureauFacade(
+        layout,
+        config=config,
+        clock=lambda: '2026-03-30T00:00:00Z',
+        callback_edge_store=callback_store,
+    )
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        message_bureau=bureau,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    for index in range(300):
+        callback_store.append(
+            CallbackEdgeRecord(
+                edge_id=f'cb-history-{index}',
+                parent_job_id=f'job-parent-{index}',
+                parent_message_id=f'msg-parent-{index}',
+                parent_agent='codex',
+                child_job_id=f'job-child-{index}',
+                child_message_id=f'msg-child-{index}',
+                callback_target_agent='codex',
+                original_caller='user',
+                original_task_id=f'task-{index}',
+                state=CallbackEdgeState.CONTINUATION_SUBMITTED,
+                continuation_job_id=f'job-continuation-{index}',
+                continuation_message_id=f'msg-parent-{index}',
+                created_at='2026-03-30T00:00:00Z',
+                updated_at='2026-03-30T00:00:01Z',
+            )
+        )
+
+    list_all_calls = 0
+    job_history_scans = 0
+    original_list_all = callback_store.list_all
+    original_list_agent = dispatcher._job_store.list_agent
+
+    def counted_list_all():
+        nonlocal list_all_calls
+        list_all_calls += 1
+        return original_list_all()
+
+    def counted_list_agent(agent_name: str):
+        nonlocal job_history_scans
+        job_history_scans += 1
+        return original_list_agent(agent_name)
+
+    monkeypatch.setattr(callback_store, 'list_all', counted_list_all)
+    monkeypatch.setattr(dispatcher._job_store, 'list_agent', counted_list_agent)
+
+    assert bureau.pending_callback_edges() == ()
+    assert dispatcher.tick() == ()
+    assert dispatcher.tick() == ()
+    assert list_all_calls == 1
+    assert job_history_scans == 0
+
+
+def test_dispatcher_callback_repair_skips_pending_edges_with_outstanding_children(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-callback-repair-pending-outstanding'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    callback_store = CallbackEdgeStore(layout)
+    bureau = MessageBureauFacade(
+        layout,
+        config=config,
+        clock=lambda: '2026-03-30T00:00:00Z',
+        callback_edge_store=callback_store,
+    )
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        message_bureau=bureau,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    for index in range(300):
+        child_job_id = f'job-child-pending-{index}'
+        callback_store.append(
+            CallbackEdgeRecord(
+                edge_id=f'cb-pending-{index}',
+                parent_job_id=f'job-parent-{index}',
+                parent_message_id=f'msg-parent-{index}',
+                parent_agent='codex',
+                child_job_id=child_job_id,
+                child_message_id=f'msg-child-{index}',
+                callback_target_agent='codex',
+                original_caller='user',
+                original_task_id=f'task-{index}',
+                state=CallbackEdgeState.PENDING,
+                created_at='2026-03-30T00:00:00Z',
+                updated_at='2026-03-30T00:00:01Z',
+            )
+        )
+        dispatcher._state.remember_job(child_job_id, TargetKind.AGENT, 'codex')
+        dispatcher._state.enqueue_for(TargetKind.AGENT, 'codex', child_job_id)
+
+    job_history_scans = 0
+    original_list_agent = dispatcher._job_store.list_agent
+
+    def counted_list_agent(agent_name: str):
+        nonlocal job_history_scans
+        job_history_scans += 1
+        return original_list_agent(agent_name)
+
+    monkeypatch.setattr(dispatcher._job_store, 'list_agent', counted_list_agent)
+
+    assert len(bureau.pending_callback_edges()) == 300
+    assert repair_callback_edges(dispatcher) == ()
+    assert job_history_scans == 0
 
 
 def test_dispatcher_empty_cancel_preserves_preexisting_caller_mailbox_head(tmp_path: Path) -> None:
