@@ -92,3 +92,36 @@ def test_write_claude_settings_overlay_strips_env_section_from_agent_settings(tm
     payload = json.loads(overlay.read_text(encoding="utf-8"))
     assert payload == {"theme": "light"}
     assert claude_user_base_url(user_settings_path=settings_path) == "http://127.0.0.1:12345"
+
+
+def test_build_claude_env_prefix_passes_through_non_api_agent_env() -> None:
+    result = build_claude_env_prefix(
+        extra_env={"GH_CONFIG_DIR": "/home/user/.config/gh", "ANTHROPIC_API_KEY": "sk-test"},
+        env={},
+        should_drop_base_url_fn=lambda value: False,
+        claude_user_base_url_fn=lambda: "",
+    )
+
+    assert "export GH_CONFIG_DIR=/home/user/.config/gh" in result
+    assert "export ANTHROPIC_API_KEY=sk-test" in result
+
+
+def test_build_claude_env_prefix_emits_passthrough_before_api_env() -> None:
+    result = build_claude_env_prefix(
+        extra_env={"HTTPS_PROXY": "http://proxy.example.test:3128", "ANTHROPIC_API_KEY": "sk-test"},
+        env={},
+        should_drop_base_url_fn=lambda value: False,
+        claude_user_base_url_fn=lambda: "",
+    )
+
+    assert result.index("HTTPS_PROXY") < result.index("ANTHROPIC_API_KEY")
+
+
+def test_build_claude_env_prefix_without_agent_env_is_unchanged() -> None:
+    result = build_claude_env_prefix(
+        env={},
+        should_drop_base_url_fn=lambda value: False,
+        claude_user_base_url_fn=lambda: "",
+    )
+
+    assert result == ""
