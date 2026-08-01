@@ -1,5 +1,31 @@
 # Changelog
 
+## v8.5.3 (2026-08-01)
+
+### Relay Capacity
+
+- **New Invitations Default To 200 MiB/Day**: newly issued Relay Host
+  invitations now allow 200 MiB per 24-hour quota window instead of
+  100 MiB. Explicit `--max-bytes-per-day` values still override the default;
+  existing Host credentials retain the quota issued with them.
+
+### Callback Repair Efficiency
+
+- **Large Ledgers No Longer Amplify Idle Reads**: callback-edge latest state
+  is cached from the append-only authority and safely invalidated on external
+  changes. Repair inspects only nonterminal candidates and scans each target's
+  job history at most once per tick, preventing historical callback growth
+  from causing sustained idle CPU and cached-read pressure.
+- **No Ledger Migration Required**: JSONL remains the durable authority and
+  existing ledgers are rebuilt into the derived in-memory view on restart.
+
+### Claude Agent Environment
+
+- **General Agent Variables Reach Claude**: non-API variables from
+  `agents.<name>.env`, including proxy and tool configuration paths, are now
+  exported to managed Claude launches. CCB-managed API credentials, endpoints,
+  and runtime-home overrides retain precedence (PR #284).
+
 ## v8.5.2 (2026-07-30)
 
 ### Bounded Pane Recovery
