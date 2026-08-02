@@ -2041,6 +2041,79 @@ def test_dispatcher_allows_silent_nested_ask_from_active_parent(tmp_path: Path) 
     assert CallbackEdgeStore(layout).list_all() == []
 
 
+def test_dispatcher_reply_delivery_is_not_a_chain_parent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reply-delivery-not-chain-parent'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    execution_service = DeferredReplyDeliveryExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    source_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='produce a reply for codex',
+            task_id='task-reply-delivery-parent-filter',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(source_job_id, _decision(reply='reply for codex'))
+
+    started = dispatcher.tick()
+    assert len(started) == 1
+    delivery_job = started[0]
+    assert delivery_job.agent_name == 'codex'
+    assert delivery_job.request.message_type == 'reply_delivery'
+    assert delivery_job.status is JobStatus.RUNNING
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='independent communication check',
+            task_id='task-independent-communication',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    assert receipt.jobs[0].status is JobStatus.ACCEPTED
+    assert CallbackEdgeStore(layout).list_all() == []
+
+    with pytest.raises(DispatchError, match='active parent job'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='claude',
+                from_actor='codex',
+                body='do not invent a chain edge',
+                task_id='task-reply-delivery-chain-reject',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                route_options={'mode': 'chain'},
+            )
+        )
+
+    assert CallbackEdgeStore(layout).list_all() == []
+
+
 def test_dispatcher_rejects_callback_from_continuation_to_original_caller(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-callback-continuation-upstream-reject'
     ctx = _bootstrap_test_project(project_root)

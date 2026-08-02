@@ -1149,6 +1149,11 @@ keeps accidental nested dependencies from completing into an undeliverable
 `TASK_REPLY`; `--chain` is for needed child results, and `--silence` is for
 independent no-result-needed work.
 
+A control-plane `reply_delivery` job is transport work, not a delegable parent
+job. It is excluded from active-parent detection: an overlapping ordinary ask
+must not be rejected as nested work, and `--chain` must not bind a child edge
+to the reply-delivery acknowledgement.
+
 The first supported callback model is intentionally narrow:
 
 - one outstanding callback child per parent job

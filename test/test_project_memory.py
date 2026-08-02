@@ -293,7 +293,8 @@ def test_materialize_runtime_memory_bundle_writes_generated_bundle(tmp_path: Pat
     assert 'Do not wait, poll, or run `pend`/`watch`/`ping`' in text
     assert 'run `command ccb clear` for all configured agents' in text
     assert 'without deleting `.ccb` state, workspaces, auth, sessions, logs, or project memory' in text
-    assert 'use `ask --chain` when a child result is needed' in text
+    assert 'use `ask --chain` only when the current task cannot finish without that exact child result' in text
+    assert 'never add it merely to bypass a rejected plain ask' in text
     assert 'Finish an inbound CCB task in its current turn' in text
     assert 'If the original caller is a registered CCB agent' in text
     assert "routes that turn's terminal result through the existing lineage" in text

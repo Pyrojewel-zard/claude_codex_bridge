@@ -604,7 +604,15 @@ def _active_parent_job(dispatcher, actor: str):
     parent_job_id = dispatcher._state.active_job(normalized)
     if not parent_job_id:
         return None
-    return get_job(dispatcher, parent_job_id)
+    parent = get_job(dispatcher, parent_job_id)
+    if parent is None:
+        return None
+    # Reply delivery preparation imports callback submission, so keep this lazy.
+    from .reply_delivery import is_reply_delivery_job
+
+    if is_reply_delivery_job(parent):
+        return None
+    return parent
 
 
 def _message_for_job(dispatcher, job):
