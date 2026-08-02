@@ -1907,38 +1907,33 @@ model = "gpt-5.5"</pre>
         </div>
         <div class="session-bar">
           <div class="session-stats">
-            <div class="session-stat"><span class="label" data-i18n="totalAgentStorage">Total .ccb agent storage</span><strong>2.8 GB</strong><span class="panel-subtitle" data-i18n="sessionsLogsArtifacts">sessions, logs, artifacts</span></div>
-            <div class="session-stat"><span class="label" data-i18n="historicalSessions">Historical sessions</span><strong>1.9 GB</strong><span class="panel-subtitle" data-i18n="safeCleanupCandidates">safe cleanup candidates</span></div>
-            <div class="session-stat"><span class="label" data-i18n="mountedAgents">Mounted agents</span><strong data-i18n="fourProtected">4 protected</strong><span class="panel-subtitle" data-i18n="currentSessionExcluded">current session excluded</span></div>
-            <div class="session-stat"><span class="label" data-i18n="staleAgents">Stale agents</span><strong data-i18n="threeRemovable">3 removable</strong><span class="panel-subtitle" data-i18n="notCurrentGraph">not in current graph</span></div>
+            <div class="session-stat"><span class="label" data-i18n="totalAgentStorage">Total .ccb agent storage</span><strong id="historyTotalStorage">—</strong><span class="panel-subtitle" data-i18n="sessionsLogsArtifacts">sessions, logs, artifacts</span></div>
+            <div class="session-stat"><span class="label" data-i18n="historicalSessions">Historical sessions</span><strong id="historyStorage">—</strong><span class="panel-subtitle" data-i18n="recognizedTranscripts">recognized provider transcripts</span></div>
+            <div class="session-stat"><span class="label" data-i18n="protectedHistory">Protected history</span><strong id="historyProtectedAgents">—</strong><span class="panel-subtitle" data-i18n="currentAndLatestProtected">current and latest sessions are always retained</span></div>
+            <div class="session-stat"><span class="label" data-i18n="cleanupCandidates">Cleanup candidates</span><strong id="historyCleanupCandidates">—</strong><span class="panel-subtitle" data-i18n="outsideRetentionWindow">outside the retention window</span></div>
           </div>
           <div class="session-controls">
             <label class="field">
               <span class="label" data-i18n="cleanupOlderThan">Cleanup older than</span>
-              <select class="select"><option data-i18n="thirtyDays">30 days</option><option data-i18n="sevenDays">7 days</option><option data-i18n="ninetyDays">90 days</option><option data-i18n="customDate">custom date...</option></select>
+              <select class="select" id="historyRetentionDays"><option value="30" data-i18n="thirtyDays">30 days</option><option value="7" data-i18n="sevenDays">7 days</option><option value="90" data-i18n="ninetyDays">90 days</option></select>
             </label>
             <label class="field">
               <span class="label" data-i18n="agentScope">Agent scope</span>
-              <select class="select"><option data-i18n="allAgents">all agents</option><option data-i18n="mountedOnly">mounted only</option><option data-i18n="staleUnmountedOnly">stale/unmounted only</option><option data-i18n="selectedAgent">selected agent</option></select>
+              <select class="select" id="historyAgentScope"><option value="all" data-i18n="allAgents">all agents</option></select>
             </label>
             <div class="session-actions">
-              <button class="btn" data-i18n="scanStorage">Scan storage</button>
-              <button class="btn danger" data-i18n="deleteOldSessions">Delete old sessions</button>
-              <button class="btn danger" disabled data-i18n="deleteMountedData">Delete mounted agent data</button>
+              <button class="btn" id="historyScanBtn" data-i18n="scanStorage">Scan storage</button>
+              <button class="btn danger" id="historyCleanupBtn" disabled data-i18n="deleteOldSessions">Clean old history</button>
             </div>
+            <div class="summary-line" id="historyCleanupStatus" aria-live="polite" data-i18n="historyScanPending">Run a scan to load actual project history.</div>
           </div>
           <div class="session-table-wrap">
             <table class="table">
-              <thead><tr><th data-i18n="agent">Agent</th><th data-i18n="status">Status</th><th data-i18n="currentSession">Current session</th><th data-i18n="historicalStorage">Historical storage</th><th data-i18n="oldest">Oldest</th><th data-i18n="allowedCleanup">Allowed cleanup</th></tr></thead>
-              <tbody>
-                <tr><td><strong>ccb_self</strong><div class="panel-subtitle">codex</div></td><td><span class="badge ok" data-i18n="mounted">mounted</span></td><td data-i18n="protected">protected</td><td>420 MB</td><td data-i18n="eighteenDays">18 days</td><td><button class="btn subtle" data-i18n="historyOnly">History only</button></td></tr>
-                <tr><td><strong>odesign</strong><div class="panel-subtitle">codex</div></td><td><span class="badge ok" data-i18n="mounted">mounted</span></td><td data-i18n="protected">protected</td><td>310 MB</td><td data-i18n="elevenDays">11 days</td><td><button class="btn subtle" data-i18n="historyOnly">History only</button></td></tr>
-                <tr><td><strong>worker1</strong><div class="panel-subtitle" data-i18n="oldRoleBinding">old role binding</div></td><td><span class="badge warn" data-i18n="stale">stale</span></td><td data-i18n="none">none</td><td>760 MB</td><td data-i18n="sixtyFourDays">64 days</td><td><button class="btn subtle" data-i18n="history">History</button><button class="btn danger" data-i18n="deleteAll">Delete all</button></td></tr>
-                <tr><td><strong>reviewer3</strong><div class="panel-subtitle" data-i18n="notMounted">not mounted</div></td><td><span class="badge danger" data-i18n="archived">archived</span></td><td data-i18n="none">none</td><td>540 MB</td><td data-i18n="ninetyTwoDays">92 days</td><td><button class="btn danger" data-i18n="deleteAll">Delete all</button></td></tr>
-              </tbody>
+              <thead><tr><th data-i18n="agent">Agent</th><th data-i18n="status">Status</th><th data-i18n="protectedRecords">Protected records</th><th data-i18n="historicalStorage">Historical storage</th><th data-i18n="oldest">Oldest</th><th data-i18n="allowedCleanup">Allowed cleanup</th></tr></thead>
+              <tbody id="historyTableBody"><tr><td colspan="6" data-i18n="historyScanPending">Run a scan to load actual project history.</td></tr></tbody>
             </table>
           </div>
-          <div class="summary-line"><strong data-i18n="rule">Rule:</strong> <span data-i18n="cleanupRule">mounted agents can only remove historical sessions and detached evidence. Current provider state, active mailbox, lifecycle, lease, and runtime records stay protected.</span></div>
+          <div class="summary-line"><strong data-i18n="rule">Rule:</strong> <span data-i18n="cleanupRule">Every agent may clean recognized historical transcripts. Records inside the retention window, current bindings, and each provider's latest transcript stay protected.</span></div>
         </div>
       </section>
       </div>
@@ -2133,11 +2128,16 @@ model = "gpt-5.5"</pre>
         request: "request",
         chainWaiting: "chain waiting",
         agentSessionStorage: "Agent session storage",
-        agentSessionStorageNote: "Scan .ccb/agents history, estimate old session storage, and stage cleanup actions with mounted-agent protection.",
+        agentSessionStorageNote: "Scan recognized provider transcripts and clean history outside a protected retention window.",
         maintenance: "maintenance",
         totalAgentStorage: "Total .ccb agent storage",
         sessionsLogsArtifacts: "sessions, logs, artifacts",
         historicalSessions: "Historical sessions",
+        recognizedTranscripts: "recognized provider transcripts",
+        protectedHistory: "Protected history",
+        currentAndLatestProtected: "current and latest sessions are always retained",
+        cleanupCandidates: "Cleanup candidates",
+        outsideRetentionWindow: "outside the retention window",
         safeCleanupCandidates: "safe cleanup candidates",
         mountedAgents: "Mounted agents",
         fourProtected: "4 protected",
@@ -2155,9 +2155,10 @@ model = "gpt-5.5"</pre>
         staleUnmountedOnly: "stale/unmounted only",
         selectedAgent: "selected agent",
         scanStorage: "Scan storage",
-        deleteOldSessions: "Delete old sessions",
+        deleteOldSessions: "Clean old history",
         deleteMountedData: "Delete mounted agent data",
         currentSession: "Current session",
+        protectedRecords: "Protected records",
         historicalStorage: "Historical storage",
         oldest: "Oldest",
         allowedCleanup: "Allowed cleanup",
@@ -2175,7 +2176,18 @@ model = "gpt-5.5"</pre>
         ninetyTwoDays: "92 days",
         historyOnly: "History only",
         rule: "Rule:",
-        cleanupRule: "mounted agents can only remove historical sessions and detached evidence. Current provider state, active mailbox, lifecycle, lease, and runtime records stay protected.",
+        cleanupRule: "Every agent may clean recognized historical transcripts. Records inside the retention window, current bindings, and each provider's latest transcript stay protected.",
+        historyScanPending: "Run a scan to load actual project history.",
+        historyScanLoading: "Scanning Agent history...",
+        historyScanFailed: "History scan failed: {error}",
+        historyNoCandidates: "No removable history exists for the selected scope.",
+        historyCandidatesReady: "{count} records · {bytes} can be removed before {cutoff}.",
+        historyCleanupConfirm: "Delete {count} historical records ({bytes})? Records from the latest {days} days, current bindings, and the latest transcript remain protected.",
+        historyCleanupRunning: "Cleaning protected Agent history...",
+        historyCleanupComplete: "Removed {count} records and released {bytes}; skipped {skipped}.",
+        historyCleanupFailed: "History cleanup failed: {error}",
+        recordsCount: "{count} records",
+        noHistory: "No recognized history",
         detailsDrawer: "Details drawer",
         details: "Details",
         inherit: "inherit",
@@ -2431,11 +2443,16 @@ model = "gpt-5.5"</pre>
         request: "请求",
         chainWaiting: "等待 chain",
         agentSessionStorage: "Agent Session 存储",
-        agentSessionStorageNote: "扫描 .ccb/agents 历史记录，估算旧 session 占用，并在保护已挂载 Agent 的前提下准备清理。",
+        agentSessionStorageNote: "扫描可识别的 Provider 会话记录，并清理保护窗口之外的历史。",
         maintenance: "维护",
         totalAgentStorage: ".ccb Agent 总存储",
         sessionsLogsArtifacts: "sessions、日志、artifacts",
         historicalSessions: "历史 Sessions",
+        recognizedTranscripts: "可识别的 Provider 会话记录",
+        protectedHistory: "受保护历史",
+        currentAndLatestProtected: "当前会话和每个 Provider 最新会话始终保留",
+        cleanupCandidates: "可清理记录",
+        outsideRetentionWindow: "位于保留窗口之外",
         safeCleanupCandidates: "可安全清理",
         mountedAgents: "已挂载 Agent",
         fourProtected: "4 个受保护",
@@ -2453,9 +2470,10 @@ model = "gpt-5.5"</pre>
         staleUnmountedOnly: "仅陈旧/未挂载",
         selectedAgent: "选中的 Agent",
         scanStorage: "扫描存储",
-        deleteOldSessions: "删除旧 Sessions",
+        deleteOldSessions: "清理旧历史",
         deleteMountedData: "删除已挂载 Agent 数据",
         currentSession: "当前 Session",
+        protectedRecords: "受保护记录",
         historicalStorage: "历史存储",
         oldest: "最早记录",
         allowedCleanup: "允许的清理",
@@ -2473,7 +2491,18 @@ model = "gpt-5.5"</pre>
         ninetyTwoDays: "92 天",
         historyOnly: "仅历史记录",
         rule: "规则：",
-        cleanupRule: "已挂载 Agent 只能删除历史 session 和脱离的证据；当前 provider state、活动 mailbox、lifecycle、lease 和 runtime 记录保持受保护。",
+        cleanupRule: "任何 Agent 都可以清理可识别的历史会话；保留窗口内记录、当前绑定以及每个 Provider 最新会话始终受保护。",
+        historyScanPending: "请先扫描以加载项目真实历史。",
+        historyScanLoading: "正在扫描 Agent 历史…",
+        historyScanFailed: "历史扫描失败：{error}",
+        historyNoCandidates: "所选范围没有可删除的历史记录。",
+        historyCandidatesReady: "可删除 {count} 条记录、{bytes}，截止时间 {cutoff}。",
+        historyCleanupConfirm: "确认删除 {count} 条历史记录（{bytes}）？最近 {days} 天、当前绑定和最新会话将继续保留。",
+        historyCleanupRunning: "正在安全清理 Agent 历史…",
+        historyCleanupComplete: "已删除 {count} 条记录，释放 {bytes}；跳过 {skipped} 条。",
+        historyCleanupFailed: "历史清理失败：{error}",
+        recordsCount: "{count} 条",
+        noHistory: "没有可识别的历史",
         detailsDrawer: "详情抽屉",
         details: "详情",
         inherit: "继承",
@@ -2682,6 +2711,7 @@ model = "gpt-5.5"</pre>
     let themeStatusKey = "";
     let themeStatusError = false;
     let themeSaveRevision = 0;
+    let historyScanState = null;
 
     function normalizeLanguage(value) {
       return String(value || "").toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -2851,6 +2881,148 @@ main = "demo:codex"
         throw error;
       }
       return payload;
+    }
+
+    function formatBytes(value) {
+      const bytes = Math.max(0, Number(value) || 0);
+      if (bytes < 1024) return `${bytes} B`;
+      const units = ["KiB", "MiB", "GiB", "TiB"];
+      let amount = bytes;
+      let unit = "B";
+      for (const candidate of units) {
+        amount /= 1024;
+        unit = candidate;
+        if (amount < 1024) break;
+      }
+      return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${unit}`;
+    }
+
+    function formatHistoryDate(value) {
+      if (!value) return "—";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+        year: "numeric", month: "2-digit", day: "2-digit"
+      });
+    }
+
+    function historyRequestState() {
+      return {
+        retentionDays: Number(document.getElementById("historyRetentionDays").value || 30),
+        agent: document.getElementById("historyAgentScope").value || "all"
+      };
+    }
+
+    function syncHistoryAgentOptions(payload) {
+      const select = document.getElementById("historyAgentScope");
+      const previous = select.value || "all";
+      const agents = Array.isArray(payload.agents) ? payload.agents : [];
+      select.innerHTML = `<option value="all">${escapeHtml(t("allAgents"))}</option>` + agents.map((row) => (
+        `<option value="${escapeAttribute(row.agent)}">${escapeHtml(row.agent)}</option>`
+      )).join("");
+      select.value = [...select.options].some((option) => option.value === previous) ? previous : "all";
+    }
+
+    function renderHistoryScan(payload, syncOptions = true) {
+      historyScanState = payload;
+      if (syncOptions) syncHistoryAgentOptions(payload);
+      document.getElementById("historyTotalStorage").textContent = formatBytes(payload.total_storage_bytes);
+      document.getElementById("historyStorage").textContent = formatBytes(payload.history_bytes);
+      document.getElementById("historyProtectedAgents").textContent = tf("recordsCount", { count: payload.protected_agent_count || 0 });
+      document.getElementById("historyCleanupCandidates").textContent = `${payload.candidate_count || 0} · ${formatBytes(payload.candidate_bytes)}`;
+
+      const rows = Array.isArray(payload.agents) ? payload.agents : [];
+      const table = document.getElementById("historyTableBody");
+      table.innerHTML = rows.length ? rows.map((row) => {
+        const mounted = row.status === "mounted";
+        const providers = Array.isArray(row.providers) && row.providers.length ? row.providers.join(", ") : "—";
+        const cleanup = row.candidate_count
+          ? `${row.candidate_count} · ${formatBytes(row.candidate_bytes)}`
+          : t("none");
+        return `<tr>
+          <td><strong>${escapeHtml(row.agent)}</strong><div class="panel-subtitle">${escapeHtml(providers)}</div></td>
+          <td><span class="badge ${mounted ? "ok" : "info"}">${t(mounted ? "mounted" : "notMounted")}</span></td>
+          <td>${row.protected_count || 0} · ${formatBytes(row.protected_bytes)}</td>
+          <td>${formatBytes(row.history_bytes)}<div class="panel-subtitle">${tf("recordsCount", { count: row.history_count || 0 })}</div></td>
+          <td>${formatHistoryDate(row.oldest_at)}</td>
+          <td>${cleanup}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="6">${t("noHistory")}</td></tr>`;
+
+      const cleanupButton = document.getElementById("historyCleanupBtn");
+      cleanupButton.disabled = !Number(payload.candidate_count);
+      const status = document.getElementById("historyCleanupStatus");
+      status.textContent = Number(payload.candidate_count)
+        ? tf("historyCandidatesReady", {
+            count: payload.candidate_count,
+            bytes: formatBytes(payload.candidate_bytes),
+            cutoff: formatHistoryDate(payload.cutoff_at)
+          })
+        : t("historyNoCandidates");
+      status.style.color = "";
+    }
+
+    async function scanAgentHistory() {
+      const controls = ["historyScanBtn", "historyCleanupBtn", "historyRetentionDays", "historyAgentScope"]
+        .map((id) => document.getElementById(id));
+      const status = document.getElementById("historyCleanupStatus");
+      status.textContent = t("historyScanLoading");
+      status.style.color = "";
+      controls.forEach((control) => { control.disabled = true; });
+      const request = historyRequestState();
+      try {
+        const query = new URLSearchParams({
+          retention_days: String(request.retentionDays),
+          agent: request.agent
+        });
+        const payload = await apiJson(`/api/storage/history?${query}`);
+        renderHistoryScan(payload);
+      } catch (error) {
+        historyScanState = null;
+        status.textContent = tf("historyScanFailed", { error: error.message });
+        status.style.color = "var(--red)";
+      } finally {
+        document.getElementById("historyScanBtn").disabled = false;
+        document.getElementById("historyRetentionDays").disabled = false;
+        document.getElementById("historyAgentScope").disabled = false;
+        document.getElementById("historyCleanupBtn").disabled = !Number(historyScanState && historyScanState.candidate_count);
+      }
+    }
+
+    async function cleanupAgentHistory() {
+      if (!historyScanState || !Number(historyScanState.candidate_count)) return;
+      const request = historyRequestState();
+      const confirmed = window.confirm(tf("historyCleanupConfirm", {
+        count: historyScanState.candidate_count,
+        bytes: formatBytes(historyScanState.candidate_bytes),
+        days: request.retentionDays
+      }));
+      if (!confirmed) return;
+      const scanButton = document.getElementById("historyScanBtn");
+      const cleanupButton = document.getElementById("historyCleanupBtn");
+      const status = document.getElementById("historyCleanupStatus");
+      scanButton.disabled = true;
+      cleanupButton.disabled = true;
+      status.textContent = t("historyCleanupRunning");
+      status.style.color = "";
+      try {
+        const result = await apiJson("/api/storage/history/cleanup", {
+          method: "POST",
+          body: JSON.stringify({ retention_days: request.retentionDays, agent: request.agent })
+        });
+        renderHistoryScan(result.scan);
+        status.textContent = tf("historyCleanupComplete", {
+          count: result.deleted_count,
+          bytes: formatBytes(result.deleted_bytes),
+          skipped: result.skipped_count
+        });
+      } catch (error) {
+        status.textContent = tf("historyCleanupFailed", { error: error.message });
+        status.style.color = "var(--red)";
+      } finally {
+        scanButton.disabled = false;
+        cleanupButton.disabled = !Number(historyScanState && historyScanState.candidate_count);
+      }
     }
 
     function setActionStatus(message, failed = false) {
@@ -3974,6 +4146,7 @@ active config: unchanged`;
       syncProviderControls();
       syncProfileOptions(profileRecords, document.getElementById("profileSelect").value || "active");
       if (visualState) renderVisualEditors();
+      if (historyScanState) renderHistoryScan(historyScanState, false);
       if (activeDrawerKind && !pendingDiffResolve && document.getElementById("drawer").classList.contains("open")) {
         openDrawer(activeDrawerKind);
       }
@@ -4117,6 +4290,7 @@ active config: unchanged`;
     loadThemePreference();
     loadProviderCapabilities();
     loadActiveConfig();
+    scanAgentHistory();
 
     document.getElementById("themeSelect").addEventListener("change", (event) => {
       saveThemePreference(event.target.value);
@@ -4143,6 +4317,10 @@ active config: unchanged`;
     document.getElementById("profileSelect").addEventListener("change", (event) => {
       loadProfile(event.target.value);
     });
+    document.getElementById("historyScanBtn").addEventListener("click", scanAgentHistory);
+    document.getElementById("historyCleanupBtn").addEventListener("click", cleanupAgentHistory);
+    document.getElementById("historyRetentionDays").addEventListener("change", scanAgentHistory);
+    document.getElementById("historyAgentScope").addEventListener("change", scanAgentHistory);
 
     document.querySelectorAll("[data-drawer]").forEach((button) => {
       button.addEventListener("click", () => openDrawer(button.dataset.drawer));

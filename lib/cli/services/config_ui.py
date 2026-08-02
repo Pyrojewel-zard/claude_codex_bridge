@@ -75,6 +75,8 @@ def prepare_config_ui(
     token: str | None = None,
     idle_timeout_s: float = DEFAULT_IDLE_TIMEOUT_S,
     reload_action: Callable[[bool], dict[str, object]] | None = None,
+    history_scan_action: Callable[[int, str | None], dict[str, object]] | None = None,
+    history_cleanup_action: Callable[[int, str | None], dict[str, object]] | None = None,
 ) -> ConfigUiHandle:
     page_path = Path(asset_path) if asset_path is not None else config_ui_asset_path()
     if not page_path.is_file():
@@ -106,6 +108,21 @@ def prepare_config_ui(
             context,
             ParsedReloadCommand(project=None, dry_run=bool(dry_run)),
         )
+    if history_scan_action is None or history_cleanup_action is None:
+        from .agent_history_cleanup import cleanup_agent_history, scan_agent_history
+
+        if history_scan_action is None:
+            history_scan_action = lambda retention_days, agent: scan_agent_history(
+                context,
+                retention_days=retention_days,
+                agent=agent,
+            )
+        if history_cleanup_action is None:
+            history_cleanup_action = lambda retention_days, agent: cleanup_agent_history(
+                context,
+                retention_days=retention_days,
+                agent=agent,
+            )
     handler = _handler_for(
         page=page,
         session_payload=session_payload,
@@ -114,6 +131,8 @@ def prepare_config_ui(
         project_root=project_root,
         path_layout=getattr(context, 'paths', None),
         reload_action=reload_action,
+        history_scan_action=history_scan_action,
+        history_cleanup_action=history_cleanup_action,
         token=access_token,
         last_activity=last_activity,
     )
@@ -445,6 +464,8 @@ def _handler_for(
     project_root: Path,
     path_layout,
     reload_action: Callable[[bool], dict[str, object]],
+    history_scan_action: Callable[[int, str | None], dict[str, object]],
+    history_cleanup_action: Callable[[int, str | None], dict[str, object]],
     token: str,
     last_activity: list[float],
 ):
@@ -483,6 +504,23 @@ def _handler_for(
                     self._send_json(
                         HTTPStatus.UNPROCESSABLE_ENTITY,
                         {'status': 'error', 'error': str(exc)},
+                    )
+                else:
+                    self._send_json(HTTPStatus.OK, payload)
+                return
+            if parsed.path == '/api/storage/history':
+                try:
+                    retention_days, agent = _history_request_parameters(parse_qs(parsed.query))
+                    payload = history_scan_action(retention_days, agent)
+                except ValueError as exc:
+                    self._send_json(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        {'status': 'error', 'error': str(exc)},
+                    )
+                except Exception as exc:  # noqa: BLE001 - HTTP boundary returns a structured failure
+                    self._send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        {'status': 'error', 'error': f'history scan failed: {exc}'},
                     )
                 else:
                     self._send_json(HTTPStatus.OK, payload)
@@ -565,6 +603,18 @@ def _handler_for(
                 if parsed.path == '/api/theme':
                     with mutation_lock:
                         result = _save_ui_theme(payload)
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+                if parsed.path == '/api/storage/history/cleanup':
+                    try:
+                        retention_days, agent = _history_request_parameters(payload)
+                    except ValueError as exc:
+                        raise _ConfigUiHttpError(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc)) from exc
+                    with mutation_lock:
+                        try:
+                            result = history_cleanup_action(retention_days, agent)
+                        except ValueError as exc:
+                            raise _ConfigUiHttpError(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc)) from exc
                     self._send_json(HTTPStatus.OK, result)
                     return
                 self._send(HTTPStatus.NOT_FOUND, b'not found\n', 'text/plain; charset=utf-8')
@@ -705,6 +755,24 @@ def _candidate_text(payload: dict[str, object]) -> str:
     if len(text.encode('utf-8')) > MAX_REQUEST_BODY_BYTES:
         raise _ConfigUiHttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, 'config text is too large')
     return text
+
+
+def _history_request_parameters(payload: dict[str, object]) -> tuple[int, str | None]:
+    raw_days = payload.get('retention_days', 30)
+    if isinstance(raw_days, list):
+        raw_days = raw_days[0] if raw_days else 30
+    try:
+        retention_days = int(raw_days)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('retention_days must be one of: 7, 30, 90') from exc
+    if retention_days not in {7, 30, 90}:
+        raise ValueError('retention_days must be one of: 7, 30, 90')
+
+    raw_agent = payload.get('agent')
+    if isinstance(raw_agent, list):
+        raw_agent = raw_agent[0] if raw_agent else None
+    agent = str(raw_agent or '').strip().lower()
+    return retention_days, None if agent in {'', 'all'} else agent
 
 
 def _profile_name(value: object) -> str:

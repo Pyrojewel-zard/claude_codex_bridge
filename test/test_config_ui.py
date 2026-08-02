@@ -51,6 +51,13 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert 'function saveThemePreference(value)' in page
     assert 'apiJson("/api/theme"' in page
     assert 'document.documentElement.dataset.ccbTheme = rendered' in page
+    assert 'id="historyScanBtn"' in page
+    assert 'id="historyCleanupBtn"' in page
+    assert 'function scanAgentHistory()' in page
+    assert 'function cleanupAgentHistory()' in page
+    assert '/api/storage/history' in page
+    assert '2.8 GB' not in page
+    assert 'data-i18n="deleteAll"' not in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
     assert match is not None
     embedded_icon = base64.b64decode(match.group(1))
@@ -836,6 +843,79 @@ role = "agentroles.coder"
         assert '[agents.agent1]' in saved_text
         assert '[agents.agent2]' not in saved_text
         assert Path(applied['backup_path']).read_text(encoding='utf-8') == original
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_scans_and_cleans_agent_history_through_token_guarded_api(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-history'
+    (project_root / '.ccb').mkdir(parents=True)
+    scan_calls: list[tuple[int, str | None]] = []
+    cleanup_calls: list[tuple[int, str | None]] = []
+    scan_payload = {
+        'schema_version': 1,
+        'status': 'ok',
+        'retention_days': 7,
+        'agent': 'worker1',
+        'candidate_count': 2,
+        'candidate_bytes': 123,
+        'agents': [],
+    }
+
+    def _scan(retention_days: int, agent: str | None) -> dict[str, object]:
+        scan_calls.append((retention_days, agent))
+        return dict(scan_payload)
+
+    def _cleanup(retention_days: int, agent: str | None) -> dict[str, object]:
+        cleanup_calls.append((retention_days, agent))
+        return {
+            'schema_version': 1,
+            'status': 'ok',
+            'retention_days': retention_days,
+            'agent': agent or 'all',
+            'deleted_count': 2,
+            'deleted_bytes': 123,
+            'skipped_count': 0,
+            'scan': {**scan_payload, 'candidate_count': 0, 'candidate_bytes': 0},
+        }
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        token='history-token',
+        idle_timeout_s=1.0,
+        reload_action=lambda _dry_run: {'status': 'unused'},
+        history_scan_action=_scan,
+        history_cleanup_action=_cleanup,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        scanned = _get_json(handle.url, '/api/storage/history?retention_days=7&agent=worker1')
+        assert scanned['candidate_count'] == 2
+        assert scan_calls == [(7, 'worker1')]
+
+        cleaned = _post_json(
+            handle.url,
+            '/api/storage/history/cleanup',
+            {'retention_days': 7, 'agent': 'worker1'},
+        )
+        assert cleaned['deleted_count'] == 2
+        assert cleanup_calls == [(7, 'worker1')]
+
+        with pytest.raises(HTTPError) as invalid_get:
+            _get_json(handle.url, '/api/storage/history?retention_days=1&agent=worker1')
+        assert invalid_get.value.code == 422
+        with pytest.raises(HTTPError) as invalid_post:
+            _post_json(
+                handle.url,
+                '/api/storage/history/cleanup',
+                {'retention_days': 365, 'agent': 'worker1'},
+            )
+        assert invalid_post.value.code == 422
     finally:
         thread.join(timeout=2)
         handle.close()
