@@ -2,6 +2,7 @@ export 'app/ccb_mobile_app.dart';
 export 'app/app_update.dart';
 export 'app/app_theme.dart';
 export 'app/background_connection.dart';
+export 'app/mobile_network_status.dart';
 export 'app/app_factories.dart';
 export 'app/runtime_mode.dart';
 export 'features/agent_chat/pane_chat_controller.dart';

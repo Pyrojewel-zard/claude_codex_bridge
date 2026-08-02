@@ -1,5 +1,42 @@
 # Changelog
 
+## v8.5.4 (2026-08-03)
+
+### Ask Routing
+
+- **Chains Now Require A Real Dependency**: inherited ask guidance for every
+  supported Provider defaults to plain routing. `--chain` is reserved for an
+  active parent task that cannot finish without that exact child result;
+  communication tests, batch sends, notifications, and independent asks no
+  longer imply a chain dependency.
+- **Reply Delivery Cannot Become A False Parent**: control-plane
+  `reply_delivery` work is excluded from active-parent detection, so an
+  overlapping ordinary ask is not rejected or attached to an acknowledgement.
+
+### Agent History And Config UI
+
+- **History Cleanup Is Bounded Per Agent**: Config UI can scan or clean one
+  Agent or all Agents with 7/30/90-day retention. Current session bindings,
+  records inside the retention window, and each Provider's newest transcript
+  remain protected; deletion is restricted to the managed transcript allowlist.
+- **The Panel Is Focused Again**: the current Config UI keeps configuration,
+  activation review, and history cleanup while temporarily delisting the
+  read-only Agent communication-flow observer.
+
+### Mobile LAN Recovery
+
+- **LAN Failures Are Actionable**: Android uses coarse, non-identifying
+  connectivity evidence to warn before LAN pairing and explain reconnecting
+  LAN routes. Stored profiles are preserved, and users can Retry or open the
+  existing authenticated Diagnostics flow.
+- **Silent Terminal Disconnects Recover**: terminal WebSockets use a 15-second
+  client ping interval so Wi-Fi half-open connections enter the existing
+  reconnect/cursor-resume path without replaying input.
+- **Network Identity Stays Private**: CCB Mobile requests only
+  `ACCESS_NETWORK_STATE`; it does not read SSID, BSSID, location, or other
+  network identity. Computer-side onboarding now covers same-network, hotspot,
+  guest isolation, VPN, firewall, and DHCP address-change recovery.
+
 ## v8.5.3 (2026-08-01)
 
 ### Relay Capacity

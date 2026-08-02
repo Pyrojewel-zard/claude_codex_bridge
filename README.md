@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.4-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.3 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.4 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.3/ccb-mobile-v8.5.3.apk)
+- [Download CCB Mobile v8.5.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.4/ccb-mobile-v8.5.4.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,6 +309,17 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.4</b> - Safer ask routing, bounded history cleanup, and actionable Mobile LAN recovery</summary>
+
+- Treat `--chain` as a real dependency only: independent asks, communication tests, batches, notifications, and reply-delivery acknowledgements no longer create false callback chains.
+- Scan or clean one Agent or all Agents from Config UI with 7/30/90-day retention while protecting active bindings, recent history, and each Provider's newest transcript.
+- Keep the current Config UI focused on configuration and history cleanup by temporarily removing the read-only communication-flow observer.
+- Add Android LAN preflight and reconnect guidance, Retry/Diagnostics actions, and a 15-second terminal WebSocket heartbeat without reading SSID, BSSID, or other network identity.
+- Flutter analysis and all 736 App tests pass; the physical Android Wi-Fi/hotspot/VPN/DHCP-change matrix remains an explicit validation limitation.
+
+</details>
+
+<details>
 <summary><b>v8.5.3</b> - Higher Relay quota, bounded callback repair, and complete Claude agent env</summary>
 
 - Raise the default quota for newly issued Relay Host invitations from 100 MiB to 200 MiB per 24-hour window; explicit operator quota flags still take precedence.

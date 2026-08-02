@@ -981,317 +981,6 @@
       flex-wrap: wrap;
     }
 
-    .comm-flow {
-      display: grid;
-      grid-template-columns: minmax(400px, 500px) minmax(280px, 1fr);
-      gap: 10px;
-      padding: 10px 12px 12px;
-      align-items: start;
-      justify-content: center;
-    }
-
-    .flow-controls {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .flow-map {
-      position: relative;
-      width: min(100%, 500px, 58dvh);
-      aspect-ratio: 1 / 1;
-      min-height: 0;
-      justify-self: center;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--control);
-      overflow: hidden;
-    }
-
-    .flow-map::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background-image:
-        linear-gradient(to right, rgba(215, 224, 229, 0.42) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(215, 224, 229, 0.42) 1px, transparent 1px);
-      background-size: 36px 36px;
-      pointer-events: none;
-    }
-
-    .flow-lines {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      color: var(--blue);
-    }
-
-    .flow-line {
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 2.2;
-      stroke-linecap: round;
-      stroke-dasharray: 7 8;
-      opacity: 0.82;
-      animation: flow-dash 1.4s linear infinite;
-    }
-
-    .flow-line.chain {
-      color: var(--amber);
-      animation-duration: 2s;
-    }
-
-    .flow-line.reply {
-      color: var(--green);
-      animation-duration: 1.7s;
-    }
-
-    .flow-line.blocked {
-      color: var(--red);
-      animation: none;
-      stroke-dasharray: 3 7;
-      opacity: 0.7;
-    }
-
-    .flow-paused .flow-line {
-      animation-play-state: paused;
-    }
-
-    @keyframes flow-dash {
-      to {
-        stroke-dashoffset: -30;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .flow-line {
-        animation: none;
-      }
-    }
-
-    .agent-node {
-      position: absolute;
-      z-index: 1;
-      display: grid;
-      place-items: center;
-      align-content: center;
-      gap: 2px;
-      width: 54px;
-      height: 54px;
-      border: 1px solid var(--line);
-      border-radius: 50%;
-      padding: 3px;
-      background: var(--control);
-      color: var(--text);
-      text-align: center;
-      box-shadow: 0 8px 18px rgba(18, 32, 43, 0.1);
-    }
-
-    .agent-node strong {
-      max-width: 42px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 11px;
-    }
-
-    .agent-node small {
-      max-width: 42px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--muted);
-      font-size: 9px;
-    }
-
-    .agent-node .badge {
-      min-height: 16px;
-      max-width: 42px;
-      overflow: hidden;
-      padding: 0 3px;
-      font-size: 8px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .agent-node.active {
-      border-color: rgba(37, 99, 235, 0.72);
-      box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.18), 0 8px 18px rgba(18, 32, 43, 0.1);
-    }
-
-    .node-self {
-      left: calc(50% - 27px);
-      top: 6%;
-    }
-
-    .node-odesign {
-      right: 6%;
-      top: calc(50% - 27px);
-    }
-
-    .node-worker {
-      left: calc(50% - 27px);
-      bottom: 6%;
-    }
-
-    .node-reviewer {
-      left: 6%;
-      top: calc(50% - 27px);
-    }
-
-    .node-archi {
-      left: 19%;
-      top: 17%;
-    }
-
-    .node-planner {
-      right: 19%;
-      top: 17%;
-    }
-
-    .node-worker2 {
-      right: 19%;
-      bottom: 17%;
-    }
-
-    .node-reviewer2 {
-      left: 19%;
-      bottom: 17%;
-    }
-
-    .flow-center {
-      position: absolute;
-      left: calc(50% - 48px);
-      top: calc(50% - 24px);
-      z-index: 1;
-      width: 96px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 5px 8px;
-      background: rgba(255, 255, 255, 0.94);
-      color: var(--muted);
-      text-align: center;
-      font-size: 11px;
-    }
-
-    .flow-center strong {
-      display: block;
-      color: var(--text);
-      font-size: 12px;
-    }
-
-    .flow-legend {
-      position: absolute;
-      left: 10px;
-      right: 10px;
-      bottom: 8px;
-      z-index: 1;
-      display: flex;
-      justify-content: center;
-      gap: 5px;
-      flex-wrap: wrap;
-      pointer-events: none;
-    }
-
-    .legend-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 1px 6px;
-      background: rgba(255, 255, 255, 0.94);
-      color: var(--muted);
-      font-size: 10px;
-    }
-
-    .legend-pill::before {
-      content: "";
-      width: 14px;
-      height: 2px;
-      border-radius: 999px;
-      background: var(--blue);
-    }
-
-    .legend-pill.reply::before {
-      background: var(--green);
-    }
-
-    .legend-pill.chain::before {
-      background: var(--amber);
-    }
-
-    .flow-label {
-      position: absolute;
-      z-index: 1;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 1px 6px;
-      background: rgba(255, 255, 255, 0.92);
-      color: var(--muted);
-      font-size: 10px;
-      white-space: nowrap;
-    }
-
-    .flow-label.ask {
-      right: 18%;
-      top: 28%;
-    }
-
-    .flow-label.chain {
-      right: 22%;
-      bottom: 22%;
-    }
-
-    .flow-label.reply {
-      left: 22%;
-      bottom: 22%;
-    }
-
-    .flow-label.blocked {
-      left: 19%;
-      top: 31%;
-    }
-
-    .flow-events {
-      display: grid;
-      gap: 6px;
-      align-content: start;
-      max-height: min(500px, 58dvh);
-      overflow: auto;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 8px;
-      background: var(--control);
-    }
-
-    .event-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
-      align-items: center;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 6px 7px;
-      background: var(--soft);
-      color: var(--text);
-      text-align: left;
-    }
-
-    .event-route {
-      display: block;
-      margin-bottom: 2px;
-      font-weight: 800;
-      font-size: 12px;
-    }
-
-    .event-meta {
-      color: var(--muted);
-      font-size: 11px;
-    }
-
     pre {
       margin: 0;
       overflow: auto;
@@ -1449,8 +1138,7 @@
       .workflow-grid,
       .bottom-inner,
       .session-stats,
-      .session-controls,
-      .comm-flow {
+      .session-controls {
         grid-template-columns: 1fr;
       }
 
@@ -1472,75 +1160,6 @@
         grid-template-columns: 1fr;
       }
 
-      .flow-map {
-        width: min(100%, 500px, 58dvh);
-      }
-
-      .agent-node {
-        width: 50px;
-        height: 50px;
-      }
-
-      .node-self {
-        left: calc(50% - 25px);
-        top: 5%;
-      }
-
-      .node-odesign {
-        right: 4%;
-        top: calc(50% - 25px);
-      }
-
-      .node-worker {
-        left: calc(50% - 25px);
-        bottom: 5%;
-      }
-
-      .node-reviewer {
-        left: 4%;
-        top: calc(50% - 25px);
-      }
-
-      .node-archi {
-        left: 15%;
-        top: 16%;
-      }
-
-      .node-planner {
-        right: 15%;
-        top: 16%;
-      }
-
-      .node-worker2 {
-        right: 15%;
-        bottom: 16%;
-      }
-
-      .node-reviewer2 {
-        left: 15%;
-        bottom: 16%;
-      }
-
-      .flow-label.ask {
-        right: 28%;
-        top: 28%;
-      }
-
-      .flow-label.chain {
-        right: 28%;
-        top: auto;
-        bottom: 22%;
-      }
-
-      .flow-label.reply {
-        left: 24%;
-        bottom: 22%;
-      }
-
-      .flow-label.blocked {
-        left: 31%;
-        top: 31%;
-      }
     }
   </style>
 </head>
@@ -1761,140 +1380,6 @@ model = "gpt-5.5"</pre>
       </section>
       </div>
 
-      <div id="observe-section" class="page-section">
-        <div class="section-label"><span data-i18n="observeSection">Observe</span><em data-i18n="observeSectionNote">read-only runtime explanation</em></div>
-      <section id="agent-communication-flow" class="panel panel-secondary" aria-label="Agent communication flow" data-i18n-aria-label="commFlowTitle">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title" data-i18n="commFlowTitle">Agent communication flow</h2>
-            <div class="panel-subtitle" data-i18n="commFlowSubtitle">Read-only trace view for ask, chain, reply, and review events. It does not write mailbox or lifecycle state.</div>
-          </div>
-          <span class="badge info" data-i18n="observerOnly">observer only</span>
-        </div>
-        <div class="toolbar">
-          <span class="toolbar-group">
-            <button class="btn" id="pauseFlow" data-i18n="pauseAnimation">Pause animation</button>
-            <span class="field-inline">
-              <label data-i18n="timeWindow">Window</label>
-              <select class="select-inline">
-                <option data-i18n="fifteenMinutes">15 min</option>
-                <option data-i18n="oneHour">1 hour</option>
-                <option data-i18n="twentyFourHours">24 hours</option>
-              </select>
-            </span>
-            <span class="field-inline">
-              <label data-i18n="agentFilter">Agent</label>
-              <select class="select-inline">
-                <option data-i18n="allAgents">all agents</option>
-                <option>ccb_self</option>
-                <option>odesign</option>
-                <option>worker1</option>
-                <option>reviewer3</option>
-              </select>
-            </span>
-          </span>
-          <span class="spacer"></span>
-          <button class="btn" data-drawer="messageTrace" data-i18n="traceDetails">Trace details</button>
-        </div>
-        <div class="comm-flow" id="commFlowPanel">
-          <div class="flow-map" aria-label="Animated agent message flow" data-i18n-aria-label="animatedMessageFlow">
-            <svg class="flow-lines" viewBox="0 0 640 640" preserveAspectRatio="none" aria-hidden="true">
-              <defs>
-                <marker id="arrow-request" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#2563eb"></path>
-                </marker>
-                <marker id="arrow-chain" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#a15c00"></path>
-                </marker>
-                <marker id="arrow-reply" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#147a43"></path>
-                </marker>
-                <marker id="arrow-blocked" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#b83232"></path>
-                </marker>
-              </defs>
-              <path class="flow-line" marker-end="url(#arrow-request)" d="M 320 70 C 455 94 540 180 570 320"></path>
-              <path class="flow-line chain" marker-end="url(#arrow-chain)" d="M 570 320 C 530 470 450 548 320 570"></path>
-              <path class="flow-line reply" marker-end="url(#arrow-reply)" d="M 320 570 C 150 540 72 438 70 320 C 72 196 152 98 320 70"></path>
-              <path class="flow-line blocked" marker-end="url(#arrow-blocked)" d="M 70 320 C 185 226 450 226 570 320"></path>
-            </svg>
-            <div class="flow-center"><strong data-i18n="activeTrace">active trace</strong><span data-i18n="openedAgents">opened agents</span></div>
-            <button class="agent-node node-self active" data-drawer="messageTrace">
-              <strong>ccb_self</strong>
-              <small data-i18n="frontdeskRunning">frontdesk · running</small>
-              <span class="badge ok" data-i18n="delivered">delivered</span>
-            </button>
-            <button class="agent-node node-planner" data-drawer="messageTrace">
-              <strong>planner</strong>
-              <small data-i18n="idle">idle</small>
-              <span class="badge" data-i18n="idle">idle</span>
-            </button>
-            <button class="agent-node node-odesign" data-drawer="messageTrace">
-              <strong>odesign</strong>
-              <small data-i18n="designChainWaiting">design · chain waiting</small>
-              <span class="badge warn" data-i18n="waiting">waiting</span>
-            </button>
-            <button class="agent-node node-worker2" data-drawer="messageTrace">
-              <strong>worker2</strong>
-              <small data-i18n="queued">queued</small>
-              <span class="badge info" data-i18n="queued">queued</span>
-            </button>
-            <button class="agent-node node-worker" data-drawer="messageTrace">
-              <strong>worker1</strong>
-              <small data-i18n="coderReviewRequested">coder · review requested</small>
-              <span class="badge info" data-i18n="running">running</span>
-            </button>
-            <button class="agent-node node-reviewer2" data-drawer="messageTrace">
-              <strong>reviewer1</strong>
-              <small data-i18n="ready">ready</small>
-              <span class="badge ok" data-i18n="ready">ready</span>
-            </button>
-            <button class="agent-node node-reviewer" data-drawer="messageTrace">
-              <strong>reviewer3</strong>
-              <small data-i18n="reviewerStaleReply">reviewer · stale reply</small>
-              <span class="badge danger" data-i18n="stale">stale</span>
-            </button>
-            <button class="agent-node node-archi" data-drawer="messageTrace">
-              <strong>archi</strong>
-              <small data-i18n="observer">observer</small>
-              <span class="badge" data-i18n="idle">idle</span>
-            </button>
-            <span class="flow-label ask">ask · job_8b204</span>
-            <span class="flow-label chain" data-i18n="chainWait">chain wait</span>
-            <span class="flow-label reply" data-i18n="replyCompleted">reply completed</span>
-            <span class="flow-label blocked" data-i18n="staleReply">stale reply</span>
-            <div class="flow-legend" aria-hidden="true">
-              <span class="legend-pill request" data-i18n="request">request</span>
-              <span class="legend-pill chain">chain</span>
-              <span class="legend-pill reply">reply</span>
-            </div>
-          </div>
-          <div class="flow-events">
-            <div>
-              <h3 class="panel-title" data-i18n="latestEvents">Latest events</h3>
-              <div class="panel-subtitle" data-i18n="eventSummary">Sanitized summaries only. Full artifacts open by path when allowed.</div>
-            </div>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">ccb_self -> odesign</span><span class="event-meta">ask · job_8b204be32628 · 14:52:11</span></span>
-              <span class="badge ok" data-i18n="delivered">delivered</span>
-            </button>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">odesign -> worker1</span><span class="event-meta">chain · parent job_8b204 · waiting</span></span>
-              <span class="badge warn" data-i18n="chainWaiting">chain waiting</span>
-            </button>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">worker1 -> reviewer3</span><span class="event-meta">review · artifact summary ready</span></span>
-              <span class="badge info" data-i18n="running">running</span>
-            </button>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">reviewer3 -> odesign</span><span class="event-meta">reply · digest mismatch</span></span>
-              <span class="badge danger" data-i18n="stale">stale</span>
-            </button>
-          </div>
-        </div>
-      </section>
-      </div>
-
       <div id="agent-session-storage" class="page-section">
         <div class="section-label"><span data-i18n="maintainSection">Maintain</span><em data-i18n="maintainSectionNote">local session storage cleanup</em></div>
       <section class="panel panel-maintenance">
@@ -2021,18 +1506,6 @@ model = "gpt-5.5"</pre>
         stepBackup: "Backup and write .ccb/ccb.config",
         stepDryRun: "Reload dry-run classifies impact",
         stepApply: "Apply hot reload or show blocker",
-        observeSection: "Observe",
-        observeSectionNote: "read-only runtime explanation",
-        commFlowTitle: "Agent communication flow",
-        commFlowSubtitle: "Read-only trace view for ask, chain, reply, and review events. It does not write mailbox or lifecycle state.",
-        observerOnly: "observer only",
-        pauseAnimation: "Pause animation",
-        resumeAnimation: "Resume animation",
-        timeWindow: "Window",
-        agentFilter: "Agent",
-        traceDetails: "Trace details",
-        latestEvents: "Latest events",
-        eventSummary: "Sanitized summaries only. Full artifacts open by path when allowed.",
         maintainSection: "Maintain",
         maintainSectionNote: "local session storage cleanup",
         close: "Close",
@@ -2109,24 +1582,6 @@ model = "gpt-5.5"</pre>
         oneHour: "1 hour",
         twentyFourHours: "24 hours",
         allAgents: "all agents",
-        animatedMessageFlow: "Animated agent message flow",
-        activeTrace: "active trace",
-        openedAgents: "opened agents",
-        frontdeskRunning: "frontdesk · running",
-        delivered: "delivered",
-        idle: "idle",
-        designChainWaiting: "design · chain waiting",
-        queued: "queued",
-        coderReviewRequested: "coder · review requested",
-        running: "running",
-        reviewerStaleReply: "reviewer · stale reply",
-        stale: "stale",
-        observer: "observer",
-        chainWait: "chain wait",
-        replyCompleted: "reply completed",
-        staleReply: "stale reply",
-        request: "request",
-        chainWaiting: "chain waiting",
         agentSessionStorage: "Agent session storage",
         agentSessionStorageNote: "Scan recognized provider transcripts and clean history outside a protected retention window.",
         maintenance: "maintenance",
@@ -2243,7 +1698,6 @@ model = "gpt-5.5"</pre>
         drawerMigrationReview: "Migration review",
         drawerSidebarSettings: "Sidebar settings",
         drawerValidationDetails: "Validation details",
-        drawerMessageTrace: "Message trace",
         authority: "Authority",
         authorityCopy: "Profiles are saved control files, not live runtime authority. Activate writes .ccb/ccb.config through validate, backup, dry-run, and reload.",
         importCurrentProfile: "Import current as profile",
@@ -2279,18 +1733,7 @@ model = "gpt-5.5"</pre>
         rolepacksInstalled: "rolepacks installed",
         windowsTopologyParse: "windows topology parse",
         styleWarnings: "style warnings",
-        pass: "pass",
-        traceSummary: "Trace summary",
-        traceSummaryCopy: "Read-only explanation assembled from mailbox traces, job state, completion tracker, and reply artifacts.",
-        traceId: "trace id",
-        route: "route",
-        state: "state",
-        visiblePayload: "visible payload",
-        visiblePayloadCopy: "Design request summary, sanitized status, artifact references only.",
-        artifact: "artifact",
-        copy: "Copy",
-        safetyBoundary: "Safety boundary",
-        safetyBoundaryCopy: "Do not show auth, API keys, private prompts, or large message bodies. Summarize long content with artifact links."
+        pass: "pass"
       },
       zh: {
         active: "当前",
@@ -2336,18 +1779,6 @@ model = "gpt-5.5"</pre>
         stepBackup: "备份并写入 .ccb/ccb.config",
         stepDryRun: "Reload dry-run 判断影响",
         stepApply: "执行热加载或显示阻断原因",
-        observeSection: "观察",
-        observeSectionNote: "只读运行解释",
-        commFlowTitle: "Agent 通讯流",
-        commFlowSubtitle: "只读展示 ask、chain、reply、review 事件，不写 mailbox 或 lifecycle 状态。",
-        observerOnly: "仅观察",
-        pauseAnimation: "暂停动画",
-        resumeAnimation: "继续动画",
-        timeWindow: "时间窗",
-        agentFilter: "Agent",
-        traceDetails: "Trace 详情",
-        latestEvents: "最近事件",
-        eventSummary: "只显示脱敏摘要。允许时再通过 artifact 路径打开全文。",
         maintainSection: "维护",
         maintainSectionNote: "本地 session 存储清理",
         close: "关闭",
@@ -2424,24 +1855,6 @@ model = "gpt-5.5"</pre>
         oneHour: "1 小时",
         twentyFourHours: "24 小时",
         allAgents: "全部 Agent",
-        animatedMessageFlow: "Agent 消息流动画",
-        activeTrace: "当前追踪",
-        openedAgents: "已打开 Agent",
-        frontdeskRunning: "frontdesk · 运行中",
-        delivered: "已送达",
-        idle: "空闲",
-        designChainWaiting: "设计 · 等待 chain",
-        queued: "已排队",
-        coderReviewRequested: "coder · 已请求审查",
-        running: "运行中",
-        reviewerStaleReply: "reviewer · 陈旧回复",
-        stale: "陈旧",
-        observer: "观察者",
-        chainWait: "chain 等待",
-        replyCompleted: "回复完成",
-        staleReply: "陈旧回复",
-        request: "请求",
-        chainWaiting: "等待 chain",
         agentSessionStorage: "Agent Session 存储",
         agentSessionStorageNote: "扫描可识别的 Provider 会话记录，并清理保护窗口之外的历史。",
         maintenance: "维护",
@@ -2558,7 +1971,6 @@ model = "gpt-5.5"</pre>
         drawerMigrationReview: "迁移审查",
         drawerSidebarSettings: "侧边栏设置",
         drawerValidationDetails: "校验详情",
-        drawerMessageTrace: "消息追踪",
         authority: "权威边界",
         authorityCopy: "档案是保存的控制文件，不是运行时权威。激活需经过校验、备份、dry-run 和 reload 后写入 .ccb/ccb.config。",
         importCurrentProfile: "导入当前配置",
@@ -2594,18 +2006,7 @@ model = "gpt-5.5"</pre>
         rolepacksInstalled: "角色包已安装",
         windowsTopologyParse: "窗口拓扑解析",
         styleWarnings: "样式警告",
-        pass: "通过",
-        traceSummary: "追踪摘要",
-        traceSummaryCopy: "根据 mailbox trace、job 状态、completion tracker 和回复 artifact 生成的只读说明。",
-        traceId: "追踪 ID",
-        route: "路由",
-        state: "状态",
-        visiblePayload: "可见内容",
-        visiblePayloadCopy: "设计请求摘要、脱敏状态和 artifact 引用。",
-        artifact: "Artifact",
-        copy: "复制",
-        safetyBoundary: "安全边界",
-        safetyBoundaryCopy: "不显示认证信息、API Key、私有提示词或大型消息正文；长内容只提供摘要和 artifact 链接。"
+        pass: "通过"
       }
     };
 
@@ -4102,25 +3503,7 @@ active config: unchanged`;
         <div class="drawer-card"><h3>${t("validation")}</h3><p>${t("validationCopy")}</p></div>
         <div class="step"><span class="step-no">1</span><span>${t("rolepacksInstalled")}</span><span class="badge ok">${t("pass")}</span></div>
         <div class="step"><span class="step-no">2</span><span>${t("windowsTopologyParse")}</span><span class="badge ok">${t("pass")}</span></div>
-        <div class="step"><span class="step-no">3</span><span>${t("styleWarnings")}</span><span class="badge warn">1</span></div>`,
-      messageTrace: () => `
-        <div class="drawer-card">
-          <h3>${t("traceSummary")}</h3>
-          <p>${t("traceSummaryCopy")}</p>
-        </div>
-        <table class="table">
-          <tbody>
-            <tr><th>${t("traceId")}</th><td><span class="mono">job_8b204be32628</span> <button class="btn subtle">${t("copy")}</button></td></tr>
-            <tr><th>${t("route")}</th><td>ccb_self -> odesign -> worker1 -> reviewer3 -> odesign</td></tr>
-            <tr><th>${t("state")}</th><td><span class="badge warn">${t("chainWaiting")}</span></td></tr>
-            <tr><th>${t("visiblePayload")}</th><td>${t("visiblePayloadCopy")}</td></tr>
-            <tr><th>${t("artifact")}</th><td><span class="mono">.ccb/ccbd/artifacts/text/completion-reply/job_8b204...</span></td></tr>
-          </tbody>
-        </table>
-        <div class="drawer-card">
-          <h3>${t("safetyBoundary")}</h3>
-          <p>${t("safetyBoundaryCopy")}</p>
-        </div>`
+        <div class="step"><span class="step-no">3</span><span>${t("styleWarnings")}</span><span class="badge warn">1</span></div>`
     };
 
     function applyLanguage(nextLang) {
@@ -4140,8 +3523,6 @@ active config: unchanged`;
         node.textContent = t(node.dataset.state);
       });
       renderThemeStatus();
-      const flowPaused = document.getElementById("commFlowPanel").classList.contains("flow-paused");
-      document.getElementById("pauseFlow").textContent = flowPaused ? t("resumeAnimation") : t("pauseAnimation");
       updateSummary();
       syncProviderControls();
       syncProfileOptions(profileRecords, document.getElementById("profileSelect").value || "active");
@@ -4230,8 +3611,7 @@ active config: unchanged`;
         sidebar: t("drawerSidebarSettings"),
         tools: t("drawerOptionalTools"),
         toml: t("fullToml"),
-        validation: t("drawerValidationDetails"),
-        messageTrace: t("drawerMessageTrace")
+        validation: t("drawerValidationDetails")
       }[kind] || t("details");
       document.getElementById("drawerBody").innerHTML = drawerContent[kind] ? drawerContent[kind]() : "";
       document.getElementById("drawer").classList.add("open");
@@ -4349,14 +3729,6 @@ active config: unchanged`;
 
     document.getElementById("closeDrawer").addEventListener("click", closeDrawer);
     document.getElementById("overlay").addEventListener("click", closeDrawer);
-
-    document.getElementById("pauseFlow").addEventListener("click", () => {
-      const panel = document.getElementById("commFlowPanel");
-      const paused = panel.classList.toggle("flow-paused");
-      document.getElementById("pauseFlow").textContent = paused
-        ? text[lang].resumeAnimation
-        : text[lang].pauseAnimation;
-    });
 
     document.getElementById("validateBtn").addEventListener("click", validateDraft);
     document.getElementById("saveProfileBtn").addEventListener("click", saveProfile);

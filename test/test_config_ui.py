@@ -56,6 +56,13 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert 'function scanAgentHistory()' in page
     assert 'function cleanupAgentHistory()' in page
     assert '/api/storage/history' in page
+    assert 'id="config-editor-section"' in page
+    assert 'id="agent-session-storage"' in page
+    assert 'id="observe-section"' not in page
+    assert 'id="agent-communication-flow"' not in page
+    assert 'id="commFlowPanel"' not in page
+    assert 'id="pauseFlow"' not in page
+    assert 'data-drawer="messageTrace"' not in page
     assert '2.8 GB' not in page
     assert 'data-i18n="deleteAll"' not in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)

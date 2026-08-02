@@ -87,6 +87,14 @@ Left navigation:
 Default visible sections should prioritize Project, Windows, Agents, Tools, and
 Sidebar. Workspace and later sections are advanced.
 
+Current release surface:
+
+- keep the configuration/editor and activation-review controls;
+- keep bounded Agent history scan and cleanup;
+- temporarily delist the read-only Agent communication-flow observer. It is
+  absent from the shipped DOM and has no animation, trace drawer, or event
+  handlers in the current panel.
+
 The sticky header also exposes **Appearance** independently from project config.
 Choices are `system`, `dark`, `light`, `solarized`, `tokyo`, `gruvbox`, and
 `rose-pine`. `system` follows browser appearance in the panel and OS appearance

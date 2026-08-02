@@ -10,6 +10,8 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -94,6 +96,16 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "io.ccb.mobile/network_status"
+        ).setMethodCallHandler { call, result ->
+            if (call.method == "readNetworkStatus") {
+                result.success(readNetworkStatus())
+            } else {
+                result.notImplemented()
+            }
+        }
         localNotificationsChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "io.ccb.mobile/local_notifications"
@@ -138,6 +150,46 @@ class MainActivity : FlutterActivity() {
             }
         }
         dispatchNotificationTap(intent)
+    }
+
+    private fun readNetworkStatus(): Map<String, Boolean> {
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        var connected = false
+        var wifi = false
+        var ethernet = false
+        var cellular = false
+        var vpn = false
+        return try {
+            connectivityManager.allNetworks.forEach { network ->
+                val capabilities =
+                    connectivityManager.getNetworkCapabilities(network) ?: return@forEach
+                connected = true
+                wifi = wifi || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                ethernet =
+                    ethernet || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                cellular =
+                    cellular || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                vpn = vpn || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            }
+            mapOf(
+                "supported" to true,
+                "connected" to connected,
+                "wifi" to wifi,
+                "ethernet" to ethernet,
+                "cellular" to cellular,
+                "vpn" to vpn
+            )
+        } catch (_: SecurityException) {
+            mapOf(
+                "supported" to false,
+                "connected" to false,
+                "wifi" to false,
+                "ethernet" to false,
+                "cellular" to false,
+                "vpn" to false
+            )
+        }
     }
 
     private fun openApplicationSystemSettings(): Boolean {

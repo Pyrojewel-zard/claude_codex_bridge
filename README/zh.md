@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.4-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.3 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.4 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.3/ccb-mobile-v8.5.3.apk)
+- [下载 CCB Mobile v8.5.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.4/ccb-mobile-v8.5.4.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -300,6 +300,17 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.4</b> - 更安全的 ask 路由、有界历史清理与可操作的 Mobile 局域网恢复</summary>
+
+- 仅在真实依赖关系中使用 `--chain`：独立 ask、通讯测试、批量任务、通知和 reply-delivery 确认不再错误创建 callback chain。
+- Config UI 支持按单个 Agent 或全部 Agent 扫描/清理历史，可选保留 7/30/90 天，并保护当前绑定、近期记录及每个 Provider 最新的一份 transcript。
+- 当前 Config UI 聚焦配置和历史清理，暂时下架只读的通讯流观察区。
+- Android 增加 LAN 配对预检、重连提示、重试/诊断操作和 15 秒 terminal WebSocket 心跳，且不会读取 SSID、BSSID 或其他网络身份信息。
+- Flutter 静态分析和全部 736 个 App 测试通过；Android 真机 Wi-Fi/热点/VPN/DHCP 地址变化矩阵仍是明确的验证限制。
+
+</details>
+
+<details>
 <summary><b>v8.5.3</b> - 更高 Relay 配额、有界 callback 修复与完整 Claude Agent 环境变量</summary>
 
 - 新签发的 Relay Host 邀请默认配额从每 24 小时 100 MiB 提升到 200 MiB；运营端显式指定的配额仍然优先。
