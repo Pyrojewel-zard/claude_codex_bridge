@@ -291,7 +291,7 @@ Use the **⚙ Settings** control panel for normal project configuration. If you 
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=77e83abf" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
