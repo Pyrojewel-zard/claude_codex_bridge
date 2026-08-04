@@ -81,6 +81,18 @@ def test_control_plane_env_keeps_pi_execution_policy(monkeypatch) -> None:
     assert env['CCB_PI_NO_TERMINAL_TIMEOUT_S'] == '1800'
 
 
+def test_control_plane_env_keeps_managed_provider_no_terminal_timeouts(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_CLAUDE_NO_TERMINAL_TIMEOUT_S', '1800')
+    monkeypatch.setenv('CCB_CODEX_NO_TERMINAL_TIMEOUT_S', '1800')
+    monkeypatch.setenv('CCB_GEMINI_NO_TERMINAL_TIMEOUT_S', '1800')
+
+    env = control_plane_env()
+
+    assert env['CCB_CLAUDE_NO_TERMINAL_TIMEOUT_S'] == '1800'
+    assert env['CCB_CODEX_NO_TERMINAL_TIMEOUT_S'] == '1800'
+    assert env['CCB_GEMINI_NO_TERMINAL_TIMEOUT_S'] == '1800'
+
+
 def test_control_plane_env_keeps_mobile_host_state_override(monkeypatch) -> None:
     monkeypatch.setenv('CCB_MOBILE_HOST_STATE_HOME', '/tmp/ccb-mobile-state')
 
