@@ -89,6 +89,7 @@ def run_start_flow(
     namespace_topology_managed: bool = False,
     fresh_namespace: bool = False,
     fresh_workspace: bool = False,
+    restart_agent_panes: dict[str, str] | None = None,
     clock=utc_now,
     readiness_recorder=None,
 ) -> StartFlowSummary:
@@ -116,6 +117,7 @@ def run_start_flow(
         namespace_topology_managed=namespace_topology_managed,
         fresh_namespace=fresh_namespace,
         fresh_workspace=fresh_workspace,
+        restart_agent_panes=restart_agent_panes,
         clock=clock,
         readiness_recorder=readiness_recorder,
         deps=_deps(),

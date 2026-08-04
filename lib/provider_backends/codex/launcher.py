@@ -105,7 +105,7 @@ def build_session_payload(
     memory_projection_fingerprint = current_memory_projection_fingerprint(runtime_dir)
     if memory_projection_fingerprint:
         payload['codex_memory_projection_sha256'] = memory_projection_fingerprint
-    provider_authority_fingerprint = current_provider_authority_fingerprint(profile)
+    provider_authority_fingerprint = current_provider_authority_fingerprint(profile, runtime_dir=runtime_dir)
     if provider_authority_fingerprint:
         payload['codex_provider_authority_fingerprint'] = provider_authority_fingerprint
     if bool(prepared_state.get('codex_app_server_enabled')):

@@ -43,6 +43,9 @@ from provider_backends.codex import launcher as codex_launcher
 from provider_backends.codex.launcher_runtime.command import (
     prepare_codex_home_overrides as prepare_codex_home_overrides_for_test,
 )
+from provider_backends.codex.session_authority import (
+    current_provider_authority_fingerprint,
+)
 from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
 from provider_backends.droid import launcher as droid_launcher
 from provider_backends.gemini import launcher as gemini_launcher
@@ -1016,6 +1019,12 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
     existing_log = existing_root / '2026' / '04' / '19' / 'rollout-existing-session.jsonl'
     existing_log.parent.mkdir(parents=True, exist_ok=True)
     existing_log.write_text('', encoding='utf-8')
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (existing_home / '.ccb-session-namespace.json').write_text(
+        json.dumps({'provider': 'codex', 'provider_authority_fingerprint': fingerprint}),
+        encoding='utf-8',
+    )
     existing_session = project_root / '.ccb' / '.codex-agent1-session'
     existing_session.write_text(
         json.dumps(
@@ -1024,6 +1033,8 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
                 'codex_session_root': str(existing_root),
                 'codex_session_id': 'existing-session-id',
                 'codex_session_path': str(existing_log),
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
                 'start_cmd': 'codex resume existing-session-id',
                 'codex_start_cmd': 'codex resume existing-session-id',
             },
@@ -1129,8 +1140,29 @@ def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypa
     project_root = tmp_path / 'repo-codex-resume'
     ccb_dir = project_root / '.ccb'
     ccb_dir.mkdir(parents=True)
+    runtime_dir = ccb_dir / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    codex_home = ccb_dir / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    session_root = codex_home / 'sessions'
+    session_log = session_root / '2026' / '08' / '04' / 'agent1.jsonl'
+    session_log.parent.mkdir(parents=True)
+    session_log.write_text('', encoding='utf-8')
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (codex_home / '.ccb-session-namespace.json').write_text(
+        json.dumps({'provider': 'codex', 'provider_authority_fingerprint': fingerprint}),
+        encoding='utf-8',
+    )
     (ccb_dir / '.codex-agent1-session').write_text(
-        json.dumps({'codex_session_id': 'agent1-session-id'}, ensure_ascii=False),
+        json.dumps(
+            {
+                'codex_home': str(codex_home),
+                'codex_session_root': str(session_root),
+                'codex_session_id': 'agent1-session-id',
+                'codex_session_path': str(session_log),
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
     (ccb_dir / '.codex-agent2-session').write_text(
@@ -1227,6 +1259,7 @@ def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_pat
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%55'
     assert payload['work_dir'] == str(resume_dir)
+    assert payload['gemini_provider_authority_fingerprint']
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='reviewer',
@@ -1297,6 +1330,7 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     assert payload['claude_home'] == str(expected_claude_home)
     assert payload['claude_projects_root'] == str(expected_claude_home / '.claude' / 'projects')
     assert payload['claude_session_env_root'] == str(expected_claude_home / '.claude' / 'session-env')
+    assert payload['claude_provider_authority_fingerprint']
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%44'
     assert payload['work_dir'] == str(resume_dir)
@@ -3009,7 +3043,7 @@ def test_codex_launcher_build_start_cmd_respects_agent_restore_fresh(monkeypatch
     assert extract_resume_session_id(cmd) is None
 
 
-def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_session_file(tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_rejects_unfenced_legacy_resume_cmd(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-agent'
     runtime_dir = project_root / '.ccb' / 'agents' / 'codex' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3032,7 +3066,7 @@ def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_sessi
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-restore')
 
-    assert extract_resume_session_id(cmd) == 'codex-session-id'
+    assert extract_resume_session_id(cmd) is None
 
 
 def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_proxy(monkeypatch, tmp_path: Path) -> None:
@@ -3925,11 +3959,12 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
     old_log = session_root / '2026' / '05' / '01' / 'legacy-session.jsonl'
     old_log.parent.mkdir(parents=True, exist_ok=True)
     old_log.write_text('', encoding='utf-8')
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
     (codex_home / '.ccb-session-namespace.json').write_text(
         json.dumps(
             {
                 'provider': 'codex',
-                'provider_authority_fingerprint': '',
+                'provider_authority_fingerprint': fingerprint,
                 'memory_projection_sha256': 'old-memory-sha',
             },
             ensure_ascii=False,
@@ -3953,6 +3988,8 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
                 'codex_session_id': 'legacy-session-id',
                 'codex_session_path': str(old_log),
                 'codex_memory_projection_sha256': 'old-memory-sha',
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
                 'start_cmd': resume_cmd,
                 'codex_start_cmd': resume_cmd,
             },
@@ -4094,7 +4131,10 @@ def test_codex_launcher_build_start_cmd_rotates_legacy_explicit_session_namespac
     assert archive_root.is_dir()
     assert any(archive_root.rglob('legacy-session.jsonl'))
     marker = json.loads((profile_home / '.ccb-session-namespace.json').read_text(encoding='utf-8'))
-    assert marker['provider_authority_fingerprint'] == fingerprint
+    assert marker['provider_authority_fingerprint'] == current_provider_authority_fingerprint(
+        profile,
+        runtime_dir=runtime_dir,
+    )
     data = json.loads(session_file.read_text(encoding='utf-8'))
     assert 'codex_session_id' not in data
     assert 'codex_session_path' not in data
@@ -4266,7 +4306,8 @@ def test_codex_launcher_build_start_cmd_reuses_legacy_session_root_from_persiste
     assert f'CODEX_HOME={shlex.quote(str(migrated_home))}' in cmd
     assert f'CODEX_SESSION_ROOT={shlex.quote(str(migrated_root))}' in cmd
     assert migrated_root.is_dir()
-    assert (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
+    assert not (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
+    assert any((migrated_home / 'archived-sessions').rglob('rollout-legacy-session.jsonl'))
 
 
 def test_claude_launcher_build_start_cmd_uses_isolated_profile_api_env(monkeypatch, tmp_path: Path) -> None:

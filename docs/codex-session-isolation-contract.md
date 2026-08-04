@@ -136,6 +136,11 @@ The managed session file must persist:
 
 These fields are authority for managed Codex runtime recovery.
 
+The managed fingerprint is a private, Agent-scoped HMAC generation over the
+selected API/route/profile and applicable inherited or Agent-private auth
+inputs. Its HMAC key is owner-only CCB state and neither raw credentials nor a
+portable plain token hash may be persisted in session or diagnostic records.
+
 For new managed launches, `codex_home` is mandatory. A session file without
 `codex_home` is legacy evidence that must be migrated or rejected before it can
 be used as normal managed authority.
@@ -190,6 +195,9 @@ When `ccb` starts a managed Codex agent:
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart
+- `ccb restart <agent>` must use this same preparation and command/session
+  construction path in the Agent's existing pane; it must not respawn the
+  persisted `start_cmd`
 - optional source-home skills must be projected as independently marked
   symlink-first entries inside a local managed `skills/` container; unmarked
   conflicts are preserved, symlink failure falls back to a marked copy, and
@@ -244,6 +252,10 @@ When `ccb` starts a managed Codex agent:
   authority, startup must archive/rotate the current `sessions/` tree and clear
   stale bound-session fields before launch so Codex cannot auto-continue an
   incompatible conversation from the same home
+- the namespace comparison must include credential/account changes as well as
+  explicit API route changes; a changed inherited `auth.json`, explicit API key,
+  endpoint, or relevant source config starts without the incompatible old
+  conversation
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
 - it must export the canonical agent-scoped `CCB_SESSION_FILE` path into the
   managed Codex process; this is a pointer to the same session authority that

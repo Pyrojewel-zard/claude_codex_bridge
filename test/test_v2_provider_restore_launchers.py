@@ -15,6 +15,7 @@ from provider_backends.claude.launcher_runtime.history import ClaudeHistoryLocat
 from provider_backends.claude.launcher_runtime import session_paths as claude_session_paths
 from provider_backends.gemini import launcher as gemini_launcher
 from provider_backends.gemini.launcher_runtime import session_paths as gemini_session_paths
+from provider_backends.session_authority import current_provider_authority_fingerprint
 
 
 def _spec(name: str, provider: str) -> AgentSpec:
@@ -48,6 +49,7 @@ def test_claude_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
     runtime_dir.mkdir(parents=True)
     workspace_path.mkdir(parents=True)
     managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
+    authority_fingerprint = current_provider_authority_fingerprint('claude', None, runtime_dir)
 
     session_path = project_root / '.ccb' / '.claude-reviewer-session'
     session_path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +59,7 @@ def test_claude_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
                 'work_dir': str(workspace_path),
                 'claude_session_id': 'claude-sess-1',
                 'claude_home': str(managed_home),
+                'claude_provider_authority_fingerprint': authority_fingerprint,
             },
             ensure_ascii=False,
         ),
@@ -119,6 +122,7 @@ def test_gemini_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
     workspace_path.mkdir(parents=True)
     managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'gemini' / 'home'
     managed_root = managed_home / '.gemini' / 'tmp'
+    authority_fingerprint = current_provider_authority_fingerprint('gemini', None, runtime_dir)
 
     session_path = project_root / '.ccb' / '.gemini-reviewer-session'
     session_path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,6 +133,7 @@ def test_gemini_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
                 'gemini_session_id': 'gemini-sess-1',
                 'gemini_home': str(managed_home),
                 'gemini_root': str(managed_root),
+                'gemini_provider_authority_fingerprint': authority_fingerprint,
             },
             ensure_ascii=False,
         ),

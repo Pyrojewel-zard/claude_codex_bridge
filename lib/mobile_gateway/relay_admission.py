@@ -171,7 +171,7 @@ class RelayAdmissionStore:
         ttl_seconds: int = DEFAULT_INVITATION_TTL_SECONDS,
         label: str | None = None,
         max_sessions: int = 4,
-        max_bytes_per_day: int = 200 * 1024 * 1024,
+        max_bytes_per_day: int = 1024 * 1024 * 1024,
     ) -> RelayIssuedInvitation:
         if ttl_seconds <= 0:
             raise RelayAdmissionError('relay invitation ttl must be positive')

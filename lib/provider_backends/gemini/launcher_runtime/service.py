@@ -147,6 +147,11 @@ def build_session_payload(
     if layout is not None:
         payload['gemini_home'] = str(layout.home_root)
         payload['gemini_root'] = str(layout.tmp_root)
+    authority_fingerprint = str(
+        prepared_state.get('gemini_provider_authority_fingerprint') or ''
+    ).strip()
+    if authority_fingerprint:
+        payload['gemini_provider_authority_fingerprint'] = authority_fingerprint
     return payload
 
 

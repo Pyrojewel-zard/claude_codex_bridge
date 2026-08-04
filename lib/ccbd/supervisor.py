@@ -79,6 +79,7 @@ class RuntimeSupervisor(SupervisorRuntimeStateMixin):
         startup_run_id: str | None = None,
         daemon_started: bool | None = None,
         readiness_recorder=None,
+        restart_agent_panes: dict[str, str] | None = None,
     ) -> StartFlowSummary:
         with collect_startup_operations():
             return start_supervisor(
@@ -96,6 +97,7 @@ class RuntimeSupervisor(SupervisorRuntimeStateMixin):
                 startup_run_id=startup_run_id,
                 daemon_started=daemon_started,
                 readiness_recorder=readiness_recorder,
+                restart_agent_panes=restart_agent_panes,
                 run_start_flow_fn=run_start_flow,
             )
 

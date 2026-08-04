@@ -1,5 +1,30 @@
 # Changelog
 
+## v8.5.5 (2026-08-05)
+
+### Provider State Refresh
+
+- **Restart Uses Current Provider Authority**: `ccb restart <agent>` now rebuilds
+  the Provider launch from the current profile, login, API key, endpoint, proxy,
+  and model state instead of replaying the command persisted when the pane was
+  first created. Switching accounts or API routes no longer requires
+  `ccb clear`.
+- **Cross-Authority Resume Is Blocked Safely**: Codex archives an incompatible
+  managed session binding before starting fresh; Claude and Gemini suppress
+  native resume when the saved session belongs to another Provider authority.
+  Provider login state and history files remain intact.
+- **Credentials Stay Private**: managed session metadata stores only an
+  Agent-private HMAC fingerprint of Provider authority inputs, never raw API
+  keys, tokens, endpoints, or proxy credentials.
+
+### Relay And Community
+
+- **New Relay Invitations Default To 1 GiB/Day**: newly issued Relay Host
+  invitations now allow 1 GiB per 24-hour quota window. Explicit
+  `--max-bytes-per-day` values and existing Host credentials are unchanged.
+- **Community QR Refreshed**: the WeChat group image and README cache key now
+  point to the current invitation image.
+
 ## v8.5.4 (2026-08-03)
 
 ### Ask Routing

@@ -6,6 +6,7 @@ from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_backends.runtime_restore import ProviderRestoreTarget
+from provider_backends.session_authority import current_provider_authority_fingerprint
 from provider_profiles import ResolvedProviderProfile
 from workspace.models import WorkspacePlan
 
@@ -99,6 +100,9 @@ def build_session_payload(
     profile = load_resolved_provider_profile(Path(runtime_dir))
     prepared_state = dict(prepared_state or {})
     prepared_state['gemini_home_layout'] = _resolve_gemini_home_layout_impl(Path(runtime_dir), profile)
+    prepared_state['gemini_provider_authority_fingerprint'] = (
+        current_provider_authority_fingerprint('gemini', profile, Path(runtime_dir))
+    )
     return _build_session_payload_impl(
         context,
         spec,

@@ -193,6 +193,11 @@ def build_session_payload(
         payload['claude_home'] = str(layout.home_root)
         payload['claude_projects_root'] = str(layout.projects_root)
         payload['claude_session_env_root'] = str(layout.session_env_root)
+    authority_fingerprint = str(
+        prepared_state.get('claude_provider_authority_fingerprint') or ''
+    ).strip()
+    if authority_fingerprint:
+        payload['claude_provider_authority_fingerprint'] = authority_fingerprint
     return payload
 
 

@@ -32,6 +32,14 @@ There is no reverse synchronization path. `inherit_auth=false` prevents a new
 source projection; a provider-specific contract may preserve an already-private
 agent login, but that state remains local and must not become a source alias.
 
+A stopped manual Provider restart must re-run the normal managed launch
+preparation before process creation. It must not replay a persisted shell
+command as a substitute for re-reading current inherited auth/API state. A
+conversation binding may be resumed only when the Provider-specific authority
+fence proves it is compatible with the newly prepared generation. Conversation
+clear remains local context management and is not required to activate a new
+credential or route.
+
 ## 3. Filesystem Boundary
 
 Credential, token, account, auth-selection, browser-profile, and mixed

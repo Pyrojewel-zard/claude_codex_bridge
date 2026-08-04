@@ -6,6 +6,10 @@ from pathlib import Path
 from agents.models import AgentSpec
 from provider_backends.gemini.comm_runtime.project_hash import project_hash_candidates
 from provider_backends.gemini.home_layout import gemini_layout_from_session_data
+from provider_backends.session_authority import (
+    current_provider_authority_fingerprint,
+    provider_authority_matches,
+)
 from provider_backends.runtime_restore import ProviderRestoreTarget, resolve_restore_context
 from .home import resolve_gemini_home_layout
 
@@ -30,9 +34,19 @@ def resolve_gemini_restore_target(
         return default_target
 
     profile = load_profile_fn(runtime_dir)
+    authority_fingerprint = current_provider_authority_fingerprint('gemini', profile, runtime_dir)
     managed_layout = resolve_gemini_home_layout(runtime_dir, profile)
     session = load_project_session_fn(context.workspace_path, instance=context.session_instance)
     if session is not None:
+        if not provider_authority_matches(
+            getattr(session, 'data', {}) or {},
+            'gemini',
+            authority_fingerprint,
+        ):
+            return ProviderRestoreTarget(
+                run_cwd=existing_dir(getattr(session, 'work_dir', '')) or context.workspace_path,
+                has_history=False,
+            )
         session_cwd = existing_dir(getattr(session, "work_dir", ""))
         gemini_root = session_gemini_root(getattr(session, 'data', {}) or {})
         if (

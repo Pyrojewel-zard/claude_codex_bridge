@@ -137,8 +137,17 @@ The managed session file must persist:
 - `claude_session_env_root`
 - `claude_session_id` once bound
 - `claude_session_path` once bound
+- `claude_provider_authority_fingerprint` for the launch-time API/login/route
+  authority
 
 These fields are authority for managed Claude runtime recovery.
+
+The fingerprint is an Agent-private HMAC over the selected profile, API
+environment/route, and applicable inherited or Agent-private auth files. Its
+owner-only key lives at
+`.ccb/agents/<agent>/provider-state/claude/.ccb-authority-hmac-key`; neither raw
+credentials nor a portable plain credential hash may be persisted in session
+or diagnostic records.
 
 Credential and config projection is not conversation identity. `ccb` may project
 the user's source Claude auth/config into the private managed home so the
@@ -176,6 +185,12 @@ When `ccb` starts a managed Claude agent:
   launching Claude
 - it must materialize required Claude auth/config projections into the managed
   home without treating them as conversation identity
+- before adding `--continue`, it must prove that the recorded
+  `claude_provider_authority_fingerprint` matches the newly prepared launch;
+  missing or mismatched proof starts a fresh conversation while preserving the
+  private login files and historical conversation data
+- `ccb restart <agent>` must use normal managed-home/profile preparation and
+  this authority check rather than replaying the persisted `start_cmd`
 - it must not use an existing managed provider home as the inherited source
   home; if the current process `HOME` is a CCB provider-state home, startup must
   fall back to the real account home or an explicit source-home override

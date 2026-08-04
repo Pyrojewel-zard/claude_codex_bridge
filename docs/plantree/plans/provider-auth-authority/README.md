@@ -2,7 +2,7 @@
 
 Date: 2026-08-04
 
-Status: Planning
+Status: In progress
 
 ## Purpose
 
@@ -59,6 +59,8 @@ execution order.
 ## File Map
 
 - [roadmap.md](roadmap.md): phases, readiness gates, and deferred work.
+- [implementation-status.md](implementation-status.md): current landed slice,
+  verification, and next implementation target.
 - [open-questions.md](open-questions.md): unresolved config, migration, and
   Provider-capability questions.
 - [topics/authority-and-precedence.md](topics/authority-and-precedence.md):

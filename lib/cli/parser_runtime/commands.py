@@ -148,7 +148,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
             parser.add_argument('--ttl-seconds', type=int, default=900)
             parser.add_argument('--label', default=None)
             parser.add_argument('--max-sessions', type=int, default=4)
-            parser.add_argument('--max-bytes-per-day', type=int, default=209715200)
+            parser.add_argument('--max-bytes-per-day', type=int, default=1073741824)
             namespace = parse_args(parser, rest, error_message='invalid relay invite issue command', error_type=error_type)
             return ParsedRelayCommand(
                 project=project,

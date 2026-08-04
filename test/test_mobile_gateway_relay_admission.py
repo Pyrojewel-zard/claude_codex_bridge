@@ -30,7 +30,7 @@ def test_relay_invitation_issue_stores_only_keyed_verifier(tmp_path) -> None:
     issued = store.issue_invitation(label='operator-visible label', ttl_seconds=120)
 
     assert issued.invitation.startswith('ccb-relay-inv-v2.')
-    assert issued.quota['max_bytes_per_day'] == 200 * 1024 * 1024
+    assert issued.quota['max_bytes_per_day'] == 1024 * 1024 * 1024
     status = store.invitation_status(issued.invite_id)
     assert status['state'] == 'unused'
     assert 'invitation' not in status
@@ -183,10 +183,10 @@ def test_relay_operator_cli_json_and_human_outputs_redact_except_issue(tmp_path)
             '--json',
         ]
     )
-    assert issue_command.max_bytes_per_day == 200 * 1024 * 1024
+    assert issue_command.max_bytes_per_day == 1024 * 1024 * 1024
 
     issue_payload = relay_operator_command(context, issue_command)
-    assert issue_payload['quota']['max_bytes_per_day'] == 200 * 1024 * 1024
+    assert issue_payload['quota']['max_bytes_per_day'] == 1024 * 1024 * 1024
     issue_lines = render_relay_operator(issue_payload)
 
     raw_invitation = str(issue_payload['invitation'])

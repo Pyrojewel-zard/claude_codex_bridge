@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.4-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.5-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.4 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.5 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.4/ccb-mobile-v8.5.4.apk)
+- [Download CCB Mobile v8.5.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.5/ccb-mobile-v8.5.5.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,6 +309,16 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.5</b> - Provider switches apply on restart, with authority-safe session isolation</summary>
+
+- Apply current Provider profile, login, API key, endpoint, proxy, and model state with `ccb restart &lt;agent&gt;`; switching authority no longer requires `ccb clear`.
+- Fence session continuation with an Agent-private HMAC fingerprint: Codex archives incompatible bindings, while Claude and Gemini suppress cross-authority native resume without deleting login state or history.
+- Raise the default quota for newly issued Relay Host invitations from 200 MiB to 1 GiB per 24-hour window; explicit overrides and existing credentials remain unchanged.
+- Refresh the WeChat community QR image and cache key. No configuration or data migration is required.
+
+</details>
+
+<details>
 <summary><b>v8.5.4</b> - Safer ask routing, bounded history cleanup, and actionable Mobile LAN recovery</summary>
 
 - Treat `--chain` as a real dependency only: independent asks, communication tests, batches, notifications, and reply-delivery acknowledgements no longer create false callback chains.

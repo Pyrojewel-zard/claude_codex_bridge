@@ -65,11 +65,11 @@ def prepare_codex_home_overrides(
     workspace_path: Path | None = None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
+    enforce_session_namespace: bool = True,
 ) -> dict[str, str]:
     layout = resolve_codex_home_layout(runtime_dir, profile)
     layout.codex_home.mkdir(parents=True, exist_ok=True)
     layout.session_root.mkdir(parents=True, exist_ok=True)
-    marker_ready = _session_namespace_marker_exists(layout.codex_home)
     if refresh_home:
         _prepare_managed_home(
             _system_codex_home(),
@@ -82,9 +82,8 @@ def prepare_codex_home_overrides(
             memory_projection_event_path=memory_projection_event_path,
             memory_projection_marker_path=memory_projection_marker_path,
         )
+    if enforce_session_namespace:
         _ensure_session_namespace_authority(runtime_dir, layout.codex_home, layout.session_root, profile=profile)
-    elif not marker_ready and not any(layout.session_root.iterdir()):
-        _write_session_namespace_marker(layout.codex_home / _SESSION_NAMESPACE_MARKER, current_provider_authority_fingerprint(profile))
     if not refresh_home:
         repair_codex_activity_hooks(
             layout.codex_home,
@@ -288,7 +287,7 @@ def _prepare_managed_home(
 
 
 def _ensure_session_namespace_authority(runtime_dir: Path, codex_home: Path, session_root: Path, *, profile) -> None:
-    current_fingerprint = current_provider_authority_fingerprint(profile)
+    current_fingerprint = current_provider_authority_fingerprint(profile, runtime_dir=runtime_dir)
     memory_fingerprint = current_memory_projection_fingerprint(runtime_dir)
     marker_path = codex_home / _SESSION_NAMESPACE_MARKER
     stored_marker = _read_session_namespace_marker(marker_path)
@@ -301,7 +300,11 @@ def _ensure_session_namespace_authority(runtime_dir: Path, codex_home: Path, ses
         session_data=session_data,
     ):
         _archive_session_root(codex_home, session_root, label=_marker_label(stored_marker) or stored_provider_authority_fingerprint(session_data))
-        _scrub_project_session_binding(session_file)
+        _scrub_project_session_binding(
+            session_file,
+            codex_home=codex_home,
+            session_root=session_root,
+        )
     _write_session_namespace_marker(marker_path, current_fingerprint, memory_fingerprint=memory_fingerprint)
 
 
@@ -378,7 +381,12 @@ def _archive_label(label: str) -> str:
     return re.sub(r'[^a-z0-9._-]+', '-', text)[:32] or 'global'
 
 
-def _scrub_project_session_binding(session_file: Path | None) -> None:
+def _scrub_project_session_binding(
+    session_file: Path | None,
+    *,
+    codex_home: Path | None = None,
+    session_root: Path | None = None,
+) -> None:
     if session_file is None or not session_file.is_file():
         return
     data = read_session_payload(session_file)
@@ -387,6 +395,12 @@ def _scrub_project_session_binding(session_file: Path | None) -> None:
     old_id = str(data.get('codex_session_id') or '').strip()
     old_path = str(data.get('codex_session_path') or '').strip()
     changed = False
+    if codex_home is not None and not str(data.get('codex_home') or '').strip():
+        data['codex_home'] = str(codex_home)
+        changed = True
+    if session_root is not None and not str(data.get('codex_session_root') or '').strip():
+        data['codex_session_root'] = str(session_root)
+        changed = True
     if old_id and data.get('old_codex_session_id') != old_id:
         data['old_codex_session_id'] = old_id
         changed = True

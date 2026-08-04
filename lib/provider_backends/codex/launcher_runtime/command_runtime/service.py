@@ -128,7 +128,7 @@ def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_par
             spec,
             runtime_dir,
             profile,
-            current_fingerprint=current_provider_authority_fingerprint(profile),
+            current_fingerprint=current_provider_authority_fingerprint(profile, runtime_dir=runtime_dir),
             current_memory_fingerprint=current_memory_projection_fingerprint(runtime_dir),
         )
         if session_id:

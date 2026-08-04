@@ -50,6 +50,7 @@ def prepare_start_agents(
     restore_state_builder,
     namespace_epoch: int | None = None,
     namespace_pane_records: dict[str, object] | None = None,
+    force_restart_agents: tuple[str, ...] = (),
 ) -> tuple[PreparedStartAgent, ...]:
     spec_store = AgentSpecStore(paths)
     restore_store = AgentRestoreStore(paths)
@@ -58,6 +59,7 @@ def prepare_start_agents(
     materializer = WorkspaceMaterializer()
     validator = WorkspaceValidator(binding_store)
     prepared: list[PreparedStartAgent] = []
+    forced_restarts = frozenset(str(name) for name in force_restart_agents)
 
     try:
         validate_provider_runtime_home_uniqueness(layout=paths, specs=config.agents.values())
@@ -117,6 +119,10 @@ def prepare_start_agents(
                     ensure_usable=True,
                 )
 
+            force_restart = agent_name in forced_restarts
+            if force_restart:
+                binding = None
+
             if restore_store.load(agent_name) is None:
                 restore_store.save(agent_name, restore_state_builder(policy.restore_mode.value))
 
@@ -140,7 +146,7 @@ def prepare_start_agents(
                         window_name=binding_window_name,
                         namespace_epoch=namespace_epoch,
                         namespace_pane_records=namespace_pane_records,
-                    ),
+                    ) if not force_restart else 'manual_restart',
                 )
             )
 

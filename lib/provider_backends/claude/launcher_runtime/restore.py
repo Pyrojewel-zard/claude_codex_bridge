@@ -3,6 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from provider_backends.session_authority import (
+    current_provider_authority_fingerprint,
+    provider_authority_matches,
+)
 from provider_backends.runtime_restore import ProviderRestoreTarget, resolve_restore_context
 
 from .history import ClaudeHistoryLocator
@@ -30,11 +34,13 @@ def resolve_claude_restore_target(
         return default_target
 
     profile = load_profile_fn(runtime_dir)
+    authority_fingerprint = current_provider_authority_fingerprint('claude', profile, runtime_dir)
     home_layout = claude_home_layout_fn(runtime_dir, profile)
     session_target = project_session_restore_target_fn(
         context.workspace_path,
         context.session_instance,
         managed_home=home_layout.home_root,
+        authority_fingerprint=authority_fingerprint,
     )
     if session_target is not None:
         return session_target
@@ -59,10 +65,23 @@ def project_session_restore_target(
     load_project_session_fn,
     claude_history_state_fn,
     managed_home: Path,
+    authority_fingerprint: str,
 ) -> ProviderRestoreTarget | None:
     session = load_project_session_fn(workspace_path, instance=session_instance)
     if session is None:
         return None
+    if not provider_authority_matches(
+        getattr(session, 'data', {}) or {},
+        'claude',
+        authority_fingerprint,
+    ):
+        # A known CCB session under another account/route is evidence that the
+        # private history must not be continued.  Return a fresh target and
+        # prevent the generic history fallback from selecting it again.
+        return ProviderRestoreTarget(
+            run_cwd=existing_dir(getattr(session, 'work_dir', '')) or workspace_path,
+            has_history=False,
+        )
     session_cwd = existing_dir(getattr(session, 'work_dir', ''))
     if session_cwd is None:
         return None

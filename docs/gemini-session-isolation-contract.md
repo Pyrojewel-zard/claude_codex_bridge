@@ -98,8 +98,17 @@ The managed session file must persist:
 - `gemini_root`
 - `gemini_session_id` once bound
 - `gemini_session_path` once bound
+- `gemini_provider_authority_fingerprint` for the launch-time API/login/route
+  authority
 
 These fields are authority for managed Gemini runtime recovery.
+
+The fingerprint is an Agent-private HMAC over the selected profile, API
+environment/route, and applicable inherited or Agent-private auth files. Its
+owner-only key lives at
+`.ccb/agents/<agent>/provider-state/gemini/.ccb-authority-hmac-key`; neither raw
+credentials nor a portable plain credential hash may be persisted in session
+or diagnostic records.
 
 ## 4. Startup Contract
 
@@ -130,6 +139,12 @@ When `ccb` starts a managed Gemini agent:
 - it must create the managed home and managed temp root before launching Gemini
 - it must materialize required Gemini auth/config projections into the managed
   home without treating them as conversation identity
+- before adding `--resume latest`, it must prove that the recorded
+  `gemini_provider_authority_fingerprint` matches the newly prepared launch;
+  missing or mismatched proof starts a fresh conversation while preserving the
+  private login files and historical conversation data
+- `ccb restart <agent>` must use normal managed-home/profile preparation and
+  this authority check rather than replaying the persisted `start_cmd`
 - managed Gemini home materialization is part of startup preparation, before
   hook/trust installation and before launcher command assembly
 - startup must project the packaged `ask` and `ccb-clear` control skills into

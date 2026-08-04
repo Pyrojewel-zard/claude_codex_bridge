@@ -58,6 +58,7 @@ def bridge_runtime_env(runtime_dir: Path, *, prepared_state: dict[str, object] |
             runtime_dir,
             profile,
             refresh_home=False,
+            enforce_session_namespace=False,
         )
     )
     state = prepared_state or {}

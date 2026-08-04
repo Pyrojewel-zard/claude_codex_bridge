@@ -4,13 +4,13 @@ Date: 2026-08-04
 
 ## Status Summary
 
-- Current status: source-backed landing analysis and corrective plan shaping
-  complete; production implementation has not started.
-- Current phase: close the runtime-home, private-login, legacy-restart, secret
-  injection, writer-recovery, and migration gates identified by the
-  execution-readiness review.
-- Next target: land the behavior-neutral contract/secrecy and observe-only
-  authority slices after implementation authorization.
+- Current status: implementation started; the first restart/session-authority
+  slice is landed in the worktree and under verification.
+- Current phase: qualify the shared fresh-restart path and Codex/Claude/Gemini
+  private credential/route session fences, then continue the unresolved writer
+  and Provider-capability work.
+- Next target: close post-spawn failure cleanup and broaden capability
+  qualification before enforcement.
 
 ## Done
 
@@ -56,9 +56,24 @@ Date: 2026-08-04
   it only when Provider capability evidence proves a dependency.
 - Added the complete source and patch-series map in
   [topics/code-landing-map.md](topics/code-landing-map.md).
+- Replaced manual persisted-command respawn with the normal Provider
+  preparation/launch/session path while retaining the Agent's assigned pane.
+- Added a Codex Agent-private HMAC authority generation covering explicit API
+  profile/environment state and applicable inherited or Agent-private auth.
+- Fenced Codex resume and active `sessions/` namespace reuse on API key,
+  endpoint, source login, or relevant source config changes; incompatible
+  sessions are archived and their binding fields are scrubbed.
+- Preserved resolved Codex home/session-root metadata while upgrading an
+  unfenced legacy binding, so fail-closed rotation does not fall back to a
+  different managed home.
+- Added Agent-private HMAC authority fingerprints and native resume fences for
+  Claude and Gemini, covering inherited API/login files and selected route or
+  account metadata.
 
 ## In Progress
 
+- Verify the fresh manual restart path against an inspectable source runtime
+  project and current inherited Codex state.
 - Close the writable-home boundary for `provider_profile.home`.
 - Define the stopped-Agent private-login workflow and legacy-session restart
   behavior.

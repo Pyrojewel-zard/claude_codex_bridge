@@ -102,6 +102,47 @@ def test_prepare_start_agents_skips_provider_preparation_for_reused_binding(
     assert prepared[0].effective_command is None
 
 
+def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-forced-restart')
+    binding = SimpleNamespace(runtime_ref='tmux:%1')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: calls.append(kwargs['agent_name']),
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path=None,
+        tmux_session_name=None,
+        workspace_window_id=None,
+        resolve_agent_binding_fn=lambda **kwargs: binding,
+        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+        force_restart_agents=('agent1',),
+    )
+
+    assert calls == ['agent1']
+    assert prepared[0].binding is None
+    assert prepared[0].raw_binding is binding
+    assert prepared[0].stale_binding is True
+    assert prepared[0].provider_prepared is True
+    assert prepared[0].effective_command is not None
+    assert prepared[0].binding_reject_reason == 'manual_restart'
+
+
 def test_prepare_start_agents_prepares_missing_binding_once(monkeypatch, tmp_path: Path) -> None:
     project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-launch')
     calls: list[str] = []
