@@ -33,6 +33,12 @@ Common asset routing, effective-root resolution, and marker ownership follow
   - project anchor + logical agent name + provider
 - `runtime generation`
   - one launch generation, currently represented by `ccb_session_id`
+- `CCB conversation identity`
+  - stable across managed launches and authority generations, represented by
+    `ccb_conversation_id`
+- `authority generation`
+  - the ordered credential/route generation inside one CCB conversation,
+    represented by `ccb_authority_generation`
 - `provider conversation identity`
   - the concrete Claude conversation, represented by `claude_session_id`
 
@@ -139,6 +145,8 @@ The managed session file must persist:
 - `claude_session_path` once bound
 - `claude_provider_authority_fingerprint` for the launch-time API/login/route
   authority
+- `ccb_conversation_id`, `ccb_authority_generation`, continuity status, resume
+  compatibility, and prior Provider bindings
 
 These fields are authority for managed Claude runtime recovery.
 
@@ -187,8 +195,19 @@ When `ccb` starts a managed Claude agent:
   home without treating them as conversation identity
 - before adding `--continue`, it must prove that the recorded
   `claude_provider_authority_fingerprint` matches the newly prepared launch;
-  missing or mismatched proof starts a fresh conversation while preserving the
-  private login files and historical conversation data
+  mismatched proof must not directly continue the old native id
+- on a mismatch, the old transcript path must be a regular file inside the
+  current Agent-managed Claude home before it may seed a continuation
+- Claude Code 2.1.220 supports `--resume <id> --fork-session`; when capability
+  probing confirms that flag, startup uses it to create a new native id with
+  imported context and binds that id to the current authority generation
+- if the flag is unavailable or the old path cannot be proven Agent-owned,
+  startup creates a linked fresh binding while preserving the old transcript
+  and must not label the result as a native fork
+- a legacy managed session with no authority fingerprint may continue once
+  when its history and home remain inside the same Agent-managed Claude home;
+  the new launch persists the current fingerprint, so later restarts return to
+  strict matching
 - `ccb restart <agent>` must use normal managed-home/profile preparation and
   this authority check rather than replaying the persisted `start_cmd`
 - it must not use an existing managed provider home as the inherited source
@@ -418,6 +437,12 @@ Managed readers must not widen their search to global `~/.claude/projects`, even
 when they can observe matching workspace paths there. A session outside the
 managed home is a contract violation or legacy-leak diagnostic, not a completion
 source.
+
+An authority-changing continuation is a new bound native session, not direct
+reuse of the old id. `native_fork_continuation` is valid only when startup
+actually selected `--resume <old-id> --fork-session` and the new binding was
+observed. Without that capability proof, the stable CCB conversation remains
+linked to both generations but does not claim native context import.
 
 Every completion path that consumes a Claude hook artifact must bind it to the
 active request and persisted managed Claude session, including normal polling,

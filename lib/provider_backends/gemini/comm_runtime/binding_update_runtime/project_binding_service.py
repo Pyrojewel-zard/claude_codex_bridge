@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from project.identity import compute_ccb_project_id
+from provider_backends.session_authority import remember_bound_provider_session_authority
 
 from ..project_hash import read_gemini_session_id
 from .history_transfer import apply_old_binding_metadata
@@ -38,6 +39,7 @@ def update_project_session_binding(*, project_file: Path, session_path: Path) ->
     change = binding_change(data, session_path=session_path)
     if change is not None:
         apply_binding_change(data, change)
+        remember_bound_provider_session_authority(data, 'gemini')
         write_project_session(project_file, data)
 
     return GeminiBindingState(

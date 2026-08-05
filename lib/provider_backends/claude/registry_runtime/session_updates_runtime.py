@@ -8,6 +8,7 @@ from typing import Optional
 from provider_backends.claude.registry_support.logs import read_session_meta
 from provider_backends.claude.registry_support.pathing import ensure_claude_session_work_dir_fields
 from provider_backends.claude.session_runtime import maybe_auto_extract_old_session
+from provider_backends.session_authority import remember_bound_provider_session_authority
 from provider_sessions.files import safe_write_session
 
 
@@ -73,6 +74,7 @@ def apply_binding_update(
     payload["updated_at"] = timestamp
     if payload.get("active") is False:
         payload["active"] = True
+    remember_bound_provider_session_authority(payload, 'claude')
 
 
 def mark_old_binding(

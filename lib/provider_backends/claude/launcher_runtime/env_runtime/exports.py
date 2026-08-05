@@ -6,6 +6,13 @@ from pathlib import Path
 from provider_profiles import provider_api_env_keys
 
 
+_CLAUDE_CREDENTIAL_ENV_KEYS = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'}
+_CLAUDE_API_ENV_GROUPS = (
+    _CLAUDE_CREDENTIAL_ENV_KEYS,
+    {'ANTHROPIC_BASE_URL'},
+)
+
+
 def build_claude_env_prefix(
     *,
     profile=None,
@@ -17,7 +24,12 @@ def build_claude_env_prefix(
 ) -> str:
     api_keys = provider_api_env_keys("claude")
     inherited_env = env or {}
-    explicit_env = collect_explicit_api_env(profile=profile, extra_env=extra_env, api_keys=api_keys)
+    explicitly_configured = collect_explicit_api_env(
+        profile=profile,
+        extra_env=extra_env,
+        api_keys=api_keys,
+    )
+    explicit_env = dict(explicitly_configured)
     explicit_env = inherit_api_env(
         explicit_env,
         profile=profile,
@@ -30,7 +42,11 @@ def build_claude_env_prefix(
         api_keys=api_keys,
         claude_user_api_env_fn=claude_user_api_env_fn,
     )
-    parts = unset_api_env_parts(profile=profile, api_keys=api_keys)
+    parts = unset_api_env_parts(
+        profile=profile,
+        api_keys=api_keys,
+        explicitly_configured=explicitly_configured,
+    )
 
     explicit_env = reconcile_base_url(
         explicit_env,
@@ -110,6 +126,9 @@ def inherit_api_env(
     if profile is not None and not getattr(profile, "inherit_auth", True):
         inherited.pop("ANTHROPIC_AUTH_TOKEN", None)
         inherited.pop("ANTHROPIC_API_KEY", None)
+    if _has_explicit_credential(explicit_env):
+        for key in _CLAUDE_CREDENTIAL_ENV_KEYS:
+            inherited.pop(key, None)
     return merge_missing_api_env(explicit_env, inherited)
 
 
@@ -128,6 +147,9 @@ def inherit_user_settings_api_env(
     if profile is not None and not getattr(profile, "inherit_auth", True):
         inherited.pop("ANTHROPIC_AUTH_TOKEN", None)
         inherited.pop("ANTHROPIC_API_KEY", None)
+    if _has_explicit_credential(explicit_env):
+        for key in _CLAUDE_CREDENTIAL_ENV_KEYS:
+            inherited.pop(key, None)
     return merge_missing_api_env(explicit_env, inherited)
 
 
@@ -141,10 +163,29 @@ def merge_missing_api_env(explicit_env: dict[str, str], inherited_env: dict[str,
     return merged
 
 
-def unset_api_env_parts(*, profile=None, api_keys: set[str]) -> list[str]:
-    if profile is None or profile.inherit_api:
-        return []
-    return [f"unset {key}" for key in sorted(api_keys)]
+def _has_explicit_credential(env: dict[str, str]) -> bool:
+    return any(str(env.get(key) or '').strip() for key in _CLAUDE_CREDENTIAL_ENV_KEYS)
+
+
+def unset_api_env_parts(
+    *,
+    profile=None,
+    api_keys: set[str],
+    explicitly_configured: dict[str, str] | None = None,
+) -> list[str]:
+    if profile is not None and not profile.inherit_api:
+        cleared = set(api_keys)
+    else:
+        configured = {
+            key
+            for key, value in dict(explicitly_configured or {}).items()
+            if str(value).strip()
+        }
+        cleared: set[str] = set()
+        for group in _CLAUDE_API_ENV_GROUPS:
+            if group & configured:
+                cleared.update(group)
+    return [f"unset {key}" for key in sorted(cleared)]
 
 
 def reconcile_base_url(

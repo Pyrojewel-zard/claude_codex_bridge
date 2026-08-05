@@ -7,6 +7,7 @@ import os
 import platform
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import unicodedata
 
@@ -85,6 +86,7 @@ _CLAUDE_RESTRICTED_PLUGIN_ROOT = 'ccb-restricted-plugins'
 _CLAUDE_EMPTY_PLUGIN_SEED = 'ccb-empty-plugin-seed'
 _CLAUDE_EMPTY_PLUGIN_ROOT = 'ccb-empty-plugins'
 _CLAUDE_PLUGIN_PATH_KEYS = ('installLocation', 'installPath')
+_CLAUDE_AUTH_PROJECTION_MANIFEST = '.ccb-auth-projection.json'
 
 
 def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
@@ -532,12 +534,17 @@ def _materialize_settings(
 ) -> None:
     payload = _projected_settings_payload(source_home / '.claude' / 'settings.json', profile=profile)
     existing = _read_json_object(target_layout.settings_path)
+    previous_projection = _read_claude_auth_projection(target_layout)
     merged = _merge_settings_payload(
         payload,
         existing=existing,
         profile=profile,
         auto_permission=auto_permission,
         command_policy=command_policy,
+        source_owned_auth_env_keys=_manifest_string_set(
+            previous_projection,
+            'projected_env_keys',
+        ),
     )
     if merged is None:
         return
@@ -611,18 +618,68 @@ def _merge_json_objects(
 
 
 def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
-    if not _inherits_auth(profile):
-        _remove_file(target_layout.auth_path)
-        _remove_file(target_layout.credentials_path)
-        _remove_managed_macos_keychain_auth(target_layout)
+    previous = _read_claude_auth_projection(target_layout)
+    previous_files = _manifest_string_set(previous, 'projected_files')
+    credentials_name = _relative_to_home(
+        target_layout.credentials_path,
+        target_layout.home_root,
+    )
+    if not _inherits_external_auth(profile):
+        for _source_auth, target_auth in _source_auth_paths(source_home, target_layout):
+            name = _relative_to_home(target_auth, target_layout.home_root)
+            if name in previous_files:
+                _remove_file(target_auth)
+        if credentials_name in previous_files:
+            _remove_managed_macos_keychain_auth(target_layout)
+        _write_claude_auth_projection(
+            target_layout,
+            source_home=source_home,
+            projected_files=(),
+            projected_env_keys=(),
+            status=(
+                'explicit_api_authority'
+                if _profile_has_explicit_credential(profile)
+                else 'inherit_auth_disabled'
+            ),
+        )
         return
 
+    projected_files: set[str] = set()
     for source_auth, target_auth in _source_auth_paths(source_home, target_layout):
-        try:
-            copy_regular_file(source_auth, target_auth)
-        except OSError:
-            pass
-    _materialize_macos_keychain_auth(target_layout)
+        name = _relative_to_home(target_auth, target_layout.home_root)
+        copied = _copy_claude_auth_source(source_auth, target_auth)
+        if copied:
+            projected_files.add(name)
+        elif name in previous_files and name != credentials_name:
+            _remove_file(target_auth)
+
+    keychain_projected = _materialize_macos_keychain_auth(
+        target_layout,
+        preserve_existing=(
+            credentials_name not in previous_files
+            or credentials_name in projected_files
+        ),
+    )
+    if keychain_projected:
+        projected_files.add(credentials_name)
+    elif credentials_name in previous_files and credentials_name not in projected_files:
+        _remove_file(target_layout.credentials_path)
+
+    projected_env_keys = _source_auth_env_keys(source_home, profile=profile)
+    had_source_projection = bool(previous_files or _manifest_string_set(previous, 'projected_env_keys'))
+    if projected_files or projected_env_keys:
+        status = 'inherited_auth'
+    elif had_source_projection:
+        status = 'source_auth_absent'
+    else:
+        status = 'agent_private_or_unmanaged'
+    _write_claude_auth_projection(
+        target_layout,
+        source_home=source_home,
+        projected_files=tuple(sorted(projected_files)),
+        projected_env_keys=tuple(sorted(projected_env_keys)),
+        status=status,
+    )
 
 
 def _materialize_macos_keychain_preferences(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
@@ -917,15 +974,32 @@ def _clone_jsonish(value: object) -> object:
         return value
 
 
-def _materialize_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None:
-    payload = _read_macos_keychain_claude_credentials()
-    if payload:
-        _write_json_object(target_layout.credentials_path, payload, mode=0o600)
+def _materialize_macos_keychain_auth(
+    target_layout: ClaudeHomeLayout,
+    *,
+    preserve_existing: bool = True,
+) -> bool:
+    try:
+        source_payload = _read_macos_keychain_claude_credentials()
+    except RuntimeError:
+        # A previously projected credential must not be mistaken for an
+        # authoritative external logout when Keychain cannot be read.
+        if not preserve_existing:
+            raise
+        return False
+    payload = source_payload
+    if source_payload:
+        _write_json_object(target_layout.credentials_path, source_payload, mode=0o600)
     elif platform.system() == 'Darwin':
+        if not preserve_existing:
+            _remove_file(target_layout.credentials_path)
+            _remove_managed_macos_keychain_auth(target_layout)
+            return False
         payload = _read_json_object(target_layout.credentials_path)
     if not payload or not isinstance(payload.get('claudeAiOauth'), dict):
-        return
+        return False
     _seed_managed_macos_keychain_auth(target_layout, payload)
+    return source_payload is not None
 
 
 def _read_macos_keychain_claude_credentials() -> dict[str, object] | None:
@@ -936,6 +1010,7 @@ def _read_macos_keychain_claude_credentials() -> dict[str, object] | None:
     if not account:
         return None
 
+    errors: list[str] = []
     for service in _macos_keychain_services():
         try:
             result = subprocess.run(
@@ -945,13 +1020,23 @@ def _read_macos_keychain_claude_credentials() -> dict[str, object] | None:
                 text=True,
                 timeout=5,
             )
-        except Exception:
+        except Exception as exc:
+            errors.append(f'{service}: {type(exc).__name__}')
+            continue
+        if result.returncode == 44:
             continue
         if result.returncode != 0:
+            errors.append(f'{service}: exit {result.returncode}')
             continue
         payload = _json_object_from_text(result.stdout)
         if isinstance(payload.get('claudeAiOauth'), dict):
             return payload
+        errors.append(f'{service}: invalid credential payload')
+    if errors:
+        raise RuntimeError(
+            'cannot determine external Claude Keychain login state: '
+            + '; '.join(errors)
+        )
     return None
 
 
@@ -1063,7 +1148,7 @@ def _remove_managed_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None
 
 
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
-    source_payload = _read_json_object(source_settings_path)
+    source_payload = _read_source_json_object(source_settings_path, label='Claude settings')
     if not source_payload:
         return {} if _needs_settings_stub(profile) else None
 
@@ -1071,7 +1156,7 @@ def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[
     if not _inherits_api(profile):
         for key in provider_api_env_keys('claude'):
             env_payload.pop(key, None)
-    elif not _inherits_auth(profile):
+    elif not _inherits_external_auth(profile):
         env_payload.pop('ANTHROPIC_AUTH_TOKEN', None)
         env_payload.pop('ANTHROPIC_API_KEY', None)
 
@@ -1095,11 +1180,17 @@ def _merge_settings_payload(
     profile=None,
     auto_permission: bool = False,
     command_policy=None,
+    source_owned_auth_env_keys: set[str] | None = None,
 ) -> dict[str, object] | None:
     existing_payload = dict(existing or {})
     projected_payload = dict(projected or {})
     merged = dict(projected_payload)
-    _carry_forward_managed_auth_env(merged, existing_payload, profile=profile)
+    _carry_forward_managed_auth_env(
+        merged,
+        existing_payload,
+        profile=profile,
+        source_owned_keys=source_owned_auth_env_keys or set(),
+    )
 
     for key in _CLAUDE_RUNTIME_SETTINGS_KEYS:
         value = existing_payload.get(key)
@@ -1223,8 +1314,9 @@ def _carry_forward_managed_auth_env(
     existing_payload: dict[str, object],
     *,
     profile=None,
+    source_owned_keys: set[str] | None = None,
 ) -> None:
-    if not _inherits_auth(profile):
+    if _profile_has_explicit_credential(profile):
         return
     existing_env = _read_env_payload(existing_payload)
     if not existing_env:
@@ -1232,15 +1324,20 @@ def _carry_forward_managed_auth_env(
     merged_env = _read_env_payload(merged_payload)
     if _has_projected_auth_authority(merged_env):
         return
+    source_owned = set(source_owned_keys or ())
 
     preserved_any = False
     for key in _CLAUDE_AUTH_ENV_KEYS:
+        if key in source_owned:
+            continue
         value = existing_env.get(key)
         if _env_value_present(value):
             merged_env[key] = value
             preserved_any = True
     if _inherits_api(profile):
         for key in _CLAUDE_API_AUTH_ENV_KEYS:
+            if key in source_owned:
+                continue
             value = existing_env.get(key)
             if _env_value_present(value):
                 merged_env[key] = value
@@ -1316,6 +1413,20 @@ def _inherits_auth(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_auth', True))
 
 
+def _inherits_external_auth(profile) -> bool:
+    return _inherits_auth(profile) and not _profile_has_explicit_credential(profile)
+
+
+def _profile_has_explicit_credential(profile) -> bool:
+    if profile is None:
+        return False
+    env = dict(getattr(profile, 'env', {}) or {})
+    return any(
+        _env_value_present(env.get(key))
+        for key in (*_CLAUDE_AUTH_ENV_KEYS, *_CLAUDE_API_AUTH_ENV_KEYS)
+    )
+
+
 def _inherits_config(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_config', True))
 
@@ -1337,6 +1448,26 @@ def _read_json_object(path: Path) -> dict[str, object]:
         data = _json_object_from_text(path.read_text(encoding='utf-8'))
     except Exception:
         return {}
+    return data
+
+
+def _read_source_json_object(path: Path, *, label: str) -> dict[str, object]:
+    source = Path(path).expanduser()
+    try:
+        metadata = source.lstat()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise RuntimeError(f'cannot inspect inherited {label} source: {source}: {exc}') from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(f'inherited {label} source must be a regular file: {source}')
+    try:
+        text = source.read_text(encoding='utf-8')
+        data = json.loads(text)
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        raise RuntimeError(f'cannot read inherited {label} source: {source}: {exc}') from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f'inherited {label} source must contain an object: {source}')
     return data
 
 
@@ -1417,6 +1548,107 @@ def _source_auth_paths(source_home: Path, target_layout: ClaudeHomeLayout) -> tu
         (source_home / '.claude' / '.credentials.json', target_layout.credentials_path),
         (source_home / '.config' / 'claude-code' / 'auth.json', target_layout.auth_path),
     )
+
+
+def _copy_claude_auth_source(source: Path, target: Path) -> bool:
+    """Copy a present auth file and distinguish absence from read failure."""
+    source_path = Path(source).expanduser()
+    try:
+        metadata = source_path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise RuntimeError(
+            f'cannot inspect inherited Claude auth source: {source_path}: {exc}'
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(
+            f'inherited Claude auth source must be a regular file: {source_path}'
+        )
+    try:
+        copied = copy_regular_file(source_path, target)
+    except OSError as exc:
+        raise RuntimeError(
+            f'cannot copy inherited Claude auth source: {source_path}: {exc}'
+        ) from exc
+    if not copied:
+        raise RuntimeError(f'cannot copy inherited Claude auth source: {source_path}')
+    return True
+
+
+def _source_auth_env_keys(source_home: Path, *, profile) -> set[str]:
+    source_settings = _read_json_object(Path(source_home) / '.claude' / 'settings.json')
+    env = _read_env_payload(source_settings)
+    keys: set[str] = set()
+    if _inherits_external_auth(profile):
+        keys.update(
+            key
+            for key in _CLAUDE_AUTH_ENV_KEYS
+            if _env_value_present(env.get(key))
+        )
+    if _inherits_api(profile):
+        keys.update(
+            key
+            for key in _CLAUDE_API_AUTH_ENV_KEYS
+            if _env_value_present(env.get(key))
+        )
+    return keys
+
+
+def _read_claude_auth_projection(target_layout: ClaudeHomeLayout) -> dict[str, object]:
+    path = target_layout.home_root / _CLAUDE_AUTH_PROJECTION_MANIFEST
+    return _read_json_object(path)
+
+
+def _manifest_string_set(payload: dict[str, object], key: str) -> set[str]:
+    if not _valid_claude_auth_projection(payload):
+        return set()
+    raw = payload.get(key)
+    if not isinstance(raw, list):
+        return set()
+    return {str(item).strip() for item in raw if str(item).strip()}
+
+
+def _valid_claude_auth_projection(payload: dict[str, object]) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and payload.get('schema_version') == 1
+        and payload.get('record_type') == 'ccb_claude_auth_projection'
+    )
+
+
+def _relative_to_home(path: Path, home_root: Path) -> str:
+    try:
+        return str(Path(path).relative_to(Path(home_root)))
+    except ValueError:
+        return str(Path(path))
+
+
+def _write_claude_auth_projection(
+    target_layout: ClaudeHomeLayout,
+    *,
+    source_home: Path,
+    projected_files: tuple[str, ...],
+    projected_env_keys: tuple[str, ...],
+    status: str,
+) -> None:
+    path = target_layout.home_root / _CLAUDE_AUTH_PROJECTION_MANIFEST
+    payload = {
+        'schema_version': 1,
+        'record_type': 'ccb_claude_auth_projection',
+        'status': str(status),
+        'source_home': str(Path(source_home).expanduser()),
+        'projected_files': list(projected_files),
+        'projected_env_keys': list(projected_env_keys),
+    }
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2) + '\n',
+    )
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _sync_tree(source: Path, target: Path) -> None:

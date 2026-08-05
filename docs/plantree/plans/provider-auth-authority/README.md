@@ -73,6 +73,9 @@ execution order.
 - [topics/code-landing-map.md](topics/code-landing-map.md): source-backed
   call-chain analysis, file-level changes, restart state machine, patch
   sequence, tests, and execution-readiness gates.
+- [topics/continuous-inheritance-implementation.md](topics/continuous-inheritance-implementation.md):
+  implementation packages for config precedence, stopped-restart refresh,
+  stable CCB conversations, generation rebinding, migration, and acceptance.
 - [topics/verification-and-rollout.md](topics/verification-and-rollout.md):
   test matrix, migration, rollout, and rollback gates.
 - [decisions/001-one-way-external-authority.md](decisions/001-one-way-external-authority.md):
@@ -89,6 +92,10 @@ execution order.
 - [decisions/006-prepared-authority-before-spawn.md](decisions/006-prepared-authority-before-spawn.md):
   authority and writer ownership become durable before Provider spawn and are
   activated only after binding verification.
+- [decisions/007-continuous-session-rebinding.md](decisions/007-continuous-session-rebinding.md):
+  authority changes refresh the Provider generation without deleting the CCB
+  conversation; native resume is capability-gated and otherwise becomes a
+  linked continuation.
 
 ## Scope
 

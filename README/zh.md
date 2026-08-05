@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.5-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.6-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.5 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.6 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.5/ccb-mobile-v8.5.5.apk)
+- [下载 CCB Mobile v8.5.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -300,12 +300,23 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
-<summary><b>v8.5.5</b> - Provider 切换在 restart 后生效，并安全隔离不同权威状态的会话</summary>
+<summary><b>v8.5.6</b> - 连续继承 Provider 状态且不清除 CCB 对话</summary>
 
-- 执行 `ccb restart &lt;agent&gt;` 即可应用当前 Provider profile、登录状态、API key、endpoint、proxy 和 model；切换权威状态后不再需要 `ccb clear`。
-- 使用 Agent 私有 HMAC 指纹隔离会话续接：Codex 归档不兼容绑定，Claude 和 Gemini 禁止跨权威状态原生 resume，同时保留登录状态和历史文件。
+- 每个 API、token、URL、route 和账号维度都优先使用 CCB 配置；未显式配置的维度才从当前外部 Provider 状态单向读取。
+- 停止后的 Provider 新 generation 会重新读取继承状态；不会反向写入用户 shell、Provider home、IDE、keyring 或远程登录。
+- 权威 generation 变化时保留稳定的 CCB conversation、workspace、队列和历史。同一权威使用原生 resume；Codex/Claude/Gemini 在能力允许时执行 fork/import，否则记录 linked continuation，不隐藏历史。
+- 可恢复受撤回版 v8.5.5 迁移形状影响的旧会话，不会执行 clear；撤回的 v8.5.5 包不再复用。
+- CCB 托管 Codex 自动安装并 arm 内置 `codex-reconnect`；在精确 pane 和 thread 可证明安全时，网络中断或选定模型容量错误最多自动提交一次 `continue`。
 - 新签发的 Relay Host 邀请默认配额从每 24 小时 200 MiB 提升到 1 GiB；显式覆盖值和现有凭据保持不变。
 - 刷新微信社区群二维码和缓存 key；无需迁移配置或数据。
+
+</details>
+
+<details>
+<summary><b>v8.5.5</b> - 已撤回的兼容性版本</summary>
+
+- 该版本已于 2026-08-05 从 GitHub 撤回；旧会话迁移回归曾导致托管对话无法被原生 `resume` 找到。
+- 托管会话请使用 v8.5.6 或 v8.5.4，不要安装 v8.5.5。
 
 </details>
 

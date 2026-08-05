@@ -5,7 +5,10 @@ from pathlib import Path
 
 from provider_backends.session_authority import (
     current_provider_authority_fingerprint,
+    linked_continuation_pending,
     provider_authority_matches,
+    rebind_provider_session_authority,
+    stored_provider_authority_fingerprint,
 )
 from provider_backends.runtime_restore import ProviderRestoreTarget, resolve_restore_context
 
@@ -70,24 +73,66 @@ def project_session_restore_target(
     session = load_project_session_fn(workspace_path, instance=session_instance)
     if session is None:
         return None
-    if not provider_authority_matches(
-        getattr(session, 'data', {}) or {},
+    data = getattr(session, 'data', {}) or {}
+    authority_matches = provider_authority_matches(
+        data,
         'claude',
         authority_fingerprint,
-    ):
-        # A known CCB session under another account/route is evidence that the
-        # private history must not be continued.  Return a fresh target and
-        # prevent the generic history fallback from selecting it again.
-        return ProviderRestoreTarget(
-            run_cwd=existing_dir(getattr(session, 'work_dir', '')) or workspace_path,
-            has_history=False,
-        )
+        allow_legacy_missing=True,
+    )
     session_cwd = existing_dir(getattr(session, 'work_dir', ''))
+    stored_fingerprint = stored_provider_authority_fingerprint(data, 'claude')
+    if stored_fingerprint and not authority_matches:
+        # A known authority change must never inspect or resume native history.
+        # Missing legacy metadata is handled below as adoptable evidence.
+        rebind_provider_session_authority(
+            session,
+            'claude',
+            authority_fingerprint,
+            native_resume_compatible=False,
+        )
+        continuation_id = linked_continuation_session_id(
+            data,
+            managed_home=managed_home,
+        )
+        return ProviderRestoreTarget(
+            run_cwd=session_cwd or workspace_path,
+            has_history=False,
+            continuation_session_id=continuation_id,
+            continuation_mode='fork' if continuation_id else None,
+        )
+    if linked_continuation_pending(data, 'claude'):
+        continuation_id = linked_continuation_session_id(
+            data,
+            managed_home=managed_home,
+        )
+        return ProviderRestoreTarget(
+            run_cwd=session_cwd or workspace_path,
+            has_history=False,
+            continuation_session_id=continuation_id,
+            continuation_mode='fork' if continuation_id else None,
+        )
     if session_cwd is None:
+        if not authority_matches:
+            rebind_provider_session_authority(
+                session,
+                'claude',
+                authority_fingerprint,
+                native_resume_compatible=False,
+            )
         return None
     session_home = getattr(session, 'claude_home_path', None)
     if session_home is None or not _is_within_root(session_home, managed_home):
-        return None
+        # Keep the CCB binding as recoverable linked history, but never resume
+        # a path outside the current Agent-owned home.
+        if not authority_matches or _has_native_binding(data, 'claude'):
+            rebind_provider_session_authority(
+                session,
+                'claude',
+                authority_fingerprint,
+                native_resume_compatible=False,
+            )
+        return ProviderRestoreTarget(run_cwd=session_cwd, has_history=False)
     _session_id, has_history, best_cwd = claude_history_state_fn(
         invocation_dir=session_cwd,
         project_root=session_cwd,
@@ -95,7 +140,23 @@ def project_session_restore_target(
         home_dir=session_home,
     )
     if not has_history:
+        if not authority_matches:
+            rebind_provider_session_authority(
+                session,
+                'claude',
+                authority_fingerprint,
+                native_resume_compatible=False,
+            )
         return None
+    native_compatible = _native_history_binding_is_safe(data, 'claude', session_home)
+    rebind_provider_session_authority(
+        session,
+        'claude',
+        authority_fingerprint,
+        native_resume_compatible=native_compatible,
+    )
+    if not native_compatible:
+        return ProviderRestoreTarget(run_cwd=existing_dir(best_cwd) or session_cwd, has_history=False)
     return ProviderRestoreTarget(run_cwd=existing_dir(best_cwd) or session_cwd, has_history=True)
 
 
@@ -156,10 +217,61 @@ def _normalize_path(value: object) -> Path | None:
             return None
 
 
+def _has_native_binding(data: object, provider: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return bool(
+        str(data.get(f'{provider}_session_id') or '').strip()
+        or str(data.get(f'{provider}_session_path') or '').strip()
+    )
+
+
+def _native_history_binding_is_safe(data: object, provider: str, managed_home: Path) -> bool:
+    if not isinstance(data, dict):
+        return True
+    raw_path = str(data.get(f'{provider}_session_path') or '').strip()
+    if not raw_path:
+        return True
+    try:
+        candidate = Path(raw_path).expanduser().resolve()
+        root = Path(managed_home).expanduser().resolve()
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return candidate.is_file()
+
+
+def linked_continuation_session_id(
+    data: dict[str, object],
+    *,
+    managed_home: Path,
+) -> str | None:
+    session_id = str(
+        data.get('old_claude_session_id')
+        or data.get('claude_session_id')
+        or ''
+    ).strip()
+    raw_path = str(
+        data.get('old_claude_session_path')
+        or data.get('claude_session_path')
+        or ''
+    ).strip()
+    if not session_id or not raw_path:
+        return None
+    try:
+        session_path = Path(raw_path).expanduser().resolve()
+        root = Path(managed_home).expanduser().resolve()
+        session_path.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    return session_id if session_path.is_file() else None
+
+
 __all__ = [
     'claude_history_state',
     'existing_dir',
     'is_ccb_managed_workspace',
+    'linked_continuation_session_id',
     'project_session_restore_target',
     'resolve_claude_restore_target',
 ]

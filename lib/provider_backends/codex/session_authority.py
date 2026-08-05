@@ -5,11 +5,17 @@ import hmac
 import json
 import os
 import secrets
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
 from provider_core.source_home import current_provider_source_home
-from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
+from provider_backends.session_authority import remember_bound_provider_session_authority
+from provider_profiles.codex_home_config import (
+    codex_auth_sidecar_names,
+    codex_provider_authority_fingerprint,
+    codex_source_authority_config_payload,
+)
 from storage.atomic import atomic_write_text
 
 from .start_cmd import extract_resume_session_id
@@ -79,11 +85,19 @@ def resume_authority_matches(
 
 
 def remember_bound_session_authority(data: dict[str, object]) -> None:
+    if remember_bound_provider_session_authority(data, 'codex'):
+        return
     current = stored_provider_authority_fingerprint(data)
     if current:
         data['codex_session_authority_fingerprint'] = current
     else:
         data.pop('codex_session_authority_fingerprint', None)
+    if (
+        str(data.get('ccb_resume_compatibility') or '').strip() == 'linked_continuation'
+        and str(data.get('ccb_continuation_launch_mode') or '').strip() == 'fork'
+    ):
+        data['ccb_resume_compatibility'] = 'native_fork_continuation'
+        data['ccb_continuity_status'] = 'continued_on_new_authority'
 
 
 def has_resume_candidate(data: Mapping[str, object]) -> bool:
@@ -105,17 +119,24 @@ def _runtime_authority_fingerprint(profile, runtime_dir: Path) -> str:
     key_path = state_dir / _AUTHORITY_KEY_NAME
     key = _load_or_create_key(key_path)
     home = _managed_home(profile, state_dir)
-    inherit_auth = bool(getattr(profile, 'inherit_auth', True))
+    profile_env = {
+        str(name): str(value)
+        for name, value in dict(getattr(profile, 'env', {}) or {}).items()
+        if str(value).strip()
+    }
+    explicit_credential = bool(profile_env.get('OPENAI_API_KEY'))
+    inherit_auth = bool(getattr(profile, 'inherit_auth', True)) and not explicit_credential
+    use_managed_auth = not bool(getattr(profile, 'inherit_auth', True)) and not explicit_credential
+    explicit_api_names = _explicit_api_owned_names(profile_env)
     source_home = _source_codex_home()
+    explicit_route = bool(explicit_api_names & {'OPENAI_BASE_URL', 'OPENAI_API_BASE'})
+    source_config = source_home / 'config.toml'
     payload = {
         'profile': {
             'mode': str(getattr(profile, 'mode', 'inherit') or 'inherit'),
             'inherit_api': bool(getattr(profile, 'inherit_api', True)),
             'inherit_auth': bool(getattr(profile, 'inherit_auth', True)),
-            'env': {
-                str(name): str(value)
-                for name, value in sorted(dict(getattr(profile, 'env', {}) or {}).items())
-            },
+            'env': dict(sorted(profile_env.items())),
         },
         'inherited_api_env': {
             name: str(os.environ.get(name) or '')
@@ -129,21 +150,25 @@ def _runtime_authority_fingerprint(profile, runtime_dir: Path) -> str:
                 }
             )
             if bool(getattr(profile, 'inherit_api', True))
+            and name not in explicit_api_names
         },
-        'managed_files': {
-            name: _file_bytes(home / name).hex()
-            for name in _AUTHORITY_FILE_NAMES
-            if (home / name).is_file()
-        } if not inherit_auth else {},
-        'source_auth_files': {
-            name: _file_bytes(source_home / name).hex()
-            for name in _AUTHORITY_FILE_NAMES
-            if (source_home / name).is_file()
-        } if inherit_auth else {},
-        'source_config': (
-            _file_bytes(source_home / 'config.toml').hex()
+        'managed_files': _authority_file_payload(home) if use_managed_auth else {},
+        'source_auth_files': (
+            _authority_file_payload(
+                source_home,
+                names=('auth.json', *codex_auth_sidecar_names(source_home, source_config)),
+            )
+            if inherit_auth
+            else {}
+        ),
+        'source_config_authority': (
+            codex_source_authority_config_payload(
+                source_config,
+                include_route=not explicit_route,
+                include_login=inherit_auth,
+            )
             if bool(getattr(profile, 'inherit_config', True))
-            else ''
+            else {}
         ),
     }
     encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
@@ -170,10 +195,47 @@ def _source_codex_home() -> Path:
 
 
 def _file_bytes(path: Path) -> bytes:
+    source = Path(path).expanduser()
     try:
-        return Path(path).expanduser().read_bytes()
-    except OSError:
+        metadata = source.lstat()
+    except FileNotFoundError:
         return b''
+    except OSError as exc:
+        raise RuntimeError(f'cannot inspect Codex authority source: {source}: {exc}') from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(f'Codex authority source must be a regular file: {source}')
+    try:
+        return source.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f'cannot read Codex authority source: {source}: {exc}') from exc
+
+
+def _authority_file_payload(root: Path, *, names: tuple[str, ...] | None = None) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    for name in names or _AUTHORITY_FILE_NAMES:
+        path = Path(root) / name
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise RuntimeError(f'cannot inspect Codex authority source: {path}: {exc}') from exc
+        payload[name] = _file_bytes(path).hex()
+    return payload
+
+
+def _explicit_api_owned_names(profile_env: Mapping[str, str]) -> set[str]:
+    configured = set(profile_env)
+    groups = (
+        {'OPENAI_API_KEY'},
+        {'OPENAI_BASE_URL', 'OPENAI_API_BASE'},
+        {'OPENAI_ORG_ID', 'OPENAI_ORGANIZATION'},
+    )
+    owned: set[str] = set()
+    for group in groups:
+        if group & configured:
+            owned.update(group)
+    return owned
 
 
 def _load_or_create_key(path: Path) -> bytes:

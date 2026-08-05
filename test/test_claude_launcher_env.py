@@ -55,9 +55,41 @@ def test_build_claude_env_prefix_preserves_auth_token_credential_kind() -> None:
         **common,
     )
 
-    assert explicit == "export ANTHROPIC_AUTH_TOKEN=explicit-token"
+    assert explicit == (
+        "unset ANTHROPIC_API_KEY; unset ANTHROPIC_AUTH_TOKEN; "
+        "export ANTHROPIC_AUTH_TOKEN=explicit-token"
+    )
     assert ambient == "export ANTHROPIC_AUTH_TOKEN=ambient-token"
     assert settings == "export ANTHROPIC_AUTH_TOKEN=settings-token"
+
+
+def test_build_claude_env_prefix_unsets_competing_ambient_aliases_for_explicit_config() -> None:
+    profile = ResolvedProviderProfile(
+        provider='claude',
+        agent_name='agent1',
+        env={
+            'ANTHROPIC_API_KEY': 'explicit-key',
+            'ANTHROPIC_BASE_URL': 'https://explicit.example.test',
+        },
+    )
+
+    result = build_claude_env_prefix(
+        profile=profile,
+        env={
+            'ANTHROPIC_AUTH_TOKEN': 'ambient-token',
+            'ANTHROPIC_BASE_URL': 'https://ambient.example.test',
+        },
+        should_drop_base_url_fn=lambda value: False,
+        claude_user_base_url_fn=lambda: '',
+    )
+
+    assert 'unset ANTHROPIC_API_KEY' in result
+    assert 'unset ANTHROPIC_AUTH_TOKEN' in result
+    assert 'unset ANTHROPIC_BASE_URL' in result
+    assert 'ANTHROPIC_API_KEY=explicit-key' in result
+    assert 'ANTHROPIC_BASE_URL=https://explicit.example.test' in result
+    assert 'ambient-token' not in result
+    assert 'ambient.example.test' not in result
 
 
 def test_write_claude_settings_overlay_returns_none_without_agent_settings(tmp_path) -> None:
@@ -114,7 +146,7 @@ def test_build_claude_env_prefix_emits_passthrough_before_api_env() -> None:
         claude_user_base_url_fn=lambda: "",
     )
 
-    assert result.index("HTTPS_PROXY") < result.index("ANTHROPIC_API_KEY")
+    assert result.index("export HTTPS_PROXY") < result.index("export ANTHROPIC_API_KEY")
 
 
 def test_build_claude_env_prefix_without_agent_env_is_unchanged() -> None:

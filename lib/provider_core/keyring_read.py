@@ -5,6 +5,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+from dataclasses import dataclass
 from typing import Iterable
 
 
@@ -27,6 +28,13 @@ Promise.resolve()
 """
 
 
+@dataclass(frozen=True)
+class KeyringReadResult:
+    status: str
+    value: str | None = None
+    detail: str = ''
+
+
 def read_keyring_password(
     service: str,
     account: str,
@@ -37,42 +45,69 @@ def read_keyring_password(
     timeout: float = 5.0,
 ) -> str | None:
     """Read one external credential without ever opening a write API."""
+    result = read_keyring_password_state(
+        service,
+        account,
+        command_name=command_name,
+        module_names=module_names,
+        extra_module_paths=extra_module_paths,
+        timeout=timeout,
+    )
+    return result.value if result.status == 'present' else None
+
+
+def read_keyring_password_state(
+    service: str,
+    account: str,
+    *,
+    command_name: str,
+    module_names: tuple[str, ...] = ('@github/keytar', 'keytar'),
+    extra_module_paths: Iterable[Path] = (),
+    timeout: float = 5.0,
+) -> KeyringReadResult:
+    """Read one credential while preserving absence/error classification."""
     service_name = str(service or '').strip()
     account_name = str(account or '').strip()
     if not service_name or not account_name:
-        return None
+        return KeyringReadResult('unavailable', detail='service or account is missing')
     if platform.system() == 'Darwin':
-        value = _read_macos_keychain(
+        return _read_macos_keychain_state(
             service_name,
             account_name,
             timeout=timeout,
         )
-        if value:
-            return value
     module_path = _find_keytar_module(
         command_name,
         module_names=module_names,
         extra_module_paths=extra_module_paths,
     )
     if module_path is not None:
-        value = _read_node_keytar(
+        return _read_node_keytar_state(
             module_path,
             service_name,
             account_name,
             timeout=timeout,
         )
-        if value:
-            return value
     if platform.system() == 'Linux':
-        return _read_linux_secret_tool(
+        return _read_linux_secret_tool_state(
             service_name,
             account_name,
             timeout=timeout,
         )
-    return None
+    return KeyringReadResult('unavailable', detail='no supported credential reader is available')
 
 
 def _read_macos_keychain(service: str, account: str, *, timeout: float) -> str | None:
+    result = _read_macos_keychain_state(service, account, timeout=timeout)
+    return result.value if result.status == 'present' else None
+
+
+def _read_macos_keychain_state(
+    service: str,
+    account: str,
+    *,
+    timeout: float,
+) -> KeyringReadResult:
     security = shutil.which('security') or '/usr/bin/security'
     try:
         result = subprocess.run(
@@ -90,9 +125,16 @@ def _read_macos_keychain(service: str, account: str, *, timeout: float) -> str |
             text=True,
             timeout=timeout,
         )
-    except Exception:
-        return None
-    return result.stdout.rstrip('\r\n') if result.returncode == 0 else None
+    except Exception as exc:
+        return KeyringReadResult('error', detail=f'{type(exc).__name__}: {exc}')
+    value = result.stdout.rstrip('\r\n')
+    if result.returncode == 0 and value:
+        return KeyringReadResult('present', value=value)
+    if result.returncode == 44:
+        return KeyringReadResult('absent')
+    if result.returncode == 0:
+        return KeyringReadResult('absent')
+    return KeyringReadResult('error', detail=f'security exited {result.returncode}')
 
 
 def _read_node_keytar(
@@ -102,9 +144,25 @@ def _read_node_keytar(
     *,
     timeout: float,
 ) -> str | None:
+    result = _read_node_keytar_state(
+        module_path,
+        service,
+        account,
+        timeout=timeout,
+    )
+    return result.value if result.status == 'present' else None
+
+
+def _read_node_keytar_state(
+    module_path: Path,
+    service: str,
+    account: str,
+    *,
+    timeout: float,
+) -> KeyringReadResult:
     node = shutil.which('node')
     if not node:
-        return None
+        return KeyringReadResult('unavailable', detail='node is unavailable')
     try:
         result = subprocess.run(
             [
@@ -121,15 +179,29 @@ def _read_node_keytar(
             timeout=timeout,
             env=dict(os.environ),
         )
-    except Exception:
-        return None
-    return result.stdout if result.returncode == 0 and result.stdout else None
+    except Exception as exc:
+        return KeyringReadResult('error', detail=f'{type(exc).__name__}: {exc}')
+    if result.returncode == 0 and result.stdout:
+        return KeyringReadResult('present', value=result.stdout)
+    if result.returncode == 0:
+        return KeyringReadResult('absent')
+    return KeyringReadResult('error', detail=f'keytar reader exited {result.returncode}')
 
 
 def _read_linux_secret_tool(service: str, account: str, *, timeout: float) -> str | None:
+    result = _read_linux_secret_tool_state(service, account, timeout=timeout)
+    return result.value if result.status == 'present' else None
+
+
+def _read_linux_secret_tool_state(
+    service: str,
+    account: str,
+    *,
+    timeout: float,
+) -> KeyringReadResult:
     secret_tool = shutil.which('secret-tool')
     if not secret_tool:
-        return None
+        return KeyringReadResult('unavailable', detail='secret-tool is unavailable')
     try:
         result = subprocess.run(
             [
@@ -145,9 +217,14 @@ def _read_linux_secret_tool(service: str, account: str, *, timeout: float) -> st
             text=True,
             timeout=timeout,
         )
-    except Exception:
-        return None
-    return result.stdout.rstrip('\r\n') if result.returncode == 0 else None
+    except Exception as exc:
+        return KeyringReadResult('error', detail=f'{type(exc).__name__}: {exc}')
+    value = result.stdout.rstrip('\r\n')
+    if result.returncode == 0 and value:
+        return KeyringReadResult('present', value=value)
+    if result.returncode in {0, 1}:
+        return KeyringReadResult('absent')
+    return KeyringReadResult('error', detail=f'secret-tool exited {result.returncode}')
 
 
 def _find_keytar_module(
@@ -182,4 +259,4 @@ def _find_keytar_module(
     return None
 
 
-__all__ = ['read_keyring_password']
+__all__ = ['KeyringReadResult', 'read_keyring_password', 'read_keyring_password_state']

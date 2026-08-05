@@ -24,6 +24,8 @@ def test_codex_session_update_binding_persists_resume_fields(tmp_path: Path) -> 
             {
                 "start_cmd": "export CODEX_RUNTIME_DIR=/tmp/demo; codex -c disable_paste_burst=true",
                 "codex_provider_authority_fingerprint": "fp-1",
+                "ccb_session_id": "ccb-launch-1",
+                "ccb_resume_compatibility": "pending_native_binding",
             },
             ensure_ascii=False,
             indent=2,
@@ -44,11 +46,52 @@ def test_codex_session_update_binding_persists_resume_fields(tmp_path: Path) -> 
     assert data["codex_session_path"] == str(log_path)
     assert data["codex_session_id"] == "123e4567-e89b-12d3-a456-426614174000"
     assert data["codex_session_authority_fingerprint"] == "fp-1"
+    assert data["ccb_conversation_id"] == "ccb-launch-1"
+    assert data["ccb_resume_compatibility"] == "managed_local_history"
     assert data["codex_start_cmd"] == (
         "export CODEX_RUNTIME_DIR=/tmp/demo; "
         "codex -c disable_paste_burst=true resume 123e4567-e89b-12d3-a456-426614174000"
     )
     assert data["start_cmd"] == data["codex_start_cmd"]
+
+
+def test_codex_existing_binding_repairs_pending_native_binding(tmp_path: Path) -> None:
+    cfg = tmp_path / ".ccb"
+    cfg.mkdir(parents=True, exist_ok=True)
+    session_file = cfg / ".codex-session"
+    log_path = tmp_path / "123e4567-e89b-12d3-a456-426614174009.jsonl"
+    log_path.write_text("", encoding="utf-8")
+    session_file.write_text(
+        json.dumps(
+            {
+                "start_cmd": "codex resume 123e4567-e89b-12d3-a456-426614174009",
+                "codex_start_cmd": "codex resume 123e4567-e89b-12d3-a456-426614174009",
+                "codex_provider_authority_fingerprint": "fp-1",
+                "codex_session_authority_fingerprint": "fp-1",
+                "codex_session_path": str(log_path),
+                "codex_session_id": "123e4567-e89b-12d3-a456-426614174009",
+                "ccb_session_id": "ccb-launch-1",
+                "ccb_resume_compatibility": "pending_native_binding",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    session = CodexProjectSession(
+        session_file=session_file,
+        data=json.loads(session_file.read_text(encoding="utf-8")),
+    )
+
+    assert session.update_codex_log_binding(
+        log_path=str(log_path),
+        session_id="123e4567-e89b-12d3-a456-426614174009",
+    ) is True
+
+    data = json.loads(session_file.read_text(encoding="utf-8"))
+    assert data["ccb_conversation_id"] == "ccb-launch-1"
+    assert data["ccb_resume_compatibility"] == "managed_local_history"
+    assert data["codex_session_authority_fingerprint"] == "fp-1"
 
 
 def test_codex_comm_remember_updates_session_file_and_runtime_info(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

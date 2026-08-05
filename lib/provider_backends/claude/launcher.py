@@ -97,6 +97,7 @@ def build_start_cmd(
         provider_start_parts_fn=provider_start_parts,
         cli_supports_flag_fn=claude_cli_supports_flag,
         is_root_user_fn=is_root_user,
+        prepared_state=prepared_state,
     )
 
 

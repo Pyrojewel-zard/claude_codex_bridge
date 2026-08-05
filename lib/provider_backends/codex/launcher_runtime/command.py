@@ -9,8 +9,12 @@ from .command_runtime import build_codex_shell_prefix as _build_codex_shell_pref
 from .command_runtime import build_start_cmd as _build_start_cmd_impl
 from .command_runtime import prepare_codex_home_overrides as _prepare_codex_home_overrides_impl
 from .command_runtime import resolve_codex_home_layout as _resolve_codex_home_layout_impl
-from .command_runtime.managed_app_server import build_managed_app_server_command, supports_managed_app_server
-from .session_paths import load_resume_session_id
+from .command_runtime.managed_app_server import (
+    build_managed_app_server_command,
+    supports_managed_app_server,
+    supports_session_fork,
+)
+from .session_paths import load_linked_continuation_session_id, load_resume_session_id
 
 
 def build_start_cmd(
@@ -31,7 +35,9 @@ def build_start_cmd(
         prepare_codex_home_overrides_fn=prepare_codex_home_overrides,
         provider_start_parts_fn=provider_start_parts,
         load_resume_session_id_fn=load_resume_session_id,
+        load_linked_continuation_session_id_fn=load_linked_continuation_session_id,
         build_codex_shell_prefix_fn=build_codex_shell_prefix,
+        supports_session_fork_fn=supports_session_fork,
         supports_managed_app_server_fn=supports_managed_app_server,
         build_managed_app_server_command_fn=build_managed_app_server_command,
     )

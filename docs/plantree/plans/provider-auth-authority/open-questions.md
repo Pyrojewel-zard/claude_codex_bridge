@@ -85,3 +85,19 @@ Only unresolved design questions belong here.
 20. When a visible Provider process is alive but its writer lease cannot be
     proven after daemon recovery, should CCB terminate it immediately or park
     the Agent and require explicit operator recovery?
+
+## Session Continuity
+
+21. For each Provider and exact CLI version, which account/API/route changes
+    permit the same native session id to resume, and which require a new native
+    session linked to the stable CCB conversation?
+22. When native rebind is incompatible, what is the minimum lossless
+    continuation payload: full local transcript, bounded summary plus recent
+    turns, or a Provider-specific import format? The old transcript must remain
+    independently resume-visible regardless of this choice.
+23. Should `resume` show one stable conversation with generation details on
+    demand, or list each Provider generation as a child entry? The default must
+    not make an authority change look like a clear.
+24. How should a crash-time continuation preserve an in-flight turn that the
+    Provider may have accepted but CCB did not commit? Duplicate submission and
+    silent turn loss must both be detectable.

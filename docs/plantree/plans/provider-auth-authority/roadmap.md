@@ -1,16 +1,15 @@
 # Provider Authentication Authority Roadmap
 
-Date: 2026-08-04
+Date: 2026-08-05
 
 ## Status Summary
 
-- Current status: implementation started; the first restart/session-authority
-  slice is landed in the worktree and under verification.
-- Current phase: qualify the shared fresh-restart path and Codex/Claude/Gemini
-  private credential/route session fences, then continue the unresolved writer
-  and Provider-capability work.
-- Next target: close post-spawn failure cleanup and broaden capability
-  qualification before enforcement.
+- Current status: the v8.5.5 compatibility repair and the continuous-
+  inheritance slice are implemented in the worktree; replacement release
+  preparation is in progress.
+- Current phase: land the qualified Codex/Claude/Gemini authority projection,
+  generation rebinding, and bundled reconnect behavior as v8.5.6.
+- Next target: commit/push v8.5.6 source and install the replacement locally.
 
 ## Done
 
@@ -61,19 +60,41 @@ Date: 2026-08-04
 - Added a Codex Agent-private HMAC authority generation covering explicit API
   profile/environment state and applicable inherited or Agent-private auth.
 - Fenced Codex resume and active `sessions/` namespace reuse on API key,
-  endpoint, source login, or relevant source config changes; incompatible
-  sessions are archived and their binding fields are scrubbed.
+  endpoint, source login, or relevant source config changes; authority changes
+  retain the namespace and move only the incompatible native binding into CCB
+  continuity history.
 - Preserved resolved Codex home/session-root metadata while upgrading an
   unfenced legacy binding, so fail-closed rotation does not fall back to a
   different managed home.
 - Added Agent-private HMAC authority fingerprints and native resume fences for
   Claude and Gemini, covering inherited API/login files and selected route or
   account metadata.
+- Accepted continuous session rebinding as the target: authority changes must
+  not delete or hide CCB history; compatible native sessions rebind and
+  incompatible native sessions become linked continuation generations.
+- Implemented the stable CCB conversation/generation record, legacy adoption,
+  v8.5.5 archive recovery, capability-gated Codex fork/Claude fork/Gemini
+  session-file import, and linked-continuation fallback.
+- Implemented stopped restart through the normal provider preparation path,
+  including one-way source projection refresh and explicit-authority
+  suppression of competing inherited credentials.
+- Bundled `codex-reconnect` installation, automatic activation, shutdown, and
+  bounded capacity/network continuation are integrated and covered by focused
+  tests.
+- An external inherited-state source-runtime project advanced authority
+  generation without changing its stable CCB conversation, preserved the old
+  transcript in place, produced a native Codex fork with matching user-message
+  history, resumed the same current thread on same-authority restart, created
+  no archive, armed reconnect, and shut down without process residue.
+- The final full source suite passed `6188` tests and `4` subtests with `2`
+  skipped in the qualification dependency environment.
 
 ## In Progress
 
-- Verify the fresh manual restart path against an inspectable source runtime
-  project and current inherited Codex state.
+- Prepare and land the v8.5.6 replacement commit, including bilingual release
+  notes and synchronized package/mobile/workflow metadata.
+- Complete organic real-fault qualification for `codex-reconnect` without
+  manufacturing provider pressure.
 - Close the writable-home boundary for `provider_profile.home`.
 - Define the stopped-Agent private-login workflow and legacy-session restart
   behavior.
@@ -84,6 +105,8 @@ Date: 2026-08-04
   literal secret-bearing persisted shell commands.
 - Define writer-lease crash recovery and process-fencing details across visible
   and headless execution.
+- Extend the same continuity index and capability table to Providers beyond
+  the current Codex/Claude/Gemini slice.
 
 ## Next
 
@@ -127,9 +150,10 @@ and no adapter performs ad hoc fallback afterward.
 3. Keep static API-key Providers on the simpler one-way snapshot path.
 4. Ensure one Agent credential has one refresh writer even when CCB supports
    both a visible pane and headless execution.
-5. Fence provider-session resume when synchronized account or credential
-   authority changes, so a conversation cannot silently continue under the
-   wrong account authority.
+5. Evaluate native resume compatibility when synchronized account or
+   credential authority changes. Preserve the stable CCB conversation in all
+   cases: rebind a proven-compatible native session or create a linked
+   continuation while retaining the old transcript in `resume`.
 6. Enforce writer leases for visible/headless refresh-capable processes and
    reconcile them after daemon restart.
 
@@ -160,6 +184,10 @@ without touching external Provider state.
    never validate logout isolation against a real user's normal login.
 4. Stage compatibility diagnostics before enforcing new fail-closed behavior.
 5. Update release notes and migration guidance.
+6. Verify same-authority resume, compatible cross-generation rebind,
+   incompatible linked continuation, legacy adoption, and v8.5.5 archive
+  recovery without history loss. The landed slice has unit and inspectable
+  external live-project coverage.
 
 Gate: zero external mutation, zero competing credential authority, and no
 unsupported claim of independent OAuth sessions.

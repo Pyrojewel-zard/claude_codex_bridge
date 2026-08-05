@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from project.identity import compute_ccb_project_id
+from provider_backends.session_authority import remember_bound_provider_session_authority
 
 from .pathing import now_str
 
@@ -24,6 +25,7 @@ def update_gemini_binding(session, *, session_path: Path | None, session_id: str
         return
 
     record_binding_change(session.data, change)
+    remember_bound_provider_session_authority(session.data, 'gemini')
     trigger_transfer_if_needed(session, change)
     mark_session_updated(session.data)
     session._write_back()

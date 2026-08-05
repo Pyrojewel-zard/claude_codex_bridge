@@ -42,6 +42,35 @@ def load_resume_session_id(
     return payload_resume_session_id(data)
 
 
+def load_linked_continuation_session_id(
+    spec,
+    runtime_dir: Path,
+    *,
+    current_fingerprint: str,
+) -> str | None:
+    """Return a transcript that should seed a new native Codex fork."""
+    session_path = preferred_session_path(spec, runtime_dir)
+    if session_path is None:
+        return None
+    data = read_session_payload(session_path)
+    if not isinstance(data, dict):
+        return None
+    if str(data.get('ccb_resume_compatibility') or '').strip() != 'linked_continuation':
+        return None
+    if str(data.get('codex_provider_authority_fingerprint') or '').strip() != str(current_fingerprint or '').strip():
+        return None
+    if str(data.get('codex_session_id') or '').strip() or str(data.get('codex_session_path') or '').strip():
+        return None
+    old_id = str(data.get('old_codex_session_id') or '').strip()
+    old_path = _path_or_none(data.get('old_codex_session_path'))
+    session_root = _path_or_none(data.get('codex_session_root'))
+    if not old_id or old_path is None or session_root is None:
+        return None
+    if not old_path.is_file() or not _is_within(old_path, session_root):
+        return None
+    return old_id
+
+
 def agent_session_path(spec, runtime_dir: Path) -> Path | None:
     ccb_dir = find_project_ccb_dir(runtime_dir)
     if ccb_dir is None:
@@ -199,4 +228,9 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-__all__ = ['load_resume_session_id', 'session_file_for_runtime_dir', 'state_dir_for_runtime_dir']
+__all__ = [
+    'load_linked_continuation_session_id',
+    'load_resume_session_id',
+    'session_file_for_runtime_dir',
+    'state_dir_for_runtime_dir',
+]

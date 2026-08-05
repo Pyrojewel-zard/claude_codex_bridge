@@ -1,6 +1,44 @@
 # Changelog
 
+## v8.5.6 (2026-08-05)
+
+### Continuous Provider Inheritance
+
+- **Explicit Authority Wins Per Dimension**: CCB uses configured API, token,
+  URL, route, account, and Provider profile values first. Only dimensions not
+  explicitly owned are read from the current external Provider environment or
+  login state.
+- **Restart Refreshes Without Reverse Effects**: a stopped Provider generation
+  is rebuilt from the current external snapshot and private projection. CCB
+  never writes the inherited result back to the user's shell, Provider home,
+  IDE, keyring, or remote login.
+- **Conversation History Survives Authority Changes**: same-authority launches
+  use native resume. Codex, Claude, and Gemini use a qualified fork/import path
+  when available; otherwise CCB records a linked continuation while preserving
+  the stable conversation, workspace, queue, session record, and transcript
+  history. The withdrawn v8.5.5 archive shape is recovered only with matching
+  ownership evidence.
+
+### Codex Reconnect
+
+- **Bundled Automatic Activation**: CCB installs and arms `codex-reconnect`
+  automatically for managed Codex panes after a concrete thread binding.
+- **Bounded Capacity Recovery**: terminal network and selected-model capacity
+  failures are classified only for the exact thread and pane, then receive at
+  most one literal `continue` after the existing safety and readiness gates.
+
+### Withdrawal And Compatibility
+
+- **v8.5.5 Withdrawn**: the GitHub release was withdrawn on 2026-08-05 after a
+  legacy-session migration regression made existing managed conversations
+  unavailable to native `resume`. v8.5.6 is the replacement; no manual clear or
+  history deletion is required.
+
 ## v8.5.5 (2026-08-05)
+
+> Withdrawn from GitHub on 2026-08-05 after a legacy-session migration
+> regression made existing managed conversations unavailable to native resume.
+> Use v8.5.4 until the replacement release is published.
 
 ### Provider State Refresh
 

@@ -95,7 +95,18 @@ Authentication projection is one-way copy-only:
 - no write-through path to the source account;
 - no diagnostic export of copied secrets;
 - preserve compatible agent-local login state when the provider-specific
-  contract permits it.
+  contract permits it;
+- record projected files and auth-bearing fields in an owner-only, non-secret
+  provenance manifest;
+- on confirmed source absence, remove only entries recorded as source-owned;
+- on a malformed/missing manifest, preserve unmarked local state rather than
+  inferring ownership from path or content;
+- on a source read, permission, parse, or credential-service error, fail the
+  launch preparation without deleting the prior projection.
+
+Auth source state is tri-state: `present`, `authoritative_absent`, or
+`unknown_error`. Projection and cleanup must consume the same classified source
+snapshot; a second unversioned read must not turn an error into absence.
 
 ## 4. Ownership And Conflict Rules
 
@@ -178,3 +189,7 @@ Changes to provider projection must test:
 - secret classification and diagnostic exclusion;
 - legacy-path migration with mixed old/new state;
 - visible and headless processes consuming the same resolved root.
+- owner-only auth provenance mode and malformed-manifest preservation;
+- confirmed source logout removing only source-owned auth;
+- source-read failure preserving the previous projection and failing closed;
+- source bytes, mode, and timestamps remaining unchanged across projection.

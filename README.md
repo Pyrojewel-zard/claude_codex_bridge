@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.5-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.6-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.5 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.6 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.5/ccb-mobile-v8.5.5.apk)
+- [Download CCB Mobile v8.5.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -309,12 +309,23 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
-<summary><b>v8.5.5</b> - Provider switches apply on restart, with authority-safe session isolation</summary>
+<summary><b>v8.5.6</b> - Continuous Provider inheritance without clearing CCB conversations</summary>
 
-- Apply current Provider profile, login, API key, endpoint, proxy, and model state with `ccb restart &lt;agent&gt;`; switching authority no longer requires `ccb clear`.
-- Fence session continuation with an Agent-private HMAC fingerprint: Codex archives incompatible bindings, while Claude and Gemini suppress cross-authority native resume without deleting login state or history.
+- Resolve each configured API, token, URL, route, and account dimension from CCB-local authority first, then read only the missing dimensions from the current external Provider state.
+- Refresh inherited state on a stopped Provider generation without writing back to the user's shell, Provider home, IDE, keyring, or remote login.
+- Keep one stable CCB conversation and its workspace, queue, and history across authority generations. Same-authority sessions use native resume; supported Codex/Claude/Gemini import or fork when safe, otherwise CCB records a linked continuation instead of hiding history.
+- Recover usable sessions affected by the withdrawn v8.5.5 migration shape without clearing them. The withdrawn v8.5.5 package is not reused.
+- Install and automatically arm bundled `codex-reconnect` for managed Codex panes; terminal network and selected-model capacity failures receive one bounded `continue` recovery when the exact pane and thread are proven safe.
 - Raise the default quota for newly issued Relay Host invitations from 200 MiB to 1 GiB per 24-hour window; explicit overrides and existing credentials remain unchanged.
 - Refresh the WeChat community QR image and cache key. No configuration or data migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.5.5</b> - Withdrawn compatibility release</summary>
+
+- Withdrawn from GitHub on 2026-08-05 after a legacy-session migration regression made existing managed conversations unavailable to native `resume`.
+- Use v8.5.6 or v8.5.4; do not install v8.5.5 for managed sessions.
 
 </details>
 

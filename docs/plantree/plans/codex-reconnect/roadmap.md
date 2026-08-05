@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-07-22
+Date: 2026-08-05
 
 ## Done
 
@@ -49,11 +49,30 @@ Date: 2026-07-22
   session recorded its submitted `continue` and started the next turn.
 - Release commit `1134122` passed the final 46-test and static-check gate and
   was pushed to GitHub `origin/main` on 2026-07-22.
+- Captured Codex 0.145.0 terminal capacity failures now have deterministic
+  coverage: `task_complete.error` and SQLite `Turn error` are both classified
+  as `serverOverloaded`, then gated by two primary probes before one literal
+  `continue`.
+- Version 0.3.4 was synchronized to the standalone authority and CCB vendored
+  copy, passed both 55-test suites, installed through the atomic user-local
+  installer, and rebound the current pane's only watcher to `armed`.
+- Version 0.3.5 waits for delayed prompt readiness, supersedes only the same
+  thread/socket/pane watcher after a managed pane PID restart, and marks the
+  current watcher instance `off` on `SIGTERM`/`SIGINT`.
+- CCB automatic activation after authoritative thread binding is implemented
+  with one successful enable per bridge/thread, bounded activation retry, and
+  best-effort bridge shutdown.
+- A real source-runtime CCB project auto-armed without `$reconnect on`, retained
+  its Codex thread through restart, replaced the old pane-generation watcher,
+  and shut down to `unmounted` with reconnect `off` and zero runtime residue.
+- Standalone and vendored deterministic suites pass 59 tests; CCB bridge,
+  autostart, and install integration passes 15 targeted tests.
+- Standalone 0.3.5 commit `387b88f` is published on GitHub `origin/main`.
 
 ## In Progress
 
-- Post-fix real network-fault and organically occurring `serverOverloaded`
-  qualification through an actual tmux Codex session.
+- Perform post-fix real network-fault and organically occurring
+  `serverOverloaded` qualification through an actual tmux Codex session.
 
 ## Next
 
