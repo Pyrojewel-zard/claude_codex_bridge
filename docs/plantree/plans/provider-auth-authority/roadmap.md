@@ -4,12 +4,13 @@ Date: 2026-08-05
 
 ## Status Summary
 
-- Current status: the v8.5.5 compatibility repair and the continuous-
-  inheritance slice are implemented in the worktree; replacement release
-  preparation is in progress.
-- Current phase: land the qualified Codex/Claude/Gemini authority projection,
-  generation rebinding, and bundled reconnect behavior as v8.5.6.
-- Next target: commit/push v8.5.6 source and install the replacement locally.
+- Current status: the v8.5.5 compatibility repair and continuous-inheritance
+  slice are committed and pushed as v8.5.6 source commit `8b35d868`, then
+  installed locally in source/dev mode.
+- Current phase: qualify organic reconnect faults and continue the remaining
+  credential-writer and Provider-capability boundaries.
+- Next target: organic real-fault qualification and the arbitrary
+  `provider_profile.home` writable-state boundary.
 
 ## Done
 
@@ -88,11 +89,15 @@ Date: 2026-08-05
   no archive, armed reconnect, and shut down without process residue.
 - The final full source suite passed `6188` tests and `4` subtests with `2`
   skipped in the qualification dependency environment.
+- The reviewed v8.5.6 source, bilingual release notes, and synchronized package,
+  mobile, and workflow metadata were committed and pushed to `origin/main` as
+  `8b35d868f402e5f68929782a6c2df657a8750d21`.
+- The global source/dev installation reports CCB `8.5.6` at `8b35d868` and
+  bundled `codex-reconnect 0.3.5`; the existing managed watcher remained
+  `armed`. No v8.5.6 tag, GitHub Release, or npm publication was created.
 
 ## In Progress
 
-- Prepare and land the v8.5.6 replacement commit, including bilingual release
-  notes and synchronized package/mobile/workflow metadata.
 - Complete organic real-fault qualification for `codex-reconnect` without
   manufacturing provider pressure.
 - Close the writable-home boundary for `provider_profile.home`.

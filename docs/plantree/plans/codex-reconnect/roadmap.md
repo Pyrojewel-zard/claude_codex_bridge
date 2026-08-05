@@ -68,6 +68,10 @@ Date: 2026-08-05
 - Standalone and vendored deterministic suites pass 59 tests; CCB bridge,
   autostart, and install integration passes 15 targeted tests.
 - Standalone 0.3.5 commit `387b88f` is published on GitHub `origin/main`.
+- CCB automatic install/activation and the vendored 0.3.5 implementation were
+  published on CCB `origin/main` as v8.5.6 source commit `8b35d868`, then
+  installed locally with both installed version checks passing and the current
+  watcher remaining `armed`.
 
 ## In Progress
 

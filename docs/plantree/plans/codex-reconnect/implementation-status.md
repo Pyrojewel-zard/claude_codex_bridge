@@ -4,7 +4,9 @@ Date: 2026-08-05
 
 ## Current Phase
 
-CCB automatic installation and activation are implemented in the source tree.
+CCB automatic installation and activation are implemented, committed, and
+published on `origin/main` in CCB v8.5.6 source commit
+[`8b35d868`](https://github.com/SeemSeam/claude_codex_bridge/commit/8b35d868f402e5f68929782a6c2df657a8750d21).
 The bridge requests bundled `on` only after a concrete managed thread is bound,
 records one successful enable per bridge/thread, retries startup failures with
 bounded backoff, preserves a later explicit `off` or circuit-open state, and
@@ -24,7 +26,7 @@ Codex 0.145.0: terminal overload is emitted as a nested `error` object on
 `task_complete`, and the exact `Selected model is at capacity` text is also
 recognized by the SQLite fallback. The source watcher now routes both shapes
 through the existing two-probe, single-literal-`continue` state machine. The
-0.3.4 user-local installer completed on 2026-08-05, and the current managed
+0.3.5 user-local installation completed on 2026-08-05, and the current managed
 Codex pane was rebound from stale pane PID `2997587` to current PID `30678`.
 Its only live watcher reached `armed`; organic real-provider requalification
 remains open.
@@ -147,7 +149,7 @@ and are published on `origin/main`.
   cursor row/column and placeholder style instead of comparing placeholder
   text, with a final conditional cursor check inside the tmux send command.
 - Local installation resolves to `~/.local/bin/codex-reconnect`, reports
-  version 0.3.4, and the installed source/skill files match the standalone
+  version 0.3.5, and the installed source/skill files match the standalone
   working tree. The replaced CCB wrapper is retained at
   `~/.local/share/codex-reconnect-wrapper-backup.VG8QmJ/codex-reconnect`.
 - The affected live pane was rebound on 0.3.4 and reached `armed` with watcher
@@ -173,6 +175,10 @@ and are published on `origin/main`.
   suite, Black, Python compilation, both installer shell syntax checks, and
   cached-diff validation; `git ls-remote` confirmed the same hash at
   `refs/heads/main`.
+- CCB v8.5.6 source commit `8b35d868f402e5f68929782a6c2df657a8750d21`
+  was pushed to `origin/main` and installed locally in source/dev mode. The
+  installed commands report CCB `8.5.6` and `codex-reconnect 0.3.5`; watcher
+  PID `466234` remained live with `status=armed` after installation.
 
 ## Open Qualification
 
