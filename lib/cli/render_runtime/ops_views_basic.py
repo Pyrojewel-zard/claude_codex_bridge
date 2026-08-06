@@ -630,6 +630,36 @@ def render_clear(summary) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def render_compact(summary) -> tuple[str, ...]:
+    results = tuple(summary.get('results', ()) or ()) if isinstance(summary, Mapping) else ()
+    compacted_count = sum(1 for item in results if item.get('status') == 'compacted')
+    skipped_count = sum(1 for item in results if item.get('status') == 'skipped')
+    blocked_count = sum(1 for item in results if item.get('status') == 'blocked')
+    unsupported_count = sum(1 for item in results if item.get('status') == 'unsupported')
+    failed_count = sum(1 for item in results if item.get('status') == 'failed')
+    lines = [
+        f'compact_status: {summary.get("status", "unknown") if isinstance(summary, Mapping) else "unknown"}',
+        f'compacted_count: {compacted_count}',
+        f'skipped_count: {skipped_count}',
+        f'blocked_count: {blocked_count}',
+        f'unsupported_count: {unsupported_count}',
+        f'failed_count: {failed_count}',
+    ]
+    for item in results:
+        agent = str(item.get('agent') or '')
+        status = str(item.get('status') or '')
+        provider = str(item.get('provider') or '')
+        pane_id = str(item.get('pane_id') or '')
+        reason = str(item.get('reason') or '')
+        command = str(item.get('command') or '')
+        detail = f'compact_agent: agent={agent} status={status}'
+        for key, value in (('provider', provider), ('pane_id', pane_id), ('command', command), ('reason', reason)):
+            if value:
+                detail += f' {key}={value}'
+        lines.append(detail)
+    return tuple(lines)
+
+
 def render_restart(summary) -> tuple[str, ...]:
     payload = summary if isinstance(summary, Mapping) else {}
     status = str(payload.get('restart_status') or payload.get('status') or 'unknown')
@@ -1156,6 +1186,7 @@ def render_ps(payload: Mapping[str, object]) -> tuple[str, ...]:
 
 __all__ = [
     'render_clear',
+    'render_compact',
     'render_cleanup',
     'render_config_validate',
     'render_doctor_bundle',

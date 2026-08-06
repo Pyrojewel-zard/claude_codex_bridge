@@ -7,6 +7,7 @@ from cli.models import (
     ParsedAgentCommand,
     ParsedCancelCommand,
     ParsedClearCommand,
+    ParsedCompactCommand,
     ParsedCleanupCommand,
     ParsedConfigUiCommand,
     ParsedConfigValidateCommand,
@@ -73,6 +74,18 @@ def parse_clear(tokens: list[str], *, project: str | None, error_type) -> Parsed
     if tuple(item.lower() for item in agent_names) == ('all',):
         agent_names = ()
     return ParsedClearCommand(project=project, agent_names=agent_names)
+
+
+def parse_compact(tokens: list[str], *, project: str | None, error_type) -> ParsedCompactCommand:
+    parser = argparse.ArgumentParser(prog='ccb compact', add_help=False)
+    parser.add_argument('agent_names', nargs='*')
+    namespace = parse_args(parser, tokens, error_message='invalid compact command', error_type=error_type)
+    agent_names = tuple(str(item).strip() for item in namespace.agent_names if str(item).strip())
+    if 'all' in {item.lower() for item in agent_names} and len(agent_names) > 1:
+        raise error_type('compact target "all" cannot be combined with agent names')
+    if tuple(item.lower() for item in agent_names) == ('all',):
+        agent_names = ()
+    return ParsedCompactCommand(project=project, agent_names=agent_names)
 
 
 def parse_restart(tokens: list[str], *, project: str | None, error_type) -> ParsedRestartCommand:

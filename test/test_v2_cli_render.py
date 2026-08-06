@@ -6,6 +6,7 @@ from cli.render import (
     render_ack,
     render_ask,
     render_clear,
+    render_compact,
     render_doctor,
     render_doctor_bundle,
     render_fault_arm,
@@ -108,6 +109,27 @@ def test_render_clear_includes_agent_results() -> None:
         'clear_agent: agent=agent1 status=cleared pane_id=%1',
         'clear_agent: agent=agent2 status=skipped reason=runtime_missing',
         'clear_agent: agent=agent3 status=failed pane_id=%3 reason=send failed',
+    )
+
+
+def test_render_compact_includes_provider_commands_and_counts() -> None:
+    assert render_compact(
+        {
+            'status': 'unsupported',
+            'results': [
+                {'agent': 'agent1', 'status': 'compacted', 'provider': 'codex', 'command': '/compact'},
+                {'agent': 'agent2', 'status': 'unsupported', 'provider': 'zai', 'reason': 'provider_native_compact_unverified'},
+            ],
+        }
+    ) == (
+        'compact_status: unsupported',
+        'compacted_count: 1',
+        'skipped_count: 0',
+        'blocked_count: 0',
+        'unsupported_count: 1',
+        'failed_count: 0',
+        'compact_agent: agent=agent1 status=compacted provider=codex command=/compact',
+        'compact_agent: agent=agent2 status=unsupported provider=zai reason=provider_native_compact_unverified',
     )
 
 

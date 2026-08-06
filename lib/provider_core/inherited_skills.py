@@ -13,14 +13,14 @@ from provider_core.projected_assets import (
 
 
 _REQUIRED_CONTROL_SKILLS = {
-    'claude': ('ask', 'ccb-clear'),
-    'codex': ('ask', 'ccb-clear', 'reconnect'),
-    'droid': ('ask', 'ccb-clear'),
-    'gemini': ('ask', 'ccb-clear'),
-    'grok': ('ask', 'ccb-clear'),
-    'kimi': ('ask', 'ccb-clear'),
-    'qoder': ('ask', 'ccb-clear'),
-    'qoderclicn': ('ask', 'ccb-clear'),
+    'claude': ('ask', 'ccb-clear', 'ccb-compact'),
+    'codex': ('ask', 'ccb-clear', 'ccb-compact', 'reconnect'),
+    'droid': ('ask', 'ccb-clear', 'ccb-compact'),
+    'gemini': ('ask', 'ccb-clear', 'ccb-compact'),
+    'grok': ('ask', 'ccb-clear', 'ccb-compact'),
+    'kimi': ('ask', 'ccb-clear', 'ccb-compact'),
+    'qoder': ('ask', 'ccb-clear', 'ccb-compact'),
+    'qoderclicn': ('ask', 'ccb-clear', 'ccb-compact'),
 }
 _PACKAGED_SKILL_PROVIDER_ALIASES = {
     # Both released Qoder provider keys consume the same CCB control contract.

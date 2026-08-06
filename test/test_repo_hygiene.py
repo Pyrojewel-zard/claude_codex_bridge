@@ -108,13 +108,13 @@ def test_inherited_skill_set_is_minimal() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
     expected = {
-        "claude_skills": {"ask", "ccb-clear"},
-        "codex_skills": {"ask", "ccb-clear", "reconnect"},
-        "droid_skills": {"ask", "ccb-clear"},
-        "gemini_skills": {"ask", "ccb-clear"},
-        "grok_skills": {"ask", "ccb-clear"},
-        "kimi_skills": {"ask", "ccb-clear"},
-        "qoder_skills": {"ask", "ccb-clear"},
+        "claude_skills": {"ask", "ccb-clear", "ccb-compact"},
+        "codex_skills": {"ask", "ccb-clear", "ccb-compact", "reconnect"},
+        "droid_skills": {"ask", "ccb-clear", "ccb-compact"},
+        "gemini_skills": {"ask", "ccb-clear", "ccb-compact"},
+        "grok_skills": {"ask", "ccb-clear", "ccb-compact"},
+        "kimi_skills": {"ask", "ccb-clear", "ccb-compact"},
+        "qoder_skills": {"ask", "ccb-clear", "ccb-compact"},
     }
     for provider_root, expected_names in expected.items():
         skill_root = repo_root / "inherit_skills" / provider_root
@@ -136,13 +136,13 @@ def test_install_scripts_current_skill_lists_are_minimal() -> None:
     install_sh = (repo_root / "install.sh").read_text(encoding="utf-8")
     install_ps1 = (repo_root / "install.ps1").read_text(encoding="utf-8")
 
-    assert 'local ccb_skills="ask ccb-config ccb-clear reconnect"' in install_sh
+    assert 'local ccb_skills="ask ccb-config ccb-clear ccb-compact reconnect"' in install_sh
     assert 'local legacy_skills="ccb-config ' in install_sh
     assert 'local ccb_skills="ask ping' not in install_sh
-    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear", "reconnect")' in install_ps1
+    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear", "ccb-compact", "reconnect")' in install_ps1
     assert '$legacySkills = @("ccb-config",' in install_ps1
     assert '$ccbSkills = @("ask", "ccb-config", "ping"' not in install_ps1
-    assert '$droidSkills = @("ask", "ccb-clear")' in install_ps1
+    assert '$droidSkills = @("ask", "ccb-clear", "ccb-compact")' in install_ps1
 
 
 def test_install_sh_excludes_git_worktree_file() -> None:

@@ -120,6 +120,11 @@ def test_source_dev_install_links_live_bin_and_ask_skill_asset(tmp_path: Path) -
     assert not ccb_clear_skill_md.is_symlink()
     assert "name: ccb-clear" in ccb_clear_skill_md.read_text(encoding="utf-8")
 
+    ccb_compact_skill_md = tmp_path / "codex-home" / "skills" / "ccb-compact" / "SKILL.md"
+    assert ccb_compact_skill_md.is_file()
+    assert not ccb_compact_skill_md.is_symlink()
+    assert "name: ccb-compact" in ccb_compact_skill_md.read_text(encoding="utf-8")
+
     reconnect_skill_md = tmp_path / "codex-home" / "skills" / "reconnect" / "SKILL.md"
     assert reconnect_skill_md.is_file()
     assert not reconnect_skill_md.is_symlink()
@@ -182,6 +187,7 @@ def test_source_dev_install_ignores_managed_codex_home_for_skill_assets(tmp_path
     assert not (home_dir / ".codex" / "skills" / "ccb-config").exists()
     assert not (managed_home / "skills" / "ccb-config").exists()
     assert not (managed_home / "skills" / "ccb-clear").exists()
+    assert (home_dir / ".codex" / "skills" / "ccb-compact" / "SKILL.md").is_file()
 
 
 def test_python_selection_falls_back_to_versioned_python_command(tmp_path: Path) -> None:

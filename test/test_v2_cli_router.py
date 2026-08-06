@@ -659,6 +659,25 @@ def test_run_cli_entrypoint_prints_clear_help() -> None:
     assert stderr.getvalue() == ""
 
 
+def test_run_cli_entrypoint_prints_compact_help() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = run_cli_entrypoint(
+        ["compact", "--help"],
+        version="5.2.8",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "usage: ccb compact [agent_name|all]..." in stdout.getvalue()
+    assert "provider-native context compaction command" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
 def test_run_cli_entrypoint_prints_ping_help() -> None:
     stdout = StringIO()
     stderr = StringIO()

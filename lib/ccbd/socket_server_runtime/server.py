@@ -27,6 +27,7 @@ class CcbdSocketServer:
         'project_restart_agent',
         'project_restart_panes',
         'project_clear_context',
+        'project_compact_context',
         'stop-all',
         'frontdesk_forward_planner',
     })
