@@ -1,6 +1,6 @@
 # Changelog
 
-## v8.5.6 (2026-08-05)
+## v8.5.6 (2026-08-06)
 
 ### Continuous Provider Inheritance
 
