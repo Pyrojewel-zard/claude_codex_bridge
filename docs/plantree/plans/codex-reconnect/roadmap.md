@@ -86,8 +86,8 @@ Date: 2026-08-06
 - Linux/macOS/WSL2 acceptance across multiple independent live Codex panes.
 - Inspect real failure audit/state transitions and recursive-failure circuit
   behavior without causing duplicate side effects.
-- Evaluate tagged releases and optional package-registry delivery after the
-  real-provider gate passes.
+- Evaluate a standalone `codex-reconnect` tag and optional package-registry
+  delivery after the real-provider gate passes.
 
 ## Deferred
 
