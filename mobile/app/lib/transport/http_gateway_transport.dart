@@ -34,9 +34,14 @@ class HttpGatewayTransport
     String? deviceToken,
     HttpClient? httpClient,
     Duration timeout = const Duration(seconds: 5),
+    this.terminalPingInterval = const Duration(seconds: 15),
     Duration projectListWarmupRetryDelay = const Duration(milliseconds: 200),
     int projectListWarmupMaxAttempts = 16,
-  }) : _httpClient = httpClient ?? HttpClient(),
+  }) : assert(
+         terminalPingInterval == null || terminalPingInterval > Duration.zero,
+         'terminalPingInterval must be positive when enabled',
+       ),
+       _httpClient = httpClient ?? HttpClient(),
        _deviceToken = deviceToken,
        _timeout = timeout,
        _projectListWarmupRetryDelay = projectListWarmupRetryDelay,
@@ -48,6 +53,7 @@ class HttpGatewayTransport
   final HttpClient _httpClient;
   final String? _deviceToken;
   final Duration _timeout;
+  final Duration? terminalPingInterval;
   final Duration _projectListWarmupRetryDelay;
   final int _projectListWarmupMaxAttempts;
   final Map<String, Future<WebSocket>> _terminalSockets = {};
@@ -251,6 +257,11 @@ class HttpGatewayTransport
           ).timeout(_timeout);
           _terminalSockets[handle.terminalId] = socketFuture;
           final socket = await socketFuture;
+          // dart:io closes the WebSocket when a ping is not answered within
+          // one interval. That turns silent Wi-Fi half-open connections into
+          // the existing terminal reconnect/resume path without replaying
+          // input frames.
+          socket.pingInterval = terminalPingInterval;
           socket.add(
             jsonEncode(
               GatewayTerminalFrame.open(

@@ -44,6 +44,7 @@ def run_start_flow(
     namespace_topology_managed: bool,
     fresh_namespace: bool,
     fresh_workspace: bool,
+    restart_agent_panes: dict[str, str] | None,
     clock,
     readiness_recorder=None,
     deps,
@@ -99,6 +100,7 @@ def run_start_flow(
         workspace_window_id=workspace_window_id,
         namespace_epoch=namespace_epoch,
         namespace_pane_records=namespace_pane_records,
+        force_restart_agents=tuple((restart_agent_panes or {}).keys()),
     )
     timings_ms['agent_prepare_and_classify'] = _elapsed_ms(stage_started_ns)
     prepared_by_agent = {item.agent_name: item for item in prepared_agents}
@@ -112,7 +114,10 @@ def run_start_flow(
         interactive_tmux_layout=interactive_tmux_layout,
         tmux_backend=tmux_backend,
         root_pane_id=root_pane_id,
-        namespace_agent_panes=namespace_agent_panes,
+        namespace_agent_panes={
+            **dict(namespace_agent_panes or {}),
+            **dict(restart_agent_panes or {}),
+        },
         actions_taken=actions_taken,
     )
     timings_ms['tmux_layout'] = _elapsed_ms(stage_started_ns)

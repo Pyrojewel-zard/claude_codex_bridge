@@ -5,6 +5,7 @@ import os
 import shlex
 import sqlite3
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,6 +43,9 @@ from provider_backends.claude.launcher_runtime.home import (
 from provider_backends.codex import launcher as codex_launcher
 from provider_backends.codex.launcher_runtime.command import (
     prepare_codex_home_overrides as prepare_codex_home_overrides_for_test,
+)
+from provider_backends.codex.session_authority import (
+    current_provider_authority_fingerprint,
 )
 from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
 from provider_backends.droid import launcher as droid_launcher
@@ -1016,6 +1020,12 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
     existing_log = existing_root / '2026' / '04' / '19' / 'rollout-existing-session.jsonl'
     existing_log.parent.mkdir(parents=True, exist_ok=True)
     existing_log.write_text('', encoding='utf-8')
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (existing_home / '.ccb-session-namespace.json').write_text(
+        json.dumps({'provider': 'codex', 'provider_authority_fingerprint': fingerprint}),
+        encoding='utf-8',
+    )
     existing_session = project_root / '.ccb' / '.codex-agent1-session'
     existing_session.write_text(
         json.dumps(
@@ -1024,6 +1034,8 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
                 'codex_session_root': str(existing_root),
                 'codex_session_id': 'existing-session-id',
                 'codex_session_path': str(existing_log),
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
                 'start_cmd': 'codex resume existing-session-id',
                 'codex_start_cmd': 'codex resume existing-session-id',
             },
@@ -1129,8 +1141,29 @@ def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypa
     project_root = tmp_path / 'repo-codex-resume'
     ccb_dir = project_root / '.ccb'
     ccb_dir.mkdir(parents=True)
+    runtime_dir = ccb_dir / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    codex_home = ccb_dir / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    session_root = codex_home / 'sessions'
+    session_log = session_root / '2026' / '08' / '04' / 'agent1.jsonl'
+    session_log.parent.mkdir(parents=True)
+    session_log.write_text('', encoding='utf-8')
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (codex_home / '.ccb-session-namespace.json').write_text(
+        json.dumps({'provider': 'codex', 'provider_authority_fingerprint': fingerprint}),
+        encoding='utf-8',
+    )
     (ccb_dir / '.codex-agent1-session').write_text(
-        json.dumps({'codex_session_id': 'agent1-session-id'}, ensure_ascii=False),
+        json.dumps(
+            {
+                'codex_home': str(codex_home),
+                'codex_session_root': str(session_root),
+                'codex_session_id': 'agent1-session-id',
+                'codex_session_path': str(session_log),
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
     (ccb_dir / '.codex-agent2-session').write_text(
@@ -1227,6 +1260,7 @@ def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_pat
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%55'
     assert payload['work_dir'] == str(resume_dir)
+    assert payload['gemini_provider_authority_fingerprint']
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='reviewer',
@@ -1297,6 +1331,7 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     assert payload['claude_home'] == str(expected_claude_home)
     assert payload['claude_projects_root'] == str(expected_claude_home / '.claude' / 'projects')
     assert payload['claude_session_env_root'] == str(expected_claude_home / '.claude' / 'session-env')
+    assert payload['claude_provider_authority_fingerprint']
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%44'
     assert payload['work_dir'] == str(resume_dir)
@@ -2697,25 +2732,41 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert any(name == 'respawn' for name, _ in calls)
 
 
-def test_codex_launcher_build_start_cmd_isolates_invalid_global_codex_config(monkeypatch, tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_fails_closed_for_invalid_global_codex_config(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     runtime_dir = tmp_path / 'runtime'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     source_home = tmp_path / 'source-home'
     source_home.mkdir(parents=True, exist_ok=True)
-    (source_home / 'config.toml').write_text('[mcp_servers.puppeteer]\nfoo=1\n[mcp_servers.puppeteer]\nbar=2\n', encoding='utf-8')
-    (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"test-key"}', encoding='utf-8')
+    source_config = source_home / 'config.toml'
+    source_auth = source_home / 'auth.json'
+    source_config.write_text(
+        '[mcp_servers.puppeteer]\nfoo=1\n[mcp_servers.puppeteer]\nbar=2\n',
+        encoding='utf-8',
+    )
+    source_auth.write_text('{"OPENAI_API_KEY":"test-key"}', encoding='utf-8')
+    source_snapshot = {
+        path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+        for path in (source_config, source_auth)
+    }
     monkeypatch.setenv('CODEX_HOME', str(source_home))
 
     spec = _spec('agent1')
     command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
 
-    cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-1')
+    with pytest.raises(RuntimeError, match='cannot parse inherited Codex config source'):
+        _codex_start_cmd(command, spec, runtime_dir, 'sess-1')
 
     isolated_home = runtime_dir / 'codex-state' / 'home'
-    assert f'CODEX_HOME={shlex.quote(str(isolated_home))}' in cmd
-    assert f'CODEX_SESSION_ROOT={shlex.quote(str(isolated_home / "sessions"))}' in cmd
-    assert (isolated_home / 'auth.json').is_file()
-    assert (isolated_home / 'config.toml').is_file()
+    assert not (isolated_home / 'auth.json').exists()
+    assert not (isolated_home / 'config.toml').exists()
+    assert all(
+        (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+        == source_snapshot[path]
+        for path in (source_config, source_auth)
+    )
 
 
 def test_codex_launcher_build_start_cmd_does_not_require_toml_parser_for_config_sync(
@@ -3009,7 +3060,7 @@ def test_codex_launcher_build_start_cmd_respects_agent_restore_fresh(monkeypatch
     assert extract_resume_session_id(cmd) is None
 
 
-def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_session_file(tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_rejects_unfenced_legacy_resume_cmd(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-agent'
     runtime_dir = project_root / '.ccb' / 'agents' / 'codex' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3032,7 +3083,7 @@ def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_sessi
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-restore')
 
-    assert extract_resume_session_id(cmd) == 'codex-session-id'
+    assert extract_resume_session_id(cmd) is None
 
 
 def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_proxy(monkeypatch, tmp_path: Path) -> None:
@@ -3226,6 +3277,52 @@ def test_claude_launcher_provider_command_template_wraps_command_after_env_prefi
     assert '; sandbox=1 claude --setting-sources user,project,local --settings ' in start_cmd
     assert start_cmd.endswith(' --continue omx --madmax')
     assert 'sandbox=1 unset ANTHROPIC_BASE_URL' not in start_cmd
+
+
+def test_claude_launcher_build_start_cmd_forks_linked_continuation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime-claude-linked-continuation'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('reviewer',),
+        restore=True,
+        auto_permission=False,
+    )
+
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(
+            run_cwd=runtime_dir,
+            has_history=False,
+            continuation_session_id='old-claude-session-id',
+            continuation_mode='fork',
+        ),
+    )
+    monkeypatch.setattr(
+        claude_launcher,
+        'claude_cli_supports_flag',
+        lambda cmd_parts, flag: str(flag)
+        in {'--setting-sources', '--settings', '--permission-mode', '--fork-session'},
+    )
+
+    prepared_state = _claude_prepared_state(runtime_dir)
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-linked-continuation',
+        prepared_state=prepared_state,
+    )
+
+    assert '--resume old-claude-session-id --fork-session' in start_cmd
+    assert '--continue' not in start_cmd
+    assert prepared_state['ccb_continuation_launch_mode'] == 'fork'
 
 
 def test_claude_launcher_build_start_cmd_respects_agent_restore_fresh(monkeypatch, tmp_path: Path) -> None:
@@ -3826,6 +3923,8 @@ def test_codex_launcher_build_start_cmd_api_override_clears_global_route_config(
     )
     (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"system-key"}\n', encoding='utf-8')
     monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setenv('OPENAI_API_KEY', 'ambient-key')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://ambient.example.test/v1')
     _write_provider_profile(
         runtime_dir,
         ResolvedProviderProfile(
@@ -3855,6 +3954,8 @@ def test_codex_launcher_build_start_cmd_api_override_clears_global_route_config(
     assert 'unset OPENAI_API_KEY' in cmd
     assert 'unset OPENAI_BASE_URL' in cmd
     assert f'OPENAI_API_KEY={shlex.quote("profile-key")}' in cmd
+    assert 'ambient-key' not in cmd
+    assert 'https://ambient.example.test/v1' not in cmd
     assert f'OPENAI_BASE_URL={shlex.quote("https://api.rootflowai.com")}' not in cmd
     config_text = (profile_home / 'config.toml').read_text(encoding='utf-8')
     assert 'model_provider = "custom"' in config_text
@@ -3877,27 +3978,41 @@ def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_authority
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     profile_home = project_root / '.ccb' / 'provider-profiles' / 'agent1' / 'codex'
-    _write_provider_profile(
-        runtime_dir,
-        ResolvedProviderProfile(
-            provider='codex',
-            agent_name='agent1',
-            mode='isolated',
-            profile_root=str(profile_home),
-            runtime_home=str(profile_home),
-            env={
-                'OPENAI_API_KEY': 'profile-key',
-                'OPENAI_BASE_URL': 'https://api.rootflowai.com',
-            },
-            inherit_api=False,
-            inherit_auth=False,
-            inherit_config=False,
-        ),
+    current_profile = ResolvedProviderProfile(
+        provider='codex',
+        agent_name='agent1',
+        mode='isolated',
+        profile_root=str(profile_home),
+        runtime_home=str(profile_home),
+        env={
+            'OPENAI_API_KEY': 'profile-key',
+            'OPENAI_BASE_URL': 'https://api.rootflowai.com',
+        },
+        inherit_api=False,
+        inherit_auth=False,
+        inherit_config=False,
     )
+    _write_provider_profile(runtime_dir, current_profile)
+    old_profile = replace(
+        current_profile,
+        env={
+            'OPENAI_API_KEY': 'old-profile-key',
+            'OPENAI_BASE_URL': 'https://old-api.example.test',
+        },
+    )
+    old_fingerprint = codex_home_config.codex_provider_authority_fingerprint(old_profile)
     ccb_dir = project_root / '.ccb'
     ccb_dir.mkdir(parents=True, exist_ok=True)
     (ccb_dir / '.codex-agent1-session').write_text(
-        json.dumps({'codex_session_id': 'legacy-session-id'}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                'codex_session_id': 'legacy-session-id',
+                'codex_provider_authority_fingerprint': old_fingerprint,
+                'codex_session_authority_fingerprint': old_fingerprint,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding='utf-8',
     )
 
@@ -3907,6 +4022,76 @@ def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_authority
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-authority-change')
 
     assert 'resume legacy-session-id' not in cmd
+
+
+def test_codex_launcher_build_start_cmd_forks_linked_authority_generation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-codex-linked-authority'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    profile_home = project_root / '.ccb' / 'provider-profiles' / 'agent1' / 'codex'
+    profile = ResolvedProviderProfile(
+        provider='codex',
+        agent_name='agent1',
+        mode='isolated',
+        profile_root=str(profile_home),
+        runtime_home=str(profile_home),
+        env={
+            'OPENAI_API_KEY': 'new-profile-key',
+            'OPENAI_BASE_URL': 'https://new-api.example.test',
+        },
+        inherit_api=False,
+        inherit_auth=False,
+        inherit_config=False,
+    )
+    _write_provider_profile(runtime_dir, profile)
+
+    session_root = profile_home / 'sessions'
+    old_log = session_root / '2026' / '08' / '05' / 'old-session.jsonl'
+    old_log.parent.mkdir(parents=True, exist_ok=True)
+    old_log.write_text('{}\n', encoding='utf-8')
+    session_file = project_root / '.ccb' / '.codex-agent1-session'
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(profile_home),
+                'codex_session_root': str(session_root),
+                'codex_session_id': 'old-codex-session-id',
+                'codex_session_path': str(old_log),
+                'codex_provider_authority_fingerprint': 'old-authority',
+                'codex_session_authority_fingerprint': 'old-authority',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        'provider_backends.codex.launcher_runtime.command.supports_session_fork',
+        lambda parts: True,
+    )
+    monkeypatch.setattr(
+        'provider_backends.codex.launcher_runtime.command.supports_managed_app_server',
+        lambda parts: False,
+    )
+
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('agent1',),
+        restore=True,
+        auto_permission=False,
+    )
+    cmd = _codex_start_cmd(command, _spec('agent1'), runtime_dir, 'codex-linked-continuation')
+
+    assert 'fork old-codex-session-id' in cmd
+    assert 'resume old-codex-session-id' not in cmd
+    rewritten = json.loads(session_file.read_text(encoding='utf-8'))
+    assert rewritten['old_codex_session_id'] == 'old-codex-session-id'
+    assert rewritten['old_codex_session_path'] == str(old_log)
+    assert rewritten['ccb_resume_compatibility'] == 'linked_continuation'
+    assert old_log.is_file()
 
 
 def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
@@ -3925,11 +4110,12 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
     old_log = session_root / '2026' / '05' / '01' / 'legacy-session.jsonl'
     old_log.parent.mkdir(parents=True, exist_ok=True)
     old_log.write_text('', encoding='utf-8')
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
     (codex_home / '.ccb-session-namespace.json').write_text(
         json.dumps(
             {
                 'provider': 'codex',
-                'provider_authority_fingerprint': '',
+                'provider_authority_fingerprint': fingerprint,
                 'memory_projection_sha256': 'old-memory-sha',
             },
             ensure_ascii=False,
@@ -3953,6 +4139,8 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
                 'codex_session_id': 'legacy-session-id',
                 'codex_session_path': str(old_log),
                 'codex_memory_projection_sha256': 'old-memory-sha',
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
                 'start_cmd': resume_cmd,
                 'codex_start_cmd': resume_cmd,
             },
@@ -3978,7 +4166,7 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
     assert marker['memory_projection_sha256'] != 'old-memory-sha'
 
 
-def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_binding_proof_missing(tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_adopts_legacy_explicit_api_binding(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-binding-proof-missing'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -4021,10 +4209,14 @@ def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_binding_p
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-binding-proof-missing')
 
-    assert 'resume legacy-session-id' not in cmd
+    assert extract_resume_session_id(cmd) == 'legacy-session-id'
+    data = json.loads((ccb_dir / '.codex-agent1-session').read_text(encoding='utf-8'))
+    assert data['codex_session_id'] == 'legacy-session-id'
+    assert data['codex_provider_authority_fingerprint']
+    assert data['codex_session_authority_fingerprint'] == data['codex_provider_authority_fingerprint']
 
 
-def test_codex_launcher_build_start_cmd_rotates_legacy_explicit_session_namespace(
+def test_codex_launcher_build_start_cmd_adopts_legacy_explicit_session_namespace(
     monkeypatch, tmp_path: Path
 ) -> None:
     project_root = tmp_path / 'repo-codex-legacy-explicit-namespace'
@@ -4087,22 +4279,22 @@ def test_codex_launcher_build_start_cmd_rotates_legacy_explicit_session_namespac
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-legacy-explicit-namespace')
 
-    assert 'resume legacy-session-id' not in cmd
+    assert extract_resume_session_id(cmd) == 'legacy-session-id'
     assert session_root.is_dir()
-    assert not any(session_root.iterdir())
+    assert old_log.is_file()
     archive_root = profile_home / 'archived-sessions'
-    assert archive_root.is_dir()
-    assert any(archive_root.rglob('legacy-session.jsonl'))
+    assert not archive_root.exists()
     marker = json.loads((profile_home / '.ccb-session-namespace.json').read_text(encoding='utf-8'))
-    assert marker['provider_authority_fingerprint'] == fingerprint
+    assert marker['provider_authority_fingerprint'] == current_provider_authority_fingerprint(
+        profile,
+        runtime_dir=runtime_dir,
+    )
     data = json.loads(session_file.read_text(encoding='utf-8'))
-    assert 'codex_session_id' not in data
-    assert 'codex_session_path' not in data
-    assert 'codex_session_authority_fingerprint' not in data
-    assert data['old_codex_session_id'] == 'legacy-session-id'
-    assert data['old_codex_session_path'] == str(old_log)
-    assert 'resume legacy-session-id' not in data['start_cmd']
-    assert 'resume legacy-session-id' not in data['codex_start_cmd']
+    assert data['codex_session_id'] == 'legacy-session-id'
+    assert data['codex_session_path'] == str(old_log)
+    assert data['codex_session_authority_fingerprint'] == marker['provider_authority_fingerprint']
+    assert extract_resume_session_id(data['start_cmd']) == 'legacy-session-id'
+    assert extract_resume_session_id(data['codex_start_cmd']) == 'legacy-session-id'
 
 
 def test_codex_launcher_build_start_cmd_exports_inherited_api_env(monkeypatch, tmp_path: Path) -> None:
@@ -4165,17 +4357,19 @@ def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkey
         skill_body='plugin skill v1\n',
     )
     monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setenv('OPENAI_API_KEY', 'old-env-key')
 
     spec = _spec('agent1')
     command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
 
-    _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-1')
+    first_cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-1')
 
     isolated_home = runtime_dir / 'codex-state' / 'home'
     config_text = (isolated_home / 'config.toml').read_text(encoding='utf-8')
     assert 'model = "gpt-5"' in config_text
     assert 'external_migration = false' in config_text
     assert (isolated_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"old-key"}\n'
+    assert f'OPENAI_API_KEY={shlex.quote("old-env-key")}' in first_cmd
     assert (isolated_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
     assert (
         isolated_home / '.tmp' / 'plugins' / 'plugins' / 'weatherpromise' / 'skills' / 'weatherpromise' / 'SKILL.md'
@@ -4183,6 +4377,7 @@ def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkey
 
     (source_home / 'config.toml').write_text('model = "gpt-5.1"\n', encoding='utf-8')
     (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"new-key"}\n', encoding='utf-8')
+    monkeypatch.setenv('OPENAI_API_KEY', 'new-env-key')
     _write_codex_plugin_source(
         source_home,
         plugin_name='weatherpromise',
@@ -4191,12 +4386,14 @@ def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkey
         skill_body='plugin skill v2\n',
     )
 
-    _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-2')
+    second_cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-2')
 
     config_text = (isolated_home / 'config.toml').read_text(encoding='utf-8')
     assert 'model = "gpt-5.1"' in config_text
     assert 'external_migration = false' in config_text
     assert (isolated_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"new-key"}\n'
+    assert f'OPENAI_API_KEY={shlex.quote("new-env-key")}' in second_cmd
+    assert 'old-env-key' not in second_cmd
     assert (isolated_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v2\n'
     marketplace_payload = json.loads(
         (isolated_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json').read_text(encoding='utf-8')
@@ -4266,7 +4463,8 @@ def test_codex_launcher_build_start_cmd_reuses_legacy_session_root_from_persiste
     assert f'CODEX_HOME={shlex.quote(str(migrated_home))}' in cmd
     assert f'CODEX_SESSION_ROOT={shlex.quote(str(migrated_root))}' in cmd
     assert migrated_root.is_dir()
-    assert (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
+    assert not (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
+    assert any((migrated_home / 'archived-sessions').rglob('rollout-legacy-session.jsonl'))
 
 
 def test_claude_launcher_build_start_cmd_uses_isolated_profile_api_env(monkeypatch, tmp_path: Path) -> None:

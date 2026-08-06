@@ -298,6 +298,47 @@ def test_project_restart_agent_handler_restarts_one_agent(monkeypatch) -> None:
     assert calls == [('agent1',)]
 
 
+def test_project_restart_agent_rebuilds_current_provider_launch(monkeypatch, tmp_path: Path) -> None:
+    session = SimpleNamespace(data={}, start_cmd='old-provider-command', pane_id='%1')
+    runtime = _runtime(pane_id='%1')
+    calls: list[dict[str, object]] = []
+
+    class _Supervisor:
+        def start(self, **kwargs):
+            calls.append(kwargs)
+            runtime.pane_id = '%1'
+            runtime.active_pane_id = '%1'
+            return SimpleNamespace(
+                agent_results=(SimpleNamespace(agent_name='agent1', action='relaunched', health='healthy'),),
+            )
+
+    app = _app(runtimes={'agent1': runtime})
+    app.project_namespace = SimpleNamespace(
+        load=lambda: SimpleNamespace(tmux_socket_path=str(tmp_path / '.tmux' / 'tmux.sock')),
+    )
+    app.runtime_supervisor = _Supervisor()
+    app.start_policy_store = SimpleNamespace(load=lambda: None)
+    monkeypatch.setattr(project_restart, '_load_agent_provider_session', lambda *args, **kwargs: session)
+
+    result = project_restart.restart_project_agent_panes_in_place(app, agent_names=('agent1',))
+
+    assert result == ({
+        'agent': 'agent1',
+        'status': 'restarted',
+        'pane_id': '%1',
+        'action': 'relaunched',
+    },)
+    assert calls == [{
+        'agent_names': ('agent1',),
+        'restore': True,
+        'auto_permission': True,
+        'cleanup_tmux_orphans': False,
+        'interactive_tmux_layout': True,
+        'restart_agent_panes': {'agent1': '%1'},
+        'recreate_reason': project_restart.RESTART_AGENT_REASON,
+    }]
+
+
 def test_project_restart_agent_socket_targets_one_agent(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-restart-socket'
     _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex,agent2:codex\n')

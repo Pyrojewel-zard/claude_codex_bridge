@@ -287,12 +287,22 @@ Managed Codex session authority rules:
   routes, and a bound Codex session under such a route is reusable only after
   that concrete binding is stamped with matching bound-session authority
 - startup must treat the active managed Codex `sessions/` directory as
-  reusable authority, not mere residue, because Codex may auto-continue the
-  newest conversation found there even without explicit `resume`
-- when the managed Codex session namespace authority is missing or incompatible
-  with the current route authority, startup must rotate that `sessions/`
-  directory out of the active namespace before launch and scrub stale bound
-  session fields from project authority
+  Agent-owned conversation history, not credential authority and not mere
+  residue
+- missing private-HMAC namespace metadata in the canonical Agent-managed home
+  is legacy evidence to adopt when its paths and any older route proof remain
+  compatible; it is not positive mismatch evidence
+- when authority changes inside that canonical namespace, startup must retain
+  the `sessions/` tree in place so native history remains visible, record the
+  prior binding in the stable CCB conversation history, and prevent that
+  incompatible binding from automatic resume
+- startup may rotate/archive a session tree only when its home/root is outside
+  the validated Agent-managed namespace or other ownership evidence is unsafe;
+  authority change alone is not an archive instruction
+- withdrawn-v8.5.5 `*-global` or matching legacy-route archives may be merged
+  back after exact old-binding/path ownership checks; if authority changed in
+  the meantime, the recovered binding is historical linked-continuation
+  evidence rather than the current resume target
 - provider-base workspace files such as `.codex-session` remain unscoped evidence only unless no explicit configured-agent binding exists
 - startup and restore must persist and reuse the effective managed `codex_home` and derived `codex_session_root` when available
 - restore must not scan or adopt global `~/.codex/sessions` merely because a manual Codex conversation shares the same `work_dir`
@@ -307,6 +317,23 @@ Managed Claude session authority rules:
 - provider-base workspace files such as `.claude-session` remain unscoped evidence only unless no explicit configured-agent binding exists
 - startup and restore must persist and reuse the effective managed Claude home and derived roots when available
 - restore must not scan or adopt global `~/.claude/projects` merely because a manual Claude conversation shares the same `work_dir`
+
+Managed conversation continuity rules:
+
+- `ccb_session_id` identifies one launch generation; it must not be reused as
+  Provider credential authority
+- `ccb_conversation_id` remains stable across stopped Provider launches and
+  authority generations for the same configured Agent conversation
+- session authority records must retain the authority generation, continuity
+  status, resume compatibility, and prior Provider bindings without secret
+  material
+- same-authority generations may use Provider-native resume after path and
+  binding checks; known or unproven cross-authority bindings become linked
+  continuations while their native transcripts remain in the Agent-managed
+  history root
+- linked continuation preserves history and prevents an automatic clear, but
+  it must not be described as lossless native context import until the exact
+  Provider/version import path is qualified
 
 Managed provider startup mutation rules:
 

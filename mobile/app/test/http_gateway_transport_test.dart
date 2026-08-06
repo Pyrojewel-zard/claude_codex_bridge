@@ -124,6 +124,10 @@ void main() {
     expect(requests, ['/v1/health']);
   });
 
+  test('terminal WebSocket heartbeat is enabled by default', () {
+    expect(transport.terminalPingInterval, const Duration(seconds: 15));
+  });
+
   test(
     'reads paired device identity through authenticated gateway route',
     () async {

@@ -64,6 +64,55 @@ class CcbMobileLocalizations {
 
   String get retry => isChinese ? '重试' : 'Retry';
 
+  String get continueAnyway => isChinese ? '仍然继续' : 'Continue anyway';
+
+  String get lanPairingWarningTitle =>
+      isChinese
+          ? '连接 LAN 前请检查手机网络'
+          : 'Check the phone network before LAN pairing';
+
+  String get lanPairingWarningIntroduction =>
+      isChinese
+          ? '这个连接码使用电脑的局域网地址。当前手机网络可能无法访问它。'
+          : 'This code uses the computer\'s local-network address, which may not be reachable from the phone\'s current network.';
+
+  String get lanPhoneOfflineTitle =>
+      isChinese ? '手机当前没有可用网络' : 'The phone is offline';
+
+  String get lanPhoneOfflineBody =>
+      isChinese
+          ? '请打开 Wi-Fi，并确认手机和电脑连接到同一个可信局域网。'
+          : 'Turn on Wi-Fi and connect the phone and computer to the same trusted local network.';
+
+  String get lanLocalNetworkRequiredTitle =>
+      isChinese ? '请连接与电脑相同的 Wi-Fi' : 'Connect to the computer\'s Wi-Fi';
+
+  String lanLocalNetworkRequiredBody(String gatewayHost) {
+    return isChinese
+        ? '当前未检测到 Wi-Fi 或以太网，仅使用移动数据通常无法访问 $gatewayHost。若手机正在共享热点，请确认电脑已连接该热点。'
+        : 'No Wi-Fi or Ethernet connection was detected. Mobile data normally cannot reach $gatewayHost. If this phone is sharing a hotspot, confirm the computer joined it.';
+  }
+
+  String get lanVpnMayBlockTitle =>
+      isChinese ? 'VPN 可能阻止局域网连接' : 'A VPN may block the LAN connection';
+
+  String lanVpnMayBlockBody(String gatewayHost) {
+    return isChinese
+        ? '请允许 VPN 访问本地网络，或暂时关闭 VPN 后重试 $gatewayHost。'
+        : 'Allow local-network access in the VPN, or temporarily disable it and retry $gatewayHost.';
+  }
+
+  String get lanGatewayUnreachableTitle =>
+      isChinese
+          ? '已连接本地网络，但电脑端不可达'
+          : 'Local network connected, but the computer is unreachable';
+
+  String lanGatewayUnreachableBody(String gatewayHost) {
+    return isChinese
+        ? '确认手机和电脑在同一 Wi-Fi，未使用访客/设备隔离网络，防火墙允许 $gatewayHost。若电脑 IP 已变化，请在电脑重新运行 ccb update mobile 并扫码。'
+        : 'Check that both devices use the same Wi-Fi, guest/client isolation is off, and the firewall allows $gatewayHost. If the computer IP changed, rerun ccb update mobile and scan the new code.';
+  }
+
   String get rePair => isChinese ? '重新配对' : 'Re-pair';
 
   String get deleteMessage => isChinese ? '删除' : 'Delete';

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from provider_backends.codex.session_authority import resume_authority_matches
+from provider_backends.session_authority import merge_session_continuity, provider_authority_matches
 from provider_core.pathing import session_filename_for_agent
 from project.identity import normalize_work_dir
 from provider_core.runtime_shared import pane_title_marker as build_pane_title_marker
@@ -57,7 +58,9 @@ def write_session_file(
     if tmux_socket_path:
         payload["tmux_socket_path"] = str(Path(tmux_socket_path).expanduser())
     payload.update(provider_payload)
-    _merge_existing_session_binding(payload, existing_payload, provider=str(spec.provider or '').strip().lower())
+    provider = str(spec.provider or '').strip().lower()
+    _merge_existing_session_binding(payload, existing_payload, provider=provider)
+    merge_session_continuity(payload, existing_payload, provider)
     ok, error = safe_write_session(session_path, json.dumps(payload, ensure_ascii=False, indent=2))
     if not ok:
         raise RuntimeError(error or f"failed to write session file: {session_path}")
@@ -107,12 +110,37 @@ def _merge_existing_session_binding(
                 'claude_home',
                 'claude_projects_root',
                 'claude_session_env_root',
-                'claude_session_id',
-                'claude_session_path',
                 'old_claude_session_id',
                 'old_claude_session_path',
             ),
         )
+        current_fingerprint = str(payload.get('claude_provider_authority_fingerprint') or '').strip()
+        if provider_authority_matches(existing_payload, 'claude', current_fingerprint):
+            _merge_keys(
+                payload,
+                existing_payload,
+                keys=('claude_session_id', 'claude_session_path'),
+            )
+    elif provider == 'gemini':
+        _merge_keys(
+            payload,
+            existing_payload,
+            keys=(
+                'gemini_home',
+                'gemini_root',
+                'gemini_project_hash',
+                'old_gemini_session_id',
+                'old_gemini_session_path',
+                'old_updated_at',
+            ),
+        )
+        current_fingerprint = str(payload.get('gemini_provider_authority_fingerprint') or '').strip()
+        if provider_authority_matches(existing_payload, 'gemini', current_fingerprint):
+            _merge_keys(
+                payload,
+                existing_payload,
+                keys=('gemini_session_id', 'gemini_session_path'),
+            )
 
 
 def _merge_codex_session_binding(payload: dict[str, object], existing_payload: dict[str, object]) -> None:

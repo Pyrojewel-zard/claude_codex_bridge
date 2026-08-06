@@ -20,6 +20,7 @@ from provider_backends.codex.execution import CodexProviderAdapter
 from provider_backends.codex.launcher_runtime.command_runtime.managed_app_server import (
     build_managed_app_server_command,
     supports_managed_app_server,
+    supports_session_fork,
 )
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
@@ -408,6 +409,18 @@ def test_managed_launcher_preserves_resume_rewrites_and_fallback(tmp_path: Path)
     assert 'CCB_CODEX_MANAGED_REMOTE=1' in stripped
 
 
+def test_managed_launcher_preserves_native_fork_continuation(tmp_path: Path) -> None:
+    session_id = '12345678-1234-1234-1234-123456789abc'
+    command, _state = build_managed_app_server_command(
+        ['codex', '--profile', 'ccb', 'fork', session_id],
+        runtime_dir=tmp_path,
+    )
+
+    assert f'codex --remote unix://{tmp_path / "app-server.sock"} --profile ccb' in command
+    assert f'fork "$CCB_CODEX_RESUME_ID"' in command
+    assert 'resume "$CCB_CODEX_RESUME_ID"' not in command
+
+
 def test_managed_app_server_capability_probe_is_explicit(monkeypatch) -> None:
     supports_managed_app_server.cache_clear()
 
@@ -422,6 +435,22 @@ def test_managed_app_server_capability_probe_is_explicit(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, 'run', run)
     assert supports_managed_app_server(('codex',)) is True
     assert supports_managed_app_server(('env', 'codex')) is False
+
+
+def test_codex_fork_capability_probe_is_explicit(monkeypatch) -> None:
+    supports_session_fork.cache_clear()
+
+    monkeypatch.setattr(
+        subprocess,
+        'run',
+        lambda command, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='Fork a previous interactive session' if command[1:3] == ['fork', '--help'] else '',
+        ),
+    )
+
+    assert supports_session_fork(('codex',)) is True
+    assert supports_session_fork(('env', 'codex')) is False
 
 
 def test_managed_app_server_supervisor_starts_and_stops_exact_child(tmp_path: Path, monkeypatch) -> None:

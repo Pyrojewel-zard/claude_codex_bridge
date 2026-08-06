@@ -11,6 +11,7 @@ import '../repository/fake_mobile_ccb_repository.dart';
 import 'app_theme.dart';
 import 'app_update.dart';
 import 'background_connection.dart';
+import 'mobile_network_status.dart';
 
 class CcbMobileApp extends StatefulWidget {
   const CcbMobileApp({
@@ -18,6 +19,7 @@ class CcbMobileApp extends StatefulWidget {
     this.themePreferenceStore,
     this.backgroundConnectionPreferenceStore,
     this.backgroundConnectionPlatform,
+    this.mobileNetworkStatusPlatform,
     this.profileStore,
     this.updateService,
     this.automaticUpdateCheck = true,
@@ -31,6 +33,7 @@ class CcbMobileApp extends StatefulWidget {
   final CcbBackgroundConnectionPreferenceStore?
   backgroundConnectionPreferenceStore;
   final BackgroundConnectionPlatform? backgroundConnectionPlatform;
+  final MobileNetworkStatusPlatform? mobileNetworkStatusPlatform;
   final GatewayHostProfileStore? profileStore;
   final CcbMobileUpdateService? updateService;
   final bool automaticUpdateCheck;
@@ -207,6 +210,7 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
             _backgroundConnectionPreferenceLoaded,
         onBackgroundConnectionEnabledChanged: _setBackgroundConnectionEnabled,
         backgroundConnectionPlatform: widget.backgroundConnectionPlatform,
+        mobileNetworkStatusPlatform: widget.mobileNetworkStatusPlatform,
       ),
     );
   }

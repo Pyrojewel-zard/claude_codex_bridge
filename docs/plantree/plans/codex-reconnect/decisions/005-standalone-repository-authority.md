@@ -13,13 +13,15 @@ history, and CI.
 
 ## Decision
 
-Use `/home/bfly/yunwei/codex-reconnect` as the authoritative local working
-tree and `https://github.com/SeemSeam/codex-reconnect` as the authoritative
-remote repository. New product changes, releases, and CI land there.
+Use `/home/bfly/workspace/agent_develop/codex-reconnect` as the authoritative
+local working tree and `https://github.com/SeemSeam/codex-reconnect` as the
+authoritative remote repository. New product changes, releases, and CI land
+there. The earlier `/home/bfly/yunwei/codex-reconnect` path is retired.
 
-Keep `ccb_source/tools/codex-reconnect/` unchanged as the migration source for
-now. Do not delete it until a separate cleanup inventory verifies that no CCB
-documentation, worktree, or handoff still depends on the legacy snapshot.
+Keep `ccb_source/tools/codex-reconnect/` as CCB's synchronized vendored copy.
+Product changes land in the standalone authority first, then are copied into
+CCB with matching implementation tests. Do not delete it while CCB packaging,
+managed command projection, or source-test shims depend on that path.
 
 Initial standalone evidence:
 
@@ -38,6 +40,7 @@ Initial standalone evidence:
 - The standalone repository is the source of truth for future implementation.
 - The CCB PlanTree remains the design and migration trail, not the release
   repository.
-- The legacy source copy may drift and must not receive new feature work.
+- The vendored copy must match the standalone implementation at each CCB
+  integration point; it is not an independent feature authority.
 - Cleanup remains recoverable from both the standalone Git history and GitHub
   remote when explicitly approved later.

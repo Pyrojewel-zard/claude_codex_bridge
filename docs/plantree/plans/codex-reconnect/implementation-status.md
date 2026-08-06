@@ -1,23 +1,53 @@
 # Implementation Status
 
-Date: 2026-07-26
+Date: 2026-08-06
 
 ## Current Phase
 
+CCB automatic installation and activation are implemented, committed, and
+published on `origin/main` in CCB v8.5.6 source commit
+[`8b35d868`](https://github.com/SeemSeam/claude_codex_bridge/commit/8b35d868f402e5f68929782a6c2df657a8750d21).
+The integration is publicly available in the bilingual
+[`v8.5.6` GitHub Release](https://github.com/SeemSeam/claude_codex_bridge/releases/tag/v8.5.6)
+and npm package `@seemseam/ccb@8.5.6` from tag commit `58b49c12`.
+The bridge requests bundled `on` only after a concrete managed thread is bound,
+records one successful enable per bridge/thread, retries startup failures with
+bounded backoff, preserves a later explicit `off` or circuit-open state, and
+requests shutdown of its owned watcher.
+
 The Decision 006 tmux refactor is implemented in the standalone working tree
 `/home/bfly/workspace/agent_develop/codex-reconnect`, installed locally as
-`codex-reconnect 0.3.3`, and vendored into CCB. CCB now projects the
-`reconnect` skill and command into each managed Codex environment and exposes
-the exact managed pane/session identity needed by the watcher. The tmux
+`codex-reconnect 0.3.5`, and synchronized into CCB's vendored copy. CCB
+projects the `reconnect` skill and command into each managed Codex environment
+and exposes the exact managed pane/session identity needed by the watcher. The tmux
 watcher, fail-closed input guards, installation lifecycle, and isolated
 managed-Codex activation are deterministic-test complete. Real provider-fault
 qualification remains the production gate.
+
+The 2026-08-05 source patch closes the low-capability recovery gap observed in
+Codex 0.145.0: terminal overload is emitted as a nested `error` object on
+`task_complete`, and the exact `Selected model is at capacity` text is also
+recognized by the SQLite fallback. The source watcher now routes both shapes
+through the existing two-probe, single-literal-`continue` state machine. The
+0.3.5 user-local installation completed on 2026-08-05, and the current managed
+Codex pane was rebound from stale pane PID `2997587` to current PID `30678`.
+Its only live watcher reached `armed`; organic real-provider requalification
+remains open.
 
 The 0.3.3 tmux refactor was committed and pushed to `origin/main` on
 2026-07-22 as
 [`1134122`](https://github.com/SeemSeam/codex-reconnect/commit/113412276abdea3d42d183477798307000fac307).
 The earlier 0.2.0 App Server bridge remains in the repository as a non-default
 compatibility path.
+
+Version 0.3.4 and the CCB-managed session support commit were pushed to
+`origin/main` on 2026-08-05 as
+[`fe5cf50`](https://github.com/SeemSeam/codex-reconnect/commit/fe5cf50c6a8fc086a99441c2e0460e55958c77c6).
+
+Version 0.3.5 then added delayed-start arming, same-thread managed-pane restart
+takeover, and signal-driven owner-instance shutdown. Its three commits end at
+[`387b88f`](https://github.com/SeemSeam/codex-reconnect/commit/387b88f665ccdc42ba35dd834f789ef735a83a8d)
+and are published on `origin/main`.
 
 ## Landed
 
@@ -57,6 +87,14 @@ compatibility path.
 - Bilingual 0.3.3 README usage, recovery, installation, state, security, and
   qualification documentation.
 - Legacy `codex-reconnect open` bridge regression compatibility.
+- Nested `task_complete.error` terminal classification for Codex 0.145.0,
+  including selected-model capacity wording in both JSONL and SQLite paths.
+- Automatic CCB activation after authoritative thread binding with bounded
+  retry and no background re-enable after a successful arm.
+- Same-thread watcher takeover after the same tmux socket and pane receive a
+  new managed pane pid; other pane/socket conflicts remain fail closed.
+- `SIGTERM`/`SIGINT` shutdown writes `enabled=false,status=off` for the current
+  watcher instance without overwriting a superseding watcher.
 
 ## Verification Evidence
 
@@ -67,10 +105,27 @@ compatibility path.
 - CCB targeted pytest qualification passed for diagnostic filtering,
   reconnect integration, launch environment, skill projection, installer
   behavior, source-test shims, and repository hygiene.
+- Standalone and vendored watcher suites each passed 59 tests on 2026-08-05.
+  Both suites
+  include nested capacity completion, internal-retry exclusion,
+  two-probe gating, one-time literal `continue`, and audit-state assertions.
+- `test/test_codex_reconnect_integration.py` — 1 passed on 2026-08-05 with an
+  isolated provider home; Python compilation and `git diff --check` also passed.
 - An isolated source CCB project under `/home/bfly/yunwei/test_ccb2` opened a
   real managed Codex, projected the skill and command shim, bound a real thread
-  through `CCB_SESSION_FILE`, reached `on -> armed`, accepted `off`, and was
-  cleanly returned to `unmounted`.
+  through `CCB_SESSION_FILE`, and reached `armed` without `$reconnect on`.
+- The same source-runtime project retained thread
+  `019fd12f-c2bf-7500-ba93-89d110f9fbd5` across CCB restart, replaced the old
+  pane-generation watcher, and shut down with lifecycle `unmounted`, watcher
+  `enabled=false,status=off`, and zero Codex/bridge/provider runtime processes.
+- A later inherited-authority change in that project created qualified fork
+  thread `019fd239-3e0a-70a1-b864-4a44e603740a` without archiving the old
+  transcript; the old and forked logs had matching user-message hashes. A
+  same-authority Agent restart retained the forked thread, rebound reconnect to
+  the new pane pid as `armed`, and normal project shutdown recorded `off` with
+  no project process residue.
+- CCB autostart, bridge, and source-dev install integration passed 15 targeted
+  pytest tests after the 0.3.5 signal-shutdown synchronization.
 - The SQLite terminal-error plus JSONL completion recovery test passed 10
   consecutive repetitions.
 - The terminal-disconnect/two-probe/injection race test passed 10 consecutive
@@ -97,9 +152,11 @@ compatibility path.
   cursor row/column and placeholder style instead of comparing placeholder
   text, with a final conditional cursor check inside the tmux send command.
 - Local installation resolves to `~/.local/bin/codex-reconnect`, reports
-  version 0.3.3, and the installed source/skill files match the working tree.
-- The affected live pane was restarted on 0.3.3 and reached `armed` as PID
-  `146071`; its older same-pane watchers remain retired.
+  version 0.3.5, and the installed source/skill files match the standalone
+  working tree. The replaced CCB wrapper is retained at
+  `~/.local/share/codex-reconnect-wrapper-backup.VG8QmJ/codex-reconnect`.
+- The affected live pane was rebound on 0.3.4 and reached `armed` with watcher
+  PID `466234`; only that watcher remains live for the pane.
 - A disposable real tmux accepted the conditional send only at its expected
   cursor and received exactly `continue`.
 - CCB `ask` source inspection identified its reliable sequence as
@@ -121,10 +178,18 @@ compatibility path.
   suite, Black, Python compilation, both installer shell syntax checks, and
   cached-diff validation; `git ls-remote` confirmed the same hash at
   `refs/heads/main`.
+- CCB v8.5.6 source commit `8b35d868f402e5f68929782a6c2df657a8750d21`
+  was pushed to `origin/main` and installed locally in source/dev mode. The
+  installed commands report CCB `8.5.6` and `codex-reconnect 0.3.5`; watcher
+  PID `466234` remained live with `status=armed` after installation.
+- CCB tag `v8.5.6` points to `58b49c12`; GitHub Release artifacts and npm OIDC
+  publication completed successfully, and npm `latest` resolves to `8.5.6`.
 
 ## Open Qualification
 
-- Repeat an actual terminal response-stream disconnect under 0.3.3 and verify
+- Verify the current 0.3.5 live pane reaches `waiting_network` and submits one
+  `continue` for an organically observed capacity event.
+- Repeat an actual terminal response-stream disconnect under 0.3.5 and verify
   SQLite detection, JSONL completion correlation, two stable OpenAI HTTPS
   successes, and one continuation.
 - Capture an organically occurring provider `serverOverloaded` terminal event
@@ -136,9 +201,10 @@ compatibility path.
 
 ## Claim Boundary
 
-The tmux implementation is deterministic-test complete, installed locally,
-integrated into CCB, and proven end to end against both JSONL and real-shape
+The tmux implementation is deterministic-test complete, integrated into CCB,
+and proven end to end against both JSONL and real-shape
 SQLite fixtures plus real network readiness. CCB-managed skill discovery and
 activation are qualified. A real pre-fix transport failure supplied the
-missing event-shape evidence, but post-fix automatic continuation during an
-organic disconnect and organic service-overload qualification remain open.
+missing event-shape evidence. The source fix, user-local installation, and live
+`armed` binding are verified; post-fix automatic continuation during an organic
+disconnect or organic service-overload event remains open.

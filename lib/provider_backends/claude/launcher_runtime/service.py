@@ -67,7 +67,10 @@ def build_start_cmd(
     provider_start_parts_fn,
     cli_supports_flag_fn,
     is_root_user_fn,
+    prepared_state: dict[str, object] | None = None,
 ) -> str:
+    launch_context = prepared_state if isinstance(prepared_state, dict) else {}
+    launch_context.pop('ccb_continuation_launch_mode', None)
     root_user = bool(is_root_user_fn())
     profile = load_profile_fn(runtime_dir)
     restore_target = resolve_restore_target_fn(
@@ -127,7 +130,20 @@ def build_start_cmd(
             cmd_parts.extend(['--permission-mode', 'bypassPermissions'])
         else:
             _append_unique_flag(cmd_parts, _ROOT_SKIP_PERMISSIONS_FLAG, spec.startup_args)
-    if restore_target.has_history:
+    if (
+        restore_target.continuation_mode == 'fork'
+        and restore_target.continuation_session_id
+        and cli_supports_flag_fn(cmd_parts, '--fork-session')
+    ):
+        launch_context['ccb_continuation_launch_mode'] = 'fork'
+        cmd_parts.extend(
+            [
+                '--resume',
+                restore_target.continuation_session_id,
+                '--fork-session',
+            ]
+        )
+    elif restore_target.has_history:
         cmd_parts.append('--continue')
     cmd_parts.extend(spec.startup_args)
 
@@ -193,6 +209,13 @@ def build_session_payload(
         payload['claude_home'] = str(layout.home_root)
         payload['claude_projects_root'] = str(layout.projects_root)
         payload['claude_session_env_root'] = str(layout.session_env_root)
+    authority_fingerprint = str(
+        prepared_state.get('claude_provider_authority_fingerprint') or ''
+    ).strip()
+    if authority_fingerprint:
+        payload['claude_provider_authority_fingerprint'] = authority_fingerprint
+    if str(prepared_state.get('ccb_continuation_launch_mode') or '').strip() == 'fork':
+        payload['ccb_continuation_launch_mode'] = 'fork'
     return payload
 
 

@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.6-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.2 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.6 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
+- [下载 CCB Mobile v8.5.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -282,7 +282,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png" alt="CCB 微信技术群 2" width="240">
+  <img src="../assets/weixin.png?v=77e83abf" alt="CCB 微信技术群 2" width="240">
 </p>
 
 > 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
@@ -300,6 +300,48 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.6</b> - 连续继承 Provider 状态且不清除 CCB 对话</summary>
+
+- 每个 API、token、URL、route 和账号维度都优先使用 CCB 配置；未显式配置的维度才从当前外部 Provider 状态单向读取。
+- 停止后的 Provider 新 generation 会重新读取继承状态；不会反向写入用户 shell、Provider home、IDE、keyring 或远程登录。
+- 权威 generation 变化时保留稳定的 CCB conversation、workspace、队列和历史。同一权威使用原生 resume；Codex/Claude/Gemini 在能力允许时执行 fork/import，否则记录 linked continuation，不隐藏历史。
+- 可恢复受撤回版 v8.5.5 迁移形状影响的旧会话，不会执行 clear；撤回的 v8.5.5 包不再复用。
+- CCB 托管 Codex 自动安装并 arm 内置 `codex-reconnect`；在精确 pane 和 thread 可证明安全时，网络中断或选定模型容量错误最多自动提交一次 `continue`。
+- 新签发的 Relay Host 邀请默认配额从每 24 小时 200 MiB 提升到 1 GiB；显式覆盖值和现有凭据保持不变。
+- 刷新微信社区群二维码和缓存 key；无需迁移配置或数据。
+
+</details>
+
+<details>
+<summary><b>v8.5.5</b> - 已撤回的兼容性版本</summary>
+
+- 该版本已于 2026-08-05 从 GitHub 撤回；旧会话迁移回归曾导致托管对话无法被原生 `resume` 找到。
+- 托管会话请使用 v8.5.6 或 v8.5.4，不要安装 v8.5.5。
+
+</details>
+
+<details>
+<summary><b>v8.5.4</b> - 更安全的 ask 路由、有界历史清理与可操作的 Mobile 局域网恢复</summary>
+
+- 仅在真实依赖关系中使用 `--chain`：独立 ask、通讯测试、批量任务、通知和 reply-delivery 确认不再错误创建 callback chain。
+- Config UI 支持按单个 Agent 或全部 Agent 扫描/清理历史，可选保留 7/30/90 天，并保护当前绑定、近期记录及每个 Provider 最新的一份 transcript。
+- 当前 Config UI 聚焦配置和历史清理，暂时下架只读的通讯流观察区。
+- Android 增加 LAN 配对预检、重连提示、重试/诊断操作和 15 秒 terminal WebSocket 心跳，且不会读取 SSID、BSSID 或其他网络身份信息。
+- Flutter 静态分析和全部 736 个 App 测试通过；Android 真机 Wi-Fi/热点/VPN/DHCP 地址变化矩阵仍是明确的验证限制。
+
+</details>
+
+<details>
+<summary><b>v8.5.3</b> - 更高 Relay 配额、有界 callback 修复与完整 Claude Agent 环境变量</summary>
+
+- 新签发的 Relay Host 邀请默认配额从每 24 小时 100 MiB 提升到 200 MiB；运营端显式指定的配额仍然优先。
+- 缓存 callback edge 的最新状态并限制修复候选，避免历史追加日志导致空闲 daemon 持续高 CPU 和缓存读放大。
+- 将 `agents.&lt;name&gt;.env` 中的非 API 变量传入托管 Claude，同时保留 CCB 对 API 凭据和 endpoint 的优先级控制（PR #284）。
+- 已有 Relay Host 凭据继续保留签发时的配额；运营端需要单独更新或重新签发邀请。
+
+</details>
+
+<details>
 <summary><b>v8.5.2</b> - 有界 pane 恢复、更简练的 ask 与隔离的 Rich 终端启动</summary>
 
 - respawn 后进入 90 秒观察期，只有新的健康观测确认恢复后才会继续派发队列任务。

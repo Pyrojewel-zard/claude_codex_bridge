@@ -29,13 +29,16 @@ def build_start_cmd(
     prepare_codex_home_overrides_fn: Callable[..., dict[str, str]],
     provider_start_parts_fn: Callable[[str], list[str]],
     load_resume_session_id_fn: Callable[..., str | None],
+    load_linked_continuation_session_id_fn: Callable[..., str | None] | None = None,
     build_codex_shell_prefix_fn: Callable[..., list[str]],
+    supports_session_fork_fn: Callable[[tuple[str, ...]], bool] | None = None,
     supports_managed_app_server_fn: Callable[[tuple[str, ...]], bool] | None = None,
     build_managed_app_server_command_fn: Callable[..., tuple[str, dict[str, object]]] | None = None,
     prepared_state: dict[str, object] | None = None,
 ) -> str:
     profile = load_resolved_provider_profile_fn(runtime_dir)
-    launch_context = prepared_state or {}
+    launch_context = prepared_state if isinstance(prepared_state, dict) else {}
+    launch_context.pop('ccb_continuation_launch_mode', None)
     project_root = _path_or_none(launch_context.get('project_root'))
     if project_root is None:
         raise RuntimeError('Codex launch requires prepare_launch_context before build_start_cmd')
@@ -55,6 +58,9 @@ def build_start_cmd(
         profile=profile,
         provider_start_parts=provider_start_parts,
         load_resume_session_id_fn=load_resume_session_id_fn,
+        load_linked_continuation_session_id_fn=load_linked_continuation_session_id_fn,
+        supports_session_fork_fn=supports_session_fork_fn,
+        launch_context=launch_context,
     )
     env_map = _env_map(
         runtime_dir,
@@ -92,9 +98,13 @@ def build_start_cmd(
 
 
 def build_codex_shell_prefix(*, profile, provider_api_env_keys_fn: Callable[[str], list[str]]) -> list[str]:
-    if profile is None or profile.inherit_api:
+    if profile is None:
         return []
-    return [f'unset {key}' for key in sorted(provider_api_env_keys_fn('codex'))]
+    if not profile.inherit_api:
+        cleared = set(provider_api_env_keys_fn('codex'))
+    else:
+        cleared = _explicit_api_owned_names(profile)
+    return [f'unset {key}' for key in sorted(cleared)]
 
 
 def _path_or_none(value: object) -> Path | None:
@@ -107,7 +117,18 @@ def _path_or_none(value: object) -> Path | None:
         return None
 
 
-def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_parts, load_resume_session_id_fn) -> list[str]:
+def _codex_args(
+    command,
+    spec,
+    runtime_dir: Path,
+    *,
+    profile,
+    provider_start_parts,
+    load_resume_session_id_fn,
+    load_linked_continuation_session_id_fn=None,
+    supports_session_fork_fn=None,
+    launch_context: dict[str, object] | None = None,
+) -> list[str]:
     codex_args = list(provider_start_parts)
     codex_args.extend(['-c', 'disable_paste_burst=true'])
     if role_command_policy_requires_enforcement(role_command_policy_for_spec(spec)):
@@ -128,11 +149,28 @@ def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_par
             spec,
             runtime_dir,
             profile,
-            current_fingerprint=current_provider_authority_fingerprint(profile),
+            current_fingerprint=current_provider_authority_fingerprint(profile, runtime_dir=runtime_dir),
             current_memory_fingerprint=current_memory_projection_fingerprint(runtime_dir),
         )
         if session_id:
             codex_args.extend(['resume', session_id])
+        elif load_linked_continuation_session_id_fn is not None:
+            continuation_id = load_linked_continuation_session_id_fn(
+                spec,
+                runtime_dir,
+                current_fingerprint=current_provider_authority_fingerprint(
+                    profile,
+                    runtime_dir=runtime_dir,
+                ),
+            )
+            if (
+                continuation_id
+                and supports_session_fork_fn is not None
+                and supports_session_fork_fn(tuple(provider_start_parts))
+            ):
+                codex_args.extend(['fork', continuation_id])
+                if launch_context is not None:
+                    launch_context['ccb_continuation_launch_mode'] = 'fork'
     return codex_args
 
 
@@ -170,6 +208,7 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
 def _inherited_api_env(*, profile) -> dict[str, str]:
     if profile is not None and not profile.inherit_api:
         return {}
+    explicitly_owned = _explicit_api_owned_names(profile)
     return {
         key: value
         for key, value in os.environ.items()
@@ -180,8 +219,29 @@ def _inherited_api_env(*, profile) -> dict[str, str]:
             'OPENAI_ORG_ID',
             'OPENAI_ORGANIZATION',
         }
+        and key not in explicitly_owned
         and str(value).strip()
     }
+
+
+def _explicit_api_owned_names(profile) -> set[str]:
+    if profile is None:
+        return set()
+    env = {
+        str(key): str(value)
+        for key, value in dict(getattr(profile, 'env', {}) or {}).items()
+        if str(value).strip()
+    }
+    groups = (
+        {'OPENAI_API_KEY'},
+        {'OPENAI_BASE_URL', 'OPENAI_API_BASE'},
+        {'OPENAI_ORG_ID', 'OPENAI_ORGANIZATION'},
+    )
+    owned: set[str] = set()
+    for group in groups:
+        if group & set(env):
+            owned.update(group)
+    return owned
 
 
 __all__ = ['build_codex_shell_prefix', 'build_start_cmd']

@@ -79,6 +79,10 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
   architecture while adopting Paseo-inspired host persistence, unified
   reconnect, cursor catch-up, Push, presence, and optional foreground-service
   behavior with strict emulator and physical-phone evidence.
+- [topics/lan-network-awareness-and-recovery.md](topics/lan-network-awareness-and-recovery.md)
+  is the execute-ready LAN reliability package for phone-side Wi-Fi/VPN
+  guidance, reconnect diagnostics, terminal heartbeat, and DHCP/address-change
+  recovery instructions.
 - [roadmap.md](roadmap.md) tracks likely implementation phases.
 - [implementation-status.md](implementation-status.md) is the current
   execution handoff for the active landing phase.

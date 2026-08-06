@@ -11,6 +11,7 @@ from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from cli.services.role_command_policy import ensure_role_command_policy_supported
 from provider_backends.runtime_restore import ProviderRestoreTarget
+from provider_backends.session_authority import current_provider_authority_fingerprint
 from provider_core.runtime_shared import provider_start_parts
 from provider_profiles import ResolvedProviderProfile, load_resolved_provider_profile
 from workspace.models import WorkspacePlan
@@ -96,6 +97,7 @@ def build_start_cmd(
         provider_start_parts_fn=provider_start_parts,
         cli_supports_flag_fn=claude_cli_supports_flag,
         is_root_user_fn=is_root_user,
+        prepared_state=prepared_state,
     )
 
 
@@ -141,6 +143,9 @@ def build_session_payload(
     profile = load_resolved_provider_profile(runtime_dir)
     prepared_state = dict(prepared_state or {})
     prepared_state['claude_home_layout'] = _resolve_claude_home_layout_impl(runtime_dir, profile)
+    prepared_state['claude_provider_authority_fingerprint'] = (
+        current_provider_authority_fingerprint('claude', profile, runtime_dir)
+    )
     return _build_session_payload_impl(
         context,
         spec,
@@ -178,6 +183,7 @@ def _project_session_restore_target(
     workspace_path: Path,
     session_instance: str | None,
     *,
+    authority_fingerprint: str,
     managed_home: Path,
 ) -> ProviderRestoreTarget | None:
     return _project_session_restore_target_impl(
@@ -186,6 +192,7 @@ def _project_session_restore_target(
         load_project_session_fn=load_project_session,
         claude_history_state_fn=_claude_history_state,
         managed_home=managed_home,
+        authority_fingerprint=authority_fingerprint,
     )
 
 

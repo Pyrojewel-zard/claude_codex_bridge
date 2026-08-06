@@ -163,6 +163,63 @@ void main() {
       },
     );
 
+    testWidgets(
+      'LAN claim warns on cellular and continues only after confirmation',
+      (tester) async {
+        var claimCalls = 0;
+        await _pumpProjectHome(
+          tester,
+          mobileNetworkStatusPlatform: _FixedMobileNetworkStatusPlatform(
+            const MobileNetworkStatus(
+              supported: true,
+              connected: true,
+              wifi: false,
+              ethernet: false,
+              cellular: true,
+              vpn: false,
+            ),
+          ),
+          pairingClaimAndStore: ({
+            required pairing,
+            required deviceName,
+            required store,
+            deviceId,
+          }) async {
+            claimCalls += 1;
+            final paired = _pairedHost(pairing);
+            await store.save(paired);
+            return paired;
+          },
+        );
+        await _openPairingPanel(tester);
+        await tester.enterText(
+          find.byKey(const ValueKey('connection-code-field')),
+          _lanPairing().toConnectionCode(),
+        );
+
+        _claimButton(tester).onPressed!();
+        await tester.pumpAndSettle();
+
+        expect(claimCalls, 0);
+        expect(
+          find.byKey(const ValueKey('lan-pairing-network-warning')),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('Mobile data normally cannot reach'),
+          findsOneWidget,
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('lan-pairing-continue-anyway')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(claimCalls, 1);
+        expect(find.text('Gateway paired'), findsOneWidget);
+      },
+    );
+
     testWidgets('successful connection-code claim clears code and activates', (
       tester,
     ) async {
@@ -224,6 +281,7 @@ Future<void> _pumpProjectHome(
   GatewayPairingScanner? pairingScanner,
   required GatewayPairingClaimAndStore pairingClaimAndStore,
   GatewayRepositoryFactory? gatewayRepositoryFactory,
+  MobileNetworkStatusPlatform? mobileNetworkStatusPlatform,
 }) async {
   final profileStore = GatewayHostProfileStore(
     secureStore: MemorySecureStore(),
@@ -238,11 +296,25 @@ Future<void> _pumpProjectHome(
         gatewayRepositoryFactory:
             gatewayRepositoryFactory ?? (_) => RecordingGatewayRepository(),
         gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        mobileNetworkStatusPlatform:
+            mobileNetworkStatusPlatform ??
+            const _FixedMobileNetworkStatusPlatform(
+              MobileNetworkStatus.unsupported(),
+            ),
         showOnboardingWhenUnpaired: true,
       ),
     ),
   );
   await tester.pumpAndSettle();
+}
+
+class _FixedMobileNetworkStatusPlatform implements MobileNetworkStatusPlatform {
+  const _FixedMobileNetworkStatusPlatform(this.status);
+
+  final MobileNetworkStatus status;
+
+  @override
+  Future<MobileNetworkStatus> read() async => status;
 }
 
 Future<void> _openPairingPanel(WidgetTester tester) async {

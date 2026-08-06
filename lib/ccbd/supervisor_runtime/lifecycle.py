@@ -27,6 +27,7 @@ def start_supervisor(
     startup_run_id: str | None,
     daemon_started: bool | None,
     readiness_recorder=None,
+    restart_agent_panes: dict[str, str] | None,
     run_start_flow_fn,
 ):
     supervisor_started_ns = time.monotonic_ns()
@@ -106,6 +107,7 @@ def start_supervisor(
             ),
             fresh_namespace=bool(getattr(namespace, 'created_this_call', False)),
             fresh_workspace=bool(getattr(namespace, 'workspace_recreated_this_call', False)),
+            restart_agent_panes=restart_agent_panes,
             clock=supervisor._clock,
             readiness_recorder=readiness_recorder,
         )

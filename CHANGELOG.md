@@ -1,5 +1,131 @@
 # Changelog
 
+## v8.5.6 (2026-08-06)
+
+### Continuous Provider Inheritance
+
+- **Explicit Authority Wins Per Dimension**: CCB uses configured API, token,
+  URL, route, account, and Provider profile values first. Only dimensions not
+  explicitly owned are read from the current external Provider environment or
+  login state.
+- **Restart Refreshes Without Reverse Effects**: a stopped Provider generation
+  is rebuilt from the current external snapshot and private projection. CCB
+  never writes the inherited result back to the user's shell, Provider home,
+  IDE, keyring, or remote login.
+- **Conversation History Survives Authority Changes**: same-authority launches
+  use native resume. Codex, Claude, and Gemini use a qualified fork/import path
+  when available; otherwise CCB records a linked continuation while preserving
+  the stable conversation, workspace, queue, session record, and transcript
+  history. The withdrawn v8.5.5 archive shape is recovered only with matching
+  ownership evidence.
+
+### Codex Reconnect
+
+- **Bundled Automatic Activation**: CCB installs and arms `codex-reconnect`
+  automatically for managed Codex panes after a concrete thread binding.
+- **Bounded Capacity Recovery**: terminal network and selected-model capacity
+  failures are classified only for the exact thread and pane, then receive at
+  most one literal `continue` after the existing safety and readiness gates.
+
+### Withdrawal And Compatibility
+
+- **v8.5.5 Withdrawn**: the GitHub release was withdrawn on 2026-08-05 after a
+  legacy-session migration regression made existing managed conversations
+  unavailable to native `resume`. v8.5.6 is the replacement; no manual clear or
+  history deletion is required.
+
+## v8.5.5 (2026-08-05)
+
+> Withdrawn from GitHub on 2026-08-05 after a legacy-session migration
+> regression made existing managed conversations unavailable to native resume.
+> Use v8.5.4 until the replacement release is published.
+
+### Provider State Refresh
+
+- **Restart Uses Current Provider Authority**: `ccb restart <agent>` now rebuilds
+  the Provider launch from the current profile, login, API key, endpoint, proxy,
+  and model state instead of replaying the command persisted when the pane was
+  first created. Switching accounts or API routes no longer requires
+  `ccb clear`.
+- **Cross-Authority Resume Is Blocked Safely**: Codex archives an incompatible
+  managed session binding before starting fresh; Claude and Gemini suppress
+  native resume when the saved session belongs to another Provider authority.
+  Provider login state and history files remain intact.
+- **Credentials Stay Private**: managed session metadata stores only an
+  Agent-private HMAC fingerprint of Provider authority inputs, never raw API
+  keys, tokens, endpoints, or proxy credentials.
+
+### Relay And Community
+
+- **New Relay Invitations Default To 1 GiB/Day**: newly issued Relay Host
+  invitations now allow 1 GiB per 24-hour quota window. Explicit
+  `--max-bytes-per-day` values and existing Host credentials are unchanged.
+- **Community QR Refreshed**: the WeChat group image and README cache key now
+  point to the current invitation image.
+
+## v8.5.4 (2026-08-03)
+
+### Ask Routing
+
+- **Chains Now Require A Real Dependency**: inherited ask guidance for every
+  supported Provider defaults to plain routing. `--chain` is reserved for an
+  active parent task that cannot finish without that exact child result;
+  communication tests, batch sends, notifications, and independent asks no
+  longer imply a chain dependency.
+- **Reply Delivery Cannot Become A False Parent**: control-plane
+  `reply_delivery` work is excluded from active-parent detection, so an
+  overlapping ordinary ask is not rejected or attached to an acknowledgement.
+
+### Agent History And Config UI
+
+- **History Cleanup Is Bounded Per Agent**: Config UI can scan or clean one
+  Agent or all Agents with 7/30/90-day retention. Current session bindings,
+  records inside the retention window, and each Provider's newest transcript
+  remain protected; deletion is restricted to the managed transcript allowlist.
+- **The Panel Is Focused Again**: the current Config UI keeps configuration,
+  activation review, and history cleanup while temporarily delisting the
+  read-only Agent communication-flow observer.
+
+### Mobile LAN Recovery
+
+- **LAN Failures Are Actionable**: Android uses coarse, non-identifying
+  connectivity evidence to warn before LAN pairing and explain reconnecting
+  LAN routes. Stored profiles are preserved, and users can Retry or open the
+  existing authenticated Diagnostics flow.
+- **Silent Terminal Disconnects Recover**: terminal WebSockets use a 15-second
+  client ping interval so Wi-Fi half-open connections enter the existing
+  reconnect/cursor-resume path without replaying input.
+- **Network Identity Stays Private**: CCB Mobile requests only
+  `ACCESS_NETWORK_STATE`; it does not read SSID, BSSID, location, or other
+  network identity. Computer-side onboarding now covers same-network, hotspot,
+  guest isolation, VPN, firewall, and DHCP address-change recovery.
+
+## v8.5.3 (2026-08-01)
+
+### Relay Capacity
+
+- **New Invitations Default To 200 MiB/Day**: newly issued Relay Host
+  invitations now allow 200 MiB per 24-hour quota window instead of
+  100 MiB. Explicit `--max-bytes-per-day` values still override the default;
+  existing Host credentials retain the quota issued with them.
+
+### Callback Repair Efficiency
+
+- **Large Ledgers No Longer Amplify Idle Reads**: callback-edge latest state
+  is cached from the append-only authority and safely invalidated on external
+  changes. Repair inspects only nonterminal candidates and scans each target's
+  job history at most once per tick, preventing historical callback growth
+  from causing sustained idle CPU and cached-read pressure.
+- **No Ledger Migration Required**: JSONL remains the durable authority and
+  existing ledgers are rebuilt into the derived in-memory view on restart.
+
+### Claude Agent Environment
+
+- **General Agent Variables Reach Claude**: non-API variables from
+  `agents.<name>.env`, including proxy and tool configuration paths, are now
+  exported to managed Claude launches. CCB-managed API credentials, endpoints,
+  and runtime-home overrides retain precedence (PR #284).
+
 ## v8.5.2 (2026-07-30)
 
 ### Bounded Pane Recovery

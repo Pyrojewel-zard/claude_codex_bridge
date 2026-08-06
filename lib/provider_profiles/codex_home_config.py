@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import hmac
 import importlib
 import json
 import os
@@ -10,6 +11,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -72,6 +74,15 @@ _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('plugins'),
 )
 _MANAGED_CODEX_DISABLED_FEATURES = ('external_migration',)
+_CODEX_AUTHORITY_ROUTE_KEYS = (
+    'chatgpt_base_url',
+    'oss_provider',
+)
+_CODEX_AUTHORITY_LOGIN_KEYS = (
+    'preferred_auth_method',
+    'forced_login_method',
+    'forced_chatgpt_workspace_id',
+)
 _CODEX_DEFAULT_INHERITED_HOOK_EVENTS = frozenset(
     {
         'SessionStart',
@@ -127,11 +138,12 @@ def materialize_codex_home_config(
 ) -> Path:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
+    source_config = source_home / 'config.toml'
+    _preflight_codex_auth_sources(source_home, source_config=source_config, profile=profile)
     target_home = ensure_private_inheritance_directory(target_home, source_home)
     ensure_private_directory(target_home / 'sessions')
 
     target_config = target_home / 'config.toml'
-    source_config = source_home / 'config.toml'
     if target_config.is_symlink():
         target_config.unlink()
     authority = codex_api_authority(profile)
@@ -184,11 +196,12 @@ def materialize_codex_home_config(
         runtime_dir=runtime_dir,
     )
 
+    previous_auth_projection = _read_auth_projection_manifest(target_home)
     _materialize_auth_file(
         source_home / 'auth.json',
         target_home / 'auth.json',
         profile=profile,
-        authority=authority,
+        previous_projection=previous_auth_projection,
     )
     _materialize_auth_sidecars(
         source_home,
@@ -196,6 +209,7 @@ def materialize_codex_home_config(
         source_config=source_config,
         profile=profile,
         authority=authority,
+        previous_projection=previous_auth_projection,
     )
     _materialize_inherited_skills(
         source_home / 'skills',
@@ -315,8 +329,6 @@ def repair_codex_activity_hooks(
 
 
 def codex_api_authority(profile) -> CodexApiAuthority | None:
-    if profile is None or _inherits_api(profile):
-        return None
     env = _profile_env(profile)
     base_url = env.get('OPENAI_BASE_URL') or env.get('OPENAI_API_BASE') or ''
     if not base_url:
@@ -339,6 +351,48 @@ def codex_provider_authority_fingerprint(profile) -> str | None:
     }
     encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def codex_source_authority_config_payload(
+    config_path: Path,
+    *,
+    include_route: bool = True,
+    include_login: bool = True,
+) -> dict[str, object]:
+    """Project only Codex config dimensions that select an authority.
+
+    Model, UI, hook, MCP, and feature edits must not rotate a conversation
+    generation.  Route/provider selection and explicit account-login knobs do
+    affect which remote authority a stopped restart will use.
+    """
+    source = Path(config_path).expanduser()
+    if not _source_config_valid(source):
+        raise RuntimeError(f'Codex authority config is invalid: {source}')
+    payload = _read_source_config_payload(source)
+    selected: dict[str, object] = {}
+    if include_route:
+        provider_id = str(payload.get('model_provider') or 'openai').strip() or 'openai'
+        selected['model_provider'] = provider_id
+        providers = payload.get('model_providers')
+        if isinstance(providers, dict):
+            provider_payload = providers.get(provider_id)
+            if isinstance(provider_payload, dict):
+                selected['model_provider_config'] = _clone_mapping(provider_payload)
+        for key in _CODEX_AUTHORITY_ROUTE_KEYS:
+            if key in payload:
+                selected[key] = _clone_payload(payload[key])
+    if include_login:
+        for key in _CODEX_AUTHORITY_LOGIN_KEYS:
+            if key in payload:
+                selected[key] = _clone_payload(payload[key])
+    return selected
+
+
+def codex_auth_sidecar_names(source_home: Path, source_config: Path | None = None) -> tuple[str, ...]:
+    """Return safe auth sidecars referenced by the source Codex config."""
+    root = Path(source_home).expanduser()
+    config = Path(source_config).expanduser() if source_config is not None else root / 'config.toml'
+    return tuple(sorted(_codex_auth_sidecar_names(root, config)))
 
 
 def refresh_codex_auth_projection(
@@ -394,6 +448,7 @@ def refresh_codex_auth_projection(
         _write_auth_projection_manifest(
             source_home,
             target_home,
+            projected_files=projected_names,
             projected_sidecars=sidecar_names,
             profile=profile,
             status='inherited_auth_recovered',
@@ -413,6 +468,10 @@ def _inherits_api(profile) -> bool:
 
 def _inherits_auth(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_auth', True))
+
+
+def _inherits_external_auth(profile) -> bool:
+    return _inherits_auth(profile) and not bool(_explicit_api_key(profile))
 
 
 def _inherits_config(profile) -> bool:
@@ -443,6 +502,52 @@ def _profile_env(profile) -> dict[str, str]:
 
 def _explicit_api_key(profile) -> str:
     return _profile_env(profile).get('OPENAI_API_KEY', '')
+
+
+def _preflight_codex_auth_sources(
+    source_home: Path,
+    *,
+    source_config: Path,
+    profile,
+) -> None:
+    reads_source_config = bool(
+        _inherits_config(profile)
+        or _inherits_api(profile)
+        or _inherits_external_auth(profile)
+    )
+    if reads_source_config and _probe_regular_source_file(source_config):
+        if not _source_config_valid(source_config):
+            raise RuntimeError(
+                f'cannot parse inherited Codex config source: {source_config}'
+            )
+    if not _inherits_external_auth(profile):
+        return
+    names = {'auth.json', *_codex_auth_sidecar_names(source_home, source_config)}
+    for name in sorted(names):
+        _probe_regular_source_file(Path(source_home) / name)
+
+
+def _probe_regular_source_file(path: Path) -> bool:
+    source = Path(path).expanduser()
+    try:
+        metadata = source.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise RuntimeError(
+            f'cannot inspect inherited Codex source: {source}: {exc}'
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(
+            f'inherited Codex source must be a regular file: {source}'
+        )
+    try:
+        source.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(
+            f'cannot read inherited Codex source: {source}: {exc}'
+        ) from exc
+    return True
 
 
 def _write_codex_api_authority_config(
@@ -942,27 +1047,41 @@ def _clone_payload(value: object) -> object:
     return value
 
 
-def _materialize_auth_file(source: Path, target: Path, *, profile, authority: CodexApiAuthority | None) -> None:
-    if authority is not None:
-        explicit_key = _explicit_api_key(profile)
-        if explicit_key:
-            _write_auth_file(target, explicit_key)
-        else:
+def _materialize_auth_file(
+    source: Path,
+    target: Path,
+    *,
+    profile,
+    previous_projection: dict[str, object],
+) -> None:
+    explicit_key = _explicit_api_key(profile)
+    if explicit_key:
+        _write_auth_file(target, explicit_key)
+        return
+    _sync_auth_file(
+        source,
+        target,
+        enabled=_inherits_external_auth(profile),
+        source_owned='auth.json' in _manifest_projected_files(previous_projection),
+    )
+
+
+def _sync_auth_file(
+    source: Path,
+    target: Path,
+    *,
+    enabled: bool,
+    source_owned: bool,
+) -> None:
+    if not enabled:
+        if source_owned:
             target.unlink(missing_ok=True)
         return
-    _sync_auth_file(source, target, profile=profile)
-
-
-def _sync_auth_file(source: Path, target: Path, *, profile) -> None:
-    if not _inherits_auth(profile):
+    copied = _sync_secret_source_file(source, target)
+    if not copied:
+        if source_owned:
+            target.unlink(missing_ok=True)
         return
-    if not source.is_file():
-        target.unlink(missing_ok=True)
-        return
-    try:
-        copied = copy_regular_file(source, target)
-    except OSError:
-        copied = False
     if copied:
         try:
             os.chmod(target, 0o600)
@@ -987,32 +1106,34 @@ def _materialize_auth_sidecars(
     source_config: Path,
     profile,
     authority: CodexApiAuthority | None,
+    previous_projection: dict[str, object],
 ) -> None:
     source_home = Path(source_home).expanduser()
     target_home = Path(target_home).expanduser()
-    previous = _read_auth_projection_manifest(target_home)
-    previous_sidecars = _manifest_sidecars(previous)
+    previous_sidecars = _manifest_sidecars(previous_projection)
     requested_sidecars = _codex_auth_sidecar_names(source_home, source_config)
 
-    if authority is not None:
-        _remove_projected_auth_sidecars(target_home, previous_sidecars | requested_sidecars)
+    if not _inherits_external_auth(profile):
+        _remove_projected_auth_sidecars(target_home, previous_sidecars)
         _write_auth_projection_manifest(
             source_home,
             target_home,
+            projected_files=(),
             projected_sidecars=(),
             profile=profile,
-            status='explicit_api_authority',
+            status=(
+                'explicit_api_authority'
+                if _explicit_api_key(profile) or authority is not None
+                else 'inherit_auth_disabled'
+            ),
         )
-        return
-
-    if not _inherits_auth(profile):
         return
 
     projected: list[str] = []
     for name in sorted(requested_sidecars):
         source = source_home / name
         target = target_home / name
-        if _sync_secret_file(source, target):
+        if _sync_secret_source_file(source, target):
             projected.append(name)
         elif name in previous_sidecars:
             target.unlink(missing_ok=True)
@@ -1024,6 +1145,11 @@ def _materialize_auth_sidecars(
     _write_auth_projection_manifest(
         source_home,
         target_home,
+        projected_files=tuple(
+            name
+            for name in ('auth.json', *projected)
+            if (target_home / name).is_file()
+        ),
         projected_sidecars=tuple(projected),
         profile=profile,
         status='inherited_auth',
@@ -1050,11 +1176,19 @@ def _is_safe_codex_auth_sidecar_name(name: str) -> bool:
     return lower.endswith('.config.toml') or any(token in lower for token in ('auth', 'credential', 'key', 'token'))
 
 
-def _sync_secret_file(source: Path, target: Path) -> bool:
+def _sync_secret_source_file(source: Path, target: Path) -> bool:
     source = Path(source).expanduser()
     target = Path(target).expanduser()
-    if not copy_regular_file(source, target):
+    if not _probe_regular_source_file(source):
         return False
+    try:
+        copied = copy_regular_file(source, target)
+    except OSError as exc:
+        raise RuntimeError(
+            f'cannot copy inherited Codex auth source: {source}: {exc}'
+        ) from exc
+    if not copied:
+        raise RuntimeError(f'cannot copy inherited Codex auth source: {source}')
     try:
         os.chmod(target, 0o600)
     except Exception:
@@ -1103,10 +1237,62 @@ def _read_auth_projection_manifest(target_home: Path) -> dict[str, object]:
 
 
 def _manifest_sidecars(payload: dict[str, object]) -> set[str]:
+    if not _valid_auth_projection_manifest(payload):
+        return set()
     raw = payload.get('projected_sidecars')
     if not isinstance(raw, list):
         return set()
-    return {name for name in (str(item or '').strip() for item in raw) if _is_safe_codex_auth_sidecar_name(name)}
+    owned = _manifest_projected_files(payload)
+    return {
+        name
+        for name in (str(item or '').strip() for item in raw)
+        if _is_safe_codex_auth_sidecar_name(name) and name in owned
+    }
+
+
+def _valid_auth_projection_manifest(payload: dict[str, object]) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and payload.get('schema_version') == 1
+        and payload.get('record_type') == 'ccb_codex_auth_projection'
+    )
+
+
+def _manifest_projected_files(payload: dict[str, object]) -> set[str]:
+    if not _valid_auth_projection_manifest(payload):
+        return set()
+    raw = payload.get('projected_files')
+    if isinstance(raw, list):
+        return {
+            name
+            for name in (str(item or '').strip() for item in raw)
+            if name == 'auth.json' or _is_safe_codex_auth_sidecar_name(name)
+        }
+
+    # Migrate the pre-provenance manifest only when its recorded source and
+    # target digests prove that CCB copied the exact file.
+    if not str(payload.get('status') or '').startswith('inherited_auth'):
+        return set()
+    records = payload.get('files')
+    if not isinstance(records, list):
+        return set()
+    owned: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = str(record.get('name') or '').strip()
+        if name != 'auth.json' and not _is_safe_codex_auth_sidecar_name(name):
+            continue
+        source_sha = str(record.get('source_sha256') or '').strip()
+        target_sha = str(record.get('target_sha256') or '').strip()
+        if (
+            record.get('source_exists') is True
+            and record.get('target_exists') is True
+            and source_sha
+            and hmac.compare_digest(source_sha, target_sha)
+        ):
+            owned.add(name)
+    return owned
 
 
 def _remove_projected_auth_sidecars(target_home: Path, names: set[str]) -> None:
@@ -1119,6 +1305,7 @@ def _write_auth_projection_manifest(
     source_home: Path,
     target_home: Path,
     *,
+    projected_files: tuple[str, ...],
     projected_sidecars: tuple[str, ...],
     profile,
     status: str,
@@ -1131,6 +1318,7 @@ def _write_auth_projection_manifest(
         'status': status,
         'source_home': str(Path(source_home).expanduser()),
         'inherit_auth': _inherits_auth(profile),
+        'projected_files': sorted(projected_files),
         'projected_sidecars': sorted(projected_sidecars),
         'files': [
             _auth_projection_file_record(Path(source_home).expanduser() / name, target_home / name, name=name)
@@ -1951,6 +2139,8 @@ __all__ = [
     'CodexAuthRefreshResult',
     'codex_api_authority',
     'codex_provider_authority_fingerprint',
+    'codex_source_authority_config_payload',
+    'codex_auth_sidecar_names',
     'materialize_codex_home_config',
     'refresh_codex_auth_projection',
     'repair_codex_activity_hooks',

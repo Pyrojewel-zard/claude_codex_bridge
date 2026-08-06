@@ -29,6 +29,12 @@ Authentication projection and logout isolation must also satisfy
   - project anchor + logical agent name + provider
 - `runtime generation`
   - one launch generation, currently represented by `ccb_session_id`
+- `CCB conversation identity`
+  - stable across managed launches and authority generations, represented by
+    `ccb_conversation_id`
+- `authority generation`
+  - the ordered credential/route generation inside one CCB conversation,
+    represented by `ccb_authority_generation`
 - `provider conversation identity`
   - the concrete Gemini conversation, represented by `gemini_session_id`
 
@@ -82,6 +88,8 @@ Inside that home, the managed Gemini state is:
     `GEMINI.md`, and optional `.ccb/agents/<agent>/memory.md`
   - removed when `inherit_memory = false`
 - `.ccb/agents/<agent>/provider-state/gemini/home/.gemini/tmp/`
+  - native history may use either `session-*.json` or current CLI
+    `session-*.jsonl`; both formats are first-class managed history evidence
 
 If the effective Gemini home is explicitly overridden by a provider profile, the
 effective temp root must still be derived from that home:
@@ -98,8 +106,19 @@ The managed session file must persist:
 - `gemini_root`
 - `gemini_session_id` once bound
 - `gemini_session_path` once bound
+- `gemini_provider_authority_fingerprint` for the launch-time API/login/route
+  authority
+- `ccb_conversation_id`, `ccb_authority_generation`, continuity status, resume
+  compatibility, and prior Provider bindings
 
 These fields are authority for managed Gemini runtime recovery.
+
+The fingerprint is an Agent-private HMAC over the selected profile, API
+environment/route, and applicable inherited or Agent-private auth files. Its
+owner-only key lives at
+`.ccb/agents/<agent>/provider-state/gemini/.ccb-authority-hmac-key`; neither raw
+credentials nor a portable plain credential hash may be persisted in session
+or diagnostic records.
 
 ## 4. Startup Contract
 
@@ -130,6 +149,24 @@ When `ccb` starts a managed Gemini agent:
 - it must create the managed home and managed temp root before launching Gemini
 - it must materialize required Gemini auth/config projections into the managed
   home without treating them as conversation identity
+- before adding `--resume latest`, it must prove that the recorded
+  `gemini_provider_authority_fingerprint` matches the newly prepared launch;
+  mismatched proof must not directly resume the old native id
+- on a mismatch, the old `.json` or `.jsonl` session file must be a regular file
+  inside the current Agent-managed `GEMINI_ROOT` before it may seed a
+  continuation
+- Gemini CLI 0.53.0 supports `--session-file <old-path>`; when capability
+  probing confirms that flag, startup uses it to import the old transcript into
+  a new native session id and binds that id to the current authority generation
+- if the flag is unavailable or the old path cannot be proven Agent-owned,
+  startup creates a linked fresh binding while preserving the old transcript
+  and must not label the result as a native import
+- a legacy managed session with no authority fingerprint may resume once when
+  its chat root remains inside the same Agent-managed Gemini home; the new
+  launch persists the current fingerprint, so later restarts return to strict
+  matching
+- `ccb restart <agent>` must use normal managed-home/profile preparation and
+  this authority check rather than replaying the persisted `start_cmd`
 - managed Gemini home materialization is part of startup preparation, before
   hook/trust installation and before launcher command assembly
 - startup must project the packaged `ask` and `ccb-clear` control skills into
@@ -221,6 +258,12 @@ Managed readers must not widen their search to global `~/.gemini/tmp`, even
 when they can observe matching workspace paths there. A session outside the
 managed home is a contract violation or legacy-leak diagnostic, not a
 completion source.
+
+An authority-changing import is a new bound native session, not direct reuse of
+the old id. `native_fork_continuation` is valid only when startup actually
+selected `--session-file <old-path>` and the new binding was observed. Without
+that capability proof, the stable CCB conversation remains linked to both
+generations but does not claim native context import.
 
 ## 6. Isolation Contract
 

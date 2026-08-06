@@ -66,12 +66,45 @@ def _supports_managed_app_server_executable(executable: str, mtime_ns: int, size
 supports_managed_app_server.cache_clear = _supports_managed_app_server_executable.cache_clear
 
 
+def supports_session_fork(provider_start: tuple[str, ...]) -> bool:
+    if len(provider_start) != 1:
+        return False
+    resolved = shutil.which(str(provider_start[0] or '').strip())
+    if not resolved:
+        return False
+    path = Path(resolved).resolve()
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    return _supports_session_fork_executable(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+@lru_cache(maxsize=16)
+def _supports_session_fork_executable(executable: str, mtime_ns: int, size: int) -> bool:
+    del mtime_ns, size
+    try:
+        result = subprocess.run(
+            [executable, 'fork', '--help'],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and 'Fork a previous interactive session' in str(result.stdout or '')
+
+
+supports_session_fork.cache_clear = _supports_session_fork_executable.cache_clear
+
+
 def build_managed_app_server_command(
     codex_args: list[str],
     *,
     runtime_dir: Path,
 ) -> tuple[str, dict[str, object]]:
-    base_args, resume_id = _split_resume(codex_args)
+    base_args, continuation_mode, resume_id = _split_continuation(codex_args)
     if not base_args:
         raise ValueError('managed Codex app-server requires an executable')
     artifacts = codex_runtime_artifact_layout(runtime_dir)
@@ -85,6 +118,7 @@ def build_managed_app_server_command(
         socket_path=socket_path,
         remote_marker=artifacts.app_server_remote_marker,
         resume_id=resume_id,
+        continuation_mode=continuation_mode,
     )
     executable = base_args[0]
     return command, {
@@ -95,14 +129,21 @@ def build_managed_app_server_command(
     }
 
 
-def _split_resume(codex_args: list[str]) -> tuple[list[str], str]:
+def _split_continuation(codex_args: list[str]) -> tuple[list[str], str, str]:
     for index, token in enumerate(codex_args):
-        if token != 'resume':
+        if token not in {'resume', 'fork'}:
             continue
         if index + 1 >= len(codex_args) or index + 2 != len(codex_args):
-            raise ValueError('managed Codex resume requires one terminal session id')
-        return list(codex_args[:index]), str(codex_args[index + 1])
-    return list(codex_args), ''
+            raise ValueError(f'managed Codex {token} requires one terminal session id')
+        return list(codex_args[:index]), token, str(codex_args[index + 1])
+    return list(codex_args), '', ''
+
+
+def _split_resume(codex_args: list[str]) -> tuple[list[str], str]:
+    base_args, mode, session_id = _split_continuation(codex_args)
+    if mode == 'fork':
+        return list(codex_args), ''
+    return base_args, session_id
 
 
 def _managed_shell_command(
@@ -112,12 +153,14 @@ def _managed_shell_command(
     socket_path: Path,
     remote_marker: Path,
     resume_id: str,
+    continuation_mode: str = 'resume',
 ) -> str:
     quoted_socket = shlex.quote(str(socket_path))
     quoted_marker = shlex.quote(str(remote_marker))
     quoted_resume = shlex.quote(resume_id)
     remote = ' '.join(shlex.quote(str(part)) for part in remote_args)
     local = ' '.join(shlex.quote(str(part)) for part in local_args)
+    mode = continuation_mode if continuation_mode in {'resume', 'fork'} else 'resume'
     return '; '.join(
         (
             f'export CCB_CODEX_MANAGED_REMOTE=1 CCB_CODEX_RESUME_ID={quoted_resume}',
@@ -130,15 +173,19 @@ def _managed_shell_command(
             (
                 f'if [ -S {quoted_socket} ]; then '
                 f"printf '%s\\n' {quoted_socket} > {quoted_marker}; "
-                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then exec {remote} resume "$CCB_CODEX_RESUME_ID"; '
+                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then exec {remote} {mode} "$CCB_CODEX_RESUME_ID"; '
                 f'else exec {remote}; fi; fi'
             ),
             (
-                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then exec {local} resume "$CCB_CODEX_RESUME_ID"; '
+                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then exec {local} {mode} "$CCB_CODEX_RESUME_ID"; '
                 f'else exec {local}; fi'
             ),
         )
     )
 
 
-__all__ = ['build_managed_app_server_command', 'supports_managed_app_server']
+__all__ = [
+    'build_managed_app_server_command',
+    'supports_managed_app_server',
+    'supports_session_fork',
+]

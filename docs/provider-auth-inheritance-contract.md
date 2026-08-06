@@ -32,6 +32,44 @@ There is no reverse synchronization path. `inherit_auth=false` prevents a new
 source projection; a provider-specific contract may preserve an already-private
 agent login, but that state remains local and must not become a source alias.
 
+A stopped manual Provider restart must re-run the normal managed launch
+preparation before process creation. It must not replay a persisted shell
+command as a substitute for re-reading current inherited auth/API state. A
+conversation binding may be resumed only when the Provider-specific authority
+fence proves it is compatible with the newly prepared generation. Conversation
+clear remains local context management and is not required to activate a new
+credential or route.
+
+Authority is resolved per dimension in this order:
+
+1. explicit Agent-local API, token, URL, route, or Provider profile state from
+   `.ccb/ccb.config`;
+2. current external Provider state for dimensions not owned explicitly; and
+3. no credential or route when neither source supplies that dimension.
+
+An explicit dimension must not be shadowed by ambient shell or Provider-home
+state, and explicit failure must not fall back to ambient authority. A fully
+stopped CCB/backend start reads a new external snapshot from the environment,
+Provider home, and supported read-only credential services inherited by that
+new backend process. It does not hot-mutate a running Provider generation.
+
+External reads have three outcomes: `present`, `authoritative_absent`, and
+`unknown_error`. Confirmed absence may remove only a managed projection whose
+owner-only provenance record proves it came from that source. A malformed or
+missing provenance record preserves unmarked Agent-private state. A read,
+permission, parse, or credential-service error blocks the new generation and
+must not be reclassified as logout or used to delete the last projection.
+
+Provider authority and conversation identity are separate. Each Agent keeps a
+stable CCB conversation id and an ordered authority-generation history. The
+same proven authority may use Provider-native resume. A changed or unknown
+authority must retain the old native transcript and binding as historical
+evidence but may resume it only when the Provider-specific contract proves
+compatibility. Otherwise CCB starts a linked continuation and leaves the old
+transcript discoverable by the Provider's native history surface. This is not
+permission to claim automatic transcript import when the Provider has no
+qualified import mechanism.
+
 ## 3. Filesystem Boundary
 
 Credential, token, account, auth-selection, browser-profile, and mixed
@@ -58,6 +96,11 @@ Mixed files such as provider config containing both plugin/config and login
 fields must use an explicit allowlist. CCB copies only the fields required for
 the selected inheritance policy and keeps the result inside the managed
 boundary.
+
+Replaceable credential projections must carry an owner-only provenance record
+that names projected paths or fields without containing secret values. Source
+absence, inheritance opt-out, and cleanup may remove only entries named by a
+valid record. Unmarked files remain Agent-private or unknown and are preserved.
 
 ## 4. Process Environment Boundary
 
@@ -175,6 +218,14 @@ Provider isolation tests must cover the applicable boundaries:
   switches;
 - prove WSL launches pin managed Windows-facing roots;
 - prove auth files and secret fields are absent from diagnostics exports.
+- prove explicit CCB API/route authority suppresses competing ambient
+  credential and route state;
+- prove a new stopped launch observes changed external state while source
+  bytes, mode, and timestamps remain unchanged;
+- prove `unknown_error` preserves the prior managed projection and blocks the
+  new launch rather than acting as logout;
+- prove same-authority resume and incompatible linked continuation retain one
+  stable CCB conversation id and keep historical native transcripts visible.
 
 Tests must not validate this contract by logging in to or logging out of a real
 user account.

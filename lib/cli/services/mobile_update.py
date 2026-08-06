@@ -31,7 +31,7 @@ CCB_MOBILE_PAIRING_QR_OUTPUT_ENV = "CCB_MOBILE_PAIRING_QR_OUTPUT"
 MAX_INLINE_TERMINAL_QR_COLUMNS = 100
 DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL = (
     "https://github.com/SeemSeam/claude_codex_bridge/releases/download/"
-    "v8.5.2/ccb-mobile-v8.5.2.apk"
+    "v8.5.6/ccb-mobile-v8.5.6.apk"
 )
 TAILSCALE_LINUX_INSTALL_COMMAND = (
     "sh",
@@ -324,9 +324,20 @@ def run_mobile_lan_onboarding(
             "Do not expose this listener to the public Internet."
         ),
         phone_steps=(
-            "Connect the phone and computer to the same trusted local network.",
+            (
+                "Connect the phone and computer to the same trusted Wi-Fi, "
+                "wired LAN, or phone hotspot."
+            ),
+            (
+                "Do not use a guest/client-isolated Wi-Fi; if a VPN blocks "
+                "local traffic, allow LAN access or pause it."
+            ),
             "Open CCB Mobile.",
             "Scan the complete LAN QR or paste the connection code below.",
+            (
+                "If this computer's LAN IP changes, run ccb update mobile "
+                "again and scan the new code."
+            ),
         ),
         start_service_fn=start_service_fn,
         environ=environ,

@@ -66,7 +66,7 @@ class ParsedRelayCommand:
     label: str | None = None
     reason: str | None = None
     max_sessions: int = 4
-    max_bytes_per_day: int = 104857600
+    max_bytes_per_day: int = 1073741824
     relay_mode: str | None = None
     relay_origin: str | None = None
     invitation: str | None = None

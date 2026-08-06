@@ -101,6 +101,14 @@ def test_source_dev_install_links_live_bin_and_ask_skill_asset(tmp_path: Path) -
     assert reconnect_path.exists()
     assert reconnect_path.is_symlink()
     assert reconnect_path.resolve() == (REPO_ROOT / "bin" / "codex-reconnect").resolve()
+    reconnect_version = subprocess.run(
+        [str(reconnect_path), "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert reconnect_version.returncode == 0, reconnect_version.stderr
+    assert reconnect_version.stdout.strip() == "codex-reconnect 0.3.5"
 
     ask_skill_md = tmp_path / "codex-home" / "skills" / "ask" / "SKILL.md"
     assert ask_skill_md.is_file()

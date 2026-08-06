@@ -281,7 +281,11 @@ def test_lan_onboarding_prints_qr_and_same_network_guidance(monkeypatch) -> None
     text = "\n".join(output)
     assert code == 0
     assert json.loads(qr_payloads[0])["route_provider"] == "lan"
-    assert "same trusted local network" in text
+    assert "same trusted Wi-Fi" in text
+    assert "guest/client-isolated Wi-Fi" in text
+    assert "VPN blocks local traffic" in text
+    assert "LAN IP changes" in text
+    assert "run ccb update mobile again" in text
     assert "Do not expose this listener to the public Internet" in text
     assert "paste this connection code" in text
     connection_code = next(
