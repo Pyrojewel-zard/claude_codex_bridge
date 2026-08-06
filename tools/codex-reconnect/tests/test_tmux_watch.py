@@ -660,6 +660,13 @@ class TrackerTests(unittest.TestCase):
             actions[0].incident,
             Incident("capacity-turn", "overload", "serverOverloaded"),
         )
+        self.assertEqual(
+            tracker.observe_terminal_log_error(
+                "capacity-turn",
+                "Selected model is at capacity. Please try a different model.",
+            ),
+            [],
+        )
 
     def test_task_complete_nested_retry_error_does_not_create_incident(self) -> None:
         tracker = SessionEventTracker()
@@ -705,6 +712,13 @@ class TrackerTests(unittest.TestCase):
             "Selected model is at capacity. " "Please try a different model.",
         )
         self.assertEqual([action.kind for action in actions], ["incident"])
+        self.assertEqual(
+            tracker.observe_terminal_log_error(
+                "capacity-turn",
+                "Selected model is at capacity. Please try a different model.",
+            ),
+            [],
+        )
 
     def test_newer_turn_rejects_delayed_sqlite_error(self) -> None:
         tracker = SessionEventTracker()
@@ -754,6 +768,27 @@ class _FakeProcess:
 
 
 class EnableDisableTests(unittest.TestCase):
+    def test_enable_uses_active_provider_route_for_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex_home = root / "codex-home"
+            _write_session(codex_home)
+            (codex_home / "config.toml").write_text(
+                'model_provider = "custom"\n'
+                '[model_providers.custom]\n'
+                'base_url = "https://provider.example.test/v1"\n',
+                encoding="utf-8",
+            )
+            state = enable_current(
+                state_dir=root / "state",
+                environment=_environment(codex_home),
+                tmux_runner=_tmux_runner,
+                process_factory=lambda *args, **kwargs: _FakeProcess(),
+            )
+            self.assertEqual(
+                state.openai_probe_url, "https://provider.example.test/v1"
+            )
+
     def test_enable_starts_one_bound_watcher_and_disable_is_thread_scoped(self) -> None:
         calls: list[tuple[list[str], dict[str, object]]] = []
 

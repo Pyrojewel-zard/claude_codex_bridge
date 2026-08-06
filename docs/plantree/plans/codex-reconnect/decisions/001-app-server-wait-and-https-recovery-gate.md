@@ -19,7 +19,9 @@ keep the pinned model, honor Codex internal retries, wait with bounded backoff,
 and reconcile the same thread before starting any continuation. It does not
 render the Codex TUI or inject a Continue key.
 
-The configured OpenAI/Codex HTTPS origin is the authoritative recovery probe.
+The active Codex provider HTTPS origin is the authoritative recovery probe. For
+CCB-managed sessions, the materialized Codex config route takes precedence over
+ambient API route variables; the standard OpenAI/Codex origin is the fallback.
 A public HTTPS endpoint is an optional diagnostic discriminator. Recovery is
 allowed whenever the primary probe is stable, regardless of the public probe.
 Local app-server restart is reserved for local process or stdio failure.

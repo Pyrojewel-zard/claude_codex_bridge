@@ -59,6 +59,9 @@ Date: 2026-08-06
 - Version 0.3.5 waits for delayed prompt readiness, supersedes only the same
   thread/socket/pane watcher after a managed pane PID restart, and marks the
   current watcher instance `off` on `SIGTERM`/`SIGINT`.
+- Version 0.3.6 probes the active Codex Provider route from managed config,
+  falls back through ambient API route variables to standard OpenAI, and
+  deduplicates matching JSONL/SQLite terminal failures.
 - CCB automatic activation after authoritative thread binding is implemented
   with one successful enable per bridge/thread, bounded activation retry, and
   best-effort bridge shutdown.
@@ -68,6 +71,7 @@ Date: 2026-08-06
 - Standalone and vendored deterministic suites pass 59 tests; CCB bridge,
   autostart, and install integration passes 15 targeted tests.
 - Standalone 0.3.5 commit `387b88f` is published on GitHub `origin/main`.
+- Standalone 0.3.6 commit `94ec479` is published on GitHub `origin/main`.
 - CCB automatic install/activation and the vendored 0.3.5 implementation were
   published on CCB `origin/main` as v8.5.6 source commit `8b35d868`, then
   installed locally with both installed version checks passing and the current

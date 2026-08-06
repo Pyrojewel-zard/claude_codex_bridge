@@ -88,8 +88,10 @@ Out of scope:
 - Codex internal retry is authoritative; `willRetry=true` never creates a
   duplicate user turn.
 - A matching terminal `task_complete` is required before recovery begins.
-- Network continuation requires two consecutive successful OpenAI/Codex HTTPS
-  probes. Public HTTPS is diagnostic only; ICMP is not a readiness signal.
+- Network continuation requires two consecutive successful HTTPS probes against
+  the active Codex provider route. The managed Codex config route takes
+  precedence over ambient API route variables; the standard OpenAI route is the
+  fallback. Public HTTPS is diagnostic only; ICMP is not a readiness signal.
 - All newly persisted session events are drained again before injection. Newer
   user or turn progress cancels recovery.
 - The tmux socket, pane id, pane pid, foreground command, and Codex empty-input
@@ -115,7 +117,7 @@ native Codex TUI in a tmux pane
        v                            ^
 owner-only background watcher -- tmux socket / exact pane binding
        |
-       +-- OpenAI/Codex HTTPS readiness probes
+       +-- active-provider HTTPS readiness probes
        +-- owner-only state and redacted audit log
 ```
 
@@ -174,6 +176,10 @@ nested `task_complete.error` capacity shape and its exact capacity wording.
 Version 0.3.5 waits through delayed prompt readiness, safely supersedes the
 same thread/socket/pane watcher after a managed pane PID restart, and records
 owner-instance `off` state when the watcher receives `SIGTERM` or `SIGINT`.
+Version 0.3.6 resolves the primary readiness probe from the active Codex
+Provider in the managed `CODEX_HOME/config.toml`, falls back to ambient API
+route variables only when the config has no route, and deduplicates the same
+terminal failure observed through both JSONL and SQLite.
 
 Production qualification still requires an inspectable real Codex network
 interruption and an organically occurring `serverOverloaded` event. Tests must
@@ -187,6 +193,6 @@ CCB restart, replaced the old pane-generation watcher, reached `armed`, and
 finished normal project shutdown with `phase=unmounted`, reconnect `status=off`,
 and zero managed runtime processes.
 
-Version 0.3.5 source is published on `origin/main` as commit
-[`387b88f`](https://github.com/SeemSeam/codex-reconnect/commit/387b88f665ccdc42ba35dd834f789ef735a83a8d).
-No 0.3.5 tag or GitHub Release has been created.
+Version 0.3.6 source is published on `origin/main` as commit
+[`94ec479`](https://github.com/SeemSeam/codex-reconnect/commit/94ec4799c719ce182cbd7073576aa0a37e6aeb39).
+No 0.3.6 tag or GitHub Release has been created.

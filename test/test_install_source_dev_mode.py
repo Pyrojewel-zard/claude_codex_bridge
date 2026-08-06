@@ -108,7 +108,7 @@ def test_source_dev_install_links_live_bin_and_ask_skill_asset(tmp_path: Path) -
         check=False,
     )
     assert reconnect_version.returncode == 0, reconnect_version.stderr
-    assert reconnect_version.stdout.strip() == "codex-reconnect 0.3.5"
+    assert reconnect_version.stdout.strip() == "codex-reconnect 0.3.6"
 
     ask_skill_md = tmp_path / "codex-home" / "skills" / "ask" / "SKILL.md"
     assert ask_skill_md.is_file()

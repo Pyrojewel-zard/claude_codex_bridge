@@ -25,6 +25,7 @@ from .network import (
     ProbeResult,
     classify_readiness,
     probe_https,
+    resolve_primary_probe_url,
 )
 from .paths import default_state_dir
 from .policy import full_jitter_delay
@@ -550,6 +551,8 @@ class SessionEventTracker:
     def observe_terminal_log_error(
         self, turn_id: str, message: str
     ) -> list[TrackerAction]:
+        if self.incident is not None and self.incident.turn_id == turn_id:
+            return []
         if turn_id in self.terminal_error_turn_ids:
             return []
         matches_active = self.active_turn_id == turn_id
@@ -1286,7 +1289,7 @@ def _validate_sqlite_schema(connection: sqlite3.Connection) -> None:
 def enable_current(
     *,
     state_dir: Path | None = None,
-    openai_probe_url: str = DEFAULT_OPENAI_PROBE_URL,
+    openai_probe_url: str | None = None,
     public_probe_url: str | None = DEFAULT_PUBLIC_PROBE_URL,
     probe_timeout: float = 5.0,
     environment: Mapping[str, str] | None = None,
@@ -1295,6 +1298,11 @@ def enable_current(
 ) -> WatchState:
     env = os.environ if environment is None else environment
     context = current_watch_context(env, tmux_runner=tmux_runner)
+    resolved_probe_url = resolve_primary_probe_url(
+        context.codex_home,
+        configured_url=openai_probe_url,
+        environment=dict(env),
+    )
     root = Path(state_dir or default_state_dir())
     state_path = watch_state_path(root, context.thread_id)
     _secure_directory(state_path.parent)
@@ -1328,7 +1336,7 @@ def enable_current(
         pane_command=context.pane.pane_command,
         session_offset=context.session_path.stat().st_size,
         watcher_pid=None,
-        openai_probe_url=openai_probe_url,
+        openai_probe_url=resolved_probe_url,
         public_probe_url=public_probe_url,
         probe_timeout=probe_timeout,
         updated_at=time.time(),

@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .control import ControlError, SessionControl, save_control, set_session_control
-from .network import DEFAULT_OPENAI_PROBE_URL, DEFAULT_PUBLIC_PROBE_URL
+from .network import (
+    DEFAULT_OPENAI_PROBE_URL,
+    DEFAULT_PUBLIC_PROBE_URL,
+    resolve_primary_probe_url,
+)
 from .paths import default_state_dir
 from .recovery import DisconnectRecoverySupervisor
 from .websocket import UnixWebSocketServer, WebSocketError
@@ -434,7 +438,7 @@ class ManagedCodexSession:
         codex_command: str,
         codex_args: Sequence[str],
         state_dir: Path | None = None,
-        openai_probe_url: str = DEFAULT_OPENAI_PROBE_URL,
+        openai_probe_url: str | None = None,
         public_probe_url: str | None = DEFAULT_PUBLIC_PROBE_URL,
         probe_timeout: float = 5.0,
     ):
@@ -464,6 +468,12 @@ class ManagedCodexSession:
             skill_root = tool_root / "skills"
             if not (skill_root / "reconnect" / "SKILL.md").is_file():
                 raise ManagedSessionError(f"reconnect skill is missing: {skill_root}")
+            environment = os.environ.copy()
+            resolved_probe_url = resolve_primary_probe_url(
+                environment.get("CODEX_HOME"),
+                configured_url=self.openai_probe_url,
+                environment=environment,
+            )
             bridge = TransparentAppServerBridge(
                 app_server_command=[self.codex_command, "app-server", "--stdio"],
                 socket_path=socket_path,
@@ -472,12 +482,11 @@ class ManagedCodexSession:
                 instance_id=instance_id,
                 audit_log=audit_log,
                 app_server_stderr_path=stderr_path,
-                openai_probe_url=self.openai_probe_url,
+                openai_probe_url=resolved_probe_url,
                 public_probe_url=self.public_probe_url,
                 probe_timeout=self.probe_timeout,
             )
             bridge.start()
-            environment = os.environ.copy()
             environment.update(
                 {
                     "CODEX_RECONNECT_MANAGED": "1",

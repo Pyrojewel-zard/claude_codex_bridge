@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--state-dir", type=Path, default=default_state_dir())
         if toggle == "on":
-            command.add_argument("--openai-probe-url", default=DEFAULT_OPENAI_PROBE_URL)
+            command.add_argument("--openai-probe-url", default=None)
             command.add_argument("--public-probe-url", default=DEFAULT_PUBLIC_PROBE_URL)
             command.add_argument("--no-public-probe", action="store_true")
             command.add_argument("--probe-timeout", type=float, default=5.0)
@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     managed_open.add_argument("--codex", default=shutil.which("codex") or "codex")
     managed_open.add_argument("--state-dir", type=Path, default=default_state_dir())
-    managed_open.add_argument("--openai-probe-url", default=DEFAULT_OPENAI_PROBE_URL)
+    managed_open.add_argument("--openai-probe-url", default=None)
     managed_open.add_argument("--public-probe-url", default=DEFAULT_PUBLIC_PROBE_URL)
     managed_open.add_argument("--no-public-probe", action="store_true")
     managed_open.add_argument("--probe-timeout", type=float, default=5.0)
