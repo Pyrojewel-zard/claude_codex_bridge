@@ -4301,8 +4301,10 @@ def test_materialize_claude_home_config_refreshes_source_auth_over_managed_auth(
 
 
 def test_materialize_claude_home_config_removes_only_source_owned_auth_after_logout(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.claude' / 'settings.json'
