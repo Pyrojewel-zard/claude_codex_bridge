@@ -1,6 +1,6 @@
 # Provider Authentication Authority Implementation Status
 
-Date: 2026-08-05
+Date: 2026-08-06
 
 ## Current Phase
 
@@ -8,6 +8,11 @@ The v8.5.5 compatibility repair and the continuous-inheritance implementation
 are committed and published on `origin/main` for Codex, Claude, and Gemini as
 CCB v8.5.6 source commit
 [`8b35d868`](https://github.com/SeemSeam/claude_codex_bridge/commit/8b35d868f402e5f68929782a6c2df657a8750d21).
+The reviewed release state is tagged at
+[`58b49c12`](https://github.com/SeemSeam/claude_codex_bridge/commit/58b49c121f4e162f74cf6d15be608e89745f9166)
+and published through the bilingual
+[`v8.5.6` GitHub Release](https://github.com/SeemSeam/claude_codex_bridge/releases/tag/v8.5.6)
+and npm package `@seemseam/ccb@8.5.6`.
 Explicit CCB
 authority wins per configured dimension; otherwise a newly prepared, stopped
 Provider generation reads the current external state into a private projection.
@@ -46,10 +51,12 @@ linked continuation evidence instead of being hidden from history.
 - Bundled `codex-reconnect` is installed and automatically armed after a
   managed Codex thread binds; capacity/network recovery remains bounded to one
   exact-thread `continue`.
-- The committed v8.5.6 source is installed locally in source/dev mode. The
-  global commands report CCB `8.5.6` from the source line containing
-  implementation commit `8b35d868` and bundled `codex-reconnect 0.3.5`; no
-  replacement tag, GitHub Release, or npm package has been published.
+- The v8.5.6 source is installed locally in source/dev mode. The global
+  commands report CCB `8.5.6` from the source line containing implementation
+  commit `8b35d868` and bundled `codex-reconnect 0.3.5`.
+- Tag `v8.5.6` points to release commit `58b49c12`. Linux, macOS universal,
+  signed Android, checksum, and bilingual GitHub Release publication passed;
+  npm Trusted Publishing succeeded and `latest` resolves to `8.5.6`.
 
 ## Active TODO
 
@@ -88,3 +95,6 @@ rather than block local history continuity.
   was independently confirmed on GitHub `main`; the local source/dev
   installation reported CCB `8.5.6` and `codex-reconnect 0.3.5` from the
   external test root.
+- Release Artifacts run `31060954687` and npm OIDC run `31060954935` completed
+  successfully. Public Release assets include `SHA256SUMS`, Linux and macOS
+  archives, and the signed CCB Mobile APK/manifest.

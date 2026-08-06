@@ -1,12 +1,12 @@
 # Provider Authentication Authority Roadmap
 
-Date: 2026-08-05
+Date: 2026-08-06
 
 ## Status Summary
 
 - Current status: the v8.5.5 compatibility repair and continuous-inheritance
-  slice are committed and pushed as v8.5.6 source commit `8b35d868`, then
-  installed locally in source/dev mode.
+  slice are published as CCB v8.5.6 from tag commit `58b49c12`, with GitHub
+  Release assets and npm `latest` at `@seemseam/ccb@8.5.6`.
 - Current phase: qualify organic reconnect faults and continue the remaining
   credential-writer and Provider-capability boundaries.
 - Next target: organic real-fault qualification and the arbitrary
@@ -94,8 +94,10 @@ Date: 2026-08-05
   `8b35d868f402e5f68929782a6c2df657a8750d21`.
 - The global source/dev installation reports CCB `8.5.6` from the source line
   containing implementation commit `8b35d868` and bundled
-  `codex-reconnect 0.3.5`; the existing managed watcher remained `armed`. No
-  v8.5.6 tag, GitHub Release, or npm publication was created.
+  `codex-reconnect 0.3.5`; the existing managed watcher remained `armed`.
+- Tag `v8.5.6` resolves to release commit `58b49c12`; the bilingual GitHub
+  Release, Linux/macOS archives, signed Android APK, checksums, and npm package
+  were published successfully on 2026-08-06.
 
 ## In Progress
 

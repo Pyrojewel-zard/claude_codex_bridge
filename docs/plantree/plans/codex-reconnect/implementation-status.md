@@ -1,12 +1,15 @@
 # Implementation Status
 
-Date: 2026-08-05
+Date: 2026-08-06
 
 ## Current Phase
 
 CCB automatic installation and activation are implemented, committed, and
 published on `origin/main` in CCB v8.5.6 source commit
 [`8b35d868`](https://github.com/SeemSeam/claude_codex_bridge/commit/8b35d868f402e5f68929782a6c2df657a8750d21).
+The integration is publicly available in the bilingual
+[`v8.5.6` GitHub Release](https://github.com/SeemSeam/claude_codex_bridge/releases/tag/v8.5.6)
+and npm package `@seemseam/ccb@8.5.6` from tag commit `58b49c12`.
 The bridge requests bundled `on` only after a concrete managed thread is bound,
 records one successful enable per bridge/thread, retries startup failures with
 bounded backoff, preserves a later explicit `off` or circuit-open state, and
@@ -179,6 +182,8 @@ and are published on `origin/main`.
   was pushed to `origin/main` and installed locally in source/dev mode. The
   installed commands report CCB `8.5.6` and `codex-reconnect 0.3.5`; watcher
   PID `466234` remained live with `status=armed` after installation.
+- CCB tag `v8.5.6` points to `58b49c12`; GitHub Release artifacts and npm OIDC
+  publication completed successfully, and npm `latest` resolves to `8.5.6`.
 
 ## Open Qualification
 

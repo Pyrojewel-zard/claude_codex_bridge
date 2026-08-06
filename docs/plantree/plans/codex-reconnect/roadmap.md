@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-08-05
+Date: 2026-08-06
 
 ## Done
 
@@ -72,6 +72,9 @@ Date: 2026-08-05
   published on CCB `origin/main` as v8.5.6 source commit `8b35d868`, then
   installed locally with both installed version checks passing and the current
   watcher remaining `armed`.
+- CCB v8.5.6 was released from tag commit `58b49c12` with bilingual GitHub
+  notes, Linux/macOS/Android assets and checksums, and npm
+  `@seemseam/ccb@8.5.6` promoted to `latest`.
 
 ## In Progress
 
