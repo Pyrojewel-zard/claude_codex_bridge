@@ -16,7 +16,7 @@ bounded backoff, preserves a later explicit `off` or circuit-open state, and
 requests shutdown of its owned watcher.
 
 The Decision 006 tmux refactor is implemented in the standalone working tree
-`/home/bfly/workspace/agent_develop/codex-reconnect`, published as
+`/home/bfly/workspace/agent_develop/codex-reconnect`, installed locally and published as
 `codex-reconnect 0.3.6`, and synchronized into CCB's vendored copy. CCB
 projects the `reconnect` skill and command into each managed Codex environment
 and exposes the exact managed pane/session identity needed by the watcher. The tmux
@@ -56,6 +56,15 @@ variables, while standard OpenAI remains the fallback. The same terminal turn
 observed through JSONL and SQLite is deduplicated. The standalone source is
 published on `origin/main` as
 [`94ec479`](https://github.com/SeemSeam/codex-reconnect/commit/94ec4799c719ce182cbd7073576aa0a37e6aeb39).
+
+The 2026-08-07 local preview install was built from clean CCB commit `43e50b08`
+with the unchanged official v8.5.6 Rust helpers. Installed CCB reports that
+commit and bundled `codex-reconnect 0.3.6`; installed reconnect source hashes
+match the standalone authority. The installed resolver selected the active
+custom Provider and received HTTP 200. An idle-gated `ccb restart ccb_self`
+retained thread `019fd5da-7201-7120-b0af-bede0a4e64c5`, replaced the old
+watcher with PID `3908802`, and reached `armed` with a non-default primary
+probe route.
 
 ## Landed
 
