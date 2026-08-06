@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,7 +42,8 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Current version: 9.1.0+9010000'), findsOneWidget);
-    expect(find.text('Open APK download'), findsOneWidget);
+    expect(find.text('Open release page'), findsOneWidget);
+    expect(find.text('Check for updates'), findsOneWidget);
 
     await tester.tap(
       find.byKey(const ValueKey('project-home-update-open-apk-button')),
@@ -48,6 +51,62 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(openedUrls, ['https://example.com/ccb-mobile.apk']);
+  });
+
+  testWidgets('manual check opens the update dialog and installs from it', (
+    tester,
+  ) async {
+    final service = _FakeUpdateService(updateAvailable: true);
+    File? installed;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProjectHomeUpdatePanel(
+            updateService: service,
+            installApk: (apk) async {
+              installed = apk;
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('project-home-update-check-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('CCB Mobile update available'), findsOneWidget);
+    expect(find.text('Version 9.0.0 is available.'), findsNWidgets(2));
+
+    await tester.tap(
+      find.byKey(const ValueKey('manual-update-dialog-install-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(installed?.path, '/tmp/ccb-mobile-v9.0.0.apk');
+    expect(
+      find.text('APK verified. Android installer opened.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('manual check reports that the installed version is current', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProjectHomeUpdatePanel(
+            updateService: _FakeUpdateService(updateAvailable: false),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('project-home-update-check-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('You are up to date.'), findsOneWidget);
   });
 
   testWidgets('update panel reports failed browser handoff', (tester) async {
@@ -71,4 +130,32 @@ void main() {
 
     expect(find.text('Could not open update download'), findsOneWidget);
   });
+}
+
+const _release = CcbMobileRelease(
+  version: '9.0.0',
+  versionCode: 9000000,
+  apkDownloadUrl:
+      'https://github.com/SeemSeam/claude_codex_bridge/releases/download/v9.0.0/ccb-mobile-v9.0.0.apk',
+  sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  sizeBytes: 10,
+  releasePageUrl:
+      'https://github.com/SeemSeam/claude_codex_bridge/releases/tag/v9.0.0',
+);
+
+class _FakeUpdateService extends CcbMobileUpdateService {
+  _FakeUpdateService({required this.updateAvailable});
+
+  final bool updateAvailable;
+
+  @override
+  Future<CcbMobileUpdateCheckResult> checkForUpdate() async =>
+      CcbMobileUpdateCheckResult(
+        currentVersion: ccbMobileCurrentVersion,
+        release: updateAvailable ? _release : null,
+      );
+
+  @override
+  Future<File> downloadApk(CcbMobileRelease release) async =>
+      File('/tmp/ccb-mobile-v${release.version}.apk');
 }

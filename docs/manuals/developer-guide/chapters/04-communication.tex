@@ -42,12 +42,20 @@ ask 解析入口在 \src{lib/cli/parser_runtime/ask.py}，提交服务在 \src{l
   \item 解析 target 和 message body，支持 stdin 追加。
   \item 推断 sender。当前 workspace agent 能识别时使用 agent，否则 fallback 到 user。
   \item 校验 target 和 sender 是否存在于项目配置。
-  \item 在普通 ask 中追加 reply guidance，除非用户已经给出明确输出要求。
+  \item 保持普通 ask 的原始正文不变；稳定 reply/cancel 规则由 managed
+  provider memory 承载。\cmd{--compact} 和 \cmd{--silence} 仅在没有显式
+  输出要求时追加一行 \src{CCB\_REPLY\_MODE} 动态标识。
   \item 在大 request 或显式 artifact flag 下把 request body 写入 text artifact。
   \item 构造 \src{MessageEnvelope} 并通过 mounted daemon client 提交。
 \end{itemize}
 
 ask flags 不应被理解为显示格式开关。它们是路由和交付策略。
+
+CCB 不再把相同的 reply guidance 和 cancel-file 长说明附加到每个 job。
+Provider materialization 会把稳定通信规则写入 managed memory；每次请求只保留
+用户正文、完成绑定所需的 \src{CCB\_REQ\_ID}，以及确有需要时的一行
+\src{CCB\_REPLY\_MODE}。取消以 execution service 的 provider interrupt 为
+主路径，cancel flag 仅作为 managed memory 中记录的协作兼容信号。
 
 \begin{longtable}{p{0.25\linewidth}p{0.65\linewidth}}
 \toprule
@@ -211,6 +219,28 @@ submission
 
 用户手册应建议：只要手里有任意 \src{job_id}、\src{message_id} 或 \src{reply_id}，先用 \cmd{trace} 重建上下文，再决定 retry、resubmit、ack 还是 doctor。
 
+\section{active-job followup}
+
+\cmd{followup <job_id> --message <correction>} 是 dispatcher control operation，
+不是普通通信提交。dispatcher 在 chain-transition lock 内重新读取指定 job，要求
+它仍是 target slot 的 exact running job，再向 execution adapter 查询显式
+capability。能力缺失时必须返回 \src{rejected}，已经 terminal 时返回
+\src{too_late}，provider 已观测终态或 cancel/completion 赢得竞态时返回
+\src{terminal}；不得改为 pane-wide send-keys、普通 queued job、hidden retry 或
+另一 provider。
+
+能力通过后，dispatcher 先追加 \src{accepted} durable outbox 记录，再调用
+adapter 注入。daemon restart 只重放仍为 \src{accepted} 的记录，并复用
+\src{followup_id} 作为 provider idempotency key。Codex adapter 使用共享 managed
+app-server 的 \src{turn/steer}，同时提交 \src{threadId}、
+\src{expectedTurnId} 和 \src{clientUserMessageId}；任何 active-turn precondition
+失败都由终态赢得。execution poll、followup injection、cancel 和 finish 对 active
+submission 的提交转换由同一个 execution lock 串行化；slow poll 在锁外运行，
+若 injection 或 terminal transition 已更换 active submission，其迟到结果必须
+丢弃。remote TUI 分支还必须写入与 socket path 匹配的 owned marker；只有 socket
+而没有 marker 的 local fallback 不具备此 capability。dispatcher terminalization
+仍由既有 chain-transition authority 决定。
+
 \section{result chain}
 
 result chain 不是同步等待。chain mode 由 \src{route_options["mode"] == "chain"} 表示，核心实现位于 \src{lib/ccbd/services/dispatcher_runtime/callbacks.py} 和 \src{lib/message_bureau/callback_edges.py}。
@@ -252,12 +282,21 @@ ask retry 有一个细节：如果旧 job 已经看到 provider anchor 或已经
   \item 从 dispatcher queued/active state 移除。
   \item 调用 execution service cancel。
   \item 构造 cancelled completion decision。
-  \item 写 completion snapshot 和 terminal event。
-  \item 记录 message-bureau terminal state。
+  \item 在 chain transition lock 内重新检查 terminal winner，再写 completion
+        snapshot 和 terminal event。
+  \item 通过与 normal completion 相同的 callback authority 记录
+        message-bureau terminal state。
   \item 解析 reply-delivery terminal state。
 \end{enumerate}
 
 取消不是简单从队列删除。它必须把执行层和通信层都推进到一致终态，否则 trace、inbox、queue 和 watch 会互相矛盾。
+如果 chain child 被取消，CCB 会把 structured cancelled result 作为唯一的
+continuation 送回 parent，由 parent 完成 original task；不会等待 dispatcher
+restart 修复 pending edge。普通任务的 empty cancel 记录为从创建起已 consumed
+的 \src{completion_notice}，因此 trace 可见但不增加 caller mailbox depth。
+有 partial output 或 reply artifact 时仍使用普通 exactly-once reply delivery。
+completion 与 cancel 并发时，先写入的 terminal job 胜出，另一方不得覆盖
+snapshot、attempt、reply 或 callback edge。
 
 \section{artifact 和 reply delivery}
 

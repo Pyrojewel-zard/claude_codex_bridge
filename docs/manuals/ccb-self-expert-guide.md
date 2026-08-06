@@ -411,7 +411,12 @@ ccb restart <agent_name>
 ccb reload [--dry-run]
 ccb kill [-f|--force]
 ccb cleanup
+ccb cleanup --legacy-provider-caches
 ```
+
+`ccb cleanup --legacy-provider-caches` 只扩展清理旧版
+`~/.cache/ccb/projects/*/provider-cache`：manifest、绝对项目根目录和重算
+project id 必须一致，并且项目根目录必须已经不存在。仍存在的其他项目不会被跨项目清理。
 
 诊断和维护：
 
@@ -443,6 +448,10 @@ ccb wait-quorum [--timeout N] <quorum> <target>
 ```bash
 ccb version
 ccb update
+ccb update --providers check
+ccb update --providers all
+ccb update --providers none
+ccb update --no-cache-cleanup
 ccb uninstall
 ccb reinstall
 ccb roles ...
@@ -451,6 +460,18 @@ ccb tools doctor workbench --profile rich
 ccb tools install workbench --profile rich
 ccb tools launch workbench --profile rich
 ```
+
+交互式 `ccb update` 只在发现可安全管理的 provider 新版本时提示：
+“暂不更新”会在下次运行时再次提示，“跳过此版本”只静默当前准确版本，
+更高版本仍会重新出现。更新成功后不自动重启现有 provider pane。
+
+实际安装新版本后，新 entrypoint 会在全局锁下迁移旧项目级 Provider
+缓存。已删除项目中 manifest 校验通过的 Claude/Gemini 缓存可立即删除；
+活跃项目和其他现存项目会保留到各自下一次成功 `ccb kill`。迁移状态写入
+`$XDG_STATE_HOME/ccb/provider-cache-cleanup.json`（默认
+`~/.local/state/ccb/provider-cache-cleanup.json`）。未知 Provider、损坏
+manifest、符号链接和用户级 Gemini 缓存均保留。单次可用
+`--no-cache-cleanup` 跳过。
 
 Fault injection 属于高级诊断：
 

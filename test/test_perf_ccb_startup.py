@@ -17,6 +17,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "dev_tools" / "perf_ccb_startup.py"
+pytestmark = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="startup performance harness requires the Linux procfs sampler",
+)
 AGENT_TIMING_KEYS = {
     "prepare_launch_context",
     "build_start_cmd",
@@ -3069,7 +3073,7 @@ def test_full_cold_constructor_rejects_attachable_namespace_and_active_runtime_r
         return runner.CommandResult(command, 0, "claimed stopped", "", False)
 
     residue = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
+        [sys.executable, "-c", "import time; time.sleep(120)"],
         cwd=options.project_root,
     )
     try:

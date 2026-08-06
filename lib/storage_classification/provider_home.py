@@ -9,10 +9,23 @@ _SECRET_FILENAMES = {
     '.ccb-auth-projection.json',
     '.credentials.json',
     '.env',
+    'a2a-oauth-tokens.json',
+    'auth.encrypted',
     'auth.json',
+    'auth.v2.file',
+    'auth.v2.key',
+    'auth.v2.keyring',
+    'auth.v2.loginkeychain',
     'company-codex-api-key',
     'company-codex.config.toml',
+    'credentials.json',
+    'extension-secrets-v1.json',
+    'gemini-credentials.json',
     'google_accounts.json',
+    'mcp-oauth-tokens-v2.json',
+    'mcp-oauth-tokens.json',
+    'mcp-oauth.v2.file',
+    'mcp-oauth.v2.key',
     'oauth_creds.json',
 }
 _CLAUDE_PROJECTED_NAMES = {'settings.json', 'CLAUDE.md'}
@@ -20,7 +33,8 @@ _GEMINI_PROJECTED_NAMES = {'settings.json', 'trustedFolders.json'}
 _CODEX_PROJECTED_NAMES = {'config.toml'}
 _OPENCODE_PROJECTED_NAMES = {'opencode.json'}
 _MIMO_PROJECTED_NAMES = {'mimocode.json'}
-_NATIVE_CLI_PROVIDERS = {'qwen', 'cursor', 'copilot', 'crush', 'grok', 'kiro', 'pi', 'omp', 'zai'}
+_COPILOT_PROJECTION_MARKER_NAME = '.ccb-installed-plugins-projection.json'
+_NATIVE_CLI_PROVIDERS = {'qwen', 'qoder', 'qoderclicn', 'cursor', 'copilot', 'crush', 'grok', 'kiro', 'pi', 'omp', 'zai'}
 _NATIVE_CLI_PROJECTED_ROOTS = {'inherited-skills', 'role-skills', 'overlay-skills'}
 _NATIVE_CLI_CACHE_ROOTS = {'.cache', '.npm', '.tmp', 'cache', 'node_modules', 'tmp'}
 _NATIVE_CLI_SESSION_ROOTS = {
@@ -30,12 +44,22 @@ _NATIVE_CLI_SESSION_ROOTS = {
     '.kiro',
     '.local',
     '.pi',
+    '.qoder',
     '.qwen',
     'data',
     'logs',
     'session',
     'sessions',
     'state',
+}
+_PROVIDER_MIXED_SECRET_NAMES = {
+    'deepseek': {'settings.json'},
+    'kimi': {'config.toml', 'device_id', 'kimi.json'},
+    'kiro': {'data.sqlite3'},
+    'mimo': {'token.json'},
+    'opencode': {'account.json'},
+    'crush': {'hyper.json', 'providers.json'},
+    'zai': {'user-settings.json'},
 }
 _CODEX_SESSION_NAMES = {
     '.ccb-session-namespace.json',
@@ -65,6 +89,17 @@ def classify_provider_home(
     name = remainder[-1]
     if name in _SECRET_FILENAMES:
         return _entry(path, relative_path, StorageClass.SECRET, size, provider=provider, agent=agent, reason='provider_secret', root_kind=root_kind)
+    if name in _PROVIDER_MIXED_SECRET_NAMES.get(provider, set()):
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.SECRET,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='provider_mixed_auth_state',
+            root_kind=root_kind,
+        )
     if name.endswith('.ccb-projection.json'):
         return _entry(
             path,
@@ -90,6 +125,19 @@ def classify_provider_home(
         return _classify_mimo_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
     if provider == 'droid':
         return _classify_droid_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
+    if provider == 'copilot':
+        return _classify_copilot_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
+    if provider in {'qoder', 'qoderclicn'} and remainder[0] == '.auth':
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.SECRET,
+            size,
+            provider=provider,
+            agent=agent,
+            reason=f'{provider}_auth_state',
+            root_kind=root_kind,
+        )
     if provider in _NATIVE_CLI_PROVIDERS:
         return _classify_native_cli_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
     return _entry(path, relative_path, StorageClass.UNKNOWN, size, provider=provider, agent=agent, root_kind=root_kind)
@@ -290,11 +338,79 @@ def _classify_droid_home(
     agent: str,
     root_kind: str,
 ) -> StorageEntry:
+    if remainder[0] == '.factory' and len(remainder) > 1:
+        remainder = remainder[1:]
     if remainder[0] == 'sessions':
         return _entry(path, relative_path, StorageClass.SESSION, size, provider=provider, agent=agent, root_kind=root_kind)
-    if remainder[0] == 'skills':
+    if remainder[0] in {'skills', 'plugins'}:
         return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
     return _entry(path, relative_path, StorageClass.UNKNOWN, size, provider=provider, agent=agent, root_kind=root_kind)
+
+
+def _classify_copilot_home(
+    path: Path,
+    relative_path: str,
+    remainder: tuple[str, ...],
+    *,
+    size: int,
+    provider: str,
+    agent: str,
+    root_kind: str,
+) -> StorageEntry:
+    name = remainder[-1]
+    if name == 'config.json':
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.SECRET,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='copilot_mixed_auth_application_state',
+            root_kind=root_kind,
+        )
+    if name == _COPILOT_PROJECTION_MARKER_NAME or remainder[0] == 'installed-plugins':
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.PROJECTED_CONFIG,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='copilot_installed_plugin_projection',
+            root_kind=root_kind,
+        )
+    if remainder[0] in {'mcp-oauth-config', 'mcp-secrets'}:
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.SECRET,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='copilot_secret_state',
+            root_kind=root_kind,
+        )
+    if len(remainder) >= 2 and remainder[:2] == ('data', 'cache'):
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.REBUILDABLE_CACHE,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='copilot_agent_local_cache',
+            root_kind=root_kind,
+        )
+    return _classify_native_cli_home(
+        path,
+        relative_path,
+        remainder,
+        size=size,
+        provider=provider,
+        agent=agent,
+        root_kind=root_kind,
+    )
 
 
 def _classify_native_cli_home(
@@ -315,6 +431,17 @@ def _classify_native_cli_home(
         and remainder[2] in {'ask', 'ccb-clear'}
     ):
         return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
+    if provider in {'qoder', 'qoderclicn'} and remainder[0] == 'skills':
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.PROJECTED_CONFIG,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='qoder_skill_projection',
+            root_kind=root_kind,
+        )
     if remainder[0] in _NATIVE_CLI_PROJECTED_ROOTS:
         return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
     if remainder[0] in _NATIVE_CLI_CACHE_ROOTS:

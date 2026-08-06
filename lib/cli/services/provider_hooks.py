@@ -8,12 +8,15 @@ import shlex
 import sys
 
 from agents.models import RuntimeMode
+from provider_core.one_way_inheritance import ensure_private_directory
 from provider_core.source_home import current_provider_source_home
-from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
+from provider_backends.claude.launcher_runtime.legacy_binary_cache import detach_legacy_claude_binary_cache
 from provider_backends.claude.launcher_runtime import materialize_claude_home_config, resolve_claude_home_layout
 from provider_backends.codex.launcher_runtime import resolve_codex_home_layout
+from provider_backends.copilot.home import materialize_copilot_home_config
 from provider_backends.droid.home import materialize_droid_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+from provider_backends.qwen.home import materialize_qwen_home_config
 from provider_backends.kimi.skills import materialize_kimi_skills
 from provider_backends.mimo.launcher import materialize_mimo_memory_config
 from provider_backends.opencode.launcher import materialize_opencode_memory_config
@@ -104,7 +107,7 @@ def prepare_provider_workspace(
     auto_permission: bool = False,
 ) -> ResolvedProviderProfile:
     runtime_dir = layout.agent_provider_runtime_dir(spec.name, spec.provider)
-    _materialize_source_test_ccb_shim(layout.project_root)
+    _materialize_source_test_command_shims(layout.project_root)
     command_policy = ensure_role_command_policy_supported(spec=spec)
     resolved_profile = (
         materialize_provider_profile(
@@ -151,7 +154,7 @@ def prepare_provider_workspace(
     return resolved_profile
 
 
-def _materialize_source_test_ccb_shim(project_root: Path) -> None:
+def _materialize_source_test_command_shims(project_root: Path) -> None:
     if os.environ.get('CCB_TEST_ENTRYPOINT') != '1':
         return
     source_root = Path(__file__).resolve().parents[3]
@@ -160,13 +163,20 @@ def _materialize_source_test_ccb_shim(project_root: Path) -> None:
         return
     bin_dir = Path(project_root) / '.ccb' / 'bin'
     bin_dir.mkdir(parents=True, exist_ok=True)
-    shim = bin_dir / 'ccb'
-    shim.write_text(
-        '#!/usr/bin/env bash\n'
-        f'exec {shlex.quote(str(wrapper))} "$@"\n',
-        encoding='utf-8',
-    )
-    shim.chmod(0o755)
+    shims = {
+        'ccb': f'exec {shlex.quote(str(wrapper))} "$@"\n',
+        'ask': f'exec {shlex.quote(str(wrapper))} ask "$@"\n',
+        'codex-reconnect': (
+            f'exec {shlex.quote(str(source_root / "bin" / "codex-reconnect"))} "$@"\n'
+        ),
+    }
+    for name, command in shims.items():
+        shim = bin_dir / name
+        shim.write_text(
+            '#!/usr/bin/env bash\n' + command,
+            encoding='utf-8',
+        )
+        shim.chmod(0o755)
 
 
 def provider_workspace_path_for_prepare(
@@ -219,8 +229,9 @@ def _materialize_provider_home(
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=Path(runtime_dir) / 'claude-memory-projection.json',
         )
-        _route_claude_binary_cache_if_possible(
+        _detach_legacy_claude_binary_cache_if_present(
             layout=layout,
+            spec=spec,
             home_root=home_root,
         )
         _record_claude_binary_cache_drift_if_present(
@@ -244,9 +255,20 @@ def _materialize_provider_home(
         )
         return
     if provider == 'droid':
+        droid_home = ensure_private_directory(
+            layout.agent_provider_state_dir(spec.name, 'droid') / 'home'
+        )
         materialize_droid_home_config(
-            layout.agent_provider_state_dir(spec.name, 'droid') / 'home',
+            droid_home / '.factory',
             profile=resolved_profile,
+            command_policy=command_policy,
+        )
+        return
+    if provider == 'copilot':
+        materialize_copilot_home_config(
+            layout.agent_provider_state_dir(spec.name, 'copilot') / 'home',
+            profile=resolved_profile,
+            command_policy=command_policy,
         )
         return
     if provider == 'opencode':
@@ -293,6 +315,14 @@ def _materialize_provider_home(
             workspace_path=workspace_path,
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=Path(runtime_dir) / 'gemini-memory-projection.json',
+            command_policy=command_policy,
+        )
+        return
+    if provider == 'qwen':
+        materialize_qwen_home_config(
+            layout.agent_provider_state_dir(spec.name, 'qwen') / 'home',
+            profile=resolved_profile,
+            command_policy=command_policy,
         )
 
 
@@ -322,8 +352,6 @@ def resolve_gemini_home_root(*, layout, agent_name: str, resolved_profile: Resol
 
 def _record_claude_binary_cache_drift_if_present(*, layout, spec, runtime_dir: Path, home_root: Path) -> None:
     versions_dir = Path(home_root) / '.local' / 'share' / 'claude' / 'versions'
-    if _claude_versions_dir_points_to_shared_cache(layout, versions_dir):
-        return
     signature = _claude_versions_cache_signature(versions_dir)
     if signature is None:
         return
@@ -353,12 +381,37 @@ def _record_claude_binary_cache_drift_if_present(*, layout, spec, runtime_dir: P
         return
 
 
-def _route_claude_binary_cache_if_possible(*, layout, home_root: Path) -> None:
+def _detach_legacy_claude_binary_cache_if_present(*, layout, spec, home_root: Path) -> None:
     try:
-        cache_root = layout.ensure_provider_external_cache_dir('claude')
+        result = detach_legacy_claude_binary_cache(
+            home_root,
+            cache_roots=(
+                layout.provider_external_cache_dir('claude'),
+                layout.shared_cache_dir / 'claude',
+            ),
+        )
     except Exception:
         return
-    route_claude_binary_cache(home_root, cache_root, source_home=current_provider_source_home())
+    if result.get('status') != 'ok':
+        return
+    payload = {
+        'record_type': 'agent_event',
+        'event_type': 'claude_binary_cache_detached',
+        'provider': 'claude',
+        'agent_name': spec.name,
+        'status': 'ok',
+        'reason': result.get('reason'),
+        'versions_dir': result.get('versions_dir'),
+        'versions_target': result.get('versions_target'),
+        'created_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+    }
+    try:
+        events_path = layout.agent_events_path(spec.name)
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + '\n')
+    except OSError:
+        return
 
 
 def _claude_versions_cache_signature(versions_dir: Path) -> dict[str, object] | None:
@@ -381,19 +434,6 @@ def _claude_versions_cache_signature(versions_dir: Path) -> dict[str, object] | 
         'versions_dir': str(versions_dir),
         'version_names': version_names,
     }
-
-
-def _claude_versions_dir_points_to_shared_cache(layout, versions_dir: Path) -> bool:
-    try:
-        resolved = Path(versions_dir).resolve()
-        external_versions = layout.provider_external_cache_dir('claude') / 'versions'
-        legacy_shared_versions = layout.provider_shared_cache_dir('claude') / 'versions'
-        return Path(versions_dir).is_symlink() and resolved in {
-            external_versions.resolve(strict=False),
-            legacy_shared_versions.resolve(strict=False),
-        }
-    except Exception:
-        return False
 
 
 def _same_cached_signature(marker_path: Path, signature: dict[str, object]) -> bool:

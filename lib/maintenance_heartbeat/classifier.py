@@ -111,6 +111,7 @@ def evaluate_project_view(payload: Mapping[str, object]) -> MaintenanceHeartbeat
         'active_comms_count': 0,
         'concern_comms_count': 0,
         'failing_comms_count': 0,
+        'orphaned_active_inbound_count': 0,
         'suspicion_count': 0,
     }
 
@@ -165,6 +166,8 @@ def evaluate_project_view(payload: Mapping[str, object]) -> MaintenanceHeartbeat
         health = _max_health(health, issue_health)
         if issue_health == HEALTH_CONCERN:
             summary['concern_comms_count'] += 1
+            if issue.get('condition_kind') == 'orphaned_active_inbound':
+                summary['orphaned_active_inbound_count'] += 1
         elif issue_health == HEALTH_FAILING:
             summary['failing_comms_count'] += 1
         evidence.append(issue)
@@ -262,13 +265,30 @@ def _comms_issue(comm: Mapping[str, object]) -> dict[str, Any] | None:
             status=status,
         )
     if business_status in _CONCERN_COMMS_STATUSES:
+        execution_phase = _clean(comm.get('execution_phase'))
+        execution_reason = _clean(comm.get('execution_phase_reason'))
+        diagnostic = _mapping(comm.get('active_inbound_diagnostic'))
+        if not (
+            execution_phase == 'orphaned'
+            and diagnostic is not None
+            and _clean(diagnostic.get('condition_kind')) == 'orphaned_active_inbound'
+            and str(diagnostic.get('job_id') or '').strip() == job_id
+        ):
+            diagnostic = None
         return _issue(
             HEALTH_CONCERN,
             'comms',
             job_id=job_id,
             target=target,
-            reason=str(comm.get('block_reason') or business_status or 'comms_blocked'),
+            reason=(
+                execution_reason
+                if execution_phase == 'orphaned' and execution_reason
+                else str(comm.get('block_reason') or business_status or 'comms_blocked')
+            ),
             status=status,
+            execution_phase=execution_phase or None,
+            condition_kind='orphaned_active_inbound' if diagnostic is not None else None,
+            active_inbound_diagnostic=dict(diagnostic) if diagnostic is not None else None,
         )
     return None
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from .models import ExecutionUpdate
 from .persistence import persist_submission
 from .reliability import apply_reliability_progress, timeout_poll_result
@@ -8,9 +10,11 @@ from .reliability import apply_reliability_progress, timeout_poll_result
 def poll_updates(service) -> tuple[ExecutionUpdate, ...]:
     updates: list[ExecutionUpdate] = []
     now = service._clock()
-    replayed_job_ids = drain_pending_replays(service, updates)
+    with _transition_lock(service):
+        replayed_job_ids = drain_pending_replays(service, updates)
+        active_items = list(service._active.items())
 
-    for job_id, submission in list(service._active.items()):
+    for job_id, submission in active_items:
         if should_skip_active_job(job_id, replayed_job_ids):
             continue
         process_active_job(
@@ -56,9 +60,14 @@ def process_active_job(
     submission,
     now: str,
 ) -> None:
+    with _transition_lock(service):
+        if service._active.get(job_id) is not submission:
+            return
     adapter = service._registry.get(submission.provider)
     if adapter is None:
-        service._active.pop(job_id, None)
+        with _transition_lock(service):
+            if service._active.get(job_id) is submission:
+                service._active.pop(job_id, None)
         return
 
     result = adapter.poll(submission, now=now)
@@ -89,27 +98,30 @@ def process_active_job(
             if timeout_result is not None:
                 result = timeout_result
 
-    service._active[job_id] = result.submission
-    persist_submission(
-        service,
-        job_id,
-        pending_decision=terminal_pending_decision(result.decision),
-        pending_items=result.items,
-    )
-    if not should_emit_update(result):
-        return
-
-    updates.append(
-        ExecutionUpdate(
-            job_id=job_id,
-            items=result.items,
-            decision=result.decision,
-            submission=result.submission,
+    with _transition_lock(service):
+        if service._active.get(job_id) is not submission:
+            return
+        service._active[job_id] = result.submission
+        persist_submission(
+            service,
+            job_id,
+            pending_decision=terminal_pending_decision(result.decision),
+            pending_items=result.items,
         )
-    )
-    if terminal_pending_decision(result.decision) is not None:
-        service._active.pop(job_id, None)
-        service._runtime_contexts.pop(job_id, None)
+        if not should_emit_update(result):
+            return
+
+        updates.append(
+            ExecutionUpdate(
+                job_id=job_id,
+                items=result.items,
+                decision=result.decision,
+                submission=result.submission,
+            )
+        )
+        if terminal_pending_decision(result.decision) is not None:
+            service._active.pop(job_id, None)
+            service._runtime_contexts.pop(job_id, None)
 
 
 def terminal_pending_decision(decision):
@@ -120,6 +132,10 @@ def terminal_pending_decision(decision):
 
 def should_emit_update(result) -> bool:
     return bool(result.items or result.decision is not None)
+
+
+def _transition_lock(service):
+    return getattr(service, '_active_transition_lock', nullcontext())
 
 
 __all__ = ["poll_updates"]

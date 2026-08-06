@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 import hashlib
+import os
+from pathlib import Path
 import socket
 from urllib.parse import urlparse, urlunsplit
 
@@ -19,7 +20,12 @@ from mobile_gateway import (
     parse_listen_address,
 )
 from mobile_gateway.fcm import build_fcm_sender_from_env, fcm_sender_runtime_options
-from mobile_gateway.relay import LocalRelayServerHarness, MobileGatewayRelayOutboundClient
+from mobile_gateway.relay_host_credentials import (
+    RelayHostCredentials,
+    build_relay_pairing_payload,
+    load_relay_host_credentials,
+)
+from mobile_gateway.relay_host_runtime import relay_host_runtime_summary
 
 
 @dataclass(frozen=True)
@@ -39,7 +45,8 @@ class MobileGatewayServeHandle:
 
 
 def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
-    listen = parse_listen_address(command.listen)
+    route_provider = str(command.route_provider or 'lan').strip().lower() or 'lan'
+    listen = parse_listen_address(command.listen, allow_lan=route_provider == 'lan')
     push_sender, push_diagnostic, push_options = _push_sender_setup()
     service = MobileGatewayService(
         project_id=context.project.project_id,
@@ -54,13 +61,19 @@ def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
     server = build_mobile_gateway_server(listen, service)
     host, port = server.server_address[:2]
     local_gateway_url = f'http://{host}:{port}'
-    gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
-    route_provider = str(command.route_provider or 'lan')
+    relay_credentials = _relay_host_credentials() if route_provider == 'relay' else None
+    gateway_url = (
+        relay_credentials.relay_http_origin
+        if relay_credentials is not None
+        else _public_gateway_url(command.public_url, fallback=local_gateway_url)
+    )
     pairing = service.ensure_reusable_pairing_payload(
         gateway_url=gateway_url,
         route_provider=route_provider,
     )
-    relay_outbound = _relay_outbound_summary(context.project.project_id) if route_provider == 'relay' else None
+    if relay_credentials is not None:
+        pairing = build_relay_pairing_payload(pairing, credentials=relay_credentials)
+    relay_outbound = _relay_outbound_summary(relay_credentials) if relay_credentials is not None else None
     summary = {
         'mobile_status': 'serving',
         'listen': f'{host}:{port}',
@@ -107,8 +120,17 @@ def prepare_server_mobile_gateway(
     rotate_pairing: bool = False,
 ) -> MobileGatewayServeHandle:
     registry = project_registry or _running_server_project_registry()
-    listen = parse_listen_address(command.listen)
-    resolved_host_id = str(host_id or '').strip() or _server_host_id()
+    route_provider = str(command.route_provider or 'lan').strip().lower() or 'lan'
+    listen = parse_listen_address(command.listen, allow_lan=route_provider == 'lan')
+    relay_credentials = _relay_host_credentials() if route_provider == 'relay' else None
+    requested_host_id = str(host_id or '').strip()
+    if relay_credentials is not None and requested_host_id and requested_host_id != relay_credentials.host_id:
+        raise ValueError('mobile relay host id does not match activated relay credentials')
+    resolved_host_id = (
+        relay_credentials.host_id
+        if relay_credentials is not None
+        else requested_host_id or _server_host_id()
+    )
     state_dir = mobile_host_state_dir()
     default_project = registry.default_project
     push_sender, push_diagnostic, push_options = _push_sender_setup()
@@ -141,8 +163,11 @@ def prepare_server_mobile_gateway(
     try:
         host, port = server.server_address[:2]
         local_gateway_url = f'http://{host}:{port}'
-        gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
-        route_provider = str(command.route_provider or 'lan')
+        gateway_url = (
+            relay_credentials.relay_http_origin
+            if relay_credentials is not None
+            else _public_gateway_url(command.public_url, fallback=local_gateway_url)
+        )
         pairing = (
             service.rotate_reusable_pairing_payload(
                 gateway_url=gateway_url,
@@ -154,7 +179,16 @@ def prepare_server_mobile_gateway(
                 route_provider=route_provider,
             )
         )
-        relay_outbound = _relay_outbound_summary(resolved_host_id) if route_provider == 'relay' else None
+        if relay_credentials is not None:
+            pairing = build_relay_pairing_payload(
+                pairing,
+                credentials=relay_credentials,
+            )
+        relay_outbound = (
+            _relay_outbound_summary(relay_credentials)
+            if relay_credentials is not None
+            else None
+        )
     except Exception:
         server.server_close()
         raise
@@ -269,29 +303,20 @@ def _public_gateway_url(value: str | None, *, fallback: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, '', '', ''))
 
 
-def _relay_outbound_summary(project_id: str) -> dict[str, object]:
-    host_id = str(project_id or '').strip()
-    relay = LocalRelayServerHarness()
-    client = MobileGatewayRelayOutboundClient(
-        relay=relay,
-        host_id=host_id,
-        server_fingerprint=f'local-relay-fp:{host_id}',
-        host_pubkey_b64=_relay_demo_pubkey(host_id),
-        diagnostics={'relay_mode': 'local_harness', 'relay_host_id': host_id},
+def _relay_outbound_summary(credentials: RelayHostCredentials) -> dict[str, object]:
+    return relay_host_runtime_summary(
+        credentials,
+        diagnostics={'credential_path': str(_relay_host_credentials_path())},
     )
-    registration = client.connect()
-    return {
-        'status': registration['status'],
-        'mode': 'local_harness',
-        'host_id': registration['host_id'],
-        'server_fingerprint': registration['server_fingerprint'],
-        'capabilities': registration['capabilities'],
-        'diagnostics': client.diagnostics(),
-    }
 
 
-def _relay_demo_pubkey(host_id: str) -> str:
-    return base64.urlsafe_b64encode(f'ccb-mobile-relay:{host_id}:public-key'.encode('utf-8')).decode('ascii')
+def _relay_host_credentials() -> RelayHostCredentials:
+    return load_relay_host_credentials(_relay_host_credentials_path())
+
+
+def _relay_host_credentials_path() -> Path:
+    configured = str(os.environ.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
+    return Path(configured or (mobile_host_state_dir() / 'relay-host-credentials.json')).expanduser()
 
 
 def _server_host_id() -> str:

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+from provider_backends.session_authority import remember_bound_provider_session_authority
+
 
 def remember_claude_session_binding(
     *,
@@ -26,6 +28,7 @@ def remember_claude_session_binding(
     )
     ensure_claude_session_work_dir_fields_fn(data, project_session_file)
     _update_binding_fields(data, session_path=session_path, now_str_fn=now_str_fn)
+    remember_bound_provider_session_authority(data, 'claude')
     payload = _render_session_payload(data)
     ok, _err = safe_write_session_fn(project_session_file, payload)
     if not ok:

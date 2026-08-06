@@ -46,10 +46,12 @@ def build_start_cmd(
     prepared_state: dict[str, object] | None = None,
     resolve_restore_target_fn,
     prepare_home_overrides_fn,
+    cli_supports_flag_fn,
 ) -> str:
     runtime_dir = Path(runtime_dir)
     profile = load_resolved_provider_profile(runtime_dir)
-    launch_context = prepared_state or {}
+    launch_context = prepared_state if isinstance(prepared_state, dict) else {}
+    launch_context.pop('ccb_continuation_launch_mode', None)
     project_root = _path_or_none(launch_context.get('project_root'))
     if project_root is None:
         raise RuntimeError('Gemini launch requires prepare_launch_context before build_start_cmd')
@@ -69,7 +71,14 @@ def build_start_cmd(
     cmd_parts = provider_start_parts("gemini")
     if command.auto_permission:
         cmd_parts.append("--yolo")
-    if restore_target.has_history:
+    if (
+        restore_target.continuation_mode == 'import'
+        and restore_target.continuation_session_path is not None
+        and cli_supports_flag_fn(cmd_parts, '--session-file')
+    ):
+        launch_context['ccb_continuation_launch_mode'] = 'import'
+        cmd_parts.extend(['--session-file', str(restore_target.continuation_session_path)])
+    elif restore_target.has_history:
         cmd_parts.extend(["--resume", "latest"])
     cmd_parts.extend(spec.startup_args)
     cmd = " ".join(shlex.quote(str(part)) for part in cmd_parts)
@@ -147,6 +156,13 @@ def build_session_payload(
     if layout is not None:
         payload['gemini_home'] = str(layout.home_root)
         payload['gemini_root'] = str(layout.tmp_root)
+    authority_fingerprint = str(
+        prepared_state.get('gemini_provider_authority_fingerprint') or ''
+    ).strip()
+    if authority_fingerprint:
+        payload['gemini_provider_authority_fingerprint'] = authority_fingerprint
+    if str(prepared_state.get('ccb_continuation_launch_mode') or '').strip() == 'import':
+        payload['ccb_continuation_launch_mode'] = 'import'
     return payload
 
 

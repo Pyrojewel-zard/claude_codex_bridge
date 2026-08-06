@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import shutil
 from typing import TYPE_CHECKING
@@ -55,7 +56,7 @@ def materialize_provider_profile(
     validate_provider_runtime_home_policy(spec)
     runtime_dir = layout.agent_provider_runtime_dir(spec.name, spec.provider)
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    profile_spec = spec.provider_profile
+    profile_spec = _profile_spec_with_agent_api_env(spec, spec.provider_profile)
     profile_root = _resolve_profile_root(layout, spec, profile_spec)
 
     if spec.provider == 'codex':
@@ -100,6 +101,31 @@ def materialize_provider_profile(
 
     _write_profile_record(runtime_dir, profile)
     return profile
+
+
+def _profile_spec_with_agent_api_env(
+    spec: 'AgentSpec',
+    profile_spec: ProviderProfileSpec,
+) -> ProviderProfileSpec:
+    """Make every CCB-configured Provider API value visible to home projection.
+
+    Launchers already give ``agents.<name>.env`` precedence over
+    ``provider_profile.env``.  Home projection and authority fingerprints must
+    resolve the same values, otherwise an explicit API credential can compete
+    with an inherited native login before the process even starts.
+    """
+    api_keys = provider_api_env_keys(spec.provider)
+    configured = {
+        str(key): str(value)
+        for key, value in dict(getattr(spec, 'env', {}) or {}).items()
+        if str(key) in api_keys and str(value).strip()
+    }
+    if not configured:
+        return profile_spec
+    return replace(
+        profile_spec,
+        env={**dict(profile_spec.env), **configured},
+    )
 
 
 def load_resolved_provider_profile(runtime_dir: Path) -> ResolvedProviderProfile | None:

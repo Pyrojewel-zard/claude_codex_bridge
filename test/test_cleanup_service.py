@@ -151,12 +151,16 @@ def test_cleanup_prunes_shared_claude_versions_referenced_by_symlinked_agent_hom
 
     summary = cleanup_project_storage(_context(project_root), SimpleNamespace())
 
-    assert summary.deleted_count == 1
-    assert summary.skipped_count == 1
-    assert not (shared_versions / '2.1.137').exists()
-    assert (shared_versions / '2.1.138').exists()
-    assert (shared_versions / '2.1.139').exists()
-    assert summary.actions[0].reason == 'old_shared_claude_version_cache'
+    assert summary.deleted_count == 2
+    assert summary.skipped_count == 0
+    assert not versions.exists()
+    assert not versions.is_symlink()
+    assert not (claude_home / '.local' / 'bin' / 'claude').exists()
+    assert not (layout.shared_cache_dir / 'claude').exists()
+    assert {action.reason for action in summary.actions} == {
+        'legacy_claude_binary_cache_detached',
+        'legacy_project_provider_cache',
+    }
 
 
 def test_cleanup_prunes_external_claude_versions_referenced_by_agent_home(
@@ -181,12 +185,16 @@ def test_cleanup_prunes_external_claude_versions_referenced_by_agent_home(
 
     summary = cleanup_project_storage(_context(project_root), SimpleNamespace())
 
-    assert summary.deleted_count == 1
-    assert summary.skipped_count == 1
-    assert not (external_versions / '2.1.136').exists()
-    assert (external_versions / '2.1.137').exists()
-    assert (external_versions / '2.1.139').exists()
-    assert summary.actions[0].reason == 'old_shared_claude_version_cache'
+    assert summary.deleted_count == 2
+    assert summary.skipped_count == 0
+    assert not versions.exists()
+    assert not versions.is_symlink()
+    assert not (claude_home / '.local' / 'bin' / 'claude').exists()
+    assert not layout.provider_external_cache_dir('claude').exists()
+    assert {action.reason for action in summary.actions} == {
+        'legacy_claude_binary_cache_detached',
+        'legacy_project_provider_cache',
+    }
 
 
 def test_cleanup_removes_legacy_shared_claude_versions_after_external_migration(
@@ -211,10 +219,11 @@ def test_cleanup_removes_legacy_shared_claude_versions_after_external_migration(
 
     summary = cleanup_project_storage(_context(project_root), SimpleNamespace())
 
-    assert summary.deleted_count == 1
-    assert not (legacy_versions / '2.1.139').exists()
-    assert (external_versions / '2.1.139').exists()
-    assert summary.actions[0].reason == 'unreferenced_shared_claude_version_cache'
+    assert summary.deleted_count == 3
+    assert not versions.exists()
+    assert not versions.is_symlink()
+    assert not (layout.shared_cache_dir / 'claude').exists()
+    assert not layout.provider_external_cache_dir('claude').exists()
 
 
 def test_cleanup_removes_claude_rebuildable_caches(tmp_path: Path, monkeypatch) -> None:
@@ -280,11 +289,200 @@ def test_cleanup_removes_gemini_shared_and_external_rebuildable_caches(
 
     summary = cleanup_project_storage(_context(project_root), SimpleNamespace())
 
-    assert summary.deleted_count == 4
-    assert not (layout.shared_cache_dir / 'gemini' / 'npm' / '_cacache').exists()
-    assert not (layout.shared_cache_dir / 'gemini' / 'xdg' / 'node-gyp').exists()
-    assert not (external / 'npm' / '_cacache').exists()
-    assert not (external / 'xdg' / 'vscode-ripgrep').exists()
+    assert summary.deleted_count == 2
+    assert not (layout.shared_cache_dir / 'gemini').exists()
+    assert not external.exists()
+    assert all(action.reason == 'legacy_project_provider_cache' for action in summary.actions)
+
+
+def test_automatic_current_project_cache_cleanup_skips_size_walk(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    layout = PathLayout(project_root)
+    _write(layout.provider_external_cache_dir('gemini') / 'payload', 'cache')
+    monkeypatch.setattr(cleanup_service, 'inspect_daemon', lambda context: (None, None, _stopped_inspection()))
+    monkeypatch.setattr(
+        cleanup_service,
+        '_tree_size',
+        lambda _path: (_ for _ in ()).throw(AssertionError('automatic cleanup must not scan size')),
+    )
+
+    summary = cleanup_service.cleanup_current_project_legacy_provider_caches(
+        _context(project_root),
+        measure_bytes=False,
+    )
+
+    assert summary.deleted_count == 1
+    assert summary.deleted_bytes == 0
+    assert not layout.provider_external_cache_dir('gemini').exists()
+
+
+def test_cleanup_explicitly_removes_orphaned_legacy_provider_caches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'current-repo'
+    project_root.mkdir()
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    missing_project = tmp_path / 'deleted-repo'
+    missing_project_id = compute_project_id(missing_project)
+    provider_cache = xdg_cache / 'ccb' / 'projects' / missing_project_id[:16] / 'provider-cache'
+    _write(provider_cache / 'claude' / 'versions' / '2.1.218', 'binary')
+    _write(provider_cache / 'gemini' / 'npm' / '_cacache' / 'blob', 'cache')
+    _write(provider_cache / 'unknown-provider' / 'keep', 'user-owned-or-unknown')
+    _write(
+        provider_cache / 'claude' / 'MANIFEST.json',
+        (
+            '{'
+            f'"schema_version":1,"record_type":"ccb_external_provider_cache_manifest",'
+            f'"provider":"claude","project_id":"{missing_project_id}",'
+            f'"project_root":"{missing_project}"'
+            '}\n'
+        ),
+    )
+    _write(
+        provider_cache / 'gemini' / 'MANIFEST.json',
+        (
+            '{'
+            f'"schema_version":1,"record_type":"ccb_external_provider_cache_manifest",'
+            f'"provider":"gemini","project_id":"{missing_project_id}",'
+            f'"project_root":"{missing_project}"'
+            '}\n'
+        ),
+    )
+    monkeypatch.setattr(cleanup_service, 'inspect_daemon', lambda context: (None, None, _stopped_inspection()))
+
+    summary = cleanup_project_storage(
+        _context(project_root),
+        SimpleNamespace(legacy_provider_caches=True),
+    )
+
+    orphan_actions = [
+        action
+        for action in summary.actions
+        if action.reason == 'orphaned_legacy_project_provider_cache'
+    ]
+    assert len(orphan_actions) == 2
+    assert not (provider_cache / 'claude').exists()
+    assert not (provider_cache / 'gemini').exists()
+    assert (provider_cache / 'unknown-provider' / 'keep').is_file()
+
+
+def test_cleanup_default_does_not_scan_other_project_cache_buckets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'current-repo'
+    project_root.mkdir()
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    missing_project = tmp_path / 'deleted-repo'
+    missing_project_id = compute_project_id(missing_project)
+    provider_cache = xdg_cache / 'ccb' / 'projects' / missing_project_id[:16] / 'provider-cache'
+    _write(provider_cache / 'claude' / 'versions' / '2.1.218', 'binary')
+    _write(
+        provider_cache / 'claude' / 'MANIFEST.json',
+        (
+            '{'
+            f'"schema_version":1,"record_type":"ccb_external_provider_cache_manifest",'
+            f'"provider":"claude","project_id":"{missing_project_id}",'
+            f'"project_root":"{missing_project}"'
+            '}\n'
+        ),
+    )
+    monkeypatch.setattr(cleanup_service, 'inspect_daemon', lambda context: (None, None, _stopped_inspection()))
+
+    summary = cleanup_project_storage(
+        _context(project_root),
+        SimpleNamespace(legacy_provider_caches=False),
+    )
+
+    assert not [
+        action
+        for action in summary.actions
+        if action.reason == 'orphaned_legacy_project_provider_cache'
+    ]
+    assert (provider_cache / 'claude' / 'versions' / '2.1.218').is_file()
+
+
+def test_cleanup_preserves_legacy_cache_for_existing_other_project(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'current-repo'
+    project_root.mkdir()
+    other_project = tmp_path / 'other-repo'
+    other_project.mkdir()
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    other_project_id = compute_project_id(other_project)
+    provider_cache = xdg_cache / 'ccb' / 'projects' / other_project_id[:16] / 'provider-cache'
+    _write(provider_cache / 'claude' / 'versions' / '2.1.218', 'binary')
+    _write(
+        provider_cache / 'claude' / 'MANIFEST.json',
+        (
+            '{'
+            f'"schema_version":1,"record_type":"ccb_external_provider_cache_manifest",'
+            f'"provider":"claude","project_id":"{other_project_id}",'
+            f'"project_root":"{other_project}"'
+            '}\n'
+        ),
+    )
+    monkeypatch.setattr(cleanup_service, 'inspect_daemon', lambda context: (None, None, _stopped_inspection()))
+
+    summary = cleanup_project_storage(
+        _context(project_root),
+        SimpleNamespace(legacy_provider_caches=True),
+    )
+
+    assert not [
+        action
+        for action in summary.actions
+        if action.reason == 'orphaned_legacy_project_provider_cache'
+    ]
+    assert (provider_cache / 'claude' / 'versions' / '2.1.218').is_file()
+
+
+def test_cleanup_preserves_orphan_cache_with_mismatched_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'current-repo'
+    project_root.mkdir()
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    missing_project = tmp_path / 'deleted-repo'
+    missing_project_id = compute_project_id(missing_project)
+    provider_cache = xdg_cache / 'ccb' / 'projects' / missing_project_id[:16] / 'provider-cache'
+    _write(provider_cache / 'claude' / 'versions' / '2.1.218', 'binary')
+    _write(
+        provider_cache / 'claude' / 'MANIFEST.json',
+        (
+            '{'
+            f'"schema_version":1,"record_type":"ccb_external_provider_cache_manifest",'
+            f'"provider":"claude","project_id":"{missing_project_id}",'
+            f'"project_root":"{tmp_path / "different-deleted-repo"}"'
+            '}\n'
+        ),
+    )
+    monkeypatch.setattr(cleanup_service, 'inspect_daemon', lambda context: (None, None, _stopped_inspection()))
+
+    summary = cleanup_project_storage(
+        _context(project_root),
+        SimpleNamespace(legacy_provider_caches=True),
+    )
+
+    assert not [
+        action
+        for action in summary.actions
+        if action.reason == 'orphaned_legacy_project_provider_cache'
+    ]
+    assert (provider_cache / 'claude' / 'versions' / '2.1.218').is_file()
 
 
 def test_cleanup_trims_pane_crash_logs_by_runtime_count(tmp_path: Path, monkeypatch) -> None:

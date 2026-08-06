@@ -119,7 +119,8 @@ def runtime_requires_mount_from_foreign_pane(ctx: RuntimeSupervisionContext, run
 
 def runtime_requires_recovery(ctx: RuntimeSupervisionContext, runtime) -> bool:
     return (
-        should_reflow_project_namespace(ctx, runtime)
+        str(getattr(runtime, 'reconcile_state', '') or '').strip() == 'probing'
+        or should_reflow_project_namespace(ctx, runtime)
         or explicit_topology_project_socket_foreign_pane(ctx, runtime)
         or should_attempt_background_recovery(runtime)
     )

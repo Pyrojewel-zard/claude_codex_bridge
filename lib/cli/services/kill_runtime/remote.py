@@ -13,6 +13,7 @@ def request_remote_stop(
     summary_from_stop_all_payload_fn,
     stop_all_timeout_s: float,
     service_error_cls,
+    client_error_cls,
 ):
     try:
         handle = connect_mounted_daemon_fn(context, allow_restart_stale=False)
@@ -22,14 +23,23 @@ def request_remote_stop(
         return None
     try:
         record_shutdown_intent_fn(context, reason='kill')
+    except Exception:
+        if not force:
+            raise
+        return None
+    try:
         stop_all_client = (
             ccbd_client_cls(context.paths.ccbd_socket_path, timeout_s=stop_all_timeout_s)
             if isinstance(handle.client, ccbd_client_cls)
             else handle.client
         )
         payload = stop_all_client.stop_all(force=force)
-    except Exception:
-        if not force:
+    except Exception as exc:
+        # Recording shutdown intent lets the project keeper close ccbd before
+        # this RPC reaches the socket.  Losing that transport is therefore a
+        # normal shutdown race, not a reason to abandon authoritative local
+        # cleanup.
+        if not force and not isinstance(exc, client_error_cls):
             raise
         return None
     return summary_from_stop_all_payload_fn(payload)

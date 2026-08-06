@@ -45,8 +45,10 @@ Observed responsibilities:
 - `submit_ask` validates target and sender against loaded project config.
 - role ids can be used as ask targets only when they resolve to exactly one
   configured project-local agent.
-- `message_with_reply_guidance` appends reply guidance for ordinary ask
-  messages unless explicit output requirements are detected.
+- `message_with_reply_guidance` preserves its compatibility name but leaves
+  ordinary ask bodies unchanged. Stable reply/cancel policy lives in managed
+  provider memory; `--compact` and `--silence` add only one
+  `CCB_REPLY_MODE` line unless explicit output requirements are detected.
 - request bodies can be artifact-backed explicitly or automatically spilled
   when larger than 4 KiB.
 - the CLI submits a `MessageEnvelope` through the mounted ccbd client.

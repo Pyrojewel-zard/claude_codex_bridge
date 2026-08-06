@@ -129,57 +129,62 @@ void main() {
     expect(seenPairing?.gatewayUrl.toString(), 'http://127.0.0.1:8787');
   });
 
-  testWidgets('camera error panel keeps image and manual paths available', (
-    tester,
-  ) async {
-    var retried = false;
-    var imageSelected = false;
-    var manualSelected = false;
+  testWidgets(
+    'camera error panel keeps image and connection code paths available',
+    (tester) async {
+      var retried = false;
+      var imageSelected = false;
+      var manualSelected = false;
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: GatewayPairingCameraErrorPanel(
-          message:
-              'Camera permission denied. Enable camera access for CCB Mobile or use image/manual setup.',
-          onRetry: () {
-            retried = true;
-          },
-          onScanImage: () {
-            imageSelected = true;
-          },
-          onUseManualSetup: () {
-            manualSelected = true;
-          },
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GatewayPairingCameraErrorPanel(
+            message:
+                'Camera permission denied. Enable camera access for CCB Mobile, scan an image, or enter a connection code.',
+            onRetry: () {
+              retried = true;
+            },
+            onScanImage: () {
+              imageSelected = true;
+            },
+            onUseManualSetup: () {
+              manualSelected = true;
+            },
+          ),
         ),
-      ),
-    );
+      );
 
-    expect(find.text('Camera unavailable'), findsOneWidget);
-    await tester.tap(
-      find.byKey(const ValueKey('gateway-pairing-scan-retry-button')),
-    );
-    await tester.tap(
-      find.byKey(const ValueKey('gateway-pairing-image-scan-button')),
-    );
-    await tester.tap(
-      find.byKey(const ValueKey('gateway-pairing-scan-manual-button')),
-    );
+      expect(find.text('Camera unavailable'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('gateway-pairing-scan-retry-button')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('gateway-pairing-image-scan-button')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('gateway-pairing-scan-manual-button')),
+      );
 
-    expect(retried, isTrue);
-    expect(imageSelected, isTrue);
-    expect(manualSelected, isTrue);
-  });
+      expect(retried, isTrue);
+      expect(imageSelected, isTrue);
+      expect(manualSelected, isTrue);
+      expect(find.text('Enter connection code'), findsOneWidget);
+    },
+  );
 
-  test('camera permission error has actionable image/manual alternatives', () {
-    final message = gatewayPairingCameraErrorMessage(
-      const MobileScannerException(
-        errorCode: MobileScannerErrorCode.permissionDenied,
-      ),
-    );
+  test(
+    'camera permission error has image and connection code alternatives',
+    () {
+      final message = gatewayPairingCameraErrorMessage(
+        const MobileScannerException(
+          errorCode: MobileScannerErrorCode.permissionDenied,
+        ),
+      );
 
-    expect(message, contains('Camera permission denied'));
-    expect(message, contains('image/manual setup'));
-  });
+      expect(message, contains('Camera permission denied'));
+      expect(message, contains('enter a connection code'));
+    },
+  );
 
   test('image scanner errors do not expose implementation details', () {
     final message = gatewayPairingImageScannerErrorMessage(

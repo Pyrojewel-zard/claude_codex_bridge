@@ -3,14 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents.models import normalize_agent_name
-from provider_backends.pane_log_support.lifecycle_common import attach_pane_log
-from provider_backends.pane_log_support.lifecycle_recovery import respawn_existing_pane
-from provider_backends.pane_log_support.session import now_str
 from provider_core.registry import build_default_session_binding_map
-from provider_core.session_binding_evidence_runtime.loading import binding_search_roots, load_provider_session
+from provider_core.session_binding_evidence_runtime.loading import (
+    binding_search_roots,
+    load_provider_session,
+)
 from rolepacks.runtime_lookup import load_installed_role, tree_digest
 from rolepacks.sources import installed_role_metadata
-from terminal_runtime import TmuxBackend
+
+from ccbd.services.start_policy import recovery_start_options
 
 
 RESTART_PANES_REASON = 'manual_restart_panes'
@@ -233,6 +234,7 @@ def _runtime_evidence(runtime) -> dict[str, object]:
             'session_ref': None,
             'runtime_pid': None,
             'restart_count': 0,
+            'recovery_failure_count': 0,
         }
     return {
         'state': _runtime_state(runtime),
@@ -243,6 +245,7 @@ def _runtime_evidence(runtime) -> dict[str, object]:
         'session_ref': getattr(runtime, 'session_ref', None),
         'runtime_pid': getattr(runtime, 'runtime_pid', None),
         'restart_count': _safe_int(getattr(runtime, 'restart_count', 0)),
+        'recovery_failure_count': _safe_int(getattr(runtime, 'recovery_failure_count', 0)),
     }
 
 
@@ -268,14 +271,13 @@ def restart_project_agent_panes_in_place(app, *, agent_names: tuple[str, ...]) -
     namespace = app.project_namespace.load()
     if namespace is None:
         raise RuntimeError('project namespace is not mounted')
-    backend = TmuxBackend(socket_path=namespace.tmux_socket_path)
     results: list[dict[str, object]] = []
     for agent_name in agent_names:
-        results.append(_restart_agent_pane(app, backend=backend, agent_name=str(agent_name)))
+        results.append(_restart_agent_pane(app, agent_name=str(agent_name)))
     return tuple(results)
 
 
-def _restart_agent_pane(app, *, backend, agent_name: str) -> dict[str, object]:
+def _restart_agent_pane(app, *, agent_name: str) -> dict[str, object]:
     runtime = app.registry.get(agent_name)
     session = _load_agent_provider_session(app, agent_name=agent_name, runtime=runtime)
     pane_id = _restart_pane_id(runtime=runtime, session=session)
@@ -286,26 +288,76 @@ def _restart_agent_pane(app, *, backend, agent_name: str) -> dict[str, object]:
         return {'agent': agent_name, **role_restart_block}
     if not pane_id:
         return {'agent': agent_name, 'status': 'skipped', 'reason': 'pane_missing'}
-    start_cmd = str(getattr(session, 'start_cmd', '') or '').strip()
-    if not start_cmd:
-        return {'agent': agent_name, 'status': 'skipped', 'reason': 'start_cmd_missing'}
-    error = respawn_existing_pane(
-        session,
-        backend,
-        pane_id,
-        start_cmd=start_cmd,
-        respawn=getattr(backend, 'respawn_pane', None),
-        now_str_fn=now_str,
-        attach_pane_log_fn=attach_pane_log,
-    )
-    if error is not None:
-        return {'agent': agent_name, 'status': 'failed', 'reason': error, 'pane_id': pane_id}
-    refreshed = app.runtime_service.refresh_provider_binding(agent_name, recover=True)
+    supervisor = getattr(app, 'runtime_supervisor', None)
+    start = getattr(supervisor, 'start', None)
+    if not callable(start):
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': 'runtime_supervisor_missing',
+            'pane_id': pane_id,
+        }
+    restore, auto_permission = _restart_start_options(app)
+    try:
+        summary = start(
+            agent_names=(agent_name,),
+            restore=restore,
+            auto_permission=auto_permission,
+            cleanup_tmux_orphans=False,
+            interactive_tmux_layout=True,
+            restart_agent_panes={agent_name: pane_id},
+            recreate_reason=RESTART_AGENT_REASON,
+        )
+    except Exception as exc:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': f'restart_start_failed: {exc}',
+            'pane_id': pane_id,
+        }
+    result = _find_start_result(summary, agent_name)
+    if result is None:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': 'restart_start_result_missing',
+            'pane_id': pane_id,
+        }
+    result_status = str(getattr(result, 'action', '') or '').strip().lower()
+    result_health = str(getattr(result, 'health', '') or '').strip().lower()
+    if result_status in {'failed', 'blocked', 'degraded'} or result_health in {'failed', 'degraded'}:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': f'restart_start_{result_status or result_health or "unknown"}',
+            'pane_id': pane_id,
+        }
+    refreshed = app.registry.get(agent_name)
     return {
         'agent': agent_name,
         'status': 'restarted',
         'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id),
+        'action': str(getattr(result, 'action', '') or '').strip() or 'relaunched',
     }
+
+
+def _restart_start_options(app) -> tuple[bool, bool]:
+    store = getattr(app, 'start_policy_store', None)
+    try:
+        policy = store.load() if store is not None else None
+    except Exception:
+        policy = None
+    if policy is None:
+        # Match the normal `ccb start` defaults when no recovery policy exists.
+        return True, True
+    return recovery_start_options(policy)
+
+
+def _find_start_result(summary, agent_name: str):
+    for result in tuple(getattr(summary, 'agent_results', ()) or ()):
+        if str(getattr(result, 'agent_name', '') or '').strip() == agent_name:
+            return result
+    return None
 
 
 def _restart_pane_id(*, runtime, session) -> str | None:

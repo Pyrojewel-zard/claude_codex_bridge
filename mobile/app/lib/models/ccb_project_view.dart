@@ -17,9 +17,13 @@ class CcbProjectView {
     required this.activePaneId,
     required this.windows,
     required this.agents,
+    this.comms = const [],
     required this.contentItems,
     required this.notifications,
     required this.terminalHistories,
+    this.generatedAt,
+    this.sequence,
+    this.ttlMs,
   });
 
   final CcbProject project;
@@ -30,13 +34,38 @@ class CcbProjectView {
   final String? activePaneId;
   final List<CcbWindow> windows;
   final List<CcbAgent> agents;
+  final List<CcbCommsItem> comms;
   final List<CcbContentItem> contentItems;
   final List<CcbNotification> notifications;
   final Map<String, ReadableTerminalHistory> terminalHistories;
+  final DateTime? generatedAt;
+  final int? sequence;
+  final int? ttlMs;
+
+  CcbProjectView copyWith({List<CcbAgent>? agents}) {
+    return CcbProjectView(
+      project: project,
+      namespaceEpoch: namespaceEpoch,
+      tmuxSocketPath: tmuxSocketPath,
+      tmuxSessionName: tmuxSessionName,
+      activeWindow: activeWindow,
+      activePaneId: activePaneId,
+      windows: windows,
+      agents: agents ?? this.agents,
+      comms: comms,
+      contentItems: contentItems,
+      notifications: notifications,
+      terminalHistories: terminalHistories,
+      generatedAt: generatedAt,
+      sequence: sequence,
+      ttlMs: ttlMs,
+    );
+  }
 
   factory CcbProjectView.fromProjectViewPayload(Map<String, Object?> payload) {
     final view = _map(payload['view']);
     final source = view.isEmpty ? payload : view;
+    final cache = _map(payload['cache']);
     final namespace = _map(source['namespace']);
     final project = CcbProject.fromJson(_map(source['project']));
     final agents = [
@@ -55,6 +84,10 @@ class CcbProjectView {
           CcbWindow.fromJson(item),
       ],
       agents: agents,
+      comms: [
+        for (final item in _mapList(source['comms']))
+          CcbCommsItem.fromJson(item),
+      ],
       contentItems: contentItems,
       notifications: _notifications(
         projectId: project.id,
@@ -63,6 +96,9 @@ class CcbProjectView {
         comms: source['comms'],
       ),
       terminalHistories: _terminalHistories(source['terminal_history']),
+      generatedAt: _optionalDateTime(cache['generated_at']),
+      sequence: _optionalInt(cache['sequence']),
+      ttlMs: _optionalInt(cache['ttl_ms']),
     );
   }
 
@@ -141,6 +177,40 @@ class CcbProjectView {
       tmuxSocketPath: tmuxSocketPath,
       tmuxSessionName: tmuxSessionName,
       scopes: scopes,
+    );
+  }
+}
+
+class CcbCommsItem {
+  const CcbCommsItem({
+    required this.id,
+    required this.status,
+    required this.businessStatus,
+    required this.statusLabel,
+    this.executionPhase,
+    this.executionPhaseReason,
+  });
+
+  final String id;
+  final String status;
+  final String businessStatus;
+  final String statusLabel;
+  final String? executionPhase;
+  final String? executionPhaseReason;
+
+  String get displayPhase =>
+      executionPhase ??
+      _firstText(<String?>[statusLabel, businessStatus, status]) ??
+      'unknown';
+
+  factory CcbCommsItem.fromJson(Map<String, Object?> json) {
+    return CcbCommsItem(
+      id: _text(json['id'], fallback: 'comms-item'),
+      status: _text(json['status']),
+      businessStatus: _text(json['business_status']),
+      statusLabel: _text(json['status_label']),
+      executionPhase: _optionalText(json['execution_phase']),
+      executionPhaseReason: _optionalText(json['execution_phase_reason']),
     );
   }
 }
@@ -334,6 +404,19 @@ String? _optionalText(Object? value) {
 }
 
 int? _optionalInt(Object? value) => int.tryParse((value ?? '').toString());
+
+DateTime? _optionalDateTime(Object? value) {
+  final text = _optionalText(value);
+  return text == null ? null : DateTime.tryParse(text)?.toUtc();
+}
+
+String? _firstText(Iterable<String?> values) {
+  for (final value in values) {
+    final text = (value ?? '').trim();
+    if (text.isNotEmpty) return text;
+  }
+  return null;
+}
 
 String _text(Object? value, {String fallback = ''}) {
   final text = (value ?? '').toString().trim();

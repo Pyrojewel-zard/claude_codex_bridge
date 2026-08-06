@@ -6,7 +6,7 @@ on:
       tag:
         description: "Release tag to publish"
         required: true
-        default: "v8.2.1"
+        default: "v8.5.6"
   push:
     tags:
       - "v*.*.*"
@@ -89,6 +89,41 @@ jobs:
 
       - name: Verify npm package contents
         run: npm pack --dry-run
+
+      - name: Smoke npm-managed Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_file="$(npm pack --silent)"
+          smoke_root="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$smoke_root" "$package_file"
+          }
+          trap cleanup EXIT
+
+          npm install --prefix "$smoke_root" "$GITHUB_WORKSPACE/$package_file"
+          package_root="$smoke_root/node_modules/@seemseam/ccb"
+          release_root="$package_root/.ccb-release/ccb-linux-x86_64"
+          managed_python="$release_root/.venv/bin/python"
+
+          test -x "$managed_python"
+          "$managed_python" - <<'PY'
+          import sys
+          assert sys.version_info >= (3, 10)
+          try:
+              import tomllib
+          except ModuleNotFoundError:
+              import tomli
+          import aiohttp
+          from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
+          from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+          PY
+          "$smoke_root/node_modules/.bin/ccb" --print-version
+
+          before="$(stat -c '%Y' "$managed_python")"
+          "$smoke_root/node_modules/.bin/ccb" --print-version
+          after="$(stat -c '%Y' "$managed_python")"
+          test "$before" = "$after"
 
       - name: Check npm package availability
         id: npm_status

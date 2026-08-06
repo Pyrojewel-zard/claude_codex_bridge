@@ -13,6 +13,7 @@ from ..callbacks import (
     mark_parent_message_waiting,
     persist_delegated_terminal_job,
     submit_callback_continuation,
+    terminalize_cancelled_parent_edge,
 )
 from ..reply_delivery import is_reply_delivery_job
 from .artifacts import spill_terminal_reply_if_needed
@@ -77,11 +78,63 @@ def record_message_bureau_completion(
             prior_snapshot=prior_snapshot,
             finished_at=finished_at,
         )
+    _record_terminal_result(
+        dispatcher,
+        terminal,
+        reply_decision,
+        finished_at=finished_at,
+        deliver_to_caller=_should_deliver_to_caller(terminal),
+    )
+    return terminal, reply_decision, False
+
+
+def record_message_bureau_cancellation(
+    dispatcher,
+    terminal,
+    decision: CompletionDecision,
+    *,
+    finished_at: str,
+    record_reply: bool,
+) -> None:
+    if dispatcher._message_bureau is None:
+        return
+    dispatcher._message_bureau.record_attempt_terminal(
+        terminal,
+        decision,
+        finished_at=finished_at,
+    )
+    if not record_reply:
+        return
+    parent_edge = delegated_parent_edge(dispatcher, terminal)
+    if parent_edge is not None:
+        terminalize_cancelled_parent_edge(
+            dispatcher,
+            parent_edge,
+            parent_job=terminal,
+            updated_at=finished_at,
+        )
+    _record_terminal_result(
+        dispatcher,
+        terminal,
+        decision,
+        finished_at=finished_at,
+        deliver_to_caller=True,
+    )
+
+
+def _record_terminal_result(
+    dispatcher,
+    terminal,
+    decision: CompletionDecision,
+    *,
+    finished_at: str,
+    deliver_to_caller: bool,
+) -> None:
     child_edge = callback_child_edge(dispatcher, terminal)
     if child_edge is not None:
         reply_id = dispatcher._message_bureau.record_reply(
             _job_with_unsilenced_reply(terminal),
-            reply_decision,
+            decision,
             finished_at=finished_at,
             deliver_to_caller=False,
         )
@@ -90,19 +143,18 @@ def record_message_bureau_completion(
             child_edge,
             child_job=terminal,
             child_reply_id=reply_id,
-            decision=reply_decision,
+            decision=decision,
             finished_at=finished_at,
         )
         mark_callback_done(dispatcher, terminal, finished_at=finished_at)
-        return terminal, reply_decision, False
+        return
     dispatcher._message_bureau.record_reply(
         terminal,
-        reply_decision,
+        decision,
         finished_at=finished_at,
-        deliver_to_caller=_should_deliver_to_caller(terminal),
+        deliver_to_caller=deliver_to_caller,
     )
     mark_callback_done(dispatcher, terminal, finished_at=finished_at)
-    return terminal, reply_decision, False
 
 
 def _job_with_unsilenced_reply(job):
@@ -118,4 +170,7 @@ def _should_deliver_to_caller(job) -> bool:
     )
 
 
-__all__ = ['record_message_bureau_completion']
+__all__ = [
+    'record_message_bureau_cancellation',
+    'record_message_bureau_completion',
+]

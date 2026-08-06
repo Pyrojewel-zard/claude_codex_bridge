@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from provider_backends.pane_log_support.lifecycle import ensure_pane as _ensure_pane_impl
+from provider_backends.session_authority import remember_bound_provider_session_authority
 from provider_sessions.files import safe_write_session
 
 from .auto_transfer import maybe_auto_extract_old_session
@@ -30,6 +31,7 @@ def update_claude_binding(session, *, session_path: Path | None, session_id: str
         return
 
     record_binding_change(session, change)
+    remember_bound_provider_session_authority(session.data, 'claude')
     session._write_back()
     maybe_extract_previous_binding(session, change)
 

@@ -1,6 +1,52 @@
 # Mobile Tmux Control Implementation Status
 
-Date: 2026-06-27
+Date: 2026-08-02
+
+## LAN Network Awareness And Recovery — Implemented, Physical Gate Pending
+
+The Android LAN reliability gap is now closed at source/build level. The app
+uses coarse, non-identifying network evidence to warn before a LAN claim and
+to explain reconnecting LAN routes; it preserves the paired profile, exposes
+Retry plus authenticated Diagnostics, and lets phone-hotspot users continue
+explicitly. Terminal WebSockets now use a 15-second client ping interval so a
+silent Wi-Fi half-open enters the existing cursor-resume path without input
+replay. Computer-side onboarding and the mobile README cover same-network,
+hotspot, guest/client isolation, VPN, firewall, and DHCP address changes.
+
+Verification on 2026-08-02: Flutter analyze passed; the full Flutter suite
+passed `736` tests with `1` existing skip; LAN/mobile Python CLI selection
+passed `34` tests with `52` deselected; and a debug APK built successfully.
+The APK is 179,363,174 bytes with SHA-256
+`0d960b2aabcf8834b7ccc50aa7189ad66fc4d3fd0b36d3f6fe93a43b5b7ae30c`,
+and packaged-permission inspection includes `ACCESS_NETWORK_STATE`.
+
+Release acceptance remains gated on the physical Android Wi-Fi/hotspot/
+guest-isolation/VPN/DHCP-change matrix recorded in
+[the LAN topic](topics/lan-network-awareness-and-recovery.md).
+
+## Public Relay Packages A-D — In Progress
+
+Current phase: local implementation and pre-deployment verification are
+complete enough to prepare the Alibaba staging host. One-time host activation,
+durable phone reconnect proof, multiplexed AEAD unary/Terminal/notification/
+file traffic, managed outbound host connector, Relay QR pairing, shared Flutter
+socket ownership, bounded flow control, transient reconnect, and 25 MiB file
+boundary coverage are present on the dedicated Relay branch.
+
+Last verified locally: Relay-focused Python `108 passed`; full Flutter
+`685 passed`; full Python `5671 passed, 2 skipped`; Flutter analyze and debug
+APK build passed; 50-host/50-phone load smoke passed with no canary
+persistence; APK is `8.3.0+8030000`, SHA-256
+`1a954db32b9bac51536c069cc4a67ece3763f22561181c59e035ee2ac9c956e0`.
+
+Next target: commit the clean local checkpoint, deploy it behind a dedicated
+Alibaba nginx SNI without changing RustDesk/ZeroTier listeners, then execute
+the no-`adb reverse` public WSS Android Emulator matrix. Public Relay remains
+unaccepted until that evidence and the required soak/no-storage audit pass.
+
+Blocked by: DNS `relay.seemlab.top -> 47.120.71.142` and SSH public-key access
+to the ECS deployment account. These are not needed for the remaining local
+checks.
 
 ## Realtime Recovery Package A — In Progress (review correction, 2026-07-10)
 

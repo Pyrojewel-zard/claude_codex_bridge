@@ -1,0 +1,3740 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f7f8">
+  <title>CCB Config Control Panel Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef3f5;
+      --panel: #ffffff;
+      --control: #ffffff;
+      --soft: #f7f9fa;
+      --line: #d7e0e5;
+      --line-strong: #9dacb6;
+      --text: #142029;
+      --muted: #61727d;
+      --header-bg: rgba(244, 247, 248, 0.96);
+      --blue: #2563eb;
+      --blue-soft: #eef4ff;
+      --teal: #0f8b8d;
+      --green: #147a43;
+      --green-soft: #edf8f2;
+      --amber: #a15c00;
+      --amber-soft: #fff6e8;
+      --red: #b83232;
+      --red-soft: #fff0f0;
+      --disabled: #8796a0;
+      --disabled-bg: #eef2f4;
+      --shadow: 0 8px 20px rgba(18, 32, 43, 0.08);
+      --radius: 8px;
+      --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    :root[data-ccb-theme="dark"] {
+      color-scheme: dark;
+      --bg: #11111b;
+      --panel: #1e1e2e;
+      --control: #181825;
+      --soft: #242438;
+      --line: #45475a;
+      --line-strong: #7f849c;
+      --text: #cdd6f4;
+      --muted: #a6adc8;
+      --header-bg: rgba(17, 17, 27, 0.96);
+      --blue: #89b4fa;
+      --blue-soft: #26334d;
+      --teal: #94e2d5;
+      --green: #a6e3a1;
+      --green-soft: #20382d;
+      --amber: #f9e2af;
+      --amber-soft: #413724;
+      --red: #f38ba8;
+      --red-soft: #462838;
+      --disabled: #7f849c;
+      --disabled-bg: #313244;
+      --shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+    }
+
+    :root[data-ccb-theme="solarized"] {
+      --bg: #eee8d5;
+      --panel: #fdf6e3;
+      --control: #fffaf0;
+      --soft: #eee8d5;
+      --line: #d6ccb4;
+      --line-strong: #93a1a1;
+      --text: #073642;
+      --muted: #586e75;
+      --header-bg: rgba(253, 246, 227, 0.96);
+      --blue: #268bd2;
+      --blue-soft: #e3eff2;
+      --teal: #2aa198;
+      --green: #648b00;
+      --green-soft: #e8efd8;
+      --amber: #b26800;
+      --amber-soft: #f5e8c6;
+      --red: #dc322f;
+    }
+
+    :root[data-ccb-theme="tokyo"] {
+      --bg: #d5d6db;
+      --panel: #e6e7ed;
+      --control: #f0f1f5;
+      --soft: #cbccd1;
+      --line: #b7b9c5;
+      --line-strong: #777a8c;
+      --text: #343b58;
+      --muted: #565a6e;
+      --header-bg: rgba(230, 231, 237, 0.96);
+      --blue: #34548a;
+      --blue-soft: #c5d5e9;
+      --teal: #166775;
+      --green: #485e30;
+      --green-soft: #d3dfc7;
+      --amber: #8f5e15;
+      --amber-soft: #ead9bd;
+      --red: #8c4351;
+    }
+
+    :root[data-ccb-theme="gruvbox"] {
+      --bg: #f2e5bc;
+      --panel: #fbf1c7;
+      --control: #fff7d6;
+      --soft: #ebdbb2;
+      --line: #d5c4a1;
+      --line-strong: #928374;
+      --text: #3c3836;
+      --muted: #665c54;
+      --header-bg: rgba(251, 241, 199, 0.96);
+      --blue: #076678;
+      --blue-soft: #d4e0c3;
+      --teal: #427b58;
+      --green: #79740e;
+      --green-soft: #e5e0b1;
+      --amber: #b57614;
+      --amber-soft: #f4dca6;
+      --red: #9d0006;
+    }
+
+    :root[data-ccb-theme="rose-pine"] {
+      --bg: #f2e9e1;
+      --panel: #faf4ed;
+      --control: #fffaf3;
+      --soft: #f2e9e1;
+      --line: #dfdad9;
+      --line-strong: #9893a5;
+      --text: #575279;
+      --muted: #797593;
+      --header-bg: rgba(250, 244, 237, 0.96);
+      --blue: #286983;
+      --blue-soft: #dce7e5;
+      --teal: #56949f;
+      --green: #587744;
+      --green-soft: #e1eadb;
+      --amber: #9c5b22;
+      --amber-soft: #f3dfcc;
+      --red: #b4637a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.45 var(--font);
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .app {
+      min-height: 100vh;
+      padding-bottom: 78px;
+    }
+
+    .shell {
+      width: min(1220px, calc(100vw - 28px));
+      margin: 0 auto;
+    }
+
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: var(--header-bg);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 1px 0 rgba(20, 32, 41, 0.04);
+    }
+
+    .header-inner {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 0;
+    }
+
+    .header-main {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .status-row,
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .status-row {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-row strong {
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 28px;
+      border-radius: 7px;
+      object-fit: cover;
+    }
+
+    .header-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .appearance-control .select-inline {
+      min-width: 112px;
+    }
+
+    .theme-status {
+      min-width: 58px;
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .theme-status.error {
+      color: var(--red);
+    }
+
+    .field-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 4px 6px 4px 9px;
+      background: var(--control);
+    }
+
+    .field-inline label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .select-inline {
+      min-width: 150px;
+      border: 0;
+      color: var(--text);
+      background: transparent;
+      outline: 0;
+    }
+
+    .select-inline.version {
+      min-width: 138px;
+    }
+
+    .btn {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      background: var(--control);
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      border-color: var(--line-strong);
+    }
+
+    .btn.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .btn.ghost {
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .btn.subtle {
+      min-height: 30px;
+      padding: 4px 8px;
+      background: var(--soft);
+      font-size: 12px;
+    }
+
+    .btn.danger {
+      border-color: rgba(184, 50, 50, 0.42);
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      color: var(--disabled);
+      background: var(--disabled-bg);
+    }
+
+    .pending {
+      display: none;
+      gap: 7px;
+      align-items: center;
+      color: var(--amber);
+      font-size: 12px;
+    }
+
+    .pending.active {
+      display: inline-flex;
+    }
+
+    .summary-line {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary-line strong {
+      color: var(--text);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 23px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      color: var(--muted);
+      background: var(--control);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--line-strong);
+    }
+
+    .badge.ok {
+      color: var(--green);
+      border-color: rgba(20, 122, 67, 0.32);
+      background: var(--green-soft);
+    }
+
+    .badge.ok::before {
+      background: var(--green);
+    }
+
+    .badge.info {
+      color: var(--blue);
+      border-color: rgba(37, 99, 235, 0.32);
+      background: var(--blue-soft);
+    }
+
+    .badge.info::before {
+      background: var(--blue);
+    }
+
+    .badge.warn {
+      color: var(--amber);
+      border-color: rgba(161, 92, 0, 0.34);
+      background: var(--amber-soft);
+    }
+
+    .badge.warn::before {
+      background: var(--amber);
+    }
+
+    .badge.danger {
+      color: var(--red);
+      border-color: rgba(184, 50, 50, 0.34);
+      background: var(--red-soft);
+    }
+
+    .badge.danger::before {
+      background: var(--red);
+    }
+
+    .mono {
+      font-family: var(--mono);
+    }
+
+    .page {
+      padding: 14px 0 24px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .page-section {
+      display: grid;
+      gap: 8px;
+    }
+
+    .section-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .section-label span {
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .section-label em {
+      font-style: normal;
+    }
+
+    .section-label::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--line);
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-primary {
+      border-color: var(--line-strong);
+      box-shadow: 0 10px 24px rgba(18, 32, 43, 0.1);
+    }
+
+    .panel-secondary {
+      box-shadow: 0 4px 14px rgba(18, 32, 43, 0.06);
+    }
+
+    .panel-maintenance {
+      box-shadow: none;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .panel-secondary .panel-head,
+    .panel-maintenance .panel-head {
+      background: var(--control);
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .panel-subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: grid;
+      gap: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--control);
+    }
+
+    .toolbar .spacer {
+      flex: 1;
+    }
+
+    .toolbar-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-note {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .select,
+    .input,
+    .textarea {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 7px 9px;
+      color: var(--text);
+      background: var(--control);
+    }
+
+    .select.compact {
+      width: auto;
+      min-width: 120px;
+    }
+
+    .readonly-value {
+      min-width: 96px;
+      color: var(--text);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .textarea {
+      min-height: 92px;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: minmax(520px, 1fr) 340px;
+      gap: 12px;
+      padding: 14px;
+      align-items: stretch;
+    }
+
+    .layout-shell {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr);
+      gap: 10px;
+      height: 100%;
+      min-height: 276px;
+    }
+
+    .window-rail {
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      border-right: 1px solid var(--line);
+      padding-right: 9px;
+    }
+
+    .rail-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .window-tab {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 7px 8px;
+      background: var(--control);
+      color: var(--text);
+      text-align: left;
+    }
+
+    .window-tab.active {
+      border-color: rgba(37, 99, 235, 0.62);
+      box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
+      background: var(--blue-soft);
+    }
+
+    .window-color {
+      width: 8px;
+      height: 24px;
+      border-radius: 999px;
+    }
+
+    .window-meta {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .rail-actions {
+      display: grid;
+      gap: 6px;
+      padding-top: 4px;
+    }
+
+    .layout-card,
+    .inspector {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--control);
+      overflow: hidden;
+    }
+
+    .layout-card {
+      display: grid;
+      min-height: 0;
+      padding: 10px;
+      background: var(--soft);
+    }
+
+    .layout-preview {
+      display: block;
+      height: 100%;
+      min-height: 256px;
+      max-height: none;
+      overflow: auto;
+    }
+
+    .layout-node {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+    }
+
+    .layout-node.branch {
+      display: grid;
+      gap: 8px;
+    }
+
+    .layout-node.horizontal {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .layout-node.vertical {
+      grid-template-rows: repeat(2, minmax(0, 1fr));
+    }
+
+    .layout-col {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    .pane {
+      display: grid;
+      align-content: space-between;
+      min-height: 92px;
+      border: 1px solid #c7d3db;
+      border-radius: var(--radius);
+      padding: 9px;
+      background: var(--soft);
+      width: 100%;
+      height: 100%;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .pane.selected {
+      border-color: rgba(37, 99, 235, 0.74);
+      box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.3);
+      background: var(--control);
+    }
+
+    .pane.tool {
+      border-style: dashed;
+      background: var(--soft);
+    }
+
+    .pane-name {
+      font-weight: 800;
+    }
+
+    .pane-meta {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pane-meta span {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 1px 6px;
+      background: var(--control);
+    }
+
+    .inspector {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      align-self: stretch;
+      align-content: start;
+      min-height: 276px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .field {
+      display: grid;
+      gap: 4px;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .field-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .field.wide {
+      grid-column: 1 / -1;
+    }
+
+    .api-details {
+      background: var(--soft);
+    }
+
+    .api-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--control);
+    }
+
+    .segment {
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: var(--control);
+      color: var(--text);
+    }
+
+    .segment:last-child {
+      border-right: 0;
+    }
+
+    .segment.active {
+      background: var(--teal);
+      color: #fff;
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--control);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 9px 11px;
+      font-weight: 700;
+    }
+
+    .details-body {
+      display: grid;
+      gap: 10px;
+      padding: 0 11px 11px;
+      border-top: 1px solid var(--line);
+    }
+
+    .preview-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .preview-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .code-line {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .quick-drawers {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .basic-grid {
+      display: grid;
+      grid-template-columns: minmax(300px, 0.75fr) minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .workflow-grid {
+      display: grid;
+      grid-template-columns: minmax(290px, 0.72fr) minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .role-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .role-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 8px 9px;
+      background: var(--control);
+    }
+
+    .sidebar-split-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .sidebar-split-row {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) 64px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .sidebar-split-row input[type="range"] {
+      width: 100%;
+    }
+
+    .percent-input {
+      text-align: right;
+    }
+
+    .activation {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 8px;
+      padding: 12px 14px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 8px 9px;
+      background: var(--control);
+    }
+
+    .step-no {
+      display: inline-grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .session-bar {
+      display: grid;
+      gap: 10px;
+      padding: 12px 14px 14px;
+    }
+
+    .session-stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .session-stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 8px 9px;
+      background: var(--control);
+    }
+
+    .session-stat strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .session-controls {
+      display: grid;
+      grid-template-columns: minmax(210px, 0.7fr) minmax(190px, 0.6fr) minmax(0, 1fr);
+      gap: 8px;
+      align-items: end;
+    }
+
+    .session-table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--control);
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    pre {
+      margin: 0;
+      overflow: auto;
+      color: var(--text);
+      font: 12px/1.5 var(--mono);
+      white-space: pre;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 50;
+      width: min(500px, 100vw);
+      border-left: 1px solid var(--line);
+      background: var(--control);
+      box-shadow: -18px 0 36px rgba(18, 32, 43, 0.18);
+      transform: translateX(100%);
+      transition: transform 0.18s ease;
+      overflow: auto;
+    }
+
+    .drawer.open {
+      transform: translateX(0);
+    }
+
+    .drawer-head {
+      position: sticky;
+      top: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--control);
+      z-index: 1;
+    }
+
+    .drawer-body {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .drawer-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 11px;
+      background: var(--control);
+    }
+
+    .drawer-card h3 {
+      margin: 0 0 4px;
+      font-size: 14px;
+    }
+
+    .drawer-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .profile-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .profile-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px;
+      background: var(--control);
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .table th,
+    .table td {
+      padding: 8px 9px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .table th {
+      color: var(--muted);
+      font-size: 12px;
+      background: var(--soft);
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      z-index: 45;
+      background: rgba(15, 25, 35, 0.28);
+    }
+
+    .overlay.open {
+      display: block;
+    }
+
+    .bottom {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 30;
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: 0 -10px 28px rgba(18, 32, 43, 0.12);
+      backdrop-filter: blur(12px);
+    }
+
+    .bottom-inner {
+      display: grid;
+      grid-template-columns: minmax(250px, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 0;
+    }
+
+    .action-summary {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .action-summary strong {
+      color: var(--text);
+    }
+
+    .action-buttons {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 860px) {
+      .header-inner,
+      .workspace-grid,
+      .basic-grid,
+      .workflow-grid,
+      .bottom-inner,
+      .session-stats,
+      .session-controls {
+        grid-template-columns: 1fr;
+      }
+
+      .header-actions,
+      .action-buttons {
+        justify-content: flex-start;
+      }
+
+      .layout-preview {
+        grid-template-columns: 1fr;
+        max-height: none;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .preview-row {
+        grid-template-columns: 1fr;
+      }
+
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="shell header-inner">
+        <div class="header-main">
+          <div class="status-row">
+            <img class="brand-icon" alt="">
+            <strong>CCB Config Control</strong>
+            <span data-i18n="active">Active</span>
+            <span class="mono">.ccb/ccb.config</span>
+            <span class="badge ok" id="activeDigestBadge">digest loading</span>
+            <span class="badge info" id="currentVersionBadge">Static V2</span>
+            <span class="badge info" data-i18n="prototypeMode">Local project editor</span>
+          </div>
+          <div class="control-row">
+            <span class="field-inline">
+              <label for="profileSelect" data-i18n="profile">Profile</label>
+              <select id="profileSelect" class="select-inline">
+                <option value="active">active</option>
+              </select>
+            </span>
+            <button class="btn" data-drawer="profiles" data-i18n="manageProfiles">Manage profiles</button>
+            <span class="field-inline">
+              <label for="versionSelect" data-i18n="version">Version</label>
+              <select id="versionSelect" class="select-inline version">
+                <option value="basic">Basic V1</option>
+                <option value="static" selected>Static V2</option>
+                <option value="workflow">Workflow V3</option>
+              </select>
+            </span>
+            <span id="pendingSwitch" class="pending">
+              <span id="pendingText">Pending switch</span>
+              <button class="btn primary" id="confirmSwitch" data-i18n="confirmSwitch">Confirm switch</button>
+              <button class="btn" id="cancelSwitch" data-i18n="cancel">Cancel</button>
+            </span>
+            <button class="btn ghost" data-drawer="version" data-i18n="versionDetails">Version details</button>
+          </div>
+          <div class="summary-line">
+            <strong id="summaryTitle">Static V2</strong>
+            <span id="summaryCopy">Current static config. Edit windows, Rich, sidebar settings, and agent overlays.</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <span class="field-inline appearance-control">
+            <label for="themeSelect" data-i18n="appearance">Appearance</label>
+            <select id="themeSelect" class="select-inline" aria-label="Appearance" data-i18n-aria-label="appearance">
+              <option value="system" data-i18n="themeSystem">System</option>
+              <option value="dark" data-i18n="themeDark">Dark</option>
+              <option value="light" data-i18n="themeLight">Light</option>
+              <option value="solarized" data-i18n="themeSolarized">Solarized</option>
+              <option value="tokyo" data-i18n="themeTokyo">Tokyo</option>
+              <option value="gruvbox" data-i18n="themeGruvbox">Gruvbox</option>
+              <option value="rose-pine" data-i18n="themeRosePine">Rosé Pine</option>
+            </select>
+          </span>
+          <span id="themeStatus" class="theme-status" aria-live="polite"></span>
+          <select id="languageSelect" class="select compact" aria-label="Language" data-i18n-aria-label="language">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+          <button class="btn" data-drawer="toml" data-i18n="fullToml">Full TOML</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell page">
+      <div id="config-editor-section" class="page-section">
+        <div class="section-label"><span data-i18n="configureSection">Configure</span><em data-i18n="configureSectionNote">desired-state draft editor</em></div>
+        <section id="view-static" class="view active">
+        <section class="panel panel-primary">
+          <div class="panel-head">
+            <div>
+              <h1 class="panel-title" data-i18n="staticTitle">Static V2 editor</h1>
+              <div class="panel-subtitle" data-i18n="staticSubtitle">Binary split windows topology editor. Profile changes do not affect runtime until activation.</div>
+            </div>
+            <span class="badge ok" data-i18n="formalPath">Formal config path</span>
+          </div>
+          <div class="toolbar">
+            <span class="toolbar-group">
+              <button class="btn" id="staticSplitLr" data-i18n="splitLeftRight">Split LR</button>
+              <button class="btn" id="staticSplitTb" data-i18n="splitTopBottom">Split TB</button>
+              <button class="btn" id="staticUndo" data-i18n="undo">Undo</button>
+              <button class="btn danger" id="staticDeletePane" data-i18n="deleteSelectedPane">Delete selected</button>
+              <span class="toolbar-note" data-i18n="binarySplitNote">50/50 binary split</span>
+            </span>
+            <span class="spacer"></span>
+            <button class="btn" id="staticSidebarSettings" data-drawer="sidebar" data-i18n="sidebarSettings">Sidebar settings</button>
+          </div>
+          <div class="workspace-grid">
+            <div class="layout-card" aria-label="Small layout preview">
+              <div class="layout-shell">
+                <nav id="staticWindowRail" class="window-rail" aria-label="Windows"></nav>
+                <div id="staticLayoutPreview" class="layout-preview"></div>
+              </div>
+            </div>
+            <aside id="staticInspector" class="inspector"></aside>
+          </div>
+          <div class="preview-row">
+            <span class="preview-label" data-i18n="compactPreview">Preview</span>
+            <span class="code-line" id="staticCompactPreview">main = "demo:codex"</span>
+            <span class="quick-drawers">
+              <button class="btn ghost" data-drawer="validation" data-i18n="validationDetails">Validation details</button>
+              <button class="btn ghost" data-drawer="toml" data-i18n="fullToml">Full TOML</button>
+            </span>
+          </div>
+        </section>
+      </section>
+
+      <section id="view-basic" class="view">
+        <section class="panel panel-primary">
+          <div class="panel-head">
+            <div>
+              <h1 class="panel-title" data-i18n="basicTitle">Basic V1 layout editor</h1>
+              <div class="panel-subtitle" data-i18n="basicSubtitle">Single-window layout editor. It uses the same binary split canvas as Static V2.</div>
+            </div>
+            <span class="badge info" data-i18n="singleWindowPreset">single window preset</span>
+          </div>
+          <div class="toolbar">
+            <span class="field-inline">
+              <label data-i18n="window">Window</label>
+              <span class="readonly-value" data-i18n="mainOnly">main only</span>
+            </span>
+            <span class="toolbar-group">
+              <button class="btn" id="basicSplitLr" data-i18n="splitLeftRight">Split LR</button>
+              <button class="btn" id="basicSplitTb" data-i18n="splitTopBottom">Split TB</button>
+              <button class="btn" id="basicUndo" data-i18n="undo">Undo</button>
+              <button class="btn danger" id="basicDeletePane" data-i18n="deleteSelectedPane">Delete selected</button>
+              <span class="toolbar-note" data-i18n="binarySplitNote">50/50 binary split</span>
+            </span>
+            <span class="spacer"></span>
+            <button class="btn" data-drawer="basicTools" data-i18n="optionalTools">Optional tools</button>
+            <button class="btn" data-drawer="toml" data-i18n="fullToml">Full TOML</button>
+            <button class="btn" data-drawer="basicUpgrade" data-i18n="upgradeStaticV2">Upgrade to Static V2</button>
+          </div>
+          <div class="workspace-grid">
+            <div class="layout-card" aria-label="Basic V1 topology preview">
+              <div id="basicLayoutPreview" class="layout-preview"></div>
+            </div>
+            <aside id="basicInspector" class="inspector"></aside>
+          </div>
+          <div class="preview-row">
+            <span class="preview-label" data-i18n="compactPreview">Preview</span>
+            <span class="code-line" id="basicCompactPreview">layout = "demo:codex"</span>
+            <span class="quick-drawers">
+              <button class="btn ghost" data-drawer="basicTools" data-i18n="optionalTools">Optional tools</button>
+              <button class="btn ghost" data-drawer="toml" data-i18n="fullToml">Full TOML</button>
+              <button class="btn ghost" data-drawer="basicUpgrade" data-i18n="upgradeStaticV2">Upgrade to Static V2</button>
+            </span>
+          </div>
+        </section>
+      </section>
+
+      <template id="basicTomlTemplate">
+        <pre>version = 1
+
+layout = "archi:codex(worktree); (odesign:codex, rich)"
+
+[agents.odesign]
+role = "agentroles.open_design"
+model = "gpt-5.5"</pre>
+      </template>
+
+      <section id="view-workflow" class="view">
+        <section class="panel panel-primary">
+          <div class="panel-head">
+            <div>
+              <h1 class="panel-title" data-i18n="workflowTitle">Workflow V3 preview</h1>
+              <div class="panel-subtitle" data-i18n="workflowSubtitle">Dynamic roles, provider defaults, model policy, and capacity. Activation is gated.</div>
+            </div>
+            <span class="badge warn" data-i18n="validatorRequired">Validator required</span>
+          </div>
+          <div class="workflow-grid">
+            <div class="inspector">
+              <label class="field"><span class="label" data-i18n="workflowProfile">Workflow profile</span><select class="select"><option>agentic_loop_v1</option><option data-i18n="custom">custom</option></select></label>
+              <label class="field"><span class="label" data-i18n="entryRole">Entry role</span><select class="select"><option>frontdesk</option><option>planner</option></select></label>
+              <label class="field"><span class="label" data-i18n="providerDefault">Provider default</span><select class="select"><option>codex / gpt-5.5</option><option>claude / sonnet</option></select></label>
+              <label class="field"><span class="label" data-i18n="maxDynamicNodes">Max dynamic nodes</span><input class="input" value="4"></label>
+            </div>
+            <div class="role-list">
+              <div class="role-row"><span>frontdesk</span><span class="badge ok" data-i18n="resident">resident</span></div>
+              <div class="role-row"><span>planner</span><span class="badge ok" data-i18n="resident">resident</span></div>
+              <div class="role-row"><span>orchestrator</span><span class="badge ok" data-i18n="resident">resident</span></div>
+              <div class="role-row"><span>task_detailer</span><span class="badge ok" data-i18n="resident">resident</span></div>
+              <div class="role-row"><span>coder</span><span class="badge info" data-i18n="dynamic">dynamic</span></div>
+              <div class="role-row"><span>code_reviewer</span><span class="badge info" data-i18n="dynamic">dynamic</span></div>
+            </div>
+          </div>
+          <div class="preview-row">
+            <span class="preview-label" data-i18n="status">Status</span>
+            <span class="code-line" data-i18n="workflowBlockedNote">Save profile is allowed. Activate is blocked until config v3 parser and validator are available.</span>
+            <button class="btn ghost" data-drawer="migration" data-i18n="migrationNotes">Migration notes</button>
+          </div>
+        </section>
+      </section>
+
+      </div>
+
+      <div id="activation-review-section" class="page-section">
+        <div class="section-label"><span data-i18n="reviewSection">Review</span><em data-i18n="reviewSectionNote">validate, save, dry-run, and reload gates</em></div>
+      <section class="panel panel-secondary">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title" data-i18n="activationTitle">Activation review</h2>
+            <div class="panel-subtitle" data-i18n="activationSubtitle">Profiles are drafts. Runtime changes only after validate, backup, dry-run, and reload.</div>
+          </div>
+          <span class="badge info" id="planClass" data-i18n="planClassPending">plan_class pending</span>
+        </div>
+        <div class="activation">
+          <div class="step"><span class="step-no">1</span><span data-i18n="stepDiff">Preview profile to active config diff</span><span id="diffState" class="badge warn" data-i18n="waiting">pending</span></div>
+          <div class="step"><span class="step-no">2</span><span data-i18n="stepValidate">Validate candidate config</span><span id="validateState" class="badge" data-state="waiting" data-i18n="waiting">waiting</span></div>
+          <div class="step"><span class="step-no">3</span><span data-i18n="stepBackup">Backup and write .ccb/ccb.config</span><span class="badge" data-i18n="locked">locked</span></div>
+          <div class="step"><span class="step-no">4</span><span data-i18n="stepDryRun">Reload dry-run classifies impact</span><span id="dryRunState" class="badge" data-state="waiting" data-i18n="waiting">waiting</span></div>
+          <div class="step"><span class="step-no">5</span><span data-i18n="stepApply">Apply hot reload or show blocker</span><span id="applyState" class="badge" data-state="waiting" data-i18n="waiting">waiting</span></div>
+        </div>
+      </section>
+      </div>
+
+      <div id="agent-session-storage" class="page-section">
+        <div class="section-label"><span data-i18n="maintainSection">Maintain</span><em data-i18n="maintainSectionNote">local session storage cleanup</em></div>
+      <section class="panel panel-maintenance">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title" data-i18n="agentSessionStorage">Agent session storage</h2>
+            <div class="panel-subtitle" data-i18n="agentSessionStorageNote">Scan .ccb/agents history, estimate old session storage, and stage cleanup actions with mounted-agent protection.</div>
+          </div>
+          <span class="badge warn" data-i18n="maintenance">maintenance</span>
+        </div>
+        <div class="session-bar">
+          <div class="session-stats">
+            <div class="session-stat"><span class="label" data-i18n="totalAgentStorage">Total .ccb agent storage</span><strong id="historyTotalStorage">—</strong><span class="panel-subtitle" data-i18n="sessionsLogsArtifacts">sessions, logs, artifacts</span></div>
+            <div class="session-stat"><span class="label" data-i18n="historicalSessions">Historical sessions</span><strong id="historyStorage">—</strong><span class="panel-subtitle" data-i18n="recognizedTranscripts">recognized provider transcripts</span></div>
+            <div class="session-stat"><span class="label" data-i18n="protectedHistory">Protected history</span><strong id="historyProtectedAgents">—</strong><span class="panel-subtitle" data-i18n="currentAndLatestProtected">current and latest sessions are always retained</span></div>
+            <div class="session-stat"><span class="label" data-i18n="cleanupCandidates">Cleanup candidates</span><strong id="historyCleanupCandidates">—</strong><span class="panel-subtitle" data-i18n="outsideRetentionWindow">outside the retention window</span></div>
+          </div>
+          <div class="session-controls">
+            <label class="field">
+              <span class="label" data-i18n="cleanupOlderThan">Cleanup older than</span>
+              <select class="select" id="historyRetentionDays"><option value="30" data-i18n="thirtyDays">30 days</option><option value="7" data-i18n="sevenDays">7 days</option><option value="90" data-i18n="ninetyDays">90 days</option></select>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="agentScope">Agent scope</span>
+              <select class="select" id="historyAgentScope"><option value="all" data-i18n="allAgents">all agents</option></select>
+            </label>
+            <div class="session-actions">
+              <button class="btn" id="historyScanBtn" data-i18n="scanStorage">Scan storage</button>
+              <button class="btn danger" id="historyCleanupBtn" disabled data-i18n="deleteOldSessions">Clean old history</button>
+            </div>
+            <div class="summary-line" id="historyCleanupStatus" aria-live="polite" data-i18n="historyScanPending">Run a scan to load actual project history.</div>
+          </div>
+          <div class="session-table-wrap">
+            <table class="table">
+              <thead><tr><th data-i18n="agent">Agent</th><th data-i18n="status">Status</th><th data-i18n="protectedRecords">Protected records</th><th data-i18n="historicalStorage">Historical storage</th><th data-i18n="oldest">Oldest</th><th data-i18n="allowedCleanup">Allowed cleanup</th></tr></thead>
+              <tbody id="historyTableBody"><tr><td colspan="6" data-i18n="historyScanPending">Run a scan to load actual project history.</td></tr></tbody>
+            </table>
+          </div>
+          <div class="summary-line"><strong data-i18n="rule">Rule:</strong> <span data-i18n="cleanupRule">Every agent may clean recognized historical transcripts. Records inside the retention window, current bindings, and each provider's latest transcript stay protected.</span></div>
+        </div>
+      </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="overlay" class="overlay"></div>
+  <aside id="drawer" class="drawer" aria-label="Details drawer" data-i18n-aria-label="detailsDrawer">
+    <div class="drawer-head">
+      <h2 id="drawerTitle" class="panel-title" data-i18n="details">Details</h2>
+      <button class="btn" id="closeDrawer" data-i18n="close">Close</button>
+    </div>
+    <div id="drawerBody" class="drawer-body"></div>
+  </aside>
+
+  <footer class="bottom">
+    <div class="shell bottom-inner">
+      <div class="action-summary">
+        <strong data-i18n="draftChanged">Draft changed</strong>
+        <span id="actionDetail">static-ops profile, runtime unchanged</span>
+      </div>
+      <div class="action-buttons">
+        <button class="btn" id="validateBtn" data-i18n="validate">Validate config</button>
+        <button class="btn" id="saveProfileBtn" data-i18n="saveProfile">Save profile</button>
+        <button class="btn" id="saveActiveBtn" data-i18n="saveActive">Save active config</button>
+        <button class="btn" id="dryRunBtn" data-i18n="dryRun">Reload dry-run</button>
+        <button class="btn primary" id="applyBtn" data-i18n="hotReload">Hot reload</button>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const CCB_MOBILE_ICON_DATA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAJ5klEQVR4nM1abWxUVRp+zr3n3pmWllbGIlq0OExotVaNxcgSdYOoEAKFlgimhfSPmxT8aNiESpvgH2PEoJtAjFQ2IXHFhGhikEA30aAmJZGVQEwMFPgx7Wy7KYwfSOyU6czc8+yPzjnM9HOmxY83Oen03nPe93nP+3U+rsAoWQAUgDsA/B1AHYBK27aFsAQEBIQQAAkAIACR/ptJQgCAANP99JBxzzUPof/TRC3CkFIKnucRwCUAxwD8A8DVDMyw0n2fBRABQNu26boOpZS0hGBa3u/eLMuilJKO49C2bf08ksaaiR0r9SDHcVJSSvVHgZ6sSSmV4zipjGcrNfgyAP8DoFzXTWVo+qdrtm0zrYRKYy4DgLcA0JHyTw0+UwkppbbEWwJA2LKsRbZtM5lMGp/6M5OUUimlhFKqT2DU75FKpUyWmA0JIbIaAJDMardChpQSyWQS0rIskhSzZWzbNgDA87wpQdq2DZJQSs1Ylp4Iy7IobcsSahbg9Ux7ngcAcF0X9957LyoqKhAIBEASP/30E/r6+hAOh00/y7JmZZG0AgKu61LMMNdnBv1jjz3GQ4cO8ccff+RkNDg4yPff7+QjjzwyIY98mhCCjuNQuK7LZDKZ90zYtg3P83DnnXfi3XffRUNDAwCgu7sb3d3duHDhAn744QcAQFlZGaruuw9/ffJJPPHEEwCAjz/+GK+8/DKuRqOGVz4khIDjOIBvBhbQs7Z8+XJev36dQ0ND7Gjv4MKFC6cdu3DhQra3t3NoaIi//PILly1bNiNLCCHoc13m7UJa0OOPP06SPHz4MAOBgHmvy7+UkrZt67w9uiyxLNMvEAjw8OGPSJLLly/PWwkhBN18FbAsi0II3n333YzH49y5c6d5J6XMiY8lBKWU5v+2tjYODw+zvLycQogsJW+5AnqGTp48yV27dhEA/X4/5QwC0bZt+v1+AmBHewe/+PyLvKyQtwKacV1dHQ8cOEAAowwyGOZjfv1b8+js7OTatWtzViJvBSzLom3b7OjoYGlJiXGDjQ0NXLJkiemTCx8AXLJkCRsaGoz7lZaWsqO9g7Zt58QnLwX0+7KyMj744IPmefuudpJkf/8AA4HAtD6sYygQCHBgYIAkjSsC4EMPPcTbb789J4vOKAZ0NgHAlStXUinFM2fOMJlMsqvr38b8E/ETQlDKUdfo6upiMpnkmW/P0PM8PvXUU+P433IXyvTNqqoqRqNRkuSaNWu4adMmkuT+/ftNv0xLaPcDwH379pEkn3vuOa5Zs4YkefXqVVZVVubs/zNSQM9MRUUFI5EISVIpxebmZgLga7tfI0nu27dvQosB4P79+0mSu3fvJgA2NzdTKUWS7OvrY8U992TJykmBXCqx4zgEwFAoxN7eXiYSCb766qskyebmZjPbra2tJMkTJ04YX9ax09XVRZJsfeUVY5Xm5mYTB8lkkr3hXoZCoVGZ0pm9BURG0Vm6dCn7+/sZi8W4YsUKlpeXkyS3bNlCAPT5fATAtWvXMhaLcXBwkKtXr+bq1as5OHiFsaGYSZO6b1PTFpJkeXk5V6xYwVgsxv7+fj766KPGElNhm1KBzGDcvHkzE4kESbJtZ5tRaKwCGlhhYSFPnz5tVqGnT59mQUHBuH5NTU0kyaVLlxIYrcokmUgkuHnzZgN0orjQCozbQurdjud5sCwLe/fuxZEjRxCJRKCUQnwkDsuystb1lmVhZGQEIyMjeOCBGrz33nuorq7GqVOncKr7FKqrq9HZ2YmamhrTz7IsswlSSsGyLMTjcSilEIlEcOTIEezdu9fIklKaHV4WZcZApiUefvhhfvfddyTJPXv2MBQKkSR37NhBAKytrSVJ1tfXEwCXLfsLjx49SpK8ePEim5qaDK/Gxkb29PSQJD/77DOzAq2vr8+ywI4dO0iSoVCIe/bsIUmeO3cuq/ZkYh0NYp+PQgjzwu/388033yRJhsNhrlq1ymQfkmxtbaVt27z//vuplOI777zDE8dPGGHr16/PEpY5KXV1dTx37hxJ8vjx43z77beplGJ1dTVt2zZJYNGiRQTAVc+uYjgcJkm+8cYbxvU0XxMDukIuWLCAkUiEQ0NDbG9vN4st27YZDAaplDIW2Lp1q/Hxnp4erlu37ibwMfl8bHFbt24dey5cMOO3bt1qLKCUYjAYNOP9fr/ZP/T29nL+/Pmm4t9UIM28pKSEzz//PEtKSsal0GAwSJJsbGxke/voEuLatWtsaWnJmvGpCtFYRVpaWnjt2rXR5NDWxsbGRpJkMBjMkp2Jbe7cuSYN55SFdI6vra3lBx/8iwffP0iSPHv2LCvTi7jpgE+lSGVlpXGrzgOd/PDDD01MaM+YKgtlKaA7ZyqklSgqKuKL218kSX7//fecd9tt42Yp36bHBgIBnj9/niS5fft2FhcXG/CTWTevSqyt8O1/viVJbtiwYdbgddP7gYaGBpLkN998kyVzsmbqADE1CSGglEJpaSkWhxYDAC5fvgwp5awOpzTpHH/p0iUAwOLgYhQXF0MpNXHeH0M5nYUKIRCLxRCNRqGUwoYNG5BKpWDbNixr5sepupilUimsX78eSilEo1HcuHEjJ/AAkNNqVPvetpZtJMnh4RvctGlTlovpU4epeOl40icW+vnGjRs5PDxMknzhhReyZE7FK+cY0CABmCJHkocOHWJleh0/lnnmccpkm5xQKMSDBw8afq+//npO/p+tQLoSTzcgk/EzzzzDL7/80gj++uuv+dJLL7GmpsZUy4ma67qsrq7mtm3bePLkSTP+q6++4tNPP50z+EwFhM/nYzKZzDkgM48Ba2trUV9fj7q6OtQ8UAMI4Ndff8XAwACuXLmC69evAwBKS0uxYMEC3HXXXZg7dy5I4vz58zh27Bg+/fRTnD17dhzv6ciyBKR0IFzXpfI8pPI4m7RtG0qprPPUefPmobKyElVVVQgGg5g//w4UFc0BSQwNDSEajSIcDuPixYu4fPkyfv75ZzNWCJG1ws2FZDqBiPTxHxKJRM6DNeml9HR3AhOREMJMxEzSseu68LwUpOd5dBxHCCHyBpEpXM/idOmP6csNkkilUnkDz5SVSCgKAJRSQkqJeDw+I4a/N/n9fqSSSaQ8DxaA3lQqRQEox3H+aGzTUhqjSo3e3vdaAD4BIG7E43QcB67r/qEApyLXceA4EvF4nBj9RuETIOOiG0Bqzpw5LCwsmPG102/RhBAsKChgYWEhAYy76AYyPjUAkPL5fKq4uIgFBQU5n/v/FqCllCwoKGBRURF9Pp9Kg9d9ViJtBv3Vx7MA/gngHuDmHdSkpwFZxFGWppv5HuXm+6zfQPZXKpNwTWeqMSn+vwD+BuBzAJbmMuHnNlmQMi6uf2vi+OtXYpLPbf4PCgeSK8gSuu0AAAAASUVORK5CYII=";
+    ["icon", "apple-touch-icon"].forEach((rel) => {
+      const link = document.createElement("link");
+      link.rel = rel;
+      link.type = "image/png";
+      link.href = CCB_MOBILE_ICON_DATA;
+      document.head.append(link);
+    });
+    document.querySelector(".brand-icon").src = CCB_MOBILE_ICON_DATA;
+
+    const text = {
+      en: {
+        active: "Active",
+        profile: "Profile",
+        manageProfiles: "Manage profiles",
+        version: "Version",
+        confirmSwitch: "Confirm switch",
+        cancel: "Cancel",
+        versionDetails: "Version details",
+        prototypeMode: "Local project editor",
+        configureSection: "Configure",
+        configureSectionNote: "desired-state draft editor",
+        staticTitle: "Static V2 editor",
+        staticSubtitle: "Binary split windows topology editor. Profile changes do not affect runtime until activation.",
+        formalPath: "Formal config path",
+        binarySplitNote: "50/50 binary split",
+        window: "Window",
+        optionalTools: "Optional tools",
+        sidebarSettings: "Sidebar settings",
+        richAvailability: "Rich availability",
+        selectedPane: "Selected pane",
+        agentName: "Agent name",
+        advancedOverlay: "Advanced overlay",
+        compactPreview: "Preview",
+        validationDetails: "Validation details",
+        basicTitle: "Basic V1 layout editor",
+        basicSubtitle: "Single-window layout editor. It uses the same binary split canvas as Static V2.",
+        mainAgent: "Agent name",
+        basicAgentSettings: "Agent settings",
+        advancedAgentOptions: "Advanced agent options",
+        generatedConfig: "Generated config",
+        basicTopology: "Topology",
+        topologyOutput: "Output",
+        workflowTitle: "Workflow V3 preview",
+        workflowSubtitle: "Dynamic roles, provider defaults, model policy, and capacity. Activation is gated.",
+        validatorRequired: "Validator required",
+        reviewSection: "Review",
+        reviewSectionNote: "validate, save, dry-run, and reload gates",
+        activationTitle: "Activation review",
+        activationSubtitle: "Profiles are drafts. Runtime changes only after validate, backup, dry-run, and reload.",
+        stepDiff: "Preview profile to active config diff",
+        stepValidate: "Validate candidate config",
+        stepBackup: "Backup and write .ccb/ccb.config",
+        stepDryRun: "Reload dry-run classifies impact",
+        stepApply: "Apply hot reload or show blocker",
+        maintainSection: "Maintain",
+        maintainSectionNote: "local session storage cleanup",
+        close: "Close",
+        draftChanged: "Draft changed",
+        validate: "Validate config",
+        saveProfile: "Save profile",
+        saveActive: "Save active config",
+        dryRun: "Reload dry-run",
+        hotReload: "Hot reload",
+        documentTitle: "CCB Config Control Panel",
+        language: "Language",
+        appearance: "Appearance",
+        themeSystem: "System",
+        themeDark: "Dark",
+        themeLight: "Light",
+        themeSolarized: "Solarized",
+        themeTokyo: "Tokyo",
+        themeGruvbox: "Gruvbox",
+        themeRosePine: "Rosé Pine",
+        themeSaving: "Saving...",
+        themeSaved: "Saved",
+        themeLoadFailed: "Theme unavailable",
+        themeSaveFailed: "Save failed",
+        fullToml: "Full TOML",
+        leftBranch: "left branch",
+        rightTop: "right / top",
+        rightBottom: "right / bottom",
+        splitLeftRight: "Split left/right",
+        splitTopBottom: "Split top/bottom",
+        undo: "Undo",
+        deleteSelectedPane: "Delete selected",
+        deletePaneConfirm: "Delete {agent} from {window}? The adjacent pane will expand into the released space.",
+        deletePaneWindowConfirm: "Delete {agent} and its window {window}?",
+        windows: "Windows",
+        entryThreePanes: "entry · 3 panes",
+        add: "Add",
+        rename: "Rename",
+        delete: "Delete",
+        paneType: "Pane type",
+        agent: "Agent",
+        richAvailableNote: "Rich available · not ask target; disable this option when the package is missing.",
+        workspace: "Workspace",
+        provider: "Provider",
+        rolePack: "RolePack",
+        model: "Model",
+        thinking: "Thinking",
+        modelCapabilityNote: "Model and thinking choices follow provider capability evidence.",
+        apiOverride: "API override",
+        apiOverrideNote: "Closed means inherit project/provider defaults. Open this only when this pane needs its own API route.",
+        overrideType: "Override type",
+        providerProfile: "provider profile",
+        customKeyUrl: "custom key/url",
+        newProfile: "new profile...",
+        apiKey: "API key",
+        baseUrl: "Base URL",
+        singleWindowPreset: "single window preset",
+        mainOnly: "main only",
+        upgradeStaticV2: "Upgrade to Static V2",
+        workflowProfile: "Workflow profile",
+        custom: "custom",
+        entryRole: "Entry role",
+        providerDefault: "Provider default",
+        maxDynamicNodes: "Max dynamic nodes",
+        resident: "resident",
+        dynamic: "dynamic",
+        status: "Status",
+        workflowBlockedNote: "Save profile is allowed. Activate is blocked until config v3 parser and validator are available.",
+        migrationNotes: "Migration notes",
+        planClassPending: "plan_class pending",
+        ready: "ready",
+        waiting: "waiting",
+        locked: "locked",
+        fifteenMinutes: "15 min",
+        oneHour: "1 hour",
+        twentyFourHours: "24 hours",
+        allAgents: "all agents",
+        agentSessionStorage: "Agent session storage",
+        agentSessionStorageNote: "Scan recognized provider transcripts and clean history outside a protected retention window.",
+        maintenance: "maintenance",
+        totalAgentStorage: "Total .ccb agent storage",
+        sessionsLogsArtifacts: "sessions, logs, artifacts",
+        historicalSessions: "Historical sessions",
+        recognizedTranscripts: "recognized provider transcripts",
+        protectedHistory: "Protected history",
+        currentAndLatestProtected: "current and latest sessions are always retained",
+        cleanupCandidates: "Cleanup candidates",
+        outsideRetentionWindow: "outside the retention window",
+        safeCleanupCandidates: "safe cleanup candidates",
+        mountedAgents: "Mounted agents",
+        fourProtected: "4 protected",
+        currentSessionExcluded: "current session excluded",
+        staleAgents: "Stale agents",
+        threeRemovable: "3 removable",
+        notCurrentGraph: "not in current graph",
+        cleanupOlderThan: "Cleanup older than",
+        thirtyDays: "30 days",
+        sevenDays: "7 days",
+        ninetyDays: "90 days",
+        customDate: "custom date...",
+        agentScope: "Agent scope",
+        mountedOnly: "mounted only",
+        staleUnmountedOnly: "stale/unmounted only",
+        selectedAgent: "selected agent",
+        scanStorage: "Scan storage",
+        deleteOldSessions: "Clean old history",
+        deleteMountedData: "Delete mounted agent data",
+        currentSession: "Current session",
+        protectedRecords: "Protected records",
+        historicalStorage: "Historical storage",
+        oldest: "Oldest",
+        allowedCleanup: "Allowed cleanup",
+        mounted: "mounted",
+        protected: "protected",
+        eighteenDays: "18 days",
+        elevenDays: "11 days",
+        oldRoleBinding: "old role binding",
+        none: "none",
+        sixtyFourDays: "64 days",
+        history: "History",
+        deleteAll: "Delete all",
+        notMounted: "not mounted",
+        archived: "archived",
+        ninetyTwoDays: "92 days",
+        historyOnly: "History only",
+        rule: "Rule:",
+        cleanupRule: "Every agent may clean recognized historical transcripts. Records inside the retention window, current bindings, and each provider's latest transcript stay protected.",
+        historyScanPending: "Run a scan to load actual project history.",
+        historyScanLoading: "Scanning Agent history...",
+        historyScanFailed: "History scan failed: {error}",
+        historyNoCandidates: "No removable history exists for the selected scope.",
+        historyCandidatesReady: "{count} records · {bytes} can be removed before {cutoff}.",
+        historyCleanupConfirm: "Delete {count} historical records ({bytes})? Records from the latest {days} days, current bindings, and the latest transcript remain protected.",
+        historyCleanupRunning: "Cleaning protected Agent history...",
+        historyCleanupComplete: "Removed {count} records and released {bytes}; skipped {skipped}.",
+        historyCleanupFailed: "History cleanup failed: {error}",
+        recordsCount: "{count} records",
+        noHistory: "No recognized history",
+        detailsDrawer: "Details drawer",
+        details: "Details",
+        inherit: "inherit",
+        customModel: "Custom model...",
+        unsupportedModelShortcut: "Not supported by CCB model shortcut",
+        modelSourceSupported: "Model source: {source}. Supported thinking levels are written to the static agent overlay.",
+        modelSourcePending: "Model source: {source}. Selection is visible for planning, but CCB cannot write this provider model shortcut yet.",
+        modelShortcutUnavailable: "This provider has no CCB model shortcut. Use provider startup configuration only after validation support is defined.",
+        thinkingLevelsTitle: "Model supports: {levels}.",
+        thinkingUnavailableTitle: "The selected provider or model has no writable static thinking mapping.",
+        activationBlocked: "Activation blocked",
+        activate: "Activate",
+        editorDraftOnly: "editor draft only",
+        passed: "passed",
+        blocked: "blocked",
+        safe: "safe",
+        viewOnly: "view_only",
+        configLoading: "Loading active .ccb/ccb.config...",
+        configLoaded: "Active config loaded. Edit Full TOML to change the project config.",
+        configLoadFailed: "Could not load active config",
+        configValid: "Config is valid",
+        configSaved: "Active config saved with a timestamped backup",
+        configReloaded: "Config saved and hot reload completed",
+        configRemovalPending: "Config saved. The selected agent is busy and will be removed after it becomes idle.",
+        configDryRun: "Reload dry-run completed",
+        configOperationFailed: "Config operation failed",
+        tomlEditorNote: "This editor and the V1/V2 visual controls share one active config draft. Advanced fields can still be edited here.",
+        visualDraftRendered: "Visual draft rendered and ready to validate",
+        invalidAgentName: "Agent name must be unique and start with a letter",
+        invalidWindowName: "Window name must be unique and start with a letter",
+        setEntry: "Set entry",
+        entry: "entry",
+        sidebarMode: "Sidebar mode",
+        sidebarPosition: "Position",
+        sidebarWidth: "Width",
+        enabled: "enabled",
+        disabled: "disabled",
+        richUnavailableNote: "Rich is not installed in this environment and cannot be selected.",
+        apiShortcutUnavailable: "This provider does not support per-agent API key/URL shortcuts.",
+        profileSaved: "Config profile saved",
+        profileLoaded: "Config profile loaded as an inactive draft",
+        profileNamePrompt: "Profile name",
+        normalizeCommentsWarning: "Visual editing normalizes TOML formatting and removes comments. Continue?",
+        visualUnsupported: "This compact config contains a cmd pane. Use Full TOML to preserve it.",
+        reviewChanges: "Review active config changes",
+        confirmWrite: "Confirm and continue",
+        noConfigChanges: "No active config changes",
+        draftConversion: "Draft conversion: Basic V1 -> Static V2",
+        drawerProfiles: "Config profiles",
+        drawerVersionDetails: "Version details",
+        drawerOptionalTools: "Optional tools",
+        drawerUpgradeStatic: "Upgrade to Static V2",
+        drawerMigrationReview: "Migration review",
+        drawerSidebarSettings: "Sidebar settings",
+        drawerValidationDetails: "Validation details",
+        authority: "Authority",
+        authorityCopy: "Profiles are saved control files, not live runtime authority. Activate writes .ccb/ccb.config through validate, backup, dry-run, and reload.",
+        importCurrentProfile: "Import current as profile",
+        duplicate: "Duplicate",
+        archive: "Archive",
+        basicV1Copy: "Single-window layout setup using the same binary split canvas as Static V2, without window or sidebar management.",
+        staticV2Copy: "Named windows, binary split layout, Rich, sidebar settings, and agent overlays.",
+        workflowV3Copy: "Dynamic roles, providers, models, and capacity. Activation waits for v3 validation.",
+        optionalToolsCopy: "Basic V1 can place Rich inside the same binary split canvas. It is a tool pane, not an agent.",
+        reservedAlias: "Reserved layout alias, not an ask target.",
+        toolPane: "tool pane",
+        boundary: "Boundary",
+        boundaryCopy: "Basic V1 keeps one fixed window and the same multi-pane editor as Static V2. Static V2 adds named windows and sidebar settings.",
+        upgradeCopy: "Static V2 adds named windows and sidebar settings while preserving the current split tree. This creates a draft only.",
+        createStaticDraft: "Create Static V2 draft",
+        migrationCopy: "Switching versions creates a new draft and requires diff review. It does not write .ccb/ccb.config.",
+        createVersionDraft: "Create version draft",
+        sidebarSplit: "Sidebar split",
+        sidebarSplitCopy: "Presentation only. Tune the three vertical blocks as percentages; keep the total near 100%.",
+        agents: "Agents",
+        comms: "Comms",
+        tips: "Tips",
+        sidebarTips: "Sidebar tips",
+        sidebarTipsCopy: "Presentation-only multiline text. Line breaks are preserved; this is not an item list.",
+        tipsText: "Tips text",
+        restoreDefaults: "Restore defaults",
+        hotReloadSidebar: "Hot reload sidebar",
+        name: "Name",
+        command: "Command",
+        notAskTarget: "not ask target",
+        validation: "Validation",
+        validationCopy: "No blocking errors. One style warning: an overlay repeats a topology-owned setting.",
+        rolepacksInstalled: "rolepacks installed",
+        windowsTopologyParse: "windows topology parse",
+        styleWarnings: "style warnings",
+        pass: "pass"
+      },
+      zh: {
+        active: "当前",
+        profile: "档案",
+        manageProfiles: "管理档案",
+        version: "版本",
+        confirmSwitch: "确认切换",
+        cancel: "取消",
+        versionDetails: "版本说明",
+        prototypeMode: "本地项目编辑器",
+        configureSection: "配置",
+        configureSectionNote: "desired-state 草稿编辑",
+        staticTitle: "静态 V2 编辑器",
+        staticSubtitle: "二分拆分 windows 拓扑编辑器。档案变更不会在激活前影响运行时。",
+        formalPath: "正式配置路径",
+        binarySplitNote: "50/50 二分拆分",
+        window: "窗口",
+        optionalTools: "可选工具",
+        sidebarSettings: "侧边栏设置",
+        richSettings: "Rich 设置",
+        selectedPane: "选中分屏",
+        agentName: "Agent 名称",
+        advancedOverlay: "高级覆盖项",
+        compactPreview: "预览",
+        validationDetails: "校验详情",
+        basicTitle: "基础 V1 布局编辑器",
+        basicSubtitle: "单窗口布局编辑器，和静态 V2 使用同一套二分拆分画布。",
+        mainAgent: "Agent 名称",
+        basicAgentSettings: "Agent 设置",
+        advancedAgentOptions: "高级 agent 选项",
+        generatedConfig: "生成配置",
+        basicTopology: "拓扑图",
+        topologyOutput: "输出",
+        workflowTitle: "工作流 V3 预览",
+        workflowSubtitle: "动态角色、provider 默认值、模型策略和容量。激活需要门禁。",
+        validatorRequired: "需要校验器",
+        reviewSection: "审查",
+        reviewSectionNote: "validate、save、dry-run、reload 门禁",
+        activationTitle: "激活审查",
+        activationSubtitle: "档案只是草稿。运行时变更必须经过校验、备份、dry-run 和 reload。",
+        stepDiff: "预览 profile 到当前配置的差异",
+        stepValidate: "校验候选配置",
+        stepBackup: "备份并写入 .ccb/ccb.config",
+        stepDryRun: "Reload dry-run 判断影响",
+        stepApply: "执行热加载或显示阻断原因",
+        maintainSection: "维护",
+        maintainSectionNote: "本地 session 存储清理",
+        close: "关闭",
+        draftChanged: "草稿已变更",
+        validate: "检测配置",
+        saveProfile: "保存档案",
+        saveActive: "保存当前配置",
+        dryRun: "Reload dry-run",
+        hotReload: "热加载",
+        documentTitle: "CCB 配置控制面板",
+        language: "语言",
+        appearance: "主题",
+        themeSystem: "跟随系统",
+        themeDark: "深色",
+        themeLight: "浅色",
+        themeSolarized: "Solarized",
+        themeTokyo: "Tokyo",
+        themeGruvbox: "Gruvbox",
+        themeRosePine: "Rosé Pine",
+        themeSaving: "保存中…",
+        themeSaved: "已保存",
+        themeLoadFailed: "主题不可用",
+        themeSaveFailed: "保存失败",
+        fullToml: "完整 TOML",
+        leftBranch: "左侧分支",
+        rightTop: "右上",
+        rightBottom: "右下",
+        splitLeftRight: "左右拆分",
+        splitTopBottom: "上下拆分",
+        undo: "撤销",
+        deleteSelectedPane: "删除所选",
+        deletePaneConfirm: "从 {window} 删除 {agent}？相邻分屏将自动扩展填充释放的空间。",
+        deletePaneWindowConfirm: "删除 {agent} 及其窗口 {window}？",
+        windows: "窗口",
+        entryThreePanes: "入口 · 3 个分屏",
+        add: "新增",
+        rename: "重命名",
+        delete: "删除",
+        paneType: "分屏类型",
+        agent: "Agent",
+        richAvailableNote: "Rich 已安装 · 不是 ask 目标；未安装对应包时禁用此选项。",
+        workspace: "工作区",
+        provider: "Provider",
+        rolePack: "角色包",
+        model: "模型",
+        thinking: "思考强度",
+        modelCapabilityNote: "模型和思考强度选项来自 provider 能力证据。",
+        apiOverride: "API 覆盖",
+        apiOverrideNote: "关闭时继承项目/provider 默认值；仅在该分屏需要独立 API 路由时打开。",
+        overrideType: "覆盖方式",
+        providerProfile: "provider 档案",
+        customKeyUrl: "自定义 key/url",
+        newProfile: "新建档案...",
+        apiKey: "API Key",
+        baseUrl: "基础 URL",
+        singleWindowPreset: "单窗口预设",
+        mainOnly: "仅 main",
+        upgradeStaticV2: "升级到静态 V2",
+        workflowProfile: "工作流档案",
+        custom: "自定义",
+        entryRole: "入口角色",
+        providerDefault: "默认 Provider",
+        maxDynamicNodes: "最大动态节点数",
+        resident: "常驻",
+        dynamic: "动态",
+        status: "状态",
+        workflowBlockedNote: "可以保存档案；在 config v3 解析器和校验器可用前禁止激活。",
+        migrationNotes: "迁移说明",
+        planClassPending: "plan_class 待定",
+        ready: "就绪",
+        waiting: "等待中",
+        locked: "已锁定",
+        fifteenMinutes: "15 分钟",
+        oneHour: "1 小时",
+        twentyFourHours: "24 小时",
+        allAgents: "全部 Agent",
+        agentSessionStorage: "Agent Session 存储",
+        agentSessionStorageNote: "扫描可识别的 Provider 会话记录，并清理保护窗口之外的历史。",
+        maintenance: "维护",
+        totalAgentStorage: ".ccb Agent 总存储",
+        sessionsLogsArtifacts: "sessions、日志、artifacts",
+        historicalSessions: "历史 Sessions",
+        recognizedTranscripts: "可识别的 Provider 会话记录",
+        protectedHistory: "受保护历史",
+        currentAndLatestProtected: "当前会话和每个 Provider 最新会话始终保留",
+        cleanupCandidates: "可清理记录",
+        outsideRetentionWindow: "位于保留窗口之外",
+        safeCleanupCandidates: "可安全清理",
+        mountedAgents: "已挂载 Agent",
+        fourProtected: "4 个受保护",
+        currentSessionExcluded: "排除当前 session",
+        staleAgents: "陈旧 Agent",
+        threeRemovable: "3 个可移除",
+        notCurrentGraph: "不在当前运行图中",
+        cleanupOlderThan: "清理早于",
+        thirtyDays: "30 天",
+        sevenDays: "7 天",
+        ninetyDays: "90 天",
+        customDate: "自定义日期...",
+        agentScope: "Agent 范围",
+        mountedOnly: "仅已挂载",
+        staleUnmountedOnly: "仅陈旧/未挂载",
+        selectedAgent: "选中的 Agent",
+        scanStorage: "扫描存储",
+        deleteOldSessions: "清理旧历史",
+        deleteMountedData: "删除已挂载 Agent 数据",
+        currentSession: "当前 Session",
+        protectedRecords: "受保护记录",
+        historicalStorage: "历史存储",
+        oldest: "最早记录",
+        allowedCleanup: "允许的清理",
+        mounted: "已挂载",
+        protected: "受保护",
+        eighteenDays: "18 天",
+        elevenDays: "11 天",
+        oldRoleBinding: "旧角色绑定",
+        none: "无",
+        sixtyFourDays: "64 天",
+        history: "历史记录",
+        deleteAll: "全部删除",
+        notMounted: "未挂载",
+        archived: "已归档",
+        ninetyTwoDays: "92 天",
+        historyOnly: "仅历史记录",
+        rule: "规则：",
+        cleanupRule: "任何 Agent 都可以清理可识别的历史会话；保留窗口内记录、当前绑定以及每个 Provider 最新会话始终受保护。",
+        historyScanPending: "请先扫描以加载项目真实历史。",
+        historyScanLoading: "正在扫描 Agent 历史…",
+        historyScanFailed: "历史扫描失败：{error}",
+        historyNoCandidates: "所选范围没有可删除的历史记录。",
+        historyCandidatesReady: "可删除 {count} 条记录、{bytes}，截止时间 {cutoff}。",
+        historyCleanupConfirm: "确认删除 {count} 条历史记录（{bytes}）？最近 {days} 天、当前绑定和最新会话将继续保留。",
+        historyCleanupRunning: "正在安全清理 Agent 历史…",
+        historyCleanupComplete: "已删除 {count} 条记录，释放 {bytes}；跳过 {skipped} 条。",
+        historyCleanupFailed: "历史清理失败：{error}",
+        recordsCount: "{count} 条",
+        noHistory: "没有可识别的历史",
+        detailsDrawer: "详情抽屉",
+        details: "详情",
+        inherit: "继承",
+        customModel: "自定义模型...",
+        unsupportedModelShortcut: "CCB 不支持该模型快捷设置",
+        modelSourceSupported: "模型来源：{source}。受支持的思考强度会写入静态 Agent overlay。",
+        modelSourcePending: "模型来源：{source}。当前仅供规划选择，CCB 尚不能写入该 provider 的模型快捷设置。",
+        modelShortcutUnavailable: "该 provider 没有 CCB 模型快捷设置；请等待启动配置的校验支持。",
+        thinkingLevelsTitle: "模型支持：{levels}。",
+        thinkingUnavailableTitle: "当前 provider 或模型没有可写入的静态 thinking 映射。",
+        activationBlocked: "禁止激活",
+        activate: "激活",
+        editorDraftOnly: "仅编辑器草稿",
+        passed: "通过",
+        blocked: "已阻断",
+        safe: "安全",
+        viewOnly: "仅显示变更",
+        configLoading: "正在加载当前 .ccb/ccb.config...",
+        configLoaded: "已加载当前配置。请在完整 TOML 中编辑项目配置。",
+        configLoadFailed: "无法加载当前配置",
+        configValid: "配置校验通过",
+        configSaved: "当前配置已保存，并已生成时间戳备份",
+        configReloaded: "配置已保存并完成热加载",
+        configRemovalPending: "配置已保存。所选 Agent 正忙，将在空闲后自动删除。",
+        configDryRun: "热加载 dry-run 已完成",
+        configOperationFailed: "配置操作失败",
+        tomlEditorNote: "此编辑器与 V1/V2 可视化控件共享同一份当前配置草稿；高级字段仍可在这里编辑。",
+        visualDraftRendered: "可视化草稿已生成，可以校验",
+        invalidAgentName: "Agent 名必须唯一并以字母开头",
+        invalidWindowName: "Window 名必须唯一并以字母开头",
+        setEntry: "设为入口",
+        entry: "入口",
+        sidebarMode: "侧边栏模式",
+        sidebarPosition: "位置",
+        sidebarWidth: "宽度",
+        enabled: "启用",
+        disabled: "禁用",
+        richUnavailableNote: "当前环境未安装 Rich，不能选择该分屏类型。",
+        apiShortcutUnavailable: "该 Provider 不支持 Agent 级 API Key/URL 快捷设置。",
+        profileSaved: "配置档案已保存",
+        profileLoaded: "配置档案已作为未激活草稿加载",
+        profileNamePrompt: "档案名称",
+        normalizeCommentsWarning: "可视化编辑会规范化 TOML 格式并移除注释，是否继续？",
+        visualUnsupported: "该紧凑配置包含 cmd Pane，请使用完整 TOML 编辑以保留它。",
+        reviewChanges: "审查当前配置变更",
+        confirmWrite: "确认并继续",
+        noConfigChanges: "当前配置没有变更",
+        draftConversion: "草稿转换：基础 V1 -> 静态 V2",
+        drawerProfiles: "配置档案",
+        drawerVersionDetails: "版本说明",
+        drawerOptionalTools: "可选工具",
+        drawerUpgradeStatic: "升级到静态 V2",
+        drawerMigrationReview: "迁移审查",
+        drawerSidebarSettings: "侧边栏设置",
+        drawerValidationDetails: "校验详情",
+        authority: "权威边界",
+        authorityCopy: "档案是保存的控制文件，不是运行时权威。激活需经过校验、备份、dry-run 和 reload 后写入 .ccb/ccb.config。",
+        importCurrentProfile: "导入当前配置",
+        duplicate: "复制",
+        archive: "归档",
+        basicV1Copy: "使用与静态 V2 相同二分画布的单窗口布局，不包含窗口和侧边栏管理。",
+        staticV2Copy: "支持命名窗口、二分布局、Rich、侧边栏设置和 Agent 覆盖项。",
+        workflowV3Copy: "动态角色、provider、模型和容量；激活等待 v3 校验。",
+        optionalToolsCopy: "基础 V1 可在同一二分画布内放置 Rich。它是工具分屏，不是 Agent。",
+        reservedAlias: "保留的布局别名，不是 ask 目标。",
+        toolPane: "工具分屏",
+        boundary: "边界",
+        boundaryCopy: "基础 V1 保持单窗口并复用静态 V2 多分屏编辑器；静态 V2 额外提供命名窗口和侧边栏设置。",
+        upgradeCopy: "静态 V2 在保留当前拆分树的同时增加命名窗口和侧边栏设置；这里只创建草稿。",
+        createStaticDraft: "创建静态 V2 草稿",
+        migrationCopy: "切换版本会创建新草稿并要求审查差异，不会写入 .ccb/ccb.config。",
+        createVersionDraft: "创建版本草稿",
+        sidebarSplit: "侧边栏比例",
+        sidebarSplitCopy: "仅影响显示。调整三个纵向区域百分比，总和应接近 100%。",
+        agents: "Agents",
+        comms: "通讯",
+        tips: "提示",
+        sidebarTips: "侧边栏提示词",
+        sidebarTipsCopy: "仅用于显示的多行文字，保留换行，不是条目列表。",
+        tipsText: "提示文字",
+        restoreDefaults: "恢复默认值",
+        hotReloadSidebar: "热加载侧边栏",
+        name: "名称",
+        command: "命令",
+        notAskTarget: "不是 ask 目标",
+        validation: "校验",
+        validationCopy: "没有阻断错误；有一项样式警告：覆盖字段重复了拓扑权威设置。",
+        rolepacksInstalled: "角色包已安装",
+        windowsTopologyParse: "窗口拓扑解析",
+        styleWarnings: "样式警告",
+        pass: "通过"
+      }
+    };
+
+    const versions = {
+      basic: {
+        label: "Basic V1",
+        summary: "Single-window setup with the same binary split canvas as Static V2.",
+        summaryZh: "单窗口基础设置，和静态 V2 使用同一套二分拆分画布。",
+        action: "basic-main profile, renders a supported single-window static config",
+        actionZh: "basic-main 档案，将生成受支持的单窗口静态配置"
+      },
+      static: {
+        label: "Static V2",
+        summary: "Current static config. Starts with one window; add or remove named windows beside the canvas.",
+        summaryZh: "当前正式静态配置，初始一个 window，可在画布侧边增减命名 window。",
+        action: "static-ops profile, runtime unchanged",
+        actionZh: "static-ops 档案，运行时未变更"
+      },
+      workflow: {
+        label: "Workflow V3",
+        summary: "Dynamic roles, providers, models, and capacity. Activation waits for v3 validation.",
+        summaryZh: "动态角色、provider、模型和容量，激活依赖 v3 校验能力。",
+        action: "workflow-loop profile, activation blocked until v3 validator lands",
+        actionZh: "workflow-loop 档案，在 v3 校验器完成前禁止激活"
+      }
+    };
+
+    const fallbackProviderCapabilities = {
+      schema_version: 1,
+      providers: [
+        {
+          id: "codex",
+          model_shortcut: true,
+          model_source: "ccb_catalog_fallback",
+          custom_model: true,
+          static_thinking: true,
+          models: [
+            { id: "gpt-5.6-sol", label: "GPT-5.6 SOL", reasoning_levels: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+            { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", reasoning_levels: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+            { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", reasoning_levels: ["low", "medium", "high", "xhigh", "max"] },
+            { id: "gpt-5.5", label: "GPT-5.5", reasoning_levels: ["low", "medium", "high", "xhigh"] }
+          ]
+        },
+        { id: "claude", model_shortcut: true, model_source: "provider_aliases", custom_model: true, static_thinking: false, models: [
+          { id: "claude-fable-5", label: "Claude Fable 5", reasoning_levels: [] },
+          { id: "claude-opus-4-8", label: "Claude Opus 4.8", reasoning_levels: [] },
+          { id: "claude-sonnet-5", label: "Claude Sonnet 5", reasoning_levels: [] },
+          { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", reasoning_levels: [] },
+          { id: "sonnet", label: "Sonnet (latest alias)", reasoning_levels: [] },
+          { id: "opus", label: "Opus (latest alias)", reasoning_levels: [] },
+          { id: "haiku", label: "Haiku (latest alias)", reasoning_levels: [] }
+        ] },
+        { id: "gemini", model_shortcut: true, model_source: "official_suggestions", custom_model: true, static_thinking: false, models: [
+          { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash", reasoning_levels: [] },
+          { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview", reasoning_levels: [] },
+          { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite", reasoning_levels: [] },
+          { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview", reasoning_levels: [] },
+          { id: "gemini-flash-latest", label: "Gemini Flash (latest alias)", reasoning_levels: [] }
+        ] },
+        { id: "deepseek", model_shortcut: true, api_shortcut: true, model_source: "deepseek_v4_and_deepcode_contract", custom_model: true, static_thinking: true, models: [
+          { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", reasoning_levels: ["off", "high", "max"], default_reasoning_level: "max" },
+          { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", reasoning_levels: ["off", "high", "max"], default_reasoning_level: "max" }
+        ] },
+        { id: "opencode", model_shortcut: true, model_source: "provider_catalog_required", custom_model: true, static_thinking: false, models: [] },
+        { id: "mimo", model_shortcut: true, model_source: "custom_only", custom_model: true, static_thinking: false, models: [] },
+        ...["droid", "agy", "kimi", "qwen", "cursor", "copilot", "crush", "kiro", "pi", "zai", "grok"].map((id) => ({
+          id,
+          model_shortcut: false,
+          model_source: "none",
+          custom_model: false,
+          static_thinking: false,
+          models: []
+        }))
+      ]
+    };
+
+    let providerCapabilities = fallbackProviderCapabilities;
+
+    let currentVersion = "static";
+    let pendingVersion = null;
+    let activeDrawerKind = null;
+    let activeConfigDigest = null;
+    let draftText = "";
+    let draftLoaded = false;
+    let draftDirty = false;
+    let visualState = null;
+    let selectedWindowIndex = 0;
+    let selectedPanePath = [];
+    let visualUndo = [];
+    let visualRenderTimer = null;
+    let visualRenderRevision = 0;
+    let visualRenderPromise = null;
+    let visualRenderError = null;
+    let visualDetached = false;
+    let profileRecords = [];
+    let visualNormalizationConfirmed = false;
+    let pendingDiffResolve = null;
+    const panelThemes = ["system", "dark", "light", "solarized", "tokyo", "gruvbox", "rose-pine"];
+    const systemThemeQuery = window.matchMedia
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : { matches: false };
+    let selectedTheme = "system";
+    let themeStatusKey = "";
+    let themeStatusError = false;
+    let themeSaveRevision = 0;
+    let historyScanState = null;
+
+    function normalizeLanguage(value) {
+      return String(value || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+    }
+
+    const requestedLanguage = new URLSearchParams(window.location.search).get("lang");
+    const browserLanguages = Array.isArray(navigator.languages) && navigator.languages.length
+      ? navigator.languages
+      : [navigator.language];
+    let lang = requestedLanguage
+      ? normalizeLanguage(requestedLanguage)
+      : normalizeLanguage(browserLanguages[0]);
+
+    function t(key) {
+      return text[lang][key] || text.en[key] || key;
+    }
+
+    function tf(key, values = {}) {
+      return Object.entries(values).reduce(
+        (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+        t(key)
+      );
+    }
+
+    function normalizePanelTheme(value) {
+      const normalized = String(value || "").trim().toLowerCase();
+      return panelThemes.includes(normalized) ? normalized : "system";
+    }
+
+    function applyPanelTheme(value) {
+      const normalized = normalizePanelTheme(value);
+      const rendered = normalized === "system"
+        ? (systemThemeQuery.matches ? "dark" : "light")
+        : normalized;
+      document.documentElement.dataset.ccbTheme = rendered;
+      const themeColor = document.querySelector('meta[name="theme-color"]');
+      if (themeColor) {
+        const background = getComputedStyle(document.documentElement)
+          .getPropertyValue("--bg")
+          .trim();
+        if (background) themeColor.content = background;
+      }
+    }
+
+    function renderThemeStatus() {
+      const status = document.getElementById("themeStatus");
+      status.textContent = themeStatusKey ? t(themeStatusKey) : "";
+      status.classList.toggle("error", themeStatusError);
+    }
+
+    function setThemeStatus(key = "", failed = false) {
+      themeStatusKey = key;
+      themeStatusError = failed;
+      renderThemeStatus();
+    }
+
+    function syncThemeOptions(availableThemes) {
+      const available = new Set(
+        Array.isArray(availableThemes)
+          ? availableThemes
+              .map((value) => String(value || "").trim().toLowerCase())
+              .filter((value) => panelThemes.includes(value))
+          : panelThemes
+      );
+      document.querySelectorAll("#themeSelect option").forEach((option) => {
+        option.disabled = !available.has(option.value);
+      });
+    }
+
+    async function loadThemePreference() {
+      const select = document.getElementById("themeSelect");
+      const revision = themeSaveRevision;
+      try {
+        const payload = await apiJson("/api/theme");
+        if (revision !== themeSaveRevision) return;
+        syncThemeOptions(payload.available_themes);
+        selectedTheme = normalizePanelTheme(payload.theme);
+        select.value = selectedTheme;
+        applyPanelTheme(selectedTheme);
+        setThemeStatus();
+      } catch (_error) {
+        if (revision !== themeSaveRevision) return;
+        selectedTheme = "system";
+        select.value = selectedTheme;
+        applyPanelTheme(selectedTheme);
+        setThemeStatus("themeLoadFailed", true);
+      }
+    }
+
+    async function saveThemePreference(value) {
+      const select = document.getElementById("themeSelect");
+      const previous = selectedTheme;
+      const requested = normalizePanelTheme(value);
+      const revision = ++themeSaveRevision;
+      selectedTheme = requested;
+      applyPanelTheme(requested);
+      select.disabled = true;
+      setThemeStatus("themeSaving");
+      try {
+        const payload = await apiJson("/api/theme", {
+          method: "POST",
+          body: JSON.stringify({ theme: requested })
+        });
+        syncThemeOptions(payload.available_themes);
+        selectedTheme = normalizePanelTheme(payload.theme);
+        select.value = selectedTheme;
+        applyPanelTheme(selectedTheme);
+        setThemeStatus("themeSaved");
+        window.setTimeout(() => {
+          if (revision === themeSaveRevision && themeStatusKey === "themeSaved") {
+            setThemeStatus();
+          }
+        }, 1800);
+      } catch (_error) {
+        selectedTheme = previous;
+        select.value = previous;
+        applyPanelTheme(previous);
+        setThemeStatus("themeSaveFailed", true);
+      } finally {
+        select.disabled = false;
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>]/g, (character) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;"
+      })[character]);
+    }
+
+    function templateToml() {
+      return `version = 2
+entry_window = "main"
+
+[windows]
+main = "demo:codex"
+`;
+    }
+
+    function apiUrl(path) {
+      const url = new URL(path, window.location.href);
+      new URLSearchParams(window.location.search).forEach((value, key) => {
+        if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+      });
+      return url;
+    }
+
+    async function apiJson(path, options = {}) {
+      const response = await fetch(apiUrl(path), {
+        cache: "no-store",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = {};
+      }
+      if (!response.ok) {
+        const error = new Error(payload.error || `${response.status} ${response.statusText}`);
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    }
+
+    function formatBytes(value) {
+      const bytes = Math.max(0, Number(value) || 0);
+      if (bytes < 1024) return `${bytes} B`;
+      const units = ["KiB", "MiB", "GiB", "TiB"];
+      let amount = bytes;
+      let unit = "B";
+      for (const candidate of units) {
+        amount /= 1024;
+        unit = candidate;
+        if (amount < 1024) break;
+      }
+      return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${unit}`;
+    }
+
+    function formatHistoryDate(value) {
+      if (!value) return "—";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+        year: "numeric", month: "2-digit", day: "2-digit"
+      });
+    }
+
+    function historyRequestState() {
+      return {
+        retentionDays: Number(document.getElementById("historyRetentionDays").value || 30),
+        agent: document.getElementById("historyAgentScope").value || "all"
+      };
+    }
+
+    function syncHistoryAgentOptions(payload) {
+      const select = document.getElementById("historyAgentScope");
+      const previous = select.value || "all";
+      const agents = Array.isArray(payload.agents) ? payload.agents : [];
+      select.innerHTML = `<option value="all">${escapeHtml(t("allAgents"))}</option>` + agents.map((row) => (
+        `<option value="${escapeAttribute(row.agent)}">${escapeHtml(row.agent)}</option>`
+      )).join("");
+      select.value = [...select.options].some((option) => option.value === previous) ? previous : "all";
+    }
+
+    function renderHistoryScan(payload, syncOptions = true) {
+      historyScanState = payload;
+      if (syncOptions) syncHistoryAgentOptions(payload);
+      document.getElementById("historyTotalStorage").textContent = formatBytes(payload.total_storage_bytes);
+      document.getElementById("historyStorage").textContent = formatBytes(payload.history_bytes);
+      document.getElementById("historyProtectedAgents").textContent = tf("recordsCount", { count: payload.protected_agent_count || 0 });
+      document.getElementById("historyCleanupCandidates").textContent = `${payload.candidate_count || 0} · ${formatBytes(payload.candidate_bytes)}`;
+
+      const rows = Array.isArray(payload.agents) ? payload.agents : [];
+      const table = document.getElementById("historyTableBody");
+      table.innerHTML = rows.length ? rows.map((row) => {
+        const mounted = row.status === "mounted";
+        const providers = Array.isArray(row.providers) && row.providers.length ? row.providers.join(", ") : "—";
+        const cleanup = row.candidate_count
+          ? `${row.candidate_count} · ${formatBytes(row.candidate_bytes)}`
+          : t("none");
+        return `<tr>
+          <td><strong>${escapeHtml(row.agent)}</strong><div class="panel-subtitle">${escapeHtml(providers)}</div></td>
+          <td><span class="badge ${mounted ? "ok" : "info"}">${t(mounted ? "mounted" : "notMounted")}</span></td>
+          <td>${row.protected_count || 0} · ${formatBytes(row.protected_bytes)}</td>
+          <td>${formatBytes(row.history_bytes)}<div class="panel-subtitle">${tf("recordsCount", { count: row.history_count || 0 })}</div></td>
+          <td>${formatHistoryDate(row.oldest_at)}</td>
+          <td>${cleanup}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="6">${t("noHistory")}</td></tr>`;
+
+      const cleanupButton = document.getElementById("historyCleanupBtn");
+      cleanupButton.disabled = !Number(payload.candidate_count);
+      const status = document.getElementById("historyCleanupStatus");
+      status.textContent = Number(payload.candidate_count)
+        ? tf("historyCandidatesReady", {
+            count: payload.candidate_count,
+            bytes: formatBytes(payload.candidate_bytes),
+            cutoff: formatHistoryDate(payload.cutoff_at)
+          })
+        : t("historyNoCandidates");
+      status.style.color = "";
+    }
+
+    async function scanAgentHistory() {
+      const controls = ["historyScanBtn", "historyCleanupBtn", "historyRetentionDays", "historyAgentScope"]
+        .map((id) => document.getElementById(id));
+      const status = document.getElementById("historyCleanupStatus");
+      status.textContent = t("historyScanLoading");
+      status.style.color = "";
+      controls.forEach((control) => { control.disabled = true; });
+      const request = historyRequestState();
+      try {
+        const query = new URLSearchParams({
+          retention_days: String(request.retentionDays),
+          agent: request.agent
+        });
+        const payload = await apiJson(`/api/storage/history?${query}`);
+        renderHistoryScan(payload);
+      } catch (error) {
+        historyScanState = null;
+        status.textContent = tf("historyScanFailed", { error: error.message });
+        status.style.color = "var(--red)";
+      } finally {
+        document.getElementById("historyScanBtn").disabled = false;
+        document.getElementById("historyRetentionDays").disabled = false;
+        document.getElementById("historyAgentScope").disabled = false;
+        document.getElementById("historyCleanupBtn").disabled = !Number(historyScanState && historyScanState.candidate_count);
+      }
+    }
+
+    async function cleanupAgentHistory() {
+      if (!historyScanState || !Number(historyScanState.candidate_count)) return;
+      const request = historyRequestState();
+      const confirmed = window.confirm(tf("historyCleanupConfirm", {
+        count: historyScanState.candidate_count,
+        bytes: formatBytes(historyScanState.candidate_bytes),
+        days: request.retentionDays
+      }));
+      if (!confirmed) return;
+      const scanButton = document.getElementById("historyScanBtn");
+      const cleanupButton = document.getElementById("historyCleanupBtn");
+      const status = document.getElementById("historyCleanupStatus");
+      scanButton.disabled = true;
+      cleanupButton.disabled = true;
+      status.textContent = t("historyCleanupRunning");
+      status.style.color = "";
+      try {
+        const result = await apiJson("/api/storage/history/cleanup", {
+          method: "POST",
+          body: JSON.stringify({ retention_days: request.retentionDays, agent: request.agent })
+        });
+        renderHistoryScan(result.scan);
+        status.textContent = tf("historyCleanupComplete", {
+          count: result.deleted_count,
+          bytes: formatBytes(result.deleted_bytes),
+          skipped: result.skipped_count
+        });
+      } catch (error) {
+        status.textContent = tf("historyCleanupFailed", { error: error.message });
+        status.style.color = "var(--red)";
+      } finally {
+        scanButton.disabled = false;
+        cleanupButton.disabled = !Number(historyScanState && historyScanState.candidate_count);
+      }
+    }
+
+    function setActionStatus(message, failed = false) {
+      const detail = document.getElementById("actionDetail");
+      detail.textContent = message;
+      detail.style.color = failed ? "var(--red)" : "";
+    }
+
+    function updateDigestBadge() {
+      document.getElementById("activeDigestBadge").textContent = activeConfigDigest
+        ? `digest ${activeConfigDigest.slice(0, 7)}`
+        : "digest none";
+    }
+
+    function syncDraftFromEditor() {
+      const editor = document.getElementById("tomlEditor");
+      if (editor) draftText = editor.value;
+    }
+
+    function clone(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function escapeAttribute(value) {
+      return escapeHtml(value).replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
+    function defaultVisualState() {
+      return {
+        schema_version: 1,
+        source_shape: "windows",
+        visual_supported: true,
+        entry_window: "main",
+        rich_available: false,
+        document: {
+          version: 2,
+          entry_window: "main",
+          windows: { main: "demo:codex" }
+        },
+        windows: [{
+          name: "main",
+          layout: "demo:codex",
+          tree: { kind: "leaf", name: "demo", provider: "codex", workspace_mode: "inplace", percent: null }
+        }]
+      };
+    }
+
+    function initializeVisualState(editor, { selectVersion = true } = {}) {
+      visualState = clone(editor || defaultVisualState());
+      if (!Array.isArray(visualState.windows) || !visualState.windows.length) {
+        visualState = defaultVisualState();
+      }
+      selectedWindowIndex = Math.max(0, visualState.windows.findIndex((item) => item.name === visualState.entry_window));
+      selectedPanePath = firstLeafPath(visualState.windows[selectedWindowIndex].tree);
+      visualUndo = [];
+      visualNormalizationConfirmed = false;
+      visualDetached = false;
+      visualRenderError = null;
+      if (selectVersion) setVersion(visualState.source_shape === "compact" ? "basic" : "static");
+      renderVisualEditors();
+    }
+
+    function firstLeafPath(node, path = []) {
+      if (!node || node.kind === "leaf") return path;
+      return firstLeafPath(node.left, [...path, "left"]);
+    }
+
+    function nodeAtPath(root, path) {
+      return path.reduce((node, part) => node && node[part], root);
+    }
+
+    function replaceNodeAtPath(root, path, replacement) {
+      if (!path.length) return replacement;
+      const copy = clone(root);
+      let cursor = copy;
+      for (let index = 0; index < path.length - 1; index += 1) cursor = cursor[path[index]];
+      cursor[path[path.length - 1]] = replacement;
+      return copy;
+    }
+
+    function selectedWindow() {
+      if (!visualState) return null;
+      selectedWindowIndex = Math.min(selectedWindowIndex, visualState.windows.length - 1);
+      return visualState.windows[selectedWindowIndex];
+    }
+
+    function selectedLeaf() {
+      const windowItem = selectedWindow();
+      return windowItem ? nodeAtPath(windowItem.tree, selectedPanePath) : null;
+    }
+
+    function pathKey(path) {
+      return path.join(".");
+    }
+
+    function collectLeaves(node, output = []) {
+      if (!node) return output;
+      if (node.kind === "leaf") {
+        output.push(node);
+        return output;
+      }
+      collectLeaves(node.left, output);
+      collectLeaves(node.right, output);
+      return output;
+    }
+
+    function allAgentNames() {
+      if (!visualState) return [];
+      return visualState.windows.flatMap((windowItem) => collectLeaves(windowItem.tree))
+        .filter((leaf) => leaf.provider)
+        .map((leaf) => leaf.name);
+    }
+
+    function uniqueAgentName(prefix = "agent") {
+      const names = new Set(allAgentNames());
+      let index = 1;
+      while (names.has(`${prefix}${index}`)) index += 1;
+      return `${prefix}${index}`;
+    }
+
+    function validConfigName(value) {
+      return /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(String(value || ""));
+    }
+
+    function overlays() {
+      if (!visualState.document.agents || typeof visualState.document.agents !== "object") {
+        visualState.document.agents = {};
+      }
+      return visualState.document.agents;
+    }
+
+    function overlayFor(name, create = false) {
+      const records = overlays();
+      if (!records[name] && create) records[name] = {};
+      return records[name] || {};
+    }
+
+    function setOverlayField(name, field, value) {
+      const records = overlays();
+      if (value === undefined || value === null || value === "" || value === "inherit") {
+        if (records[name]) delete records[name][field];
+      } else {
+        overlayFor(name, true)[field] = value;
+      }
+      if (records[name] && !Object.keys(records[name]).length) delete records[name];
+    }
+
+    function cleanStaleOverlays() {
+      const active = new Set(allAgentNames());
+      Object.keys(overlays()).forEach((name) => {
+        if (!active.has(name)) delete visualState.document.agents[name];
+      });
+      if (!Object.keys(visualState.document.agents).length) delete visualState.document.agents;
+    }
+
+    function snapshotVisualState() {
+      visualUndo.push({
+        state: clone(visualState),
+        windowIndex: selectedWindowIndex,
+        panePath: [...selectedPanePath]
+      });
+      if (visualUndo.length > 30) visualUndo.shift();
+    }
+
+    function mutateVisual(mutator) {
+      if (!visualState) return;
+      if (visualDetached) {
+        setActionStatus(`${t("configOperationFailed")}: ${t("configValid")}`, true);
+        return;
+      }
+      if (visualState.comments_present && !visualNormalizationConfirmed) {
+        if (!window.confirm(t("normalizeCommentsWarning"))) return;
+        visualNormalizationConfirmed = true;
+      }
+      snapshotVisualState();
+      mutator();
+      cleanStaleOverlays();
+      renderVisualEditors();
+      scheduleVisualRender();
+    }
+
+    function undoVisual() {
+      const previous = visualUndo.pop();
+      if (!previous) return;
+      visualState = previous.state;
+      selectedWindowIndex = previous.windowIndex;
+      selectedPanePath = previous.panePath;
+      renderVisualEditors();
+      scheduleVisualRender();
+    }
+
+    function renderLayoutNode(node, parentKind = null) {
+      if (node.kind === "leaf") {
+        let textValue = node.provider
+          ? `${node.name}:${node.provider}${node.workspace_mode === "worktree" ? "(worktree)" : ""}`
+          : node.name;
+        if (node.percent !== null && node.percent !== undefined) textValue += `@${node.percent}`;
+        return textValue;
+      }
+      const separator = node.kind === "horizontal" ? "; " : ", ";
+      const rank = { horizontal: 1, vertical: 2, leaf: 3 };
+      const renderChild = (child) => {
+        const childText = renderLayoutNode(child, node.kind);
+        if (child.kind === "leaf") return childText;
+        if (rank[child.kind] < rank[node.kind] || (node.kind === "vertical" && child.kind === "horizontal")) {
+          return `(${childText})`;
+        }
+        return childText;
+      };
+      return `${renderChild(node.left)}${separator}${renderChild(node.right)}`;
+    }
+
+    function syncDocumentFromVisual() {
+      const documentValue = clone(visualState.document || {});
+      documentValue.version = 2;
+      documentValue.entry_window = visualState.entry_window;
+      documentValue.windows = {};
+      visualState.windows.forEach((windowItem) => {
+        windowItem.layout = renderLayoutNode(windowItem.tree);
+        documentValue.windows[windowItem.name] = windowItem.layout;
+      });
+      delete documentValue.default_agents;
+      delete documentValue.layout;
+      delete documentValue.cmd_enabled;
+      if (visualState.document.agents && Object.keys(visualState.document.agents).length) {
+        documentValue.agents = clone(visualState.document.agents);
+      } else {
+        delete documentValue.agents;
+      }
+      visualState.document = documentValue;
+      return documentValue;
+    }
+
+    function scheduleVisualRender() {
+      if (!visualState) return;
+      visualDetached = false;
+      draftDirty = true;
+      visualRenderError = null;
+      updateCompactPreviews();
+      setActionStatus(t("draftChanged"));
+      const documentValue = syncDocumentFromVisual();
+      if (!window.location.protocol.startsWith("http")) return;
+      const revision = ++visualRenderRevision;
+      clearTimeout(visualRenderTimer);
+      visualRenderPromise = new Promise((resolve) => {
+        visualRenderTimer = setTimeout(async () => {
+          try {
+            const result = await apiJson("/api/render", {
+              method: "POST",
+              body: JSON.stringify({ document: documentValue })
+            });
+            if (revision !== visualRenderRevision) return resolve(false);
+            draftText = result.text;
+            visualState.document = clone(result.editor.document);
+            visualRenderError = null;
+            const editor = document.getElementById("tomlEditor");
+            if (editor) editor.value = draftText;
+            setActionStatus(t("visualDraftRendered"));
+            resolve(true);
+          } catch (error) {
+            if (revision === visualRenderRevision) {
+              visualRenderError = error.message;
+              setActionStatus(`${t("configOperationFailed")}: ${error.message}`, true);
+            }
+            resolve(false);
+          }
+        }, 120);
+      });
+    }
+
+    function renderTreeHtml(node, path = []) {
+      if (node.kind !== "leaf") {
+        return `<div class="layout-node branch ${node.kind}">
+          ${renderTreeHtml(node.left, [...path, "left"])}
+          ${renderTreeHtml(node.right, [...path, "right"])}
+        </div>`;
+      }
+      const selected = pathKey(path) === pathKey(selectedPanePath);
+      const rich = !node.provider || node.name === "rich";
+      const overlay = rich ? {} : overlayFor(node.name);
+      const metadata = rich
+        ? `<span>${t("notAskTarget")}</span>`
+        : `<span>${escapeHtml(node.provider)}</span>
+           <span>${node.workspace_mode === "worktree" ? "worktree" : "inplace"}</span>
+           ${overlay.role ? `<span>${escapeHtml(overlay.role)}</span>` : ""}`;
+      return `<div class="layout-node">
+        <button type="button" class="pane ${selected ? "selected" : ""} ${rich ? "tool" : ""}" data-pane-path="${pathKey(path)}">
+          <span class="pane-name">${escapeHtml(node.name)}</span>
+          <span class="pane-meta">${metadata}</span>
+        </button>
+      </div>`;
+    }
+
+    function bindPaneSelection(container) {
+      container.querySelectorAll("[data-pane-path]").forEach((pane) => {
+        pane.addEventListener("click", () => {
+          selectedPanePath = pane.dataset.panePath ? pane.dataset.panePath.split(".") : [];
+          renderVisualEditors();
+        });
+      });
+    }
+
+    function renderWindowRail() {
+      const rail = document.getElementById("staticWindowRail");
+      if (!rail || !visualState) return;
+      const colors = ["#2563eb", "#059669", "#d97706", "#7c3aed", "#dc2626", "#0891b2"];
+      rail.innerHTML = `<span class="rail-title">${t("windows")}</span>` + visualState.windows.map((item, index) => {
+        const leafCount = collectLeaves(item.tree).length;
+        const entry = item.name === visualState.entry_window ? ` · ${t("entry")}` : "";
+        return `<button type="button" class="window-tab ${index === selectedWindowIndex ? "active" : ""}" data-window-index="${index}">
+          <span class="window-color" style="background:${colors[index % colors.length]}"></span>
+          <span>${escapeHtml(item.name)}<span class="window-meta">${leafCount} panes${entry}</span></span>
+        </button>`;
+      }).join("") + `<div class="rail-actions">
+        <button type="button" class="btn subtle" id="addWindow">${t("add")}</button>
+        <button type="button" class="btn subtle" id="renameWindow">${t("rename")}</button>
+        <button type="button" class="btn subtle" id="setEntryWindow">${t("setEntry")}</button>
+        <button type="button" class="btn subtle" id="deleteWindow" ${visualState.windows.length === 1 ? "disabled" : ""}>${t("delete")}</button>
+      </div>`;
+      rail.querySelectorAll("[data-window-index]").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedWindowIndex = Number(button.dataset.windowIndex);
+          selectedPanePath = firstLeafPath(selectedWindow().tree);
+          renderVisualEditors();
+        });
+      });
+      document.getElementById("addWindow").addEventListener("click", addWindow);
+      document.getElementById("renameWindow").addEventListener("click", renameWindow);
+      document.getElementById("setEntryWindow").addEventListener("click", () => mutateVisual(() => {
+        visualState.entry_window = selectedWindow().name;
+      }));
+      document.getElementById("deleteWindow").addEventListener("click", deleteWindow);
+    }
+
+    function renderInspector(container) {
+      if (!container || !visualState) return;
+      const leaf = selectedLeaf();
+      if (!leaf || leaf.kind !== "leaf") {
+        container.innerHTML = `<h2 class="panel-title">${t("selectedPane")}</h2>`;
+        return;
+      }
+      const isRich = !leaf.provider || leaf.name === "rich";
+      const overlay = isRich ? {} : overlayFor(leaf.name);
+      const capability = providerCapability(leaf.provider) || { models: [], model_shortcut: false };
+      const providers = [...new Set([leaf.provider, ...providerCapabilities.providers.map((item) => item.id)].filter(Boolean))];
+      const models = Array.isArray(capability.models) ? capability.models : [];
+      const apiSupported = Boolean(capability.api_shortcut);
+      const role = overlay.role || "";
+      const model = overlay.model || "inherit";
+      const thinking = overlay.thinking || "inherit";
+      const startupArgs = Array.isArray(overlay.startup_args) ? overlay.startup_args.join(" ") : "";
+      const keyConfigured = Boolean(overlay.key);
+      const roleListId = `${container.id}RoleOptions`;
+      container.innerHTML = `
+        <h2 class="panel-title">${t("selectedPane")}</h2>
+        <label class="field">
+          <span class="label">${t("paneType")}</span>
+          <select class="select" data-field="paneType">
+            <option value="agent" ${isRich ? "" : "selected"}>${t("agent")}</option>
+            <option value="rich" ${isRich ? "selected" : ""} ${!visualState.rich_available && !isRich ? "disabled" : ""}>Rich</option>
+          </select>
+          <span class="field-note">${visualState.rich_available ? t("richAvailableNote") : t("richUnavailableNote")}</span>
+        </label>
+        <div class="field-row">
+          <label class="field"><span class="label">${t("agentName")}</span><input class="input" data-field="name" value="${escapeAttribute(isRich ? "rich" : leaf.name)}" ${isRich ? "disabled" : ""}></label>
+          <label class="field"><span class="label">${t("workspace")}</span><select class="select" data-field="workspace" ${isRich ? "disabled" : ""}><option value="inplace" ${leaf.workspace_mode !== "worktree" ? "selected" : ""}>inplace</option><option value="worktree" ${leaf.workspace_mode === "worktree" ? "selected" : ""}>worktree</option></select></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span class="label">${t("provider")}</span><select class="select provider-select" data-field="provider" ${isRich ? "disabled" : ""}>${providers.map((provider) => `<option value="${escapeAttribute(provider)}" ${provider === leaf.provider ? "selected" : ""}>${escapeHtml(provider)}</option>`).join("")}</select></label>
+          <label class="field"><span class="label">${t("rolePack")}</span><input class="input" data-field="role" list="${roleListId}" value="${escapeAttribute(role)}" placeholder="none" ${isRich ? "disabled" : ""}><datalist id="${roleListId}"><option value="agentroles.ccb_self"><option value="agentroles.archi"><option value="agentroles.coder"><option value="agentroles.code_reviewer"><option value="agentroles.open_design"></datalist></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span class="label">${t("model")}</span><select class="select model-select" data-field="model" ${isRich || (!capability.model_shortcut && !models.length) ? "disabled" : ""}><option value="inherit">${t("inherit")}</option>${models.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === model ? "selected" : ""}>${escapeHtml(item.label || item.id)}</option>`).join("")}${model !== "inherit" && !models.some((item) => item.id === model) ? `<option value="${escapeAttribute(model)}" selected>${escapeHtml(model)}</option>` : ""}${capability.custom_model ? `<option value="__custom__">${t("customModel")}</option>` : ""}</select></label>
+          <label class="field"><span class="label">${t("thinking")}</span><select class="select thinking-select" data-field="thinking" data-current="${escapeAttribute(thinking)}" disabled><option value="inherit">${t("inherit")}</option></select></label>
+        </div>
+        <p class="field-note model-capability-note">${capability.model_shortcut ? tf("modelSourceSupported", { source: capability.model_source || "catalog" }) : t("modelShortcutUnavailable")}</p>
+        <details class="api-details" ${overlay.key || overlay.url ? "open" : ""}>
+          <summary>${t("apiOverride")}</summary>
+          <div class="details-body api-grid">
+            <p class="field-note wide">${apiSupported ? t("apiOverrideNote") : t("apiShortcutUnavailable")}</p>
+            <label class="field"><span class="label">${t("apiKey")}</span><input class="input" data-field="key" type="password" placeholder="${keyConfigured ? "configured · enter to replace" : "$API_KEY"}" ${isRich || !apiSupported ? "disabled" : ""}></label>
+            <label class="field"><span class="label">${t("baseUrl")}</span><input class="input" data-field="url" value="${escapeAttribute(overlay.url || "")}" placeholder="https://api.example/v1" ${isRich || !apiSupported ? "disabled" : ""}></label>
+          </div>
+        </details>
+        <details>
+          <summary>${t("advancedOverlay")}</summary>
+          <div class="details-body">
+            <label class="field"><span class="label">startup_args</span><input class="input" data-field="startup_args" value="${escapeAttribute(startupArgs)}" ${isRich ? "disabled" : ""}></label>
+            <label class="field"><span class="label">workspace_group</span><input class="input" data-field="workspace_group" value="${escapeAttribute(overlay.workspace_group || "")}" ${isRich ? "disabled" : ""}></label>
+          </div>
+        </details>`;
+      syncThinking(container, capability, model);
+      bindInspector(container);
+    }
+
+    function renderVisualEditors() {
+      if (!visualState) return;
+      const toolbarIds = [
+        "staticSplitLr", "staticSplitTb", "staticUndo", "staticDeletePane",
+        "basicSplitLr", "basicSplitTb", "basicUndo", "basicDeletePane"
+      ];
+      toolbarIds.forEach((id) => { document.getElementById(id).disabled = visualState.visual_supported === false; });
+      if (visualState.visual_supported === false) {
+        const message = `<div class="drawer-card"><p>${t("visualUnsupported")}</p></div>`;
+        document.getElementById("staticWindowRail").innerHTML = `<span class="rail-title">${t("windows")}</span>`;
+        document.getElementById("staticLayoutPreview").innerHTML = message;
+        document.getElementById("basicLayoutPreview").innerHTML = message;
+        document.getElementById("staticInspector").innerHTML = message;
+        document.getElementById("basicInspector").innerHTML = message;
+        return;
+      }
+      const windowItem = selectedWindow();
+      if (!nodeAtPath(windowItem.tree, selectedPanePath)) selectedPanePath = firstLeafPath(windowItem.tree);
+      const deleteDisabled = !canDeleteSelectedPane();
+      document.getElementById("staticDeletePane").disabled = deleteDisabled;
+      document.getElementById("basicDeletePane").disabled = deleteDisabled;
+      renderWindowRail();
+      ["staticLayoutPreview", "basicLayoutPreview"].forEach((id) => {
+        const container = document.getElementById(id);
+        if (!container) return;
+        container.innerHTML = renderTreeHtml(windowItem.tree);
+        bindPaneSelection(container);
+      });
+      renderInspector(document.getElementById("staticInspector"));
+      renderInspector(document.getElementById("basicInspector"));
+      updateCompactPreviews();
+    }
+
+    function updateCompactPreviews() {
+      if (!visualState || !selectedWindow()) return;
+      const layout = renderLayoutNode(selectedWindow().tree);
+      document.getElementById("staticCompactPreview").textContent = `${selectedWindow().name} = ${JSON.stringify(layout)}`;
+      document.getElementById("basicCompactPreview").textContent = `layout = ${JSON.stringify(layout)}`;
+    }
+
+    function bindInspector(container) {
+      const leaf = selectedLeaf();
+      if (!leaf || leaf.kind !== "leaf") return;
+      const field = (name) => container.querySelector(`[data-field="${name}"]`);
+      field("paneType").addEventListener("change", (event) => mutateVisual(() => {
+        const previousName = leaf.name;
+        if (event.target.value === "rich") {
+          Object.assign(leaf, { name: "rich", provider: null, workspace_mode: "inplace", percent: leaf.percent ?? null });
+          if (visualState.document.agents) delete visualState.document.agents[previousName];
+        } else if (!leaf.provider) {
+          Object.assign(leaf, { name: uniqueAgentName(), provider: "codex", workspace_mode: "inplace", percent: leaf.percent ?? null });
+        }
+      }));
+      field("name").addEventListener("change", (event) => {
+        const nextName = event.target.value.trim().toLowerCase();
+        const duplicate = allAgentNames().some((name) => name === nextName && name !== leaf.name);
+        if (!validConfigName(nextName) || duplicate) {
+          window.alert(t("invalidAgentName"));
+          renderVisualEditors();
+          return;
+        }
+        mutateVisual(() => {
+          const previousName = leaf.name;
+          leaf.name = nextName;
+          if (visualState.document.agents && visualState.document.agents[previousName]) {
+            visualState.document.agents[nextName] = visualState.document.agents[previousName];
+            delete visualState.document.agents[previousName];
+          }
+        });
+      });
+      field("workspace").addEventListener("change", (event) => mutateVisual(() => {
+        leaf.workspace_mode = event.target.value;
+        if (leaf.workspace_mode !== "worktree") setOverlayField(leaf.name, "workspace_group", null);
+      }));
+      field("provider").addEventListener("change", (event) => mutateVisual(() => {
+        leaf.provider = event.target.value;
+        setOverlayField(leaf.name, "model", null);
+        setOverlayField(leaf.name, "thinking", null);
+      }));
+      field("role").addEventListener("change", (event) => mutateVisual(() => {
+        setOverlayField(leaf.name, "role", event.target.value.trim().toLowerCase());
+      }));
+      field("model").addEventListener("change", (event) => mutateVisual(() => {
+        let value = event.target.value;
+        if (value === "__custom__") value = String(window.prompt(t("customModel"), "") || "").trim();
+        setOverlayField(leaf.name, "model", value);
+        const capability = providerCapability(leaf.provider);
+        const selectedModel = capability && capability.models.find((item) => item.id === value);
+        const levels = selectedModel && Array.isArray(selectedModel.reasoning_levels)
+          ? selectedModel.reasoning_levels
+          : [];
+        if (!levels.includes(overlayFor(leaf.name).thinking)) {
+          setOverlayField(leaf.name, "thinking", null);
+        }
+      }));
+      field("thinking").addEventListener("change", (event) => mutateVisual(() => {
+        setOverlayField(leaf.name, "thinking", event.target.value);
+      }));
+      field("key").addEventListener("change", (event) => {
+        if (!event.target.value.trim()) return;
+        mutateVisual(() => setOverlayField(leaf.name, "key", event.target.value.trim()));
+      });
+      field("url").addEventListener("change", (event) => mutateVisual(() => {
+        setOverlayField(leaf.name, "url", event.target.value.trim());
+      }));
+      field("startup_args").addEventListener("change", (event) => mutateVisual(() => {
+        const args = event.target.value.trim().split(/\s+/).filter(Boolean);
+        setOverlayField(leaf.name, "startup_args", args.length ? args : null);
+      }));
+      field("workspace_group").addEventListener("change", (event) => mutateVisual(() => {
+        setOverlayField(leaf.name, "workspace_group", event.target.value.trim());
+      }));
+    }
+
+    function splitSelected(kind) {
+      const leaf = selectedLeaf();
+      if (!leaf || leaf.kind !== "leaf") return;
+      const originalPath = [...selectedPanePath];
+      mutateVisual(() => {
+        const replacement = {
+          kind,
+          left: clone(leaf),
+          right: {
+            kind: "leaf",
+            name: uniqueAgentName(),
+            provider: leaf.provider || "codex",
+            workspace_mode: "inplace",
+            percent: null
+          }
+        };
+        selectedWindow().tree = replaceNodeAtPath(selectedWindow().tree, originalPath, replacement);
+        selectedPanePath = [...originalPath, "right"];
+      });
+    }
+
+    function canDeleteSelectedPane() {
+      const windowItem = selectedWindow();
+      const leaf = selectedLeaf();
+      if (!windowItem || !leaf || leaf.kind !== "leaf" || !leaf.provider) return false;
+      return collectLeaves(windowItem.tree).length > 1 || visualState.windows.length > 1;
+    }
+
+    function deleteSelectedPane() {
+      if (!canDeleteSelectedPane()) return;
+      const windowItem = selectedWindow();
+      const leaf = selectedLeaf();
+      const selectedPath = [...selectedPanePath];
+      const removesWindow = collectLeaves(windowItem.tree).length === 1;
+      const confirmation = removesWindow
+        ? tf("deletePaneWindowConfirm", { agent: leaf.name, window: windowItem.name })
+        : tf("deletePaneConfirm", { agent: leaf.name, window: windowItem.name });
+      if (!window.confirm(confirmation)) return;
+      mutateVisual(() => {
+        if (removesWindow) {
+          const removedIndex = selectedWindowIndex;
+          visualState.windows.splice(removedIndex, 1);
+          selectedWindowIndex = Math.min(removedIndex, visualState.windows.length - 1);
+          if (visualState.entry_window === windowItem.name) {
+            visualState.entry_window = visualState.windows[selectedWindowIndex].name;
+          }
+          selectedPanePath = firstLeafPath(selectedWindow().tree);
+          return;
+        }
+        const parentPath = selectedPath.slice(0, -1);
+        const selectedSide = selectedPath[selectedPath.length - 1];
+        const parent = nodeAtPath(windowItem.tree, parentPath);
+        const sibling = clone(parent[selectedSide === "left" ? "right" : "left"]);
+        windowItem.tree = replaceNodeAtPath(windowItem.tree, parentPath, sibling);
+        selectedPanePath = [...parentPath, ...firstLeafPath(sibling)];
+      });
+    }
+
+    function addWindow() {
+      const defaultName = `window${visualState.windows.length + 1}`;
+      const name = String(window.prompt(t("add"), defaultName) || "").trim().toLowerCase();
+      if (!name) return;
+      if (!validConfigName(name) || visualState.windows.some((item) => item.name === name)) {
+        window.alert(t("invalidWindowName"));
+        return;
+      }
+      const provider = selectedLeaf() && selectedLeaf().provider ? selectedLeaf().provider : "codex";
+      mutateVisual(() => {
+        const agentName = uniqueAgentName();
+        visualState.windows.push({
+          name,
+          layout: `${agentName}:${provider}`,
+          tree: { kind: "leaf", name: agentName, provider, workspace_mode: "inplace", percent: null }
+        });
+        selectedWindowIndex = visualState.windows.length - 1;
+        selectedPanePath = [];
+      });
+    }
+
+    function renameWindow() {
+      const current = selectedWindow();
+      const name = String(window.prompt(t("rename"), current.name) || "").trim().toLowerCase();
+      if (!name || name === current.name) return;
+      if (!validConfigName(name) || visualState.windows.some((item) => item.name === name)) {
+        window.alert(t("invalidWindowName"));
+        return;
+      }
+      mutateVisual(() => {
+        if (visualState.entry_window === current.name) visualState.entry_window = name;
+        current.name = name;
+      });
+    }
+
+    function deleteWindow() {
+      if (visualState.windows.length <= 1) return;
+      const current = selectedWindow();
+      if (!window.confirm(`${t("delete")} ${current.name}?`)) return;
+      mutateVisual(() => {
+        visualState.windows.splice(selectedWindowIndex, 1);
+        selectedWindowIndex = Math.max(0, selectedWindowIndex - 1);
+        if (visualState.entry_window === current.name) visualState.entry_window = visualState.windows[0].name;
+        selectedPanePath = firstLeafPath(selectedWindow().tree);
+      });
+    }
+
+    function convertVisualVersion(target) {
+      if (!visualState || target !== "basic") return;
+      const entry = visualState.windows.find((item) => item.name === visualState.entry_window) || selectedWindow();
+      mutateVisual(() => {
+        entry.name = "main";
+        visualState.windows = [entry];
+        visualState.entry_window = "main";
+        selectedWindowIndex = 0;
+        selectedPanePath = firstLeafPath(entry.tree);
+        delete visualState.document.ui;
+      });
+    }
+
+    function bindVisualToolbar() {
+      document.getElementById("staticSplitLr").addEventListener("click", () => splitSelected("horizontal"));
+      document.getElementById("staticSplitTb").addEventListener("click", () => splitSelected("vertical"));
+      document.getElementById("staticUndo").addEventListener("click", undoVisual);
+      document.getElementById("staticDeletePane").addEventListener("click", deleteSelectedPane);
+      document.getElementById("basicSplitLr").addEventListener("click", () => splitSelected("horizontal"));
+      document.getElementById("basicSplitTb").addEventListener("click", () => splitSelected("vertical"));
+      document.getElementById("basicUndo").addEventListener("click", undoVisual);
+      document.getElementById("basicDeletePane").addEventListener("click", deleteSelectedPane);
+    }
+
+    function syncProfileOptions(records, selected = "active") {
+      profileRecords = Array.isArray(records) ? records : [];
+      const select = document.getElementById("profileSelect");
+      select.replaceChildren(option("active", t("active"), selected === "active"));
+      profileRecords.forEach((record) => {
+        select.append(option(record.name, record.name, record.name === selected));
+      });
+      select.value = [...select.options].some((item) => item.value === selected) ? selected : "active";
+    }
+
+    async function loadProfile(name) {
+      if (name === "active") {
+        await loadActiveConfig();
+        return;
+      }
+      try {
+        const payload = await apiJson(`/api/profile?name=${encodeURIComponent(name)}`);
+        draftText = payload.text;
+        draftDirty = true;
+        draftLoaded = true;
+        initializeVisualState(payload.editor || defaultVisualState());
+        setActionStatus(`${t("profileLoaded")}: ${name}`);
+        if (activeDrawerKind === "toml") openDrawer("toml");
+      } catch (error) {
+        setActionStatus(`${t("configOperationFailed")}: ${error.message}`, true);
+      }
+    }
+
+    async function saveProfile() {
+      if (visualRenderPromise) await visualRenderPromise;
+      if (visualRenderError) {
+        setActionStatus(`${t("configOperationFailed")}: ${visualRenderError}`, true);
+        return;
+      }
+      syncDraftFromEditor();
+      const selected = document.getElementById("profileSelect").value;
+      const fallback = selected === "active" ? "project-profile" : selected;
+      const name = String(window.prompt(t("profileNamePrompt"), fallback) || "").trim();
+      if (!name) return;
+      try {
+        const result = await apiJson("/api/profile", {
+          method: "POST",
+          body: JSON.stringify({ name, text: draftText })
+        });
+        syncProfileOptions(result.profiles, result.name);
+        setActionStatus(`${t("profileSaved")}: ${result.name}`);
+      } catch (error) {
+        setActionStatus(`${t("configOperationFailed")}: ${error.message}`, true);
+      }
+    }
+
+    async function loadActiveConfig() {
+      if (!window.location.protocol.startsWith("http")) {
+        draftText = templateToml();
+        draftLoaded = true;
+        initializeVisualState(defaultVisualState());
+        return;
+      }
+      setActionStatus(t("configLoading"));
+      try {
+        const payload = await apiJson("/api/config");
+        syncProfileOptions(payload.profiles || [], "active");
+        draftText = payload.text || templateToml();
+        activeConfigDigest = payload.digest ?? null;
+        updateDigestBadge();
+        draftLoaded = true;
+        draftDirty = false;
+        initializeVisualState(payload.editor || defaultVisualState());
+        setActionStatus(t("configLoaded"));
+        if (activeDrawerKind === "toml") openDrawer("toml");
+      } catch (error) {
+        setActionStatus(`${t("configLoadFailed")}: ${error.message}`, true);
+      }
+    }
+
+    async function validateDraft() {
+      if (visualRenderPromise) await visualRenderPromise;
+      if (visualRenderError) {
+        setActionStatus(`${t("configOperationFailed")}: ${visualRenderError}`, true);
+        return false;
+      }
+      syncDraftFromEditor();
+      const state = document.getElementById("validateState");
+      try {
+        const result = await apiJson("/api/validate", {
+          method: "POST",
+          body: JSON.stringify({ text: draftText })
+        });
+        state.className = "badge ok";
+        state.dataset.state = "passed";
+        state.textContent = t("passed");
+        if (visualDetached && result.editor) initializeVisualState(result.editor, { selectVersion: false });
+        setActionStatus(`${t("configValid")}: ${result.agent_names.join(", ")}`);
+        return true;
+      } catch (error) {
+        state.className = "badge warn";
+        state.dataset.state = "blocked";
+        state.textContent = t("blocked");
+        setActionStatus(`${t("configOperationFailed")}: ${error.message}`, true);
+        return false;
+      }
+    }
+
+    function confirmDiff(diff) {
+      if (!diff) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        pendingDiffResolve = resolve;
+        activeDrawerKind = "diff";
+        document.getElementById("drawerTitle").textContent = t("reviewChanges");
+        document.getElementById("drawerBody").innerHTML = `
+          <pre style="min-height:50vh; white-space:pre-wrap;">${escapeHtml(diff)}</pre>
+          <div class="quick-drawers" style="margin-top:12px;">
+            <button class="btn primary" id="confirmDiffWrite">${t("confirmWrite")}</button>
+            <button class="btn" id="cancelDiffWrite">${t("cancel")}</button>
+          </div>`;
+        document.getElementById("drawer").classList.add("open");
+        document.getElementById("overlay").classList.add("open");
+        document.getElementById("confirmDiffWrite").addEventListener("click", () => {
+          const finish = pendingDiffResolve;
+          pendingDiffResolve = null;
+          closeDrawer();
+          finish(true);
+        });
+        document.getElementById("cancelDiffWrite").addEventListener("click", () => closeDrawer());
+      });
+    }
+
+    function pendingAgentRemoval(payload) {
+      const reload = payload && payload.reload;
+      const diagnostics = reload && reload.diagnostics;
+      const reason = diagnostics && diagnostics.reason;
+      return Boolean(
+        payload && payload.saved
+        && reload && reload.plan_class === "remove_agent" && reload.status === "blocked"
+        && (reason === "agent_busy" || reason === "agent_has_outstanding_work")
+      );
+    }
+
+    async function applyDraft(mode) {
+      syncDraftFromEditor();
+      if (!draftLoaded || !(await validateDraft())) return;
+      try {
+        const preview = await apiJson("/api/preview", {
+          method: "POST",
+          body: JSON.stringify({ text: draftText, expected_digest: activeConfigDigest })
+        });
+        if (preview.changed && !(await confirmDiff(preview.diff))) return;
+        document.getElementById("diffState").className = "badge ok";
+        document.getElementById("diffState").textContent = t("ready");
+        if (!preview.changed) setActionStatus(t("noConfigChanges"));
+        const result = await apiJson("/api/apply", {
+          method: "POST",
+          body: JSON.stringify({
+            text: draftText,
+            expected_digest: activeConfigDigest,
+            mode
+          })
+        });
+        activeConfigDigest = result.digest;
+        updateDigestBadge();
+        draftDirty = false;
+        if (result.validation && result.validation.editor) {
+          initializeVisualState(result.validation.editor, { selectVersion: false });
+        }
+        if (mode === "hot_reload") {
+          document.getElementById("dryRunState").className = "badge ok";
+          document.getElementById("dryRunState").textContent = result.dry_run.plan_class;
+          document.getElementById("applyState").className = "badge ok";
+          document.getElementById("applyState").textContent = t("safe");
+          document.getElementById("planClass").textContent = result.dry_run.plan_class;
+          setActionStatus(t("configReloaded"));
+        } else {
+          setActionStatus(t("configSaved"));
+        }
+      } catch (error) {
+        if (error.payload && error.payload.digest) {
+          activeConfigDigest = error.payload.digest;
+          updateDigestBadge();
+          draftDirty = false;
+        }
+        if (mode === "hot_reload" && pendingAgentRemoval(error.payload)) {
+          const planClass = error.payload.reload.plan_class;
+          document.getElementById("dryRunState").className = "badge ok";
+          document.getElementById("dryRunState").textContent = planClass;
+          document.getElementById("applyState").className = "badge warn";
+          document.getElementById("applyState").textContent = t("waiting");
+          document.getElementById("planClass").textContent = planClass;
+          setActionStatus(t("configRemovalPending"));
+          return;
+        }
+        document.getElementById("applyState").className = "badge warn";
+        document.getElementById("applyState").textContent = t("blocked");
+        setActionStatus(`${t("configOperationFailed")}: ${error.message}`, true);
+      }
+    }
+
+    async function dryRunSavedConfig() {
+      syncDraftFromEditor();
+      if (draftDirty) {
+        setActionStatus(`${t("configOperationFailed")}: ${t("configSaved")}`, true);
+        return;
+      }
+      try {
+        const payload = await apiJson("/api/reload", {
+          method: "POST",
+          body: JSON.stringify({ dry_run: true, expected_digest: activeConfigDigest })
+        });
+        const result = payload.result;
+        document.getElementById("planClass").textContent = result.plan_class;
+        const state = document.getElementById("dryRunState");
+        state.className = "badge ok";
+        state.textContent = result.plan_class;
+        setActionStatus(t("configDryRun"));
+      } catch (error) {
+        document.getElementById("dryRunState").className = "badge warn";
+        document.getElementById("dryRunState").textContent = t("blocked");
+        setActionStatus(`${t("configOperationFailed")}: ${error.message}`, true);
+      }
+    }
+
+    function providerCapability(providerId) {
+      return providerCapabilities.providers.find((item) => item.id === providerId);
+    }
+
+    function option(value, label, selected = false) {
+      const node = document.createElement("option");
+      node.value = value;
+      node.textContent = label;
+      node.selected = selected;
+      return node;
+    }
+
+    function syncThinking(inspector, capability, modelId) {
+      const thinking = inspector.querySelector(".thinking-select");
+      if (!thinking) return;
+      const model = capability && capability.models.find((item) => item.id === modelId);
+      const levels = model && Array.isArray(model.reasoning_levels) ? model.reasoning_levels : [];
+      const selected = thinking.dataset.current || "inherit";
+      thinking.replaceChildren(option("inherit", t("inherit"), selected === "inherit"));
+      levels.forEach((level) => thinking.append(option(level, level, selected === level)));
+      thinking.value = levels.includes(selected) ? selected : "inherit";
+      thinking.disabled = !capability || !capability.static_thinking || !model || !levels.length;
+      thinking.title = levels.length
+        ? tf("thinkingLevelsTitle", { levels: levels.join(", ") })
+        : t("thinkingUnavailableTitle");
+    }
+
+    function syncProviderInspector(providerSelect) {
+      const inspector = providerSelect.closest(".inspector");
+      const modelSelect = inspector && inspector.querySelector(".model-select");
+      const note = inspector && inspector.querySelector(".model-capability-note");
+      if (!inspector || !modelSelect) return;
+      const capability = providerCapability(providerSelect.value);
+      const previousModel = modelSelect.value;
+      modelSelect.replaceChildren(option("inherit", t("inherit"), previousModel === "inherit"));
+      if (capability && (capability.model_shortcut || capability.models.length)) {
+        capability.models.forEach((model) => {
+          modelSelect.append(option(model.id, model.label || model.id, model.id === previousModel));
+        });
+        if (capability.custom_model) {
+          modelSelect.append(option("__custom__", t("customModel")));
+        }
+        modelSelect.disabled = false;
+        modelSelect.value = [...modelSelect.options].some((item) => item.value === previousModel)
+          ? previousModel
+          : "inherit";
+        if (note) note.textContent = capability.model_shortcut
+          ? tf("modelSourceSupported", { source: capability.model_source })
+          : tf("modelSourcePending", { source: capability.model_source });
+      } else {
+        modelSelect.replaceChildren(option("inherit", t("unsupportedModelShortcut"), true));
+        modelSelect.disabled = true;
+        if (note) note.textContent = t("modelShortcutUnavailable");
+      }
+      syncThinking(inspector, capability, modelSelect.value);
+    }
+
+    function syncProviderControls() {
+      document.querySelectorAll(".provider-select").forEach((providerSelect) => {
+        const previousProvider = providerSelect.value || "codex";
+        providerSelect.replaceChildren();
+        if (!providerCapability(previousProvider)) {
+          providerSelect.append(option(previousProvider, previousProvider, true));
+        }
+        providerCapabilities.providers.forEach((provider) => {
+          providerSelect.append(option(provider.id, provider.id, provider.id === previousProvider));
+        });
+        syncProviderInspector(providerSelect);
+      });
+    }
+
+    async function loadProviderCapabilities() {
+      if (!window.location.protocol.startsWith("http")) {
+        syncProviderControls();
+        return;
+      }
+      try {
+        const url = new URL("/api/capabilities", window.location.href);
+        url.search = window.location.search;
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) throw new Error(`capabilities ${response.status}`);
+        const payload = await response.json();
+        if (payload && Array.isArray(payload.providers)) providerCapabilities = payload;
+      } catch (_error) {
+        providerCapabilities = fallbackProviderCapabilities;
+      }
+      if (visualState) renderVisualEditors();
+      else syncProviderControls();
+    }
+
+    function basicUpgradeSummary() {
+      return lang === "zh" ? `来源：基础 V1
+目标：静态 V2 草稿
+保留：
+  main 窗口
+  main / rich 拆分树
+  main agent
+  provider codex
+  model 继承
+  workspace inplace
+  rich 工具分屏
+影响：仅编辑器草稿` : `from: Basic V1
+to: Static V2 draft
+carry:
+  window main
+  split tree main / rich
+  agent main
+  provider codex
+  model inherit
+  workspace inplace
+  rich tool pane
+effect: editor draft only`;
+    }
+
+    function migrationSummary() {
+      const profile = document.getElementById("profileSelect").value;
+      const target = pendingVersion ? versions[pendingVersion].label : versions[currentVersion].label;
+      return lang === "zh" ? `档案：${profile}
+来源：${versions[currentVersion].label}
+目标：${target}
+影响：仅编辑器草稿
+当前配置：未变更` : `profile: ${profile}
+from: ${versions[currentVersion].label}
+to: ${target}
+effect: editor draft only
+active config: unchanged`;
+    }
+
+    function sidebarRecord() {
+      if (!visualState.document.ui || typeof visualState.document.ui !== "object") visualState.document.ui = {};
+      if (!visualState.document.ui.sidebar || typeof visualState.document.ui.sidebar !== "object") {
+        visualState.document.ui.sidebar = {};
+      }
+      return visualState.document.ui.sidebar;
+    }
+
+    function sidebarDrawerContent() {
+      const sidebar = sidebarRecord();
+      const tips = Array.isArray(sidebar.tips) ? sidebar.tips.join("\n") : "";
+      return `
+        <div class="field-row">
+          <label class="field"><span class="label">${t("sidebarMode")}</span><select class="select" data-sidebar-field="mode"><option value="every_window" ${sidebar.mode !== "off" ? "selected" : ""}>${t("enabled")}</option><option value="off" ${sidebar.mode === "off" ? "selected" : ""}>${t("disabled")}</option></select></label>
+          <label class="field"><span class="label">${t("sidebarPosition")}</span><select class="select" data-sidebar-field="position"><option value="left" ${sidebar.position !== "right" ? "selected" : ""}>left</option><option value="right" ${sidebar.position === "right" ? "selected" : ""}>right</option></select></label>
+        </div>
+        <label class="field"><span class="label">${t("sidebarWidth")}</span><input class="input" data-sidebar-field="width" value="${escapeAttribute(sidebar.width || "15%")}"></label>
+        <div class="sidebar-split-grid">
+          ${[["agents_height", t("agents"), "50%"], ["comms_height", t("comms"), "15%"], ["tips_height", t("tips"), "35%"]].map(([field, label, fallback]) => `
+            <label class="sidebar-split-row"><span class="label">${label}</span><input class="input percent-input" data-sidebar-field="${field}" value="${escapeAttribute(sidebar[field] || fallback)}"></label>
+          `).join("")}
+        </div>
+        <label class="field"><span class="label">${t("tipsText")}</span><textarea class="textarea" rows="10" data-sidebar-field="tips">${escapeHtml(tips)}</textarea></label>`;
+    }
+
+    function bindSidebarDrawer() {
+      document.querySelectorAll("[data-sidebar-field]").forEach((control) => {
+        control.addEventListener("change", () => mutateVisual(() => {
+          const sidebar = sidebarRecord();
+          const field = control.dataset.sidebarField;
+          if (field === "tips") {
+            const lines = control.value.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+            if (lines.length) sidebar.tips = lines;
+            else delete sidebar.tips;
+          } else if (control.value) {
+            sidebar[field] = control.value;
+          } else {
+            delete sidebar[field];
+          }
+        }));
+      });
+    }
+
+    const drawerContent = {
+      profiles: () => `
+        <div class="profile-list">
+          ${profileRecords.length ? profileRecords.map((item) => `
+            <div class="profile-row">
+              <div><strong>${escapeHtml(item.name)}</strong><div class="panel-subtitle">.ccb/config-profiles/${escapeHtml(item.name)}.toml</div></div>
+              <span class="badge info">${Math.max(1, Math.round(Number(item.size_bytes || 0) / 1024))} KiB</span>
+            </div>`).join("") : `<div class="drawer-card"><p>${t("none")}</p></div>`}
+        </div>
+        <div class="drawer-card">
+          <h3>${t("authority")}</h3>
+          <p>${t("authorityCopy")}</p>
+        </div>
+        <div class="quick-drawers">
+          <button class="btn" id="drawerSaveProfile">${t("saveProfile")}</button>
+        </div>`,
+      version: () => `
+        <div class="drawer-card"><h3>Basic V1</h3><p>${t("basicV1Copy")}</p></div>
+        <div class="drawer-card"><h3>Static V2</h3><p>${t("staticV2Copy")}</p></div>
+        <div class="drawer-card"><h3>Workflow V3</h3><p>${t("workflowV3Copy")}</p></div>`,
+      basicTools: () => `
+        <div class="drawer-card"><h3>${t("drawerOptionalTools")}</h3><p>${t("optionalToolsCopy")}</p></div>
+        <div class="profile-row"><div><strong>rich</strong><div class="panel-subtitle">${t("reservedAlias")}</div></div><span class="badge info">${t("toolPane")}</span></div>
+        <div class="drawer-card"><h3>${t("boundary")}</h3><p>${t("boundaryCopy")}</p></div>`,
+      basicUpgrade: () => `
+        <div class="drawer-card"><h3>${t("drawerUpgradeStatic")}</h3><p>${t("upgradeCopy")}</p></div>
+        <pre>${basicUpgradeSummary()}</pre>
+        <button class="btn primary" id="continueBasicUpgrade">${t("createStaticDraft")}</button>`,
+      migration: () => `
+        <div class="drawer-card"><h3>${t("drawerMigrationReview")}</h3><p>${t("migrationCopy")}</p></div>
+        <pre>${migrationSummary()}</pre>
+        <button class="btn primary" id="continueMigration">${t("createVersionDraft")}</button>`,
+      sidebar: sidebarDrawerContent,
+      tools: () => `
+        <table class="table">
+          <thead><tr><th>${t("name")}</th><th>${t("command")}</th><th>${t("status")}</th></tr></thead>
+          <tbody>
+            <tr><td>rich</td><td><span class="mono">ccb-workbench files</span></td><td><span class="badge info">${t("notAskTarget")}</span></td></tr>
+          </tbody>
+        </table>`,
+      toml: () => `
+        <div class="drawer-card"><p>${t("tomlEditorNote")}</p></div>
+        <label class="field">
+          <span class="label">.ccb/ccb.config</span>
+          <textarea id="tomlEditor" class="textarea mono" rows="28" spellcheck="false" style="min-height: 55vh; resize: vertical;">${escapeHtml(draftText || templateToml())}</textarea>
+        </label>`,
+      validation: () => `
+        <div class="drawer-card"><h3>${t("validation")}</h3><p>${t("validationCopy")}</p></div>
+        <div class="step"><span class="step-no">1</span><span>${t("rolepacksInstalled")}</span><span class="badge ok">${t("pass")}</span></div>
+        <div class="step"><span class="step-no">2</span><span>${t("windowsTopologyParse")}</span><span class="badge ok">${t("pass")}</span></div>
+        <div class="step"><span class="step-no">3</span><span>${t("styleWarnings")}</span><span class="badge warn">1</span></div>`
+    };
+
+    function applyLanguage(nextLang) {
+      lang = normalizeLanguage(nextLang);
+      document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+      document.title = t("documentTitle");
+      document.getElementById("languageSelect").value = lang;
+      document.querySelectorAll("[data-i18n]").forEach((node) => {
+        const key = node.dataset.i18n;
+        const value = text[lang][key] || text.en[key];
+        if (value) node.textContent = value;
+      });
+      document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+        node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
+      });
+      document.querySelectorAll("[data-state]").forEach((node) => {
+        node.textContent = t(node.dataset.state);
+      });
+      renderThemeStatus();
+      updateSummary();
+      syncProviderControls();
+      syncProfileOptions(profileRecords, document.getElementById("profileSelect").value || "active");
+      if (visualState) renderVisualEditors();
+      if (historyScanState) renderHistoryScan(historyScanState, false);
+      if (activeDrawerKind && !pendingDiffResolve && document.getElementById("drawer").classList.contains("open")) {
+        openDrawer(activeDrawerKind);
+      }
+    }
+
+    function setVersion(version) {
+      currentVersion = version;
+      pendingVersion = null;
+      document.getElementById("versionSelect").value = version;
+      document.getElementById("pendingSwitch").classList.remove("active");
+      document.querySelectorAll(".view").forEach((view) => {
+        view.classList.toggle("active", view.id === `view-${version}`);
+      });
+      updateSummary();
+    }
+
+    function updateSummary() {
+      const data = versions[currentVersion];
+      document.getElementById("summaryTitle").textContent = data.label;
+      document.getElementById("summaryCopy").textContent = lang === "zh" ? data.summaryZh : data.summary;
+      document.getElementById("currentVersionBadge").textContent = data.label;
+      document.getElementById("actionDetail").textContent = lang === "zh" ? data.actionZh : data.action;
+      const apply = document.getElementById("applyBtn");
+      const validate = document.getElementById("validateBtn");
+      const saveActive = document.getElementById("saveActiveBtn");
+      const saveProfileButton = document.getElementById("saveProfileBtn");
+      const dryRun = document.getElementById("dryRunBtn");
+      if (currentVersion === "workflow") {
+        apply.disabled = true;
+        validate.disabled = true;
+        saveActive.disabled = true;
+        saveProfileButton.disabled = true;
+        dryRun.disabled = true;
+        apply.textContent = t("activationBlocked");
+      } else if (currentVersion === "static") {
+        apply.disabled = false;
+        validate.disabled = false;
+        saveActive.disabled = false;
+        saveProfileButton.disabled = false;
+        dryRun.disabled = false;
+        apply.textContent = t("hotReload");
+      } else {
+        apply.disabled = false;
+        validate.disabled = false;
+        saveActive.disabled = false;
+        saveProfileButton.disabled = false;
+        dryRun.disabled = false;
+        apply.textContent = t("activate");
+      }
+    }
+
+    function showPending(target) {
+      if (target === currentVersion) {
+        pendingVersion = null;
+        document.getElementById("pendingSwitch").classList.remove("active");
+        return;
+      }
+      pendingVersion = target;
+      document.getElementById("pendingText").textContent = `${versions[currentVersion].label} -> ${versions[target].label}: ${t("editorDraftOnly")}`;
+      document.getElementById("pendingSwitch").classList.add("active");
+    }
+
+    function confirmVersionSwitch() {
+      if (!pendingVersion) return;
+      const risk = currentVersion !== "basic" || pendingVersion === "workflow";
+      if (risk) {
+        openDrawer("migration");
+      } else {
+        setVersion(pendingVersion);
+      }
+    }
+
+    function openDrawer(kind) {
+      activeDrawerKind = kind;
+      document.getElementById("drawerTitle").textContent = {
+        profiles: t("drawerProfiles"),
+        version: t("drawerVersionDetails"),
+        basicTools: t("drawerOptionalTools"),
+        basicUpgrade: t("drawerUpgradeStatic"),
+        migration: t("drawerMigrationReview"),
+        sidebar: t("drawerSidebarSettings"),
+        tools: t("drawerOptionalTools"),
+        toml: t("fullToml"),
+        validation: t("drawerValidationDetails")
+      }[kind] || t("details");
+      document.getElementById("drawerBody").innerHTML = drawerContent[kind] ? drawerContent[kind]() : "";
+      document.getElementById("drawer").classList.add("open");
+      document.getElementById("overlay").classList.add("open");
+      if (kind === "sidebar" && visualState) bindSidebarDrawer();
+      const drawerSaveProfile = document.getElementById("drawerSaveProfile");
+      if (drawerSaveProfile) drawerSaveProfile.addEventListener("click", saveProfile);
+      const continueButton = document.getElementById("continueMigration");
+      if (continueButton) {
+        continueButton.addEventListener("click", () => {
+          if (pendingVersion) {
+            const target = pendingVersion;
+            convertVisualVersion(target);
+            setVersion(target);
+          }
+          closeDrawer();
+        });
+      }
+      const basicUpgradeButton = document.getElementById("continueBasicUpgrade");
+      if (basicUpgradeButton) {
+        basicUpgradeButton.addEventListener("click", () => {
+          setVersion("static");
+          document.getElementById("actionDetail").textContent = t("draftConversion");
+          closeDrawer();
+        });
+      }
+      const tomlEditor = document.getElementById("tomlEditor");
+      if (tomlEditor) {
+        tomlEditor.addEventListener("input", () => {
+          draftText = tomlEditor.value;
+          draftDirty = true;
+          visualDetached = true;
+          setActionStatus(t("draftChanged"));
+        });
+        tomlEditor.focus();
+      }
+    }
+
+    function closeDrawer() {
+      if (pendingDiffResolve) {
+        const finish = pendingDiffResolve;
+        pendingDiffResolve = null;
+        finish(false);
+      }
+      activeDrawerKind = null;
+      document.getElementById("drawer").classList.remove("open");
+      document.getElementById("overlay").classList.remove("open");
+    }
+
+    document.getElementById("themeSelect").value = selectedTheme;
+    applyPanelTheme(selectedTheme);
+    document.getElementById("languageSelect").value = lang;
+    applyLanguage(lang);
+    setVersion("static");
+    bindVisualToolbar();
+    loadThemePreference();
+    loadProviderCapabilities();
+    loadActiveConfig();
+    scanAgentHistory();
+
+    document.getElementById("themeSelect").addEventListener("change", (event) => {
+      saveThemePreference(event.target.value);
+    });
+    const handleSystemThemeChange = () => {
+      if (selectedTheme === "system") applyPanelTheme(selectedTheme);
+    };
+    if (typeof systemThemeQuery.addEventListener === "function") {
+      systemThemeQuery.addEventListener("change", handleSystemThemeChange);
+    } else if (typeof systemThemeQuery.addListener === "function") {
+      systemThemeQuery.addListener(handleSystemThemeChange);
+    }
+
+    document.getElementById("languageSelect").addEventListener("change", (event) => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("lang", normalizeLanguage(event.target.value));
+      window.history.replaceState(null, "", url);
+      applyLanguage(event.target.value);
+    });
+    document.getElementById("versionSelect").addEventListener("change", (event) => showPending(event.target.value));
+    document.getElementById("confirmSwitch").addEventListener("click", confirmVersionSwitch);
+    document.getElementById("cancelSwitch").addEventListener("click", () => setVersion(currentVersion));
+
+    document.getElementById("profileSelect").addEventListener("change", (event) => {
+      loadProfile(event.target.value);
+    });
+    document.getElementById("historyScanBtn").addEventListener("click", scanAgentHistory);
+    document.getElementById("historyCleanupBtn").addEventListener("click", cleanupAgentHistory);
+    document.getElementById("historyRetentionDays").addEventListener("change", scanAgentHistory);
+    document.getElementById("historyAgentScope").addEventListener("change", scanAgentHistory);
+
+    document.querySelectorAll("[data-drawer]").forEach((button) => {
+      button.addEventListener("click", () => openDrawer(button.dataset.drawer));
+    });
+
+    document.querySelectorAll(".segment").forEach((button) => {
+      button.addEventListener("click", () => {
+        button.parentElement.querySelectorAll(".segment").forEach((peer) => peer.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+
+    document.querySelectorAll(".provider-select").forEach((providerSelect) => {
+      providerSelect.addEventListener("change", () => syncProviderInspector(providerSelect));
+    });
+
+    document.querySelectorAll(".model-select").forEach((modelSelect) => {
+      modelSelect.addEventListener("change", () => {
+        const inspector = modelSelect.closest(".inspector");
+        const providerSelect = inspector && inspector.querySelector(".provider-select");
+        if (inspector && providerSelect) {
+          syncThinking(inspector, providerCapability(providerSelect.value), modelSelect.value);
+        }
+      });
+    });
+
+    document.getElementById("closeDrawer").addEventListener("click", closeDrawer);
+    document.getElementById("overlay").addEventListener("click", closeDrawer);
+
+    document.getElementById("validateBtn").addEventListener("click", validateDraft);
+    document.getElementById("saveProfileBtn").addEventListener("click", saveProfile);
+    document.getElementById("saveActiveBtn").addEventListener("click", () => applyDraft("save"));
+    document.getElementById("dryRunBtn").addEventListener("click", dryRunSavedConfig);
+    document.getElementById("applyBtn").addEventListener("click", () => applyDraft("hot_reload"));
+  </script>
+</body>
+</html>

@@ -1,28 +1,51 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import pytest
-
 from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope
 from completion.models import CompletionItemKind, CompletionSourceKind, CompletionStatus
+from provider_backends.copilot.execution import _build_env as build_copilot_env
 from provider_backends.grok import home as grok_home
 from provider_backends.grok.execution import (
     _grok_session_id_for_job,
-    build_headless_execution_adapter,
     observe_grok_output,
+)
+from provider_backends.grok.execution import (
+    build_headless_execution_adapter as build_grok_headless_execution_adapter,
+)
+from provider_backends.native_cli_support import (
+    NativeCliExecutionConfig,
+    NativeCliExecutionRequest,
+)
+from provider_backends.native_cli_support.execution import _native_cli_env
+from provider_backends.pi.execution import (
+    build_headless_execution_adapter as build_pi_headless_execution_adapter,
+)
+from provider_backends.qoder.execution import (
+    _build_command as build_qoder_command,
+)
+from provider_backends.qoder.execution import (
+    _qoder_session_id_for_job,
+    observe_qoder_output,
+)
+from provider_backends.qoderclicn.execution import (
+    _build_command as build_qoderclicn_command,
+)
+from provider_backends.qoderclicn.execution import (
+    _qoderclicn_session_id_for_job,
+    observe_qoderclicn_output,
 )
 from provider_backends.zai.execution import observe_zai_output
 from provider_core.pathing import session_filename_for_agent
 from provider_core.registry import build_default_backend_registry
 from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
 
-
-PROVIDERS = ("qwen", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
+PROVIDERS = ("qwen", "qoder", "qoderclicn", "cursor", "copilot", "crush", "kiro", "pi", "omp", "zai")
 STRUCTURED_PROVIDERS = ("qwen", "cursor", "copilot", "pi", "omp")
 
 
@@ -84,13 +107,92 @@ def _write_session(provider: str, work_dir: Path) -> None:
 
 
 def _adapter(provider: str):
+    if provider == "pi":
+        return build_pi_headless_execution_adapter()
     backend = build_default_backend_registry(include_optional=True, include_test_doubles=False).get(provider)
     assert backend is not None
     assert backend.execution_adapter is not None
     return backend.execution_adapter
 
 
+def test_qoderclicn_headless_command_uses_qoder_contract_and_uuid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("QODERCLICN_START_CMD", raising=False)
+    provider = "qoderclicn"
+    work_dir = tmp_path / "repo-qoderclicn-command"
+    work_dir.mkdir()
+    config_dir = work_dir / ".ccb" / "agents" / "qoderclicn1" / "provider-state" / provider / "home"
+    request = NativeCliExecutionRequest(
+        provider=provider,
+        job=_job(provider, work_dir),
+        work_dir=work_dir,
+        session_data={f"{provider}_config_dir": str(config_dir)},
+        prompt="Reply exactly once.",
+        request_anchor="CCB_REQ_ID: job",
+    )
+
+    command = build_qoderclicn_command(request)
+    session_id = command[command.index("--session-id") + 1]
+
+    assert command == [
+        "qoderclicn",
+        "--config-dir",
+        str(config_dir),
+        "--permission-mode",
+        "dont_ask",
+        "-w",
+        str(work_dir),
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--session-id",
+        session_id,
+        "Reply exactly once.",
+    ]
+    assert str(uuid.UUID(session_id)) == session_id
+    assert session_id == _qoderclicn_session_id_for_job(request.job.job_id)
+    assert session_id != request.job.job_id
+    assert config_dir.is_dir()
+
+
+def test_qoderclicn_headless_command_does_not_repeat_explicit_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    explicit_config = tmp_path / "explicit-qoderclicn"
+    monkeypatch.setenv(
+        "QODERCLICN_START_CMD",
+        f"qoderclicn --config-dir {explicit_config} --yolo",
+    )
+    work_dir = tmp_path / "repo-qoderclicn-explicit"
+    work_dir.mkdir()
+    request = NativeCliExecutionRequest(
+        provider="qoderclicn",
+        job=_job("qoderclicn", work_dir),
+        work_dir=work_dir,
+        session_data={"qoderclicn_headless_permission_mode": "auto"},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+
+    command = build_qoderclicn_command(request)
+
+    assert command.count("--config-dir") == 1
+    assert command.count("--yolo") == 1
+    assert "--permission-mode" not in command
+
+
 def _install_stub(monkeypatch, provider: str, *, mode: str = "") -> None:
+    if provider == "kiro":
+        # Kiro's managed storage contract intentionally fails closed on
+        # macOS. These generic adapter tests exercise the supported private
+        # file-store path; the macOS rejection has dedicated coverage.
+        monkeypatch.setattr(
+            "provider_backends.native_cli_support.home.platform.system",
+            lambda: "Linux",
+        )
     stub = Path("test/stubs/provider_stub.py").resolve()
     monkeypatch.setenv(f"{provider.upper()}_START_CMD", f"{sys.executable} {stub} --provider {provider}")
     if mode:
@@ -111,6 +213,296 @@ def _run_to_terminal(adapter, submission: ProviderSubmission):
                 return result, emitted
         time.sleep(0.02)
     raise AssertionError("provider adapter did not terminalize")
+
+
+def test_copilot_headless_execution_uses_agent_local_home_and_cache(tmp_path: Path) -> None:
+    work_dir = tmp_path / 'repo-copilot-env'
+    state_dir = work_dir / '.ccb' / 'agents' / 'copilot1' / 'provider-state' / 'copilot'
+    request = NativeCliExecutionRequest(
+        provider='copilot',
+        job=_job('copilot', work_dir),
+        work_dir=work_dir,
+        session_data={
+            'copilot_state_dir': str(state_dir),
+            'copilot_home': str(state_dir / 'home'),
+            'copilot_data_dir': str(state_dir / 'data'),
+        },
+        prompt='test prompt',
+        request_anchor='anchor',
+    )
+
+    env = build_copilot_env(request)
+
+    assert env == {
+        'COPILOT_HOME': str(state_dir / 'home'),
+        'COPILOT_CACHE_HOME': str(state_dir / 'data' / 'cache'),
+        'COPILOT_DISABLE_KEYTAR': '1',
+    }
+    assert (state_dir / 'home').is_dir()
+    assert (state_dir / 'data' / 'cache').is_dir()
+
+
+def test_native_headless_env_overrides_global_home_and_detaches_legacy_link(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    managed_home = tmp_path / "managed-home"
+    managed_home.symlink_to(outside, target_is_directory=True)
+    request = NativeCliExecutionRequest(
+        provider="qwen",
+        job=_job("qwen", work_dir),
+        work_dir=work_dir,
+        session_data={"qwen_home": str(managed_home)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+    config = NativeCliExecutionConfig(
+        provider="qwen",
+        session_filename=".qwen-session",
+        command_builder=lambda _request: ["qwen"],
+        env_builder=lambda _request: {"HOME": str(tmp_path / "global-home")},
+    )
+
+    env = _native_cli_env(config, request)
+
+    assert env["HOME"] == str(managed_home)
+    assert env["XDG_CONFIG_HOME"] == str(managed_home / ".config")
+    assert env["XDG_DATA_HOME"] == str(managed_home.parent / "data")
+    assert env["XDG_STATE_HOME"] == str(managed_home / ".local" / "state")
+    assert env["XDG_CACHE_HOME"] == str(managed_home / ".cache")
+    assert managed_home.is_dir() and not managed_home.is_symlink()
+    assert not any(outside.iterdir())
+
+
+def test_cursor_headless_disables_os_credential_store(tmp_path: Path) -> None:
+    from provider_backends.cursor.execution import _build_env as build_cursor_env
+
+    work_dir = tmp_path / "repo-cursor"
+    work_dir.mkdir()
+    managed_home = tmp_path / "managed-cursor"
+    request = NativeCliExecutionRequest(
+        provider="cursor",
+        job=_job("cursor", work_dir),
+        work_dir=work_dir,
+        session_data={"cursor_home": str(managed_home)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+
+    env = build_cursor_env(request)
+
+    assert env["HOME"] == str(managed_home)
+    assert env["AGENT_CLI_CREDENTIAL_STORE"] == "file"
+
+
+def test_qoder_headless_command_uses_documented_print_mode_and_uuid(tmp_path: Path) -> None:
+    work_dir = tmp_path / "repo-qoder-command"
+    config_dir = work_dir / ".ccb" / "agents" / "qoder1" / "provider-state" / "qoder" / "home"
+    request = NativeCliExecutionRequest(
+        provider="qoder",
+        job=_job("qoder", work_dir),
+        work_dir=work_dir,
+        session_data={"qoder_config_dir": str(config_dir)},
+        prompt="test prompt",
+        request_anchor="anchor",
+    )
+
+    command = build_qoder_command(request)
+    session_id = command[command.index("--session-id") + 1]
+
+    assert "--bare" not in command
+    assert "-p" in command
+    assert command[command.index("--config-dir") + 1] == str(config_dir)
+    assert command[command.index("--permission-mode") + 1] == "dont_ask"
+    assert str(uuid.UUID(session_id)) == session_id
+    assert session_id == _qoder_session_id_for_job(request.job.job_id)
+    assert session_id != request.job.job_id
+    assert config_dir.is_dir()
+
+
+def test_qoder_observer_uses_result_without_duplicate_assistant_text(tmp_path: Path) -> None:
+    output = tmp_path / "qoder.jsonl"
+    session_id = "11111111-1111-5111-8111-111111111111"
+    output.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {"type": "system", "subtype": "init", "session_id": session_id},
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "QODER_OK"}],
+                    },
+                    "session_id": session_id,
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": "QODER_OK",
+                    "stop_reason": "end_turn",
+                    "session_id": session_id,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    observed = observe_qoder_output(output)
+
+    assert observed.text == "QODER_OK"
+    assert observed.finished is True
+    assert observed.finish_reason == "completed"
+    assert observed.turn_ref == session_id
+    assert observed.error == ""
+
+
+def test_qoder_observer_fails_closed_on_stream_result_error(tmp_path: Path) -> None:
+    output = tmp_path / "qoder-error.jsonl"
+    output.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "Not logged in"}],
+                        },
+                        "error": "authentication_failed",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": True,
+                        "result": "Not logged in",
+                        "stop_reason": "stop_sequence",
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    observed = observe_qoder_output(output)
+
+    assert observed.finished is True
+    assert observed.text == ""
+    assert observed.error == "Not logged in"
+
+
+def test_qoderclicn_observer_uses_result_without_duplicate_assistant_text(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "qoderclicn.jsonl"
+    session_id = "22222222-2222-5222-8222-222222222222"
+    output.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {"type": "system", "subtype": "init", "session_id": session_id},
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "QODER_CN_OK"}],
+                    },
+                    "session_id": session_id,
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": "QODER_CN_OK",
+                    "stop_reason": "end_turn",
+                    "session_id": session_id,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    observed = observe_qoderclicn_output(output)
+
+    assert observed.text == "QODER_CN_OK"
+    assert observed.finished is True
+    assert observed.finish_reason == "completed"
+    assert observed.turn_ref == session_id
+    assert observed.error == ""
+
+
+def test_qoderclicn_observer_waits_for_error_result_envelope(tmp_path: Path) -> None:
+    output = tmp_path / "qoderclicn-error.jsonl"
+    assistant_error = {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Not logged in"}],
+        },
+        "error": "authentication_failed",
+    }
+    output.write_text(json.dumps(assistant_error) + "\n", encoding="utf-8")
+
+    assistant_only = observe_qoderclicn_output(output)
+
+    assert assistant_only.finished is False
+    assert assistant_only.text == "Not logged in"
+    assert assistant_only.error == ""
+
+    with output.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": True,
+                    "result": "Not logged in",
+                    "stop_reason": "stop_sequence",
+                }
+            )
+            + "\n"
+        )
+
+    observed = observe_qoderclicn_output(output)
+
+    assert observed.finished is True
+    assert observed.text == ""
+    assert observed.error == "Not logged in"
+
+
+@pytest.mark.parametrize("provider", ("qoder", "qoderclicn"))
+def test_qoder_provider_requires_native_result_envelope(
+    monkeypatch,
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    work_dir = tmp_path / f"repo-{provider}-no-result"
+    work_dir.mkdir()
+    _write_session(provider, work_dir)
+    _install_stub(monkeypatch, provider, mode="no_terminal")
+
+    adapter = _adapter(provider)
+    submission = adapter.start(
+        _job(provider, work_dir),
+        context=_runtime_context(provider, work_dir),
+        now="2026-06-13T00:00:00Z",
+    )
+    terminal, emitted = _run_to_terminal(adapter, submission)
+
+    assert terminal.decision is not None
+    assert terminal.decision.status is CompletionStatus.INCOMPLETE
+    assert terminal.decision.reason == f"{provider}_native_terminal_missing"
+    assert terminal.decision.reply == f"stub reply for job_{provider}_run123"
+    assert CompletionItemKind.TURN_BOUNDARY not in emitted
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
@@ -152,13 +544,20 @@ def test_grok_provider_adapter_projects_system_login_and_uses_uuid_session(
     _write_session("grok", work_dir)
     _install_stub(monkeypatch, "grok")
 
-    adapter = build_headless_execution_adapter()
+    adapter = build_grok_headless_execution_adapter()
     job = _job("grok", work_dir)
     submission = adapter.start(job, context=_runtime_context("grok", work_dir), now="2026-06-13T00:00:00Z")
 
     managed_home = work_dir / ".ccb" / "agents" / "grok1" / "provider-state" / "grok" / "home"
     assert (managed_home / ".grok" / "auth.json").read_text(encoding="utf-8") == '{"token":"system-login"}\n'
     assert (managed_home / ".grok" / "config.toml").read_text(encoding="utf-8") == 'model = "grok-test"\n'
+    (managed_home / ".grok" / "auth.json").write_text(
+        '{"token":"managed-login"}\n',
+        encoding="utf-8",
+    )
+    assert (source_grok / "auth.json").read_text(encoding="utf-8") == (
+        '{"token":"system-login"}\n'
+    )
     grok_session_id = _grok_session_id_for_job(job.job_id)
     assert grok_session_id != job.job_id
     assert str(uuid.UUID(grok_session_id)) == grok_session_id
@@ -177,7 +576,7 @@ def test_grok_provider_adapter_requires_native_terminal_event(monkeypatch, tmp_p
     _write_session("grok", work_dir)
     _install_stub(monkeypatch, "grok", mode="no_terminal")
 
-    adapter = build_headless_execution_adapter()
+    adapter = build_grok_headless_execution_adapter()
     submission = adapter.start(
         _job("grok", work_dir),
         context=_runtime_context("grok", work_dir),
@@ -199,7 +598,7 @@ def test_grok_provider_adapter_reports_native_cancelled_end(monkeypatch, tmp_pat
     _write_session("grok", work_dir)
     _install_stub(monkeypatch, "grok", mode="cancelled")
 
-    adapter = build_headless_execution_adapter()
+    adapter = build_grok_headless_execution_adapter()
     submission = adapter.start(
         _job("grok", work_dir),
         context=_runtime_context("grok", work_dir),
@@ -395,8 +794,8 @@ def test_native_cli_structured_tool_event_does_not_terminalize_before_final(tmp_
     assert terminal.decision is not None
     assert terminal.decision.status is CompletionStatus.INCOMPLETE
     expected_reason = (
-        "grok_native_terminal_missing"
-        if provider == "grok"
+        f"{provider}_native_terminal_missing"
+        if provider in {"grok", "pi", "omp"}
         else f"{provider}_run_finished:tool_calls"
     )
     assert terminal.decision.reason == expected_reason

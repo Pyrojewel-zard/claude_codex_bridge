@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import shlex
 import subprocess
 import textwrap
@@ -11,7 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 
 
-def _run_install_snippet(tmp_path: Path, body: str) -> subprocess.CompletedProcess[str]:
+def _run_install_snippet(
+    tmp_path: Path,
+    body: str,
+    *,
+    install_sh: Path = INSTALL_SH,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
         {
@@ -25,7 +31,7 @@ def _run_install_snippet(tmp_path: Path, body: str) -> subprocess.CompletedProce
     command = textwrap.dedent(
         f"""
         set -euo pipefail
-        source {shlex.quote(str(INSTALL_SH))}
+        source {shlex.quote(str(install_sh))}
         {body}
         """
     )
@@ -70,12 +76,53 @@ def test_install_tomli_skip_is_successful_and_explicit(tmp_path: Path) -> None:
     assert "done" in completed.stdout
 
 
+def test_install_mobile_relay_dependencies_uses_pinned_manifest(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        mkdir -p "$HOME"
+        fake_requirements="$HOME/mobile-relay-requirements.txt"
+        printf '%s\\n' 'aiohttp==3.13.5' 'cryptography==48.0.0' > "$fake_requirements"
+        relay_ready=0
+        mobile_relay_requirements_path() { printf '%s\\n' "$fake_requirements"; }
+        python_has_mobile_relay_dependencies() { [[ "$relay_ready" == "1" ]]; }
+        pip_install_with_index_fallback() {
+          shift 2
+          printf '%s\\n' "$*" > "$HOME/mobile-relay-pip-argv.txt"
+          relay_ready=1
+        }
+        install_mobile_relay_dependencies_for_python python3
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "Mobile Relay Python dependencies installed" in completed.stdout
+    pip_argv = (tmp_path / "home" / "mobile-relay-pip-argv.txt").read_text(
+        encoding="utf-8"
+    )
+    assert f"--requirement {tmp_path / 'home' / 'mobile-relay-requirements.txt'}" in pip_argv
+
+
+def test_install_mobile_relay_dependencies_skip_is_explicit(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
+        install_mobile_relay_dependencies_for_python python3
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "CCB_INSTALL_MOBILE_RELAY_DEPS=0" in completed.stdout
+
+
 def test_install_requirements_continue_when_optional_watchdog_is_skipped(tmp_path: Path) -> None:
     completed = _run_install_snippet(
         tmp_path,
         """
         install_tomli() { echo "tomli stub"; }
         CCB_INSTALL_WATCHDOG=0
+        install_mobile_relay_dependencies_for_python() { echo "relay deps:$1"; }
         require_terminal_backend() { echo "tmux stub"; }
         install_requirements
         echo requirements-ok
@@ -85,8 +132,28 @@ def test_install_requirements_continue_when_optional_watchdog_is_skipped(tmp_pat
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "tomli stub" in completed.stdout
     assert "watchdog auto-install skipped" in completed.stdout
+    assert "relay deps:" in completed.stdout
     assert "tmux stub" in completed.stdout
     assert "requirements-ok" in completed.stdout
+
+
+def test_resolve_source_kind_recognizes_linked_git_worktree(tmp_path: Path) -> None:
+    worktree_root = tmp_path / "linked-worktree"
+    worktree_root.mkdir()
+    linked_install = worktree_root / "install.sh"
+    shutil.copy2(INSTALL_SH, linked_install)
+    (worktree_root / ".git").write_text(
+        "gitdir: /tmp/example.git/worktrees/linked\n",
+        encoding="utf-8",
+    )
+    completed = _run_install_snippet(
+        tmp_path,
+        "resolve_source_kind",
+        install_sh=linked_install,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.strip() == "source"
 
 
 def test_install_role_pack_provisioning_runs_by_default_without_prompt(tmp_path: Path) -> None:
@@ -94,13 +161,13 @@ def test_install_role_pack_provisioning_runs_by_default_without_prompt(tmp_path:
         tmp_path,
         """
         CCB_SOURCE_KIND=release
-        mkdir -p "$CODEX_INSTALL_PREFIX"
-        cat > "$CODEX_INSTALL_PREFIX/ccb" <<'SH'
+        mkdir -p "$CODEX_INSTALL_PREFIX" "$CODEX_BIN_DIR"
+        cat > "$CODEX_BIN_DIR/ccb" <<'SH'
         #!/usr/bin/env bash
         printf '%s\\n' "$*" >> "$CODEX_INSTALL_PREFIX/ccb-argv.txt"
         exit 0
         SH
-        chmod +x "$CODEX_INSTALL_PREFIX/ccb"
+        chmod +x "$CODEX_BIN_DIR/ccb"
         check_role_pack_dependencies() { echo "deps:$1"; return 0; }
         provision_role_packs
         cat "$CODEX_INSTALL_PREFIX/ccb-argv.txt"
@@ -176,6 +243,33 @@ def test_install_requirements_defers_watchdog_to_managed_venv(tmp_path: Path) ->
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "managed Python venv" in completed.stdout
     assert "unexpected-system-watchdog" not in completed.stdout
+    assert "requirements-ok" in completed.stdout
+
+
+def test_release_install_requirements_never_use_system_pip_by_default(
+    tmp_path: Path,
+) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        install_tomli() { echo unexpected-system-tomli; exit 9; }
+        install_watchdog() { echo unexpected-system-watchdog; exit 9; }
+        install_mobile_relay_dependencies_for_python() {
+          echo unexpected-system-relay-deps
+          exit 9
+        }
+        require_terminal_backend() { echo "tmux stub"; }
+        install_requirements
+        echo requirements-ok
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "managed Python venv" in completed.stdout
+    assert "unexpected-system-tomli" not in completed.stdout
+    assert "unexpected-system-watchdog" not in completed.stdout
+    assert "unexpected-system-relay-deps" not in completed.stdout
     assert "requirements-ok" in completed.stdout
 
 
@@ -422,6 +516,56 @@ def test_install_watchdog_retries_macos_dns_failure_with_fallback_index(tmp_path
     assert "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" in pip_calls[1]
 
 
+def test_pip_retries_interrupted_download_without_fallback_index(
+    tmp_path: Path,
+) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        venv_dir="$HOME/managed-venv"
+        fake_modules="$HOME/fake-modules"
+        pip_argv_marker="$HOME/pip-argv.txt"
+        attempt_marker="$HOME/pip-attempt.txt"
+        pip_log="$HOME/pip.log"
+        python3 -m venv "$venv_dir"
+        mkdir -p "$fake_modules"
+        cat > "$fake_modules/pip.py" <<'PY'
+        import os
+        import pathlib
+        import sys
+
+        argv_marker = pathlib.Path(os.environ["PIP_ARGV_MARKER"])
+        with argv_marker.open("a", encoding="utf-8") as stream:
+            stream.write(" ".join(sys.argv[1:]) + "\\n")
+        attempt_marker = pathlib.Path(os.environ["PIP_ATTEMPT_MARKER"])
+        attempt = int(attempt_marker.read_text(encoding="utf-8") or "0") + 1
+        attempt_marker.write_text(str(attempt), encoding="utf-8")
+        if attempt == 1:
+            print(
+                "ProtocolError: Connection broken: "
+                "IncompleteRead(1024 bytes read, 2048 more expected)"
+            )
+            raise SystemExit(1)
+        raise SystemExit(0)
+        PY
+        echo 0 > "$attempt_marker"
+        detect_platform() { echo linux; }
+        PIP_ARGV_MARKER="$pip_argv_marker" \
+        PIP_ATTEMPT_MARKER="$attempt_marker" \
+        PYTHONPATH="$fake_modules" \
+          pip_install_with_index_fallback \
+            "$venv_dir/bin/python" "$pip_log" "example-package"
+        cat "$pip_argv_marker"
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "download was interrupted; retrying (2/3)" in completed.stdout
+    pip_calls = (tmp_path / "home" / "pip-argv.txt").read_text(encoding="utf-8").splitlines()
+    assert len(pip_calls) == 2
+    assert all("--index-url" not in call for call in pip_calls)
+
+
 def test_install_pip_fallback_never_disables_https_verification() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
 
@@ -532,6 +676,7 @@ def test_install_managed_venv_reuses_healthy_environment(tmp_path: Path) -> None
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_TOMLI=0
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         mkdir -p "$CODEX_INSTALL_PREFIX"
         python3 -m venv "$CODEX_INSTALL_PREFIX/.venv"
         echo keep > "$CODEX_INSTALL_PREFIX/.venv/marker"
@@ -554,6 +699,7 @@ def test_install_managed_venv_refreshes_legacy_pip_when_reused(tmp_path: Path) -
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_TOMLI=0
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         pip_argv_marker="$HOME/pip-refresh-argv.txt"
         mkdir -p "$HOME" "$CODEX_INSTALL_PREFIX"
         python3 -m venv "$CODEX_INSTALL_PREFIX/.venv"
@@ -597,10 +743,12 @@ def test_release_managed_venv_wraps_installed_python_entrypoints(tmp_path: Path)
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
-        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
+        cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
+        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         require_python_version >/dev/null
         install_managed_venv
         install_bin_links
@@ -646,10 +794,12 @@ def test_release_managed_venv_wrapper_uses_absolute_target_path(tmp_path: Path) 
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook"
         cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
-        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook"
+        cp "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
+        chmod +x "$CODEX_INSTALL_PREFIX/bin/_ccb-python" "$CODEX_INSTALL_PREFIX/ccb" "$CODEX_INSTALL_PREFIX/bin/ask" "$CODEX_INSTALL_PREFIX/bin/autonew" "$CODEX_INSTALL_PREFIX/bin/ctx-transfer" "$CODEX_INSTALL_PREFIX/bin/ccb-cleanup" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-activity-hook" "$CODEX_INSTALL_PREFIX/bin/ccb-provider-finish-hook" "$CODEX_INSTALL_PREFIX/bin/codex-reconnect"
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         install_managed_venv
         install_bin_links
         """,
@@ -666,6 +816,7 @@ def test_install_managed_venv_selects_python_when_called_directly(tmp_path: Path
         CCB_SOURCE_KIND=release
         CCB_USE_MANAGED_VENV=1
         CCB_INSTALL_WATCHDOG=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
         install_managed_venv
         echo venv-ok
         """,
@@ -676,12 +827,107 @@ def test_install_managed_venv_selects_python_when_called_directly(tmp_path: Path
     assert "venv-ok" in completed.stdout
 
 
-def test_use_managed_venv_auto_requires_release_on_macos(tmp_path: Path) -> None:
+def test_runtime_bootstrap_forces_release_local_required_dependencies(
+    tmp_path: Path,
+) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        CCB_USE_MANAGED_VENV=0
+        CCB_INSTALL_TOMLI=0
+        CCB_INSTALL_MOBILE_RELAY_DEPS=0
+        canonical_existing_parent_path() { echo "$REPO_ROOT"; }
+        install_managed_venv() {
+          echo "managed:$CCB_USE_MANAGED_VENV:$CCB_INSTALL_TOMLI:$CCB_INSTALL_MOBILE_RELAY_DEPS"
+        }
+        managed_venv_python() { echo "$HOME/release-python"; }
+        python_has_toml_reader() {
+          echo "toml:$PYTHON_BIN"
+          return 0
+        }
+        python_has_mobile_relay_dependencies() {
+          echo "relay:$1"
+          return 0
+        }
+        runtime_bootstrap
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "managed:1:1:1" in completed.stdout
+    assert f"toml:{tmp_path / 'home' / 'release-python'}" in completed.stdout
+    assert f"relay:{tmp_path / 'home' / 'release-python'}" in completed.stdout
+    assert "Release-local Python runtime ready" in completed.stdout
+
+
+def test_runtime_bootstrap_rejects_live_source_tree(tmp_path: Path) -> None:
     completed = _run_install_snippet(
         tmp_path,
         """
         CCB_SOURCE_KIND=source
-        CCB_BUILD_PLATFORM=macos
+        runtime_bootstrap
+        """,
+    )
+
+    assert completed.returncode == 1
+    assert "only supported for a packaged CCB release" in completed.stderr
+
+
+def test_runtime_bootstrap_rejects_a_different_install_prefix(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        runtime_bootstrap
+        """,
+    )
+
+    assert completed.returncode == 1
+    assert "must target its own packaged release tree" in completed.stderr
+
+
+def test_release_mode_uses_managed_venv_by_default(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        if ! use_managed_venv; then
+          echo missing-managed-venv
+          exit 1
+        fi
+        echo release-managed-venv
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "release-managed-venv" in completed.stdout
+
+
+def test_release_mode_can_explicitly_disable_managed_venv(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=release
+        CCB_USE_MANAGED_VENV=0
+        if use_managed_venv; then
+          echo unexpected-managed-venv
+          exit 1
+        fi
+        echo release-managed-venv-disabled
+        """,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "release-managed-venv-disabled" in completed.stdout
+
+
+def test_source_mode_stays_unmanaged_even_when_requested(tmp_path: Path) -> None:
+    completed = _run_install_snippet(
+        tmp_path,
+        """
+        CCB_SOURCE_KIND=source
+        CCB_USE_MANAGED_VENV=1
         if use_managed_venv; then
           echo unexpected-managed-venv
           exit 1

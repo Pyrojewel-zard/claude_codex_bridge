@@ -99,6 +99,35 @@ def record_retry_attempt(service, message_id: str, job: JobRecord, *, accepted_a
     message = service._message_store.get_latest(message_id)
     if message is None:
         raise ValueError(f'message not found: {message_id}')
+    existing = service._attempt_store.get_latest_by_job_id(job.job_id)
+    if existing is not None:
+        if existing.message_id != message_id:
+            raise ValueError(
+                f'retry job {job.job_id} is already bound to message {existing.message_id}'
+            )
+        if existing.attempt_state is not AttemptState.PENDING:
+            return existing.attempt_id
+        inbound = service._inbound_store.get_latest_for_attempt(job.agent_name, existing.attempt_id)
+        if inbound is None:
+            service._inbound_store.append(
+                InboundEventRecord(
+                    inbound_event_id=new_id('iev'),
+                    agent_name=job.agent_name,
+                    event_type=InboundEventType.TASK_REQUEST,
+                    message_id=message_id,
+                    attempt_id=existing.attempt_id,
+                    payload_ref=f'job:{job.job_id}',
+                    priority=100,
+                    status=InboundEventStatus.QUEUED,
+                    created_at=existing.started_at or accepted_at,
+                )
+            )
+        # A process can stop after persisting the retry attempt or inbound
+        # event but before updating the derived mailbox/message views. Rebuild
+        # those views from durable history so replay is idempotent.
+        service._mailbox_kernel.rebuild_mailbox_summary(job.agent_name, updated_at=accepted_at)
+        set_message_state(service, message_id, MessageState.QUEUED, updated_at=accepted_at)
+        return existing.attempt_id
     retry_index = next_retry_index(service, message_id, job.agent_name)
     attempt_id = new_id('att')
     service._attempt_store.append(

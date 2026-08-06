@@ -16,6 +16,7 @@ from mobile_gateway import (
     build_mobile_gateway_server,
     parse_listen_address,
 )
+from mobile_gateway.activity_watch import MobileAgentActivityProbe
 from mobile_gateway.notifications import (
     MobileInvalidationSnapshot,
     MobileNotificationSnapshot,
@@ -89,6 +90,7 @@ def _service(
     push_sender=None,
     push_sender_timeout_seconds: float = 2.0,
     push_sender_max_workers: int = 4,
+    agent_activity_probe=None,
 ) -> MobileGatewayService:
     return MobileGatewayService(
         project_id=client.project_id,
@@ -100,6 +102,7 @@ def _service(
         push_sender=push_sender,
         push_sender_timeout_seconds=push_sender_timeout_seconds,
         push_sender_max_workers=push_sender_max_workers,
+        agent_activity_probe=agent_activity_probe,
     )
 
 
@@ -192,12 +195,28 @@ def test_invalidation_store_dedupes_redacts_and_bounds_event_journal(tmp_path: P
         'agent_activity_changed',
         'project_summary_changed',
     }
+    agent_activity_event = next(
+        event
+        for event in activity_events
+        if event.kind == 'agent_activity_changed'
+    )
+    assert agent_activity_event.to_payload()['activity_state'] == 'idle'
+    assert next(
+        event
+        for event in activity_events
+        if event.kind == 'project_summary_changed'
+    ).activity_state is None
     conversation_events = store.sync_invalidations([conversation_changed])
     assert [event.kind for event in conversation_events] == ['conversation_changed']
     assert store.sync_invalidations([conversation_changed]) == []
 
     records = store.events_since(None)
     assert len(records) <= 3
+    assert any(
+        event.kind == 'agent_activity_changed'
+        and event.activity_state == 'idle'
+        for event in records
+    )
     payload = json.dumps([event.to_payload() for event in records])
     assert 'fingerprint-one' not in payload
     assert 'fingerprint-two' not in payload
@@ -227,6 +246,57 @@ def test_native_watch_unknown_activity_does_not_churn_known_project_state(
         'conversation_changed'
     ]
     assert store.sync_invalidations([observed_same]) == []
+
+
+def test_mobile_activity_events_coalesce_pending_and_active_states(
+    tmp_path: Path,
+) -> None:
+    store = MobileNotificationStore(tmp_path / 'mobile', recent_limit=8)
+
+    assert store.sync_invalidations([
+        MobileInvalidationSnapshot(
+            'proj-demo',
+            'demo',
+            7,
+            'worker',
+            'pending',
+            'fingerprint',
+            '2026-06-30T01:00:00Z',
+        )
+    ]) == []
+    assert store.sync_invalidations([
+        MobileInvalidationSnapshot(
+            'proj-demo',
+            'demo',
+            7,
+            'worker',
+            'active',
+            'fingerprint',
+            '2026-06-30T01:00:01Z',
+        )
+    ]) == []
+
+    assert store.sync_snapshots([
+        MobileNotificationSnapshot(
+            'proj-demo',
+            'demo',
+            7,
+            'worker',
+            'pending',
+            '2026-06-30T01:00:00Z',
+        )
+    ]) == []
+    completed = store.sync_snapshots([
+        MobileNotificationSnapshot(
+            'proj-demo',
+            'demo',
+            7,
+            'worker',
+            'idle',
+            '2026-06-30T01:00:02Z',
+        )
+    ])
+    assert [event.kind for event in completed] == ['task_completed']
 
 
 def test_logical_journal_shares_monotonic_sequence_and_retained_cursor_is_exactly_once(
@@ -298,6 +368,59 @@ def test_notification_watcher_is_shared_across_sse_clients(tmp_path: Path) -> No
     assert audit['watch_project_view_calls'] == 0
     assert audit['ccbd_project_view_requests'] == 0
     assert audit['mobile_conversation_requests'] == 0
+
+
+def test_notification_watcher_emits_selected_agent_active_to_idle_without_project_view_poll(
+    tmp_path: Path,
+) -> None:
+    client = _ActivityCcbdClient(
+        project_id='proj-demo',
+        project_root=str(tmp_path / 'project'),
+        display_name='demo',
+    )
+    service = _service(
+        client,
+        mobile_dir=tmp_path / 'mobile',
+        agent_activity_probe=lambda **_: MobileAgentActivityProbe(
+            'idle',
+            'claude_pane_idle_prompt',
+            'claude_runtime',
+        ),
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787'
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': pairing['pairing_code']},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+
+    service.project_view_payload('proj-demo')
+    calls_before_watch = len(
+        [call for call in client.calls if call[0] == 'project_view']
+    )
+    events = service.notification_events_since(
+        '/v1/mobile/notifications?once=1'
+        '&watch_project_id=proj-demo'
+        '&watch_agent=mobile'
+        '&watch_namespace_epoch=7'
+        '&watch_provider=codex',
+        headers,
+    )
+
+    assert any(
+        event['kind'] == 'agent_activity_changed'
+        and event['project_id'] == 'proj-demo'
+        and event['agent'] == 'mobile'
+        for event in events
+    )
+    assert len([call for call in client.calls if call[0] == 'project_view']) == (
+        calls_before_watch
+    )
+    audit = service.invalidation_audit_payload()
+    assert audit['watch_activity_probes'] == 1
+    assert audit['watch_project_view_calls'] == 0
 
 
 def test_notification_audit_http_route_exposes_low_sensitive_counters(tmp_path: Path) -> None:
@@ -397,9 +520,10 @@ def test_push_delivery_is_device_bound_deduped_and_visible_target_scoped(tmp_pat
 def test_push_delivery_runs_multiple_device_sends_concurrently(tmp_path: Path) -> None:
     client = _ActivityCcbdClient(project_id='proj-demo', project_root='/srv/demo', display_name='demo')
     sent: list[str] = []
+    senders_ready = threading.Barrier(3)
 
     def sender(token: str, _payload: dict[str, object], _timeout: float) -> PushSendResult:
-        time.sleep(0.12)
+        senders_ready.wait(timeout=2.0)
         sent.append(token)
         return PushSendResult(sent=True)
 
@@ -407,7 +531,7 @@ def test_push_delivery_runs_multiple_device_sends_concurrently(tmp_path: Path) -
         client,
         mobile_dir=tmp_path / 'mobile',
         push_sender=sender,
-        push_sender_timeout_seconds=1.0,
+        push_sender_timeout_seconds=3.0,
         push_sender_max_workers=3,
     )
     pairing = service.create_pairing_payload(
@@ -428,11 +552,8 @@ def test_push_delivery_runs_multiple_device_sends_concurrently(tmp_path: Path) -
 
     service.project_view_payload('proj-demo')
     client.activity_state = 'idle'
-    started = time.monotonic()
     service.project_view_payload('proj-demo')
-    elapsed = time.monotonic() - started
 
-    assert elapsed < 0.28
     assert sorted(sent) == ['token-0', 'token-1', 'token-2']
 
 

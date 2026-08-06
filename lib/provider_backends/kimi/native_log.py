@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Iterable
 
 from provider_backends.native_cli_support import clean_native_reply
@@ -24,25 +26,42 @@ class KimiTurnObservation:
     native_completed_at: object | None = None
 
 
+_NORMAL_STEP_FINISH_REASONS = {"complete", "completed", "end_turn", "stop", "success"}
+_REQ_ID_TOKEN_CHARS = r"A-Za-z0-9._-"
+
+
 def observe_kimi_turn(
     work_dir: Path,
     req_id: str,
     *,
     home_candidates: Iterable[Path] | None = None,
+    share_candidates: Iterable[Path] | None = None,
+    code_home_candidates: Iterable[Path] | None = None,
 ) -> KimiTurnObservation | None:
     if not req_id:
         return None
-    observations: list[KimiTurnObservation] = []
-    for wire_path in _wire_paths(work_dir, home_candidates=home_candidates):
-        observed = _observe_wire_file(wire_path, req_id=req_id)
-        if observed is not None:
-            observations.append(observed)
-    if not observations:
-        return None
-    completed = [item for item in observations if item.completed]
-    if completed:
-        return max(completed, key=_observation_sort_key)
-    return max(observations, key=_observation_sort_key)
+    wire_paths = _wire_paths(
+        work_dir,
+        home_candidates=home_candidates,
+        share_candidates=share_candidates,
+        code_home_candidates=code_home_candidates,
+    )
+    # A shared worktree can have several Kimi agents. Prefer a request header
+    # at the start of the submitted prompt, then use exact-token legacy
+    # matching only when no modern header exists anywhere.
+    for strict in (True, False):
+        observations: list[KimiTurnObservation] = []
+        for wire_path in wire_paths:
+            observed = _observe_wire_file(wire_path, req_id=req_id, strict=strict)
+            if observed is not None:
+                observations.append(observed)
+        if not observations:
+            continue
+        completed = [item for item in observations if item.completed]
+        if completed:
+            return max(completed, key=_observation_sort_key)
+        return max(observations, key=_observation_sort_key)
+    return None
 
 
 def kimi_project_hash(work_dir: Path) -> str:
@@ -50,28 +69,111 @@ def kimi_project_hash(work_dir: Path) -> str:
     return hashlib.md5(normalized.encode("utf-8", "surrogateescape")).hexdigest()
 
 
-def kimi_sessions_root(work_dir: Path, *, home: Path | None = None) -> Path:
-    base = _kimi_home(home)
+def kimi_code_project_dirname(work_dir: Path) -> str:
+    normalized = str(Path(work_dir).expanduser().resolve(strict=False))
+    digest = hashlib.sha256(normalized.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    return f"wd_{Path(normalized).name[:40]}_{digest}"
+
+
+def kimi_share_dir(*, environ: Mapping[str, object] | None = None) -> Path:
+    source = os.environ if environ is None else environ
+    explicit = str(source.get("KIMI_SHARE_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    home = str(source.get("HOME") or "").strip()
+    if home:
+        return Path(home).expanduser() / ".kimi"
+    return current_provider_source_home() / ".kimi"
+
+
+def kimi_code_home(*, environ: Mapping[str, object] | None = None) -> Path:
+    source = os.environ if environ is None else environ
+    explicit = str(source.get("KIMI_CODE_HOME") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    home = str(source.get("HOME") or "").strip()
+    if home:
+        return Path(home).expanduser() / ".kimi-code"
+    return current_provider_source_home() / ".kimi-code"
+
+
+def kimi_sessions_root(
+    work_dir: Path,
+    *,
+    home: Path | None = None,
+    share_dir: Path | None = None,
+) -> Path:
+    base = Path(share_dir).expanduser() if share_dir is not None else _kimi_home(home)
     return base / "sessions" / kimi_project_hash(work_dir)
 
 
-def _wire_paths(work_dir: Path, *, home_candidates: Iterable[Path] | None) -> list[Path]:
+def kimi_code_sessions_root(
+    work_dir: Path,
+    *,
+    home: Path | None = None,
+    code_home: Path | None = None,
+) -> Path:
+    base = Path(code_home).expanduser() if code_home is not None else _kimi_code_home(home)
+    return base / "sessions" / kimi_code_project_dirname(work_dir)
+
+
+def _wire_paths(
+    work_dir: Path,
+    *,
+    home_candidates: Iterable[Path] | None,
+    share_candidates: Iterable[Path] | None,
+    code_home_candidates: Iterable[Path] | None,
+) -> list[Path]:
     paths: list[Path] = []
     seen: set[Path] = set()
+    explicit_roots = share_candidates is not None or code_home_candidates is not None
+    share_roots = [Path(item).expanduser() for item in (share_candidates or ())]
+    code_home_roots = [Path(item).expanduser() for item in (code_home_candidates or ())]
+    if not explicit_roots:
+        share_roots.append(kimi_share_dir())
+        code_home_roots.append(kimi_code_home())
+    for share_root in share_roots:
+        root = kimi_sessions_root(work_dir, share_dir=share_root)
+        _append_wire_paths(root, pattern="*/wire.jsonl", paths=paths, seen=seen)
+    for code_home_root in code_home_roots:
+        root = kimi_code_sessions_root(work_dir, code_home=code_home_root)
+        _append_wire_paths(root, pattern="*/agents/*/wire.jsonl", paths=paths, seen=seen)
+    if explicit_roots:
+        return sorted(paths, key=_path_mtime)
     for home in _candidate_homes(home_candidates):
-        root = kimi_sessions_root(work_dir, home=home)
-        if not root.is_dir():
-            continue
-        for path in root.glob("*/wire.jsonl"):
-            try:
-                resolved = path.resolve(strict=False)
-            except Exception:
-                resolved = path
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            paths.append(path)
+        _append_wire_paths(
+            kimi_sessions_root(work_dir, home=home),
+            pattern="*/wire.jsonl",
+            paths=paths,
+            seen=seen,
+        )
+        _append_wire_paths(
+            kimi_code_sessions_root(work_dir, home=home),
+            pattern="*/agents/*/wire.jsonl",
+            paths=paths,
+            seen=seen,
+        )
     return sorted(paths, key=_path_mtime)
+
+
+def _append_wire_paths(
+    root: Path,
+    *,
+    pattern: str,
+    paths: list[Path],
+    seen: set[Path],
+) -> None:
+    if not root.is_dir():
+        return
+    for path in root.glob(pattern):
+        try:
+            resolved = path.resolve(strict=False)
+        except Exception:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        paths.append(path)
 
 
 def _candidate_homes(home_candidates: Iterable[Path] | None) -> list[Path]:
@@ -102,7 +204,20 @@ def _kimi_home(home: Path | None) -> Path:
     return home / ".kimi"
 
 
-def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None:
+def _kimi_code_home(home: Path | None) -> Path:
+    if home is None:
+        return current_provider_source_home() / ".kimi-code"
+    if home.name == ".kimi-code":
+        return home
+    return home / ".kimi-code"
+
+
+def _observe_wire_file(
+    path: Path,
+    *,
+    req_id: str,
+    strict: bool = False,
+) -> KimiTurnObservation | None:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -110,6 +225,23 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
 
     current: dict[str, object] | None = None
     latest: KimiTurnObservation | None = None
+
+    def _finalize_current(index: int, timestamp: object | None) -> None:
+        nonlocal current, latest
+        if current is None:
+            return
+        parts = current.get("parts")
+        if isinstance(parts, list) and any(str(part).strip() for part in parts):
+            latest = _observation_from_state(
+                path,
+                current,
+                req_id=req_id,
+                completed=True,
+                completed_at=timestamp,
+                line_count=index,
+            )
+        current = None
+
     for index, line in enumerate(lines, 1):
         try:
             event = json.loads(line)
@@ -120,7 +252,8 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
         event_type, payload, timestamp = _normalize_event(event)
 
         if event_type == "TurnBegin":
-            if _payload_has_req_id(payload, req_id):
+            if _payload_has_req_id(payload, req_id, strict=strict):
+                _finalize_current(index, timestamp)
                 current = {
                     "parts": [],
                     "started_at": timestamp,
@@ -136,11 +269,12 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                     line_count=index,
                 )
             else:
-                current = None
+                _finalize_current(index, timestamp)
             continue
 
         if event_type in {"turn.prompt", "turn.started"}:
-            if _value_has_req_id(payload, req_id):
+            if _value_has_req_id(payload, req_id, strict=strict):
+                _finalize_current(index, timestamp)
                 current = {
                     "parts": [],
                     "started_at": timestamp,
@@ -155,6 +289,8 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                     completed_at=None,
                     line_count=index,
                 )
+            else:
+                _finalize_current(index, timestamp)
             continue
 
         if event_type == "context.append_message":
@@ -163,7 +299,8 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                 continue
             role = str(message.get("role") or "").strip().lower()
             content = _text_from_value(message.get("content"))
-            if role == "user" and req_id in content:
+            if role == "user" and _req_id_in_text(content, req_id, strict=strict):
+                _finalize_current(index, timestamp)
                 current = {
                     "parts": [],
                     "started_at": timestamp,
@@ -180,7 +317,7 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                 )
                 continue
             if role == "user" and current is not None:
-                current = None
+                _finalize_current(index, timestamp)
                 continue
             if current is None or role != "assistant":
                 continue
@@ -236,7 +373,15 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                 continue
             nested_type = str(nested.get("type") or "")
             if nested_type == "content.part":
-                text = _text_from_value(nested.get("part"))
+                part = nested.get("part")
+                part_kind = ""
+                if isinstance(part, dict):
+                    part_kind = str(part.get("type") or part.get("kind") or "").strip().lower()
+                text = (
+                    ""
+                    if part_kind in {"part.think", "reasoning", "think", "thinking"}
+                    else _text_from_value(part)
+                )
                 if text:
                     _append_part(current, text)
                     latest = _observation_from_state(
@@ -247,6 +392,12 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                         completed_at=None,
                         line_count=index,
                     )
+            elif nested_type == "step.end":
+                finish_reason = str(
+                    nested.get("finishReason") or nested.get("finish_reason") or ""
+                ).strip().lower()
+                if finish_reason in _NORMAL_STEP_FINISH_REASONS:
+                    _finalize_current(index, timestamp)
             continue
 
         if event_type == "StatusUpdate":
@@ -295,7 +446,33 @@ def _normalize_event(event: dict[str, object]) -> tuple[str, dict[str, object], 
     return event_type, event, event.get("timestamp") or event.get("time")
 
 
-def _payload_has_req_id(payload: dict[str, object], req_id: str) -> bool:
+def _req_id_in_text(text: str, req_id: str, *, strict: bool) -> bool:
+    if not text or not req_id:
+        return False
+    escaped = re.escape(req_id)
+    if strict:
+        return re.match(
+            rf"\A[ \t\r\n]*CCB_REQ_ID:[ \t]*{escaped}[ \t]*(?:\r?\n|\Z)",
+            text,
+        ) is not None
+    leading_header = re.match(
+        rf"\A[ \t\r\n]*CCB_REQ_ID:[ \t]*([{_REQ_ID_TOKEN_CHARS}]+)[ \t]*(?:\r?\n|\Z)",
+        text,
+    )
+    if leading_header is not None:
+        return leading_header.group(1) == req_id
+    return re.search(
+        rf"(?<![{_REQ_ID_TOKEN_CHARS}]){escaped}(?![{_REQ_ID_TOKEN_CHARS}])",
+        text,
+    ) is not None
+
+
+def _payload_has_req_id(
+    payload: dict[str, object],
+    req_id: str,
+    *,
+    strict: bool = False,
+) -> bool:
     user_input = payload.get("user_input")
     if not isinstance(user_input, list):
         return False
@@ -303,7 +480,7 @@ def _payload_has_req_id(payload: dict[str, object], req_id: str) -> bool:
         if not isinstance(part, dict):
             continue
         text = part.get("text")
-        if isinstance(text, str) and req_id in text:
+        if isinstance(text, str) and _req_id_in_text(text, req_id, strict=strict):
             return True
     return False
 
@@ -318,8 +495,8 @@ def _append_part(state: dict[str, object], text: str, *, continuous: bool = Fals
     parts.append(text)
 
 
-def _value_has_req_id(value: object, req_id: str) -> bool:
-    return req_id in _text_from_value(value)
+def _value_has_req_id(value: object, req_id: str, *, strict: bool = False) -> bool:
+    return _req_id_in_text(_text_from_value(value), req_id, strict=strict)
 
 
 def _text_from_value(value: object) -> str:
@@ -354,6 +531,8 @@ def _observation_from_state(
     parts = state.get("parts")
     reply = clean_native_reply("\n".join(str(part) for part in parts), req_id) if isinstance(parts, list) else ""
     session_id = path.parent.name if path.parent.name else None
+    if path.parent.parent.name == "agents" and path.parent.parent.parent.name:
+        session_id = path.parent.parent.parent.name
     message_id = state.get("message_id")
     provider_turn_ref = str(message_id).strip() if message_id else session_id
     return KimiTurnObservation(
@@ -383,7 +562,11 @@ def _path_mtime(path: Path) -> float:
 
 __all__ = [
     "KimiTurnObservation",
+    "kimi_code_home",
+    "kimi_code_project_dirname",
+    "kimi_code_sessions_root",
     "kimi_project_hash",
+    "kimi_share_dir",
     "kimi_sessions_root",
     "observe_kimi_turn",
 ]

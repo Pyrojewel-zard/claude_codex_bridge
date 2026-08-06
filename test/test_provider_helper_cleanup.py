@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 from provider_runtime.helper_cleanup import cleanup_stale_runtime_helper, terminate_helper_manifest_path
+from provider_runtime.helper_manifest import ProviderHelperManifest, save_helper_manifest
 from storage.paths import PathLayout
 
 
@@ -16,6 +18,26 @@ def _write_helper(path, *, runtime_generation: int = 1, leader_pid: int = 777, p
         ),
         encoding='utf-8',
     )
+
+
+def test_save_helper_manifest_skips_identical_atomic_rewrite(tmp_path) -> None:
+    path = tmp_path / 'helper.json'
+    manifest = ProviderHelperManifest(
+        agent_name='agent1',
+        runtime_generation=3,
+        helper_kind='codex_bridge',
+        leader_pid=777,
+        pgid=888,
+        started_at='2026-04-22T00:00:00Z',
+        owner_daemon_generation=5,
+    )
+    save_helper_manifest(path, manifest)
+    fixed_ns = 1_000_000_000
+    os.utime(path, ns=(fixed_ns, fixed_ns))
+
+    save_helper_manifest(path, manifest)
+
+    assert path.stat().st_mtime_ns == fixed_ns
 
 
 def test_cleanup_stale_runtime_helper_reaps_superseded_manifest(tmp_path, monkeypatch) -> None:

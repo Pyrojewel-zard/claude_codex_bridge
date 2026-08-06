@@ -55,6 +55,10 @@ Date: 2026-06-10
   `docs/manuals/ccb-self-expert-guide.md`, focused on role mission, authority
   hierarchy, config expertise, command surface, communication logic,
   diagnostics, recovery playbooks, and source navigation.
+- Synchronized the developer/user communication chapters and communication
+  source inventory with the memory-first prompt policy on 2026-07-30: stable
+  reply/cancellation rules live in managed project memory, and per-request
+  prompts carry only dynamic reply-mode metadata.
 
 ## In Progress
 

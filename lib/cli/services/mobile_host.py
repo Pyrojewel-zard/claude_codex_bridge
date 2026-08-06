@@ -15,12 +15,21 @@ import time
 from types import SimpleNamespace
 from typing import Callable
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 from ccbd.system import utc_now
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
 from cli.services.mobile import prepare_server_mobile_gateway
-from mobile_gateway import MobileGatewayPairingStore, mobile_host_state_dir
+from mobile_gateway import (
+    MobileGatewayPairingStore,
+    mobile_host_state_dir,
+    parse_listen_address,
+)
+from mobile_gateway.relay_host_credentials import (
+    build_relay_pairing_payload,
+    load_relay_host_credentials,
+)
+from mobile_gateway.relay_host_runtime import RelayHostConnectorRuntime
 from storage.atomic import atomic_write_json
 
 
@@ -112,6 +121,18 @@ def start_or_replace_mobile_host_service(
     lock_wait_timeout_s: float = MOBILE_HOST_LOCK_WAIT_TIMEOUT_S,
     rotate_pairing: bool = False,
 ) -> MobileHostServiceResult:
+    try:
+        parsed_listen = parse_listen_address(
+            listen,
+            allow_lan=str(route_provider or '').strip().lower() == 'lan',
+        )
+    except ValueError as exc:
+        raise MobileHostServiceError(str(exc)) from exc
+    if parsed_listen.port <= 0:
+        raise MobileHostServiceError(
+            'mobile gateway listen port must be between 1 and 65535'
+        )
+    listen = parsed_listen.text
     paths = mobile_host_service_paths(state_dir)
     lock_fd = _acquire_mobile_host_lock(
         paths.lock_path,
@@ -295,18 +316,43 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
     del script_root
     state_dir = Path(args.state_dir).expanduser()
     os.environ['CCB_MOBILE_HOST_STATE_HOME'] = str(state_dir)
+    route_provider = str(args.route_provider or 'tailnet')
+    relay_credentials = None
+    effective_host_id = str(args.host_id or '').strip() or None
+    if route_provider == 'relay':
+        relay_credentials = load_relay_host_credentials(
+            Path(
+                str(os.environ.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
+                or state_dir / 'relay-host-credentials.json'
+            )
+        )
+        if effective_host_id and effective_host_id != relay_credentials.host_id:
+            raise MobileHostServiceError(
+                'mobile relay host id does not match activated relay credentials'
+            )
+        effective_host_id = relay_credentials.host_id
     handle = prepare_server_mobile_gateway(
         SimpleNamespace(
             listen=str(args.listen),
             public_url=str(args.public_url).strip() if args.public_url else None,
-            route_provider=str(args.route_provider or 'tailnet'),
+            route_provider=route_provider,
         ),
-        host_id=str(args.host_id or '').strip() or None,
+        host_id=effective_host_id,
         rotate_pairing=bool(getattr(args, 'rotate_pairing', False)),
     )
     summary = dict(handle.summary)
     paths = mobile_host_service_paths(state_dir)
     generation = int(args.generation)
+    relay_runtime = None
+    if relay_credentials is not None:
+        relay_runtime = RelayHostConnectorRuntime(
+            credentials=relay_credentials,
+            gateway_origin=str(
+                summary.get('local_gateway_url')
+                or _local_gateway_url(str(args.listen))
+            ),
+        )
+        relay_runtime.start()
     try:
         pairing = summary.get('pairing') if isinstance(summary.get('pairing'), dict) else None
         write_mobile_host_service_state(
@@ -322,6 +368,16 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
                 'local_gateway_url': str(summary.get('local_gateway_url') or _local_gateway_url(str(args.listen))),
                 'gateway_url': str(summary.get('gateway_url') or summary.get('local_gateway_url') or ''),
                 'route_provider': str(summary.get('route_provider') or args.route_provider or 'tailnet'),
+                **(
+                    {'relay_mode': relay_credentials.relay_mode}
+                    if relay_credentials is not None
+                    else {}
+                ),
+                **(
+                    {'relay_outbound': relay_runtime.diagnostics()}
+                    if relay_runtime is not None
+                    else {}
+                ),
                 **({'pairing': dict(pairing)} if pairing is not None else {}),
                 'state_dir': str(paths.state_dir),
                 'started_at': utc_now(),
@@ -331,6 +387,8 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
         )
     except Exception as exc:
         print(f'mobile host service could not write state: {type(exc).__name__}: {exc}', file=sys.stderr)
+        if relay_runtime is not None:
+            relay_runtime.stop()
         handle.close()
         return 1
     try:
@@ -341,6 +399,8 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
             pid=os.getpid(),
             generation=generation,
         )
+        if relay_runtime is not None:
+            relay_runtime.stop()
         handle.close()
     return 0
 
@@ -382,9 +442,15 @@ def remove_mobile_host_service_state(path: Path) -> None:
 
 
 def detect_loopback_port_owner(listen: str) -> PortOwner | None:
-    host, port = _split_listen(listen)
-    if host not in {'127.0.0.1', 'localhost', '::1'}:
-        raise MobileHostServiceError('mobile gateway only supports loopback listen addresses')
+    try:
+        parsed = parse_listen_address(listen, allow_lan=True)
+    except ValueError as exc:
+        raise MobileHostServiceError(str(exc)) from exc
+    host, port = parsed.host, parsed.port
+    if port <= 0:
+        raise MobileHostServiceError(
+            'mobile gateway listen port must be between 1 and 65535'
+        )
     owner = _detect_loopback_port_owner_ss(host=host, port=port)
     if owner is not None:
         return owner
@@ -566,7 +632,11 @@ def _mobile_host_log_tail(path: Path, *, max_chars: int = 1200) -> str:
 
 def _http_health_check(local_gateway_url: str) -> bool:
     try:
-        with urlopen(f'{local_gateway_url}/v1/health', timeout=MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S) as response:
+        opener = build_opener(ProxyHandler({}))
+        with opener.open(
+            f'{local_gateway_url}/v1/health',
+            timeout=MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S,
+        ) as response:
             return 200 <= int(response.status) < 300
     except (OSError, URLError):
         return False
@@ -833,6 +903,15 @@ def _mobile_host_state_with_rotated_pairing(
     refreshed = _rotate_mobile_host_pairing(state, pairing=pairing, store=store)
     if refreshed is None:
         return None
+    if _state_route_provider(state, fallback='') == 'relay':
+        credentials_path = Path(
+            str(os.environ.get('CCB_RELAY_HOST_CREDENTIALS') or '').strip()
+            or paths.state_dir / 'relay-host-credentials.json'
+        )
+        refreshed = build_relay_pairing_payload(
+            refreshed,
+            credentials=load_relay_host_credentials(credentials_path),
+        )
     updated = dict(state or {})
     updated['pairing'] = refreshed
     updated.pop('pairing_diagnostic', None)

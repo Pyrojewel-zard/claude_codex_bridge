@@ -45,6 +45,22 @@ def _release_install(tmp_path: Path, *, version: str = "6.0.10") -> Path:
     return tmp_path
 
 
+def _npm_release_install(monkeypatch, tmp_path: Path, *, version: str = "6.0.10") -> Path:
+    package_root = tmp_path / "npm-package"
+    install_dir = package_root / ".ccb-release" / "ccb-linux-x86_64"
+    install_dir.mkdir(parents=True)
+    _release_install(install_dir, version=version)
+    (package_root / "package.json").write_text(
+        json.dumps({"name": "@seemseam/ccb", "version": version}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CCB_INSTALL_KIND", "npm")
+    monkeypatch.setenv("CCB_NPM_PACKAGE_NAME", "@seemseam/ccb")
+    monkeypatch.setenv("CCB_NPM_PACKAGE_ROOT", str(package_root))
+    monkeypatch.setenv("CCB_NPM_PACKAGE_VERSION", version)
+    return install_dir
+
+
 def _fresh_update_state(*, current: str = "6.0.10", latest: str = "6.0.11") -> dict[str, object]:
     now = time.time()
     return {
@@ -195,6 +211,57 @@ def test_maybe_handle_startup_release_update_updates_and_relaunches_on_yes(tmp_p
     assert relaunched["tokens"] == ["--project", str(install_dir), "-s"]
     assert relaunched["script_root"] == install_dir
     assert relaunched["cwd"] == install_dir
+
+
+def test_npm_startup_update_shows_package_manager_command_without_relaunching(monkeypatch, tmp_path: Path) -> None:
+    install_dir = _npm_release_install(monkeypatch, tmp_path)
+    startup_update_runtime.write_update_check_state(install_dir, _fresh_update_state())
+    stdout = _TtyStringIO()
+
+    code = startup_update_runtime.maybe_handle_startup_release_update(
+        [],
+        script_root=install_dir,
+        cwd=install_dir,
+        stdout=stdout,
+        stderr=StringIO(),
+        stdin=_TtyInput("y\n"),
+        update_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("npm payload must not self-update")),
+        relaunch_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("npm guidance must not relaunch")),
+        schedule_refresh_fn=lambda **_: (_ for _ in ()).throw(AssertionError("refresh should not run")),
+    )
+
+    saved = startup_update_runtime.load_update_check_state(install_dir)
+    assert code is None
+    assert saved is not None
+    assert saved["deferred_version"] == "6.0.11"
+    assert "[y] show npm command" in stdout.getvalue()
+    assert "npm install -g @seemseam/ccb@6.0.11" in stdout.getvalue()
+    assert "no vendored files were changed" in stdout.getvalue()
+
+
+def test_npm_startup_update_yes_does_not_prompt_again_during_defer_window(monkeypatch, tmp_path: Path) -> None:
+    install_dir = _npm_release_install(monkeypatch, tmp_path)
+    startup_update_runtime.write_update_check_state(install_dir, _fresh_update_state())
+    first_stdout = _TtyStringIO()
+    common = {
+        "script_root": install_dir,
+        "cwd": install_dir,
+        "stderr": StringIO(),
+        "schedule_refresh_fn": lambda **_: (_ for _ in ()).throw(AssertionError("refresh should not run")),
+        "update_fn": lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("npm payload must not self-update")),
+        "relaunch_fn": lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("npm guidance must not relaunch")),
+    }
+    startup_update_runtime.maybe_handle_startup_release_update(
+        [], stdout=first_stdout, stdin=_TtyInput("y\n"), **common
+    )
+    second_stdout = _TtyStringIO()
+
+    code = startup_update_runtime.maybe_handle_startup_release_update(
+        [], stdout=second_stdout, stdin=_TtyInput("y\n"), **common
+    )
+
+    assert code is None
+    assert "Release update available" not in second_stdout.getvalue()
 
 
 def test_maybe_handle_startup_release_update_skips_non_start_commands(tmp_path: Path) -> None:

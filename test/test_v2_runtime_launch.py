@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shlex
 import sqlite3
 import subprocess
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
+
 try:  # pragma: no cover - version shim
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
+import cli.services.runtime_launch as runtime_launch
+import provider_backends.claude.launcher_runtime.home as claude_home_runtime
+import provider_profiles.codex_home_config as codex_home_config
 from agents.models import (
     AgentSpec,
     PermissionMode,
@@ -23,28 +30,37 @@ from agents.models import (
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from cli.services.provider_binding import AgentBinding
-import cli.services.runtime_launch as runtime_launch
-from cli.services.runtime_launch_runtime import tmux_panes
+from cli.services.role_command_policy import RoleCommandPolicy
 from cli.services.runtime_launch import ensure_agent_runtime
+from cli.services.runtime_launch_runtime import tmux_panes
+from project.ids import compute_project_id
+from project.resolver import ProjectContext
+from provider_backends.agy import launcher as agy_launcher
 from provider_backends.claude import launcher as claude_launcher
 from provider_backends.claude.launcher_runtime.home import (
     prepare_claude_home_overrides as prepare_claude_home_overrides_for_test,
 )
 from provider_backends.codex import launcher as codex_launcher
+from provider_backends.codex.launcher_runtime.command import (
+    prepare_codex_home_overrides as prepare_codex_home_overrides_for_test,
+)
+from provider_backends.codex.session_authority import (
+    current_provider_authority_fingerprint,
+)
+from provider_backends.codex.start_cmd_runtime.parsing import extract_resume_session_id
 from provider_backends.droid import launcher as droid_launcher
 from provider_backends.gemini import launcher as gemini_launcher
 from provider_backends.grok import home as grok_home
 from provider_backends.mimo import launcher as mimo_launcher
+from provider_backends.native_cli_support import NativeCliExecutionRequest
 from provider_backends.opencode import launcher as opencode_launcher
-from provider_backends.agy import launcher as agy_launcher
+from provider_backends.qoderclicn.execution import (
+    _build_command as build_qoderclicn_command,
+)
 from provider_backends.runtime_restore import ProviderRestoreTarget
-from provider_backends.codex.launcher_runtime.command import prepare_codex_home_overrides as prepare_codex_home_overrides_for_test
 from provider_core.registry import build_default_runtime_launcher_map
-import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles import load_resolved_provider_profile
 from provider_profiles.models import ResolvedProviderProfile
-from project.ids import compute_project_id
-from project.resolver import ProjectContext
 from storage.paths import PathLayout
 from terminal_runtime.tmux_identity import pane_visual
 from workspace.planner import WorkspacePlanner
@@ -227,12 +243,17 @@ def _codex_start_cmd(command, spec: AgentSpec, runtime_dir: Path, launch_session
 
 def _opencode_prepared_state(runtime_dir: Path, *, agent_name: str = 'agent1') -> dict[str, object]:
     project_root = _launch_project_root(runtime_dir)
+    state_dir = project_root / '.ccb' / 'agents' / agent_name / 'provider-state' / 'opencode'
     return {
         'agent_name': agent_name,
         'project_root': project_root,
         'workspace_path': project_root,
         'agent_events_path': project_root / '.ccb' / 'agents' / agent_name / 'events.jsonl',
-        'opencode_config_path': project_root / '.ccb' / 'agents' / agent_name / 'provider-state' / 'opencode' / 'opencode.json',
+        'opencode_state_dir': state_dir,
+        'opencode_config_path': state_dir / 'opencode.json',
+        'opencode_data_home': state_dir / 'data',
+        'opencode_storage_root': state_dir / 'data' / 'opencode' / 'storage',
+        'opencode_log_root': state_dir / 'data' / 'opencode' / 'log',
     }
 
 
@@ -274,11 +295,23 @@ def test_claude_home_overrides_wsl_exports_paths_and_api_env_names(
     overrides = prepare_claude_home_overrides_for_test(runtime_dir, None, refresh_home=False)
 
     assert overrides['USERPROFILE'] == overrides['HOME']
+    assert overrides['CLAUDE_CONFIG_DIR'] == str(runtime_dir / 'claude-home' / '.claude')
+    assert overrides['CLAUDE_SECURESTORAGE_CONFIG_DIR'] == str(
+        runtime_dir / 'claude-home' / '.claude'
+    )
+    assert overrides['CLAUDE_SESSION_ENV_ROOT'] == str(
+        runtime_dir / 'claude-home' / '.claude' / 'session-env'
+    )
     wslenv = overrides['WSLENV'].split(':')
     assert 'HOME/p' in wslenv
     assert 'USERPROFILE/p' in wslenv
+    assert 'CLAUDE_CONFIG_DIR/p' in wslenv
+    assert 'CLAUDE_SECURESTORAGE_CONFIG_DIR/p' in wslenv
     assert 'CLAUDE_PROJECTS_ROOT/p' in wslenv
     assert 'CLAUDE_PROJECT_ROOT/p' in wslenv
+    assert 'CLAUDE_SESSION_ENV_ROOT/p' in wslenv
+    assert 'CLAUDE_CODE_PLUGIN_SEED_DIR/p' in wslenv
+    assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR/p' in wslenv
     assert 'ANTHROPIC_AUTH_TOKEN' in wslenv
     assert 'ANTHROPIC_API_KEY' in wslenv
     assert 'ANTHROPIC_BASE_URL' in wslenv
@@ -286,6 +319,275 @@ def test_claude_home_overrides_wsl_exports_paths_and_api_env_names(
     assert 'ANTHROPIC_API_KEY/p' not in wslenv
     assert 'ANTHROPIC_BASE_URL/p' not in wslenv
     assert wslenv[-1] == 'EXISTING/u'
+
+
+def test_codex_home_overrides_pin_sqlite_and_windows_home(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSLENV', 'EXISTING/u')
+
+    overrides = prepare_codex_home_overrides_for_test(
+        runtime_dir,
+        None,
+        refresh_home=False,
+    )
+
+    assert overrides['CODEX_SQLITE_HOME'] == overrides['CODEX_HOME']
+    assert overrides['USERPROFILE'] == overrides['CODEX_HOME']
+    wslenv = overrides['WSLENV'].split(':')
+    assert 'CODEX_HOME/p' in wslenv
+    assert 'CODEX_SESSION_ROOT/p' in wslenv
+    assert 'CODEX_SQLITE_HOME/p' in wslenv
+    assert 'USERPROFILE/p' in wslenv
+    assert wslenv[-1] == 'EXISTING/u'
+
+
+def test_codex_home_overrides_repairs_required_skills_without_full_refresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(tmp_path / 'source-home'))
+
+    overrides = prepare_codex_home_overrides_for_test(
+        runtime_dir,
+        None,
+        refresh_home=False,
+    )
+
+    skills_dir = Path(overrides['CODEX_HOME']) / 'skills'
+    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+        assert (skills_dir / skill_name / 'SKILL.md').is_file()
+
+
+def test_claude_home_overrides_share_plugin_seed_but_isolate_writable_caches(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    seed_root.mkdir(parents=True)
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'version': 2,
+                'plugins': {
+                    'fixture@marketplace': [
+                        {
+                            'scope': 'user',
+                            'installPath': str(seed_root / 'cache' / 'fixture'),
+                            'version': '1.0.0',
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+    (seed_root / 'cache').mkdir()
+
+    first = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-agent1',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    second = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-agent2',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+
+    assert first['CLAUDE_CODE_PLUGIN_SEED_DIR'] == str(seed_root)
+    assert second['CLAUDE_CODE_PLUGIN_SEED_DIR'] == str(seed_root)
+    first_plugin_root = Path(first['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    second_plugin_root = Path(second['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    assert first_plugin_root.is_dir()
+    assert second_plugin_root.is_dir()
+    assert not first_plugin_root.is_symlink()
+    assert not second_plugin_root.is_symlink()
+    assert first_plugin_root != second_plugin_root
+    first_registry = json.loads(
+        (first_plugin_root / 'installed_plugins.json').read_text(encoding='utf-8')
+    )
+    assert first_registry['plugins']['fixture@marketplace'][0]['installPath'] == str(
+        first_plugin_root / 'cache' / 'fixture'
+    )
+    source_registry = json.loads((seed_root / 'installed_plugins.json').read_text(encoding='utf-8'))
+    assert source_registry['plugins']['fixture@marketplace'][0]['installPath'] == str(
+        seed_root / 'cache' / 'fixture'
+    )
+    assert (second_plugin_root / 'known_marketplaces.json').is_file()
+    (first_plugin_root / 'cache' / 'agent1-runtime.json').write_text('{}\n', encoding='utf-8')
+    assert not (seed_root / 'cache' / 'agent1-runtime.json').exists()
+    assert not (second_plugin_root / 'cache' / 'agent1-runtime.json').exists()
+
+
+def test_claude_home_overrides_preserve_existing_writable_plugin_cache(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    seed_root.mkdir(parents=True)
+    (seed_root / 'known_marketplaces.json').write_text('{"source": true}\n', encoding='utf-8')
+    runtime_dir = tmp_path / 'runtime'
+    plugin_root = runtime_dir / 'claude-home' / '.claude' / 'plugins'
+    plugin_root.mkdir(parents=True)
+    local_registry = plugin_root / 'known_marketplaces.json'
+    local_registry.write_text('{"local": true}\n', encoding='utf-8')
+
+    overrides = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+
+    assert Path(overrides['CLAUDE_CODE_PLUGIN_CACHE_DIR']) == plugin_root
+    assert local_registry.read_text(encoding='utf-8') == '{"local": true}\n'
+
+
+def test_claude_home_overrides_use_empty_seed_for_non_seed_plugin_metadata(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    plugin_root = source_home / '.claude' / 'plugins'
+    plugin_root.mkdir(parents=True)
+    (plugin_root / 'blocklist.json').write_text('{}\n', encoding='utf-8')
+
+    overrides = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+
+    empty_seed = Path(overrides['CLAUDE_CODE_PLUGIN_SEED_DIR'])
+    plugin_root = Path(overrides['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    assert empty_seed.is_dir()
+    assert not any(empty_seed.iterdir())
+    assert empty_seed != source_home / '.claude' / 'plugins'
+    assert plugin_root.name == 'ccb-empty-plugins'
+    assert (plugin_root / 'cache').is_dir()
+
+
+def test_claude_home_overrides_bootstrap_when_source_seed_appears_later(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    runtime_dir = tmp_path / 'runtime'
+
+    initial = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    assert Path(initial['CLAUDE_CODE_PLUGIN_CACHE_DIR']).name == 'ccb-empty-plugins'
+    legacy_normal_root = runtime_dir / 'claude-home' / '.claude' / 'plugins'
+    (legacy_normal_root / 'cache').mkdir(parents=True)
+
+    seed_root = source_home / '.claude' / 'plugins'
+    source_cache = seed_root / 'cache' / 'fixture'
+    source_cache.mkdir(parents=True)
+    (source_cache / 'plugin.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'version': 2,
+                'plugins': {
+                    'fixture@marketplace': [
+                        {'scope': 'user', 'installPath': str(source_cache), 'version': '1.0.0'}
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    updated = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    plugin_root = Path(updated['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    registry = json.loads((plugin_root / 'installed_plugins.json').read_text(encoding='utf-8'))
+    assert plugin_root.name == 'plugins'
+    assert registry['plugins']['fixture@marketplace'][0]['installPath'] == str(
+        plugin_root / 'cache' / 'fixture'
+    )
+
+
+def test_claude_home_overrides_respect_config_inheritance_and_hard_role_policy(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    plugin_root = source_home / '.claude' / 'plugins'
+    plugin_root.mkdir(parents=True)
+    (plugin_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (source_home / '.claude' / 'settings.json').write_text(
+        json.dumps(
+            {
+                'enabledPlugins': {'source-plugin@marketplace': True},
+                'extraKnownMarketplaces': {
+                    'marketplace': {'source': {'source': 'github', 'repo': 'demo/plugins'}},
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+    no_config_profile = ResolvedProviderProfile(
+        provider='claude',
+        agent_name='agent1',
+        inherit_config=False,
+    )
+    hard_policy = RoleCommandPolicy(
+        role_id='test.hard',
+        path=tmp_path / 'command-surface.toml',
+        mode='deny_all_except',
+        enforcement='required',
+        if_unsupported='fail_mount',
+        generic_shell=False,
+        generic_ccb=False,
+        supported_providers=('claude',),
+        provider_tools=(),
+        allowed_effects=(),
+        forbidden_effects=(),
+        allowed=(),
+    )
+
+    inheritance_disabled = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-no-config',
+        no_config_profile,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    role_restricted = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-hard-role',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+        command_policy=hard_policy,
+    )
+
+    for overrides in (inheritance_disabled, role_restricted):
+        seed_root = Path(overrides['CLAUDE_CODE_PLUGIN_SEED_DIR'])
+        plugin_root = Path(overrides['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+        assert seed_root.is_dir()
+        assert not any(seed_root.iterdir())
+        assert seed_root != source_home / '.claude' / 'plugins'
+        assert plugin_root.name == 'ccb-restricted-plugins'
+        assert (plugin_root / 'cache').is_dir()
+
+    for target_home, profile, command_policy in (
+        (tmp_path / 'managed-no-config', no_config_profile, None),
+        (tmp_path / 'managed-hard-role', None, hard_policy),
+    ):
+        layout = claude_home_runtime.materialize_claude_home_config(
+            target_home,
+            profile=profile,
+            source_home=source_home,
+            command_policy=command_policy,
+        )
+        settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+        assert 'enabledPlugins' not in settings
+        assert 'extraKnownMarketplaces' not in settings
 
 
 def _write_codex_plugin_source(
@@ -718,6 +1020,12 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
     existing_log = existing_root / '2026' / '04' / '19' / 'rollout-existing-session.jsonl'
     existing_log.parent.mkdir(parents=True, exist_ok=True)
     existing_log.write_text('', encoding='utf-8')
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (existing_home / '.ccb-session-namespace.json').write_text(
+        json.dumps({'provider': 'codex', 'provider_authority_fingerprint': fingerprint}),
+        encoding='utf-8',
+    )
     existing_session = project_root / '.ccb' / '.codex-agent1-session'
     existing_session.write_text(
         json.dumps(
@@ -726,6 +1034,8 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
                 'codex_session_root': str(existing_root),
                 'codex_session_id': 'existing-session-id',
                 'codex_session_path': str(existing_log),
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
                 'start_cmd': 'codex resume existing-session-id',
                 'codex_start_cmd': 'codex resume existing-session-id',
             },
@@ -773,7 +1083,7 @@ def test_ensure_agent_runtime_rewrites_session_file_without_losing_existing_code
     assert payload['codex_session_root'] == str(existing_root)
     assert payload['codex_session_id'] == 'existing-session-id'
     assert payload['codex_session_path'] == str(existing_log)
-    assert payload['codex_start_cmd'].endswith('resume existing-session-id')
+    assert extract_resume_session_id(payload['codex_start_cmd']) == 'existing-session-id'
 
 
 def test_binding_runtime_alive_uses_tmux_socket_and_active_pane(monkeypatch) -> None:
@@ -831,8 +1141,29 @@ def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypa
     project_root = tmp_path / 'repo-codex-resume'
     ccb_dir = project_root / '.ccb'
     ccb_dir.mkdir(parents=True)
+    runtime_dir = ccb_dir / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    codex_home = ccb_dir / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    session_root = codex_home / 'sessions'
+    session_log = session_root / '2026' / '08' / '04' / 'agent1.jsonl'
+    session_log.parent.mkdir(parents=True)
+    session_log.write_text('', encoding='utf-8')
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (codex_home / '.ccb-session-namespace.json').write_text(
+        json.dumps({'provider': 'codex', 'provider_authority_fingerprint': fingerprint}),
+        encoding='utf-8',
+    )
     (ccb_dir / '.codex-agent1-session').write_text(
-        json.dumps({'codex_session_id': 'agent1-session-id'}, ensure_ascii=False),
+        json.dumps(
+            {
+                'codex_home': str(codex_home),
+                'codex_session_root': str(session_root),
+                'codex_session_id': 'agent1-session-id',
+                'codex_session_path': str(session_log),
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
     (ccb_dir / '.codex-agent2-session').write_text(
@@ -875,10 +1206,10 @@ def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypa
     assert result.launched is True
     assert result.binding is not None
     assert result.binding.runtime_ref == 'tmux:%52'
-    assert str(tmux_state['cmd']).endswith('resume agent1-session-id')
+    assert extract_resume_session_id(tmux_state['cmd']) == 'agent1-session-id'
     assert 'agent2-session-id' not in str(tmux_state['cmd'])
     payload = json.loads((project_root / '.ccb' / '.codex-agent1-session').read_text(encoding='utf-8'))
-    assert payload['codex_start_cmd'].endswith('resume agent1-session-id')
+    assert extract_resume_session_id(payload['codex_start_cmd']) == 'agent1-session-id'
 
 
 def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_path: Path) -> None:
@@ -929,6 +1260,7 @@ def test_ensure_agent_runtime_launches_named_gemini_session(monkeypatch, tmp_pat
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%55'
     assert payload['work_dir'] == str(resume_dir)
+    assert payload['gemini_provider_authority_fingerprint']
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='reviewer',
@@ -999,6 +1331,7 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     assert payload['claude_home'] == str(expected_claude_home)
     assert payload['claude_projects_root'] == str(expected_claude_home / '.claude' / 'projects')
     assert payload['claude_session_env_root'] == str(expected_claude_home / '.claude' / 'session-env')
+    assert payload['claude_provider_authority_fingerprint']
     assert payload['pane_title_marker'].startswith('CCB-reviewer-')
     assert payload['pane_id'] == '%44'
     assert payload['work_dir'] == str(resume_dir)
@@ -1007,7 +1340,10 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
     managed_memory = expected_claude_home / '.claude' / 'CLAUDE.md'
     assert f'workspace_path: {resume_dir.resolve()}' in managed_memory.read_text(encoding='utf-8')
     assert payload['start_cmd'].startswith('unset ANTHROPIC_BASE_URL; ')
+    assert 'export DISABLE_AUTOUPDATER=1' in payload['start_cmd']
+    assert 'DISABLE_LOGOUT_COMMAND=1' in payload['start_cmd']
     assert f'HOME={shlex.quote(str(expected_claude_home))}' in payload['start_cmd']
+    assert f'CLAUDE_CONFIG_DIR={shlex.quote(str(expected_claude_home / ".claude"))}' in payload['start_cmd']
     assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(expected_claude_home / ".claude" / "projects"))}' in payload['start_cmd']
     _assert_caller_env_exports(
         payload['start_cmd'],
@@ -1066,7 +1402,11 @@ def test_ensure_agent_runtime_launches_named_opencode_session(monkeypatch, tmp_p
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
     assert payload['pane_title_marker'].startswith('CCB-builder-')
     config_path = ctx.paths.agent_provider_state_dir('builder', 'opencode') / 'opencode.json'
+    state_dir = config_path.parent
     assert f'OPENCODE_CONFIG={shlex.quote(str(config_path))}' in payload['start_cmd']
+    assert f'XDG_DATA_HOME={shlex.quote(str(state_dir / "data"))}' in payload['start_cmd']
+    assert f'OPENCODE_STORAGE_ROOT={shlex.quote(str(state_dir / "data" / "opencode" / "storage"))}' in payload['start_cmd']
+    assert payload['opencode_storage_root'] == str(state_dir / 'data' / 'opencode' / 'storage')
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='builder',
@@ -1315,6 +1655,8 @@ def test_ensure_agent_runtime_launches_named_droid_session(monkeypatch, tmp_path
     monkeypatch.setattr('cli.services.runtime_launch.shutil.which', lambda name: f'/usr/bin/{name}')
     monkeypatch.setattr('cli.services.runtime_launch.TmuxBackend', FakeTmuxBackend)
     monkeypatch.setenv('DROID_START_CMD', 'droid')
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSLENV', 'EXISTING/u')
 
     result = ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
 
@@ -1325,12 +1667,18 @@ def test_ensure_agent_runtime_launches_named_droid_session(monkeypatch, tmp_path
     payload = json.loads(expected_session.read_text(encoding='utf-8'))
     assert payload['pane_title_marker'].startswith('CCB-mobile-')
     expected_home = ctx.paths.agent_provider_state_dir('mobile', 'droid') / 'home'
+    expected_factory_home = expected_home / '.factory'
     assert payload['droid_home'] == str(expected_home)
-    assert payload['factory_home'] == str(expected_home)
-    assert payload['droid_sessions_root'] == str(expected_home / 'sessions')
-    assert (expected_home / 'sessions').is_dir()
-    assert f'FACTORY_HOME={shlex.quote(str(expected_home))}' in payload['start_cmd']
-    assert f'DROID_SESSIONS_ROOT={shlex.quote(str(expected_home / "sessions"))}' in payload['start_cmd']
+    assert payload['factory_home'] == str(expected_factory_home)
+    assert payload['droid_sessions_root'] == str(expected_factory_home / 'sessions')
+    assert (expected_factory_home / 'sessions').is_dir()
+    assert f'FACTORY_HOME_OVERRIDE={shlex.quote(str(expected_home))}' in payload['start_cmd']
+    assert f'FACTORY_HOME={shlex.quote(str(expected_factory_home))}' in payload['start_cmd']
+    assert 'FACTORY_DISABLE_KEYRING=true' in payload['start_cmd']
+    assert f'DROID_SESSIONS_ROOT={shlex.quote(str(expected_factory_home / "sessions"))}' in payload['start_cmd']
+    assert 'FACTORY_HOME_OVERRIDE/p' in payload['start_cmd']
+    assert 'FACTORY_DISABLE_KEYRING' in payload['start_cmd']
+    assert 'EXISTING/u' in payload['start_cmd']
     _assert_caller_env_exports(
         payload['start_cmd'],
         actor='mobile',
@@ -1732,6 +2080,8 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv('CODEX_START_CMD', '/tmp/stub-codex --profile test')
     monkeypatch.setenv('AGY_START_CMD', '/tmp/stub-agy --profile test')
     monkeypatch.setenv('QWEN_START_CMD', '/tmp/stub-qwen --profile test')
+    monkeypatch.setenv('QODER_START_CMD', '/tmp/stub-qoder --profile test')
+    monkeypatch.setenv('QODERCLICN_START_CMD', '/tmp/stub-qoderclicn --profile test')
     monkeypatch.setenv('CURSOR_START_CMD', '/tmp/stub-cursor --profile test')
     monkeypatch.setenv('COPILOT_START_CMD', '/tmp/stub-copilot --profile test')
     monkeypatch.setenv('CRUSH_START_CMD', '/tmp/stub-crush --profile test')
@@ -1745,6 +2095,8 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     assert runtime_launch._provider_start_parts('codex') == ['/tmp/stub-codex', '--profile', 'test']
     assert runtime_launch._provider_start_parts('agy') == ['/tmp/stub-agy', '--profile', 'test']
     assert runtime_launch._provider_start_parts('qwen') == ['/tmp/stub-qwen', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('qoder') == ['/tmp/stub-qoder', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('qoderclicn') == ['/tmp/stub-qoderclicn', '--profile', 'test']
     assert runtime_launch._provider_start_parts('cursor') == ['/tmp/stub-cursor', '--profile', 'test']
     assert runtime_launch._provider_start_parts('copilot') == ['/tmp/stub-copilot', '--profile', 'test']
     assert runtime_launch._provider_start_parts('crush') == ['/tmp/stub-crush', '--profile', 'test']
@@ -1767,6 +2119,8 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     monkeypatch.delenv('KIMI_START_CMD', raising=False)
     monkeypatch.delenv('DEEPSEEK_START_CMD', raising=False)
     monkeypatch.delenv('QWEN_START_CMD', raising=False)
+    monkeypatch.delenv('QODER_START_CMD', raising=False)
+    monkeypatch.delenv('QODERCLICN_START_CMD', raising=False)
     monkeypatch.delenv('CURSOR_START_CMD', raising=False)
     monkeypatch.delenv('COPILOT_START_CMD', raising=False)
     monkeypatch.delenv('CRUSH_START_CMD', raising=False)
@@ -1782,6 +2136,8 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     assert runtime_launch._provider_start_parts('kimi') == ['kimi']
     assert runtime_launch._provider_start_parts('deepseek') == ['deepcode']
     assert runtime_launch._provider_start_parts('qwen') == ['qwen']
+    assert runtime_launch._provider_start_parts('qoder') == ['qodercli']
+    assert runtime_launch._provider_start_parts('qoderclicn') == ['qoderclicn']
     assert runtime_launch._provider_start_parts('cursor') == ['agent']
     assert runtime_launch._provider_start_parts('copilot') == ['copilot']
     assert runtime_launch._provider_start_parts('crush') == ['crush']
@@ -1795,6 +2151,8 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     ('provider', 'default_executable', 'home_env'),
     [
         ('qwen', 'qwen', 'QWEN_HOME'),
+        ('qoder', 'qodercli', None),
+        ('qoderclicn', 'qoderclicn', None),
         ('cursor', 'agent', 'HOME'),
         ('copilot', 'copilot', 'COPILOT_HOME'),
         ('crush', 'crush', None),
@@ -1811,6 +2169,13 @@ def test_native_cli_launcher_builds_provider_state_payload(
     default_executable: str,
     home_env: str | None,
 ) -> None:
+    if provider == 'kiro':
+        # Exercise Kiro's supported private file-store launch path on every
+        # CI host. macOS fail-closed behavior is covered separately.
+        monkeypatch.setattr(
+            'provider_backends.native_cli_support.home.platform.system',
+            lambda: 'Linux',
+        )
     monkeypatch.delenv(f'{provider.upper()}_START_CMD', raising=False)
     project_root = tmp_path / f'repo-{provider}-launcher'
     (project_root / '.ccb').mkdir(parents=True)
@@ -1843,12 +2208,33 @@ def test_native_cli_launcher_builds_provider_state_payload(
     assert payload[f'{provider}_home'] == str(state_dir / 'home')
     assert payload[f'{provider}_data_dir'] == str(state_dir / 'data')
     assert payload[f'{provider}_session_id'] == 'sess-native'
+    assert f'HOME={shlex.quote(str(state_dir / "home"))}' in start_cmd
+    assert f'XDG_CONFIG_HOME={shlex.quote(str(state_dir / "home" / ".config"))}' in start_cmd
+    assert f'XDG_DATA_HOME={shlex.quote(str(state_dir / "data"))}' in start_cmd
+    assert f'XDG_STATE_HOME={shlex.quote(str(state_dir / "home" / ".local" / "state"))}' in start_cmd
+    assert f'XDG_CACHE_HOME={shlex.quote(str(state_dir / "home" / ".cache"))}' in start_cmd
     if home_env:
         assert f'{home_env}={shlex.quote(str(state_dir / "home"))}' in start_cmd
+    if provider == 'copilot':
+        assert f'COPILOT_CACHE_HOME={shlex.quote(str(state_dir / "data" / "cache"))}' in start_cmd
+        assert 'COPILOT_DISABLE_KEYTAR=1' in start_cmd
     visible_cmd = start_cmd.rsplit('; ', 1)[-1]
     visible_parts = shlex.split(visible_cmd)
     if provider == 'crush':
         assert visible_parts == [default_executable, '--data-dir', str(state_dir / 'data'), '--demo']
+    elif provider == 'qoder':
+        assert visible_parts == [
+            default_executable,
+            '--config-dir',
+            str(state_dir / 'home'),
+            '--demo',
+        ]
+        assert payload['qoder_config_dir'] == str(state_dir / 'home')
+        assert payload['qoder_auto_permission_enabled'] is False
+        assert payload['qoder_headless_permission_mode'] == 'dont_ask'
+        assert 'QODER_HOME=' not in start_cmd
+        assert (state_dir / 'home' / 'skills' / 'ask' / 'SKILL.md').is_file()
+        assert (state_dir / 'home' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     elif provider == 'grok':
         assert visible_parts == [
             default_executable,
@@ -1863,17 +2249,48 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert (state_dir / 'home' / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
         assert (state_dir / 'home' / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     elif provider == 'pi':
+        extension_path = Path(payload['pi_completion_extension'])
+        completion_event_log = Path(payload['pi_completion_event_log'])
+        dispatch_event_log = Path(payload['pi_dispatch_event_log'])
         assert f'PI_CODING_AGENT_DIR={shlex.quote(str(state_dir / "home"))}' in start_cmd
         assert f'PI_CODING_AGENT_SESSION_DIR={shlex.quote(str(state_dir / "sessions"))}' in start_cmd
         assert 'PI_SKIP_VERSION_CHECK=1' in start_cmd
         assert 'PI_TELEMETRY=0' in start_cmd
+        assert (
+            f'CCB_PI_COMPLETION_EVENTS={shlex.quote(str(completion_event_log))}'
+            in start_cmd
+        )
+        assert (
+            f'CCB_PI_DISPATCH_EVENTS={shlex.quote(str(dispatch_event_log))}'
+            in start_cmd
+        )
         assert visible_parts == [
             default_executable,
             '--session-dir',
             str(state_dir / 'sessions'),
+            '--extension',
+            str(extension_path),
             '--no-approve',
             '--demo',
         ]
+        assert payload['pi_completion_schema_version'] == 1
+        assert extension_path.is_file()
+        assert completion_event_log.is_file()
+        assert dispatch_event_log.is_file()
+        extension_source = extension_path.read_text(encoding='utf-8')
+        assert 'pi.on("agent_settled"' in extension_source
+        assert 'pi.on("input"' in extension_source
+        assert 'request_superseded' in extension_source
+        assert 'CCB_PI_COMPLETION_EVENTS' in extension_source
+        assert (
+            'String(record.runtime_instance_id || "") === runtimeInstanceId'
+            in extension_source
+        )
+        assert 'String(record.dispatch_id || "")' in extension_source
+        assert 'oauth' not in extension_source.lower()
+        assert extension_path.stat().st_mode & 0o077 == 0
+        assert completion_event_log.stat().st_mode & 0o077 == 0
+        assert dispatch_event_log.stat().st_mode & 0o077 == 0
     elif provider == 'zai':
         assert visible_parts == [
             default_executable,
@@ -1881,8 +2298,211 @@ def test_native_cli_launcher_builds_provider_state_payload(
             str(plan.workspace_path),
             '--demo',
         ]
+    elif provider == 'cursor':
+        assert 'AGENT_CLI_CREDENTIAL_STORE=file' in start_cmd
+        assert visible_parts == [default_executable, '--demo']
+    elif provider == 'qoderclicn':
+        assert visible_parts == [
+            default_executable,
+            '--config-dir',
+            str(state_dir / 'home'),
+            '--demo',
+        ]
+        assert payload['qoderclicn_config_dir'] == str(state_dir / 'home')
+        assert payload['qoderclicn_auto_permission_enabled'] is False
+        assert payload['qoderclicn_headless_permission_mode'] == 'dont_ask'
+        settings = json.loads((state_dir / 'home' / 'settings.json').read_text(encoding='utf-8'))
+        assert settings['general']['enableAutoUpdate'] is False
+        assert settings['general']['enableAutoUpdateNotification'] is False
+        assert (state_dir / 'home' / 'skills' / 'ask' / 'SKILL.md').is_file()
+        assert (state_dir / 'home' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     else:
         assert visible_parts == [default_executable, '--demo']
+
+
+def test_qoder_launcher_respects_explicit_config_and_permission_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv('QODER_START_CMD', raising=False)
+    project_root = tmp_path / 'repo-qoder-explicit-options'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoder1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec(
+        'qoder1',
+        provider='qoder',
+        startup_args=('--config-dir', 'custom-qoder', '--permission-mode', 'plan'),
+    )
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoder1', 'qoder')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoder']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoder-explicit',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoder1',
+        start_cmd,
+        'sess-qoder-explicit',
+        prepared,
+    )
+    parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert parts.count('--config-dir') == 1
+    assert parts.count('--permission-mode') == 1
+    assert parts[parts.index('--permission-mode') + 1] == 'plan'
+    assert payload['qoder_config_dir'] == str(plan.workspace_path / 'custom-qoder')
+    assert payload['qoder_auto_permission_enabled'] is True
+    assert payload['qoder_headless_permission_mode'] == 'plan'
+    assert (plan.workspace_path / 'custom-qoder' / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (plan.workspace_path / 'custom-qoder' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+
+
+def test_qoderclicn_launcher_uses_one_managed_root_and_merges_update_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv('QODERCLICN_START_CMD', raising=False)
+    project_root = tmp_path / 'repo-qoderclicn-managed-root'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoderclicn1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec('qoderclicn1', provider='qoderclicn', startup_args=('--demo',))
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoderclicn1', 'qoderclicn')
+    state_dir = ctx.paths.agent_provider_state_dir('qoderclicn1', 'qoderclicn')
+    config_dir = state_dir / 'home'
+    config_dir.mkdir(parents=True)
+    (config_dir / 'settings.json').write_text(
+        json.dumps({'theme': 'dark', 'general': {'locale': 'zh-CN'}}),
+        encoding='utf-8',
+    )
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoderclicn']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoderclicn-managed',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoderclicn1',
+        start_cmd,
+        'sess-qoderclicn-managed',
+        prepared,
+    )
+    request = NativeCliExecutionRequest(
+        provider='qoderclicn',
+        job=SimpleNamespace(job_id='job_qoderclicn_launcher'),
+        work_dir=plan.workspace_path,
+        session_data=payload,
+        prompt='test prompt',
+        request_anchor='anchor',
+    )
+    headless = build_qoderclicn_command(request)
+    visible = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+    settings = json.loads((config_dir / 'settings.json').read_text(encoding='utf-8'))
+
+    assert visible[visible.index('--config-dir') + 1] == str(config_dir)
+    assert visible[visible.index('--permission-mode') + 1] == 'auto'
+    assert headless[headless.index('--config-dir') + 1] == str(config_dir)
+    assert headless[headless.index('--permission-mode') + 1] == 'auto'
+    assert payload['qoderclicn_config_dir'] == str(config_dir)
+    assert settings['theme'] == 'dark'
+    assert settings['general']['locale'] == 'zh-CN'
+    assert settings['general']['enableAutoUpdate'] is False
+    assert settings['general']['enableAutoUpdateNotification'] is False
+
+
+def test_qoderclicn_launcher_does_not_duplicate_explicit_config_or_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv('QODERCLICN_START_CMD', 'qoderclicn --permission-mode plan')
+    project_root = tmp_path / 'repo-qoderclicn-explicit-options'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('qoderclicn1',),
+        restore=True,
+        auto_permission=True,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec(
+        'qoderclicn1',
+        provider='qoderclicn',
+        startup_args=('--config-dir', 'custom-qoderclicn', '--demo'),
+    )
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('qoderclicn1', 'qoderclicn')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['qoderclicn']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-qoderclicn-explicit',
+        prepared_state=prepared,
+    )
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-qoderclicn1',
+        start_cmd,
+        'sess-qoderclicn-explicit',
+        prepared,
+    )
+    parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert parts.count('--config-dir') == 1
+    assert parts.count('--permission-mode') == 1
+    assert parts[parts.index('--permission-mode') + 1] == 'plan'
+    assert payload['qoderclicn_config_dir'] == str(
+        plan.workspace_path / 'custom-qoderclicn'
+    )
+    assert payload['qoderclicn_headless_permission_mode'] == 'plan'
+    assert not (plan.workspace_path / 'custom-qoderclicn' / 'settings.json').exists()
+    assert (
+        plan.workspace_path / 'custom-qoderclicn' / 'skills' / 'ask' / 'SKILL.md'
+    ).is_file()
 
 
 def test_grok_launcher_fullscreen_startup_arg_overrides_default_minimal(
@@ -1996,7 +2616,7 @@ def test_grok_launcher_uses_bypass_permissions_and_allows_ccb_skills_on_normal_s
     assert payload['grok_auto_permission_enabled'] is True
 
 
-def test_grok_launcher_disables_skill_projection_and_rules_when_inheritance_is_off(
+def test_grok_launcher_keeps_control_skills_when_optional_inheritance_is_off(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2022,12 +2642,12 @@ def test_grok_launcher_disables_skill_projection_and_rules_when_inheritance_is_o
 
     visible_parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
 
-    assert '--allow' not in visible_parts
+    assert '--allow' in visible_parts
     assert visible_parts[visible_parts.index('--permission-mode') + 1] == 'bypassPermissions'
-    assert prepared['grok_skill_permissions_enabled'] is False
+    assert prepared['grok_skill_permissions_enabled'] is True
     assert prepared['grok_auto_permission_enabled'] is True
-    assert not (managed_home / '.grok' / 'skills' / 'ask').exists()
-    assert not (managed_home / '.grok' / 'skills' / 'ccb-clear').exists()
+    assert (managed_home / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (managed_home / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
 
 
 def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypatch, tmp_path: Path) -> None:
@@ -2112,25 +2732,41 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert any(name == 'respawn' for name, _ in calls)
 
 
-def test_codex_launcher_build_start_cmd_isolates_invalid_global_codex_config(monkeypatch, tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_fails_closed_for_invalid_global_codex_config(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     runtime_dir = tmp_path / 'runtime'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     source_home = tmp_path / 'source-home'
     source_home.mkdir(parents=True, exist_ok=True)
-    (source_home / 'config.toml').write_text('[mcp_servers.puppeteer]\nfoo=1\n[mcp_servers.puppeteer]\nbar=2\n', encoding='utf-8')
-    (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"test-key"}', encoding='utf-8')
+    source_config = source_home / 'config.toml'
+    source_auth = source_home / 'auth.json'
+    source_config.write_text(
+        '[mcp_servers.puppeteer]\nfoo=1\n[mcp_servers.puppeteer]\nbar=2\n',
+        encoding='utf-8',
+    )
+    source_auth.write_text('{"OPENAI_API_KEY":"test-key"}', encoding='utf-8')
+    source_snapshot = {
+        path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+        for path in (source_config, source_auth)
+    }
     monkeypatch.setenv('CODEX_HOME', str(source_home))
 
     spec = _spec('agent1')
     command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
 
-    cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-1')
+    with pytest.raises(RuntimeError, match='cannot parse inherited Codex config source'):
+        _codex_start_cmd(command, spec, runtime_dir, 'sess-1')
 
     isolated_home = runtime_dir / 'codex-state' / 'home'
-    assert f'CODEX_HOME={shlex.quote(str(isolated_home))}' in cmd
-    assert f'CODEX_SESSION_ROOT={shlex.quote(str(isolated_home / "sessions"))}' in cmd
-    assert (isolated_home / 'auth.json').is_file()
-    assert (isolated_home / 'config.toml').is_file()
+    assert not (isolated_home / 'auth.json').exists()
+    assert not (isolated_home / 'config.toml').exists()
+    assert all(
+        (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+        == source_snapshot[path]
+        for path in (source_config, source_auth)
+    )
 
 
 def test_codex_launcher_build_start_cmd_does_not_require_toml_parser_for_config_sync(
@@ -2353,7 +2989,7 @@ def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeyp
 
     cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-restore', prepared_state=prepared)
 
-    assert cmd.endswith('resume agent1-session-id')
+    assert extract_resume_session_id(cmd) == 'agent1-session-id'
     assert 'agent2-session-id' not in cmd
 
 
@@ -2421,10 +3057,10 @@ def test_codex_launcher_build_start_cmd_respects_agent_restore_fresh(monkeypatch
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-fresh')
 
-    assert ' resume ' not in f' {cmd} '
+    assert extract_resume_session_id(cmd) is None
 
 
-def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_session_file(tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_rejects_unfenced_legacy_resume_cmd(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-agent'
     runtime_dir = project_root / '.ccb' / 'agents' / 'codex' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2447,7 +3083,7 @@ def test_codex_launcher_build_start_cmd_reads_resume_cmd_from_agent_scoped_sessi
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-restore')
 
-    assert cmd.endswith('resume codex-session-id')
+    assert extract_resume_session_id(cmd) is None
 
 
 def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_proxy(monkeypatch, tmp_path: Path) -> None:
@@ -2501,11 +3137,103 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
     )
     settings_payload = json.loads((runtime_dir / 'claude-settings.json').read_text(encoding='utf-8'))
     assert settings_payload['skipDangerousModePermissionPrompt'] is True
+    managed_home = runtime_dir / 'claude-home'
+    trust_payload = json.loads(
+        (managed_home / '.claude' / '.claude.json').read_text(encoding='utf-8')
+    )
+    assert trust_payload['bypassPermissionsModeAccepted'] is True
+    assert not (managed_home / '.claude.json').exists()
     assert json.loads(_claude_settings_arg(start_cmd)) == settings_payload
     assert start_cmd.endswith(
         f'claude --setting-sources user,project,local --settings {shlex.quote(json.dumps(settings_payload, ensure_ascii=False))} '
         '--permission-mode bypassPermissions --continue'
     )
+
+
+def test_claude_launcher_exports_plugin_seed_before_process_start(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    seed_root.mkdir(parents=True)
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    monkeypatch.setattr(claude_home_runtime, 'current_provider_source_home', lambda: source_home)
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-plugin-seed',
+        prepared_state=_claude_prepared_state(runtime_dir),
+    )
+
+    expected_plugin_root = runtime_dir / 'claude-home' / '.claude' / 'plugins'
+    assert f'CLAUDE_CODE_PLUGIN_SEED_DIR={shlex.quote(str(seed_root))}' in start_cmd
+    assert f'CLAUDE_CODE_PLUGIN_CACHE_DIR={shlex.quote(str(expected_plugin_root))}' in start_cmd
+    assert expected_plugin_root.is_dir()
+    assert start_cmd.index('CLAUDE_CODE_PLUGIN_SEED_DIR=') < start_cmd.rindex('; claude ')
+
+
+def test_claude_launcher_hard_role_overrides_source_and_ambient_plugin_seed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    source_seed = source_home / '.claude' / 'plugins'
+    source_seed.mkdir(parents=True)
+    (source_seed / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    hard_policy = RoleCommandPolicy(
+        role_id='test.hard',
+        path=tmp_path / 'command-surface.toml',
+        mode='deny_all_except',
+        enforcement='required',
+        if_unsupported='fail_mount',
+        generic_shell=False,
+        generic_ccb=False,
+        supported_providers=('claude',),
+        provider_tools=(),
+        allowed_effects=(),
+        forbidden_effects=(),
+        allowed=(),
+    )
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+    monkeypatch.setenv('CLAUDE_CODE_PLUGIN_SEED_DIR', str(tmp_path / 'ambient-seed'))
+    monkeypatch.setattr(claude_home_runtime, 'current_provider_source_home', lambda: source_home)
+    monkeypatch.setattr(claude_launcher, 'ensure_role_command_policy_supported', lambda **kwargs: hard_policy)
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-hard-role',
+        prepared_state=_claude_prepared_state(runtime_dir),
+    )
+
+    managed_claude = runtime_dir / 'claude-home' / '.claude'
+    empty_seed = managed_claude / 'ccb-empty-plugin-seed'
+    restricted_plugins = managed_claude / 'ccb-restricted-plugins'
+    assert f'CLAUDE_CODE_PLUGIN_SEED_DIR={shlex.quote(str(empty_seed))}' in start_cmd
+    assert f'CLAUDE_CODE_PLUGIN_CACHE_DIR={shlex.quote(str(restricted_plugins))}' in start_cmd
+    assert str(source_seed) not in start_cmd
+    assert str(tmp_path / 'ambient-seed') not in start_cmd
 
 
 def test_claude_launcher_provider_command_template_wraps_command_after_env_prefix(
@@ -2549,6 +3277,52 @@ def test_claude_launcher_provider_command_template_wraps_command_after_env_prefi
     assert '; sandbox=1 claude --setting-sources user,project,local --settings ' in start_cmd
     assert start_cmd.endswith(' --continue omx --madmax')
     assert 'sandbox=1 unset ANTHROPIC_BASE_URL' not in start_cmd
+
+
+def test_claude_launcher_build_start_cmd_forks_linked_continuation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime-claude-linked-continuation'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('reviewer',),
+        restore=True,
+        auto_permission=False,
+    )
+
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(
+            run_cwd=runtime_dir,
+            has_history=False,
+            continuation_session_id='old-claude-session-id',
+            continuation_mode='fork',
+        ),
+    )
+    monkeypatch.setattr(
+        claude_launcher,
+        'claude_cli_supports_flag',
+        lambda cmd_parts, flag: str(flag)
+        in {'--setting-sources', '--settings', '--permission-mode', '--fork-session'},
+    )
+
+    prepared_state = _claude_prepared_state(runtime_dir)
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-linked-continuation',
+        prepared_state=prepared_state,
+    )
+
+    assert '--resume old-claude-session-id --fork-session' in start_cmd
+    assert '--continue' not in start_cmd
+    assert prepared_state['ccb_continuation_launch_mode'] == 'fork'
 
 
 def test_claude_launcher_build_start_cmd_respects_agent_restore_fresh(monkeypatch, tmp_path: Path) -> None:
@@ -2686,6 +3460,16 @@ def test_claude_cli_capability_probe_does_not_reuse_prior_help_output(monkeypatc
 
     assert '--settings' in claude_launcher._claude_help_text(('claude',))
     assert '--permission-mode' in claude_launcher._claude_help_text(('claude',))
+
+
+def test_claude_cli_capability_probe_reads_flags_after_pipe_truncation_boundary(monkeypatch) -> None:
+    def write_long_help(args, **kwargs):
+        kwargs['stdout'].write(f'{"x" * 8192}\n--setting-sources <sources>\n')
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(claude_launcher.subprocess, 'run', write_long_help)
+
+    assert claude_launcher.claude_cli_supports_flag(['claude'], '--setting-sources') is True
 
 
 def test_claude_launcher_skips_unsupported_optional_flags(monkeypatch, tmp_path: Path) -> None:
@@ -2831,6 +3615,76 @@ def test_opencode_workspace_preparation_writes_memory_config(tmp_path: Path, mon
     assert (project_root / '.ccb' / 'runtime' / 'skills' / 'builder' / 'opencode' / 'ask.md').is_file()
 
 
+def test_opencode_launcher_inherits_auth_into_private_data_home_one_way(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-opencode-auth'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'builder' / 'provider-runtime' / 'opencode'
+    runtime_dir.mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    source_auth = source_home / '.local' / 'share' / 'opencode' / 'auth.json'
+    source_auth.parent.mkdir(parents=True)
+    source_auth.write_text('{"github":{"token":"source"}}\n', encoding='utf-8')
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.setenv('OPENCODE_START_CMD', 'opencode')
+    spec = _spec('builder', provider='opencode')
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('builder',),
+        restore=False,
+        auto_permission=False,
+    )
+    prepared = _prepare_opencode_workspace_for_test(spec, runtime_dir)
+
+    cmd = opencode_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'opencode-auth',
+        prepared_state=prepared,
+    )
+
+    target_auth = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'builder'
+        / 'provider-state'
+        / 'opencode'
+        / 'data'
+        / 'opencode'
+        / 'auth.json'
+    )
+    assert target_auth.read_text(encoding='utf-8') == '{"github":{"token":"source"}}\n'
+    assert f'XDG_DATA_HOME={shlex.quote(str(target_auth.parent.parent))}' in cmd
+    target_auth.unlink()
+    assert source_auth.is_file()
+
+
+def test_opencode_auth_inheritance_honors_external_xdg_data_home(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    source_data = tmp_path / 'external-xdg-data'
+    source_auth = source_data / 'opencode' / 'auth.json'
+    source_auth.parent.mkdir(parents=True)
+    source_auth.write_text('{"github":{"token":"source"}}\n', encoding='utf-8')
+    target_root = tmp_path / 'managed' / 'data' / 'opencode'
+    target_root.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(source_home))
+    monkeypatch.setenv('XDG_DATA_HOME', str(source_data))
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+
+    opencode_launcher._materialize_opencode_auth(target_root, profile=None)
+
+    target_auth = target_root / 'auth.json'
+    assert target_auth.read_text(encoding='utf-8') == source_auth.read_text(encoding='utf-8')
+    target_auth.write_text('{"github":{"token":"managed"}}\n', encoding='utf-8')
+    assert source_auth.read_text(encoding='utf-8') == '{"github":{"token":"source"}}\n'
+
+
 def test_opencode_workspace_preparation_records_memory_projection_once(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-opencode-events'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'opencode'
@@ -2901,7 +3755,7 @@ def test_opencode_workspace_preparation_can_inject_skills_without_memory(tmp_pat
     assert memory_events[0]['skill_sha256']
 
 
-def test_opencode_workspace_preparation_disables_config_when_memory_and_skills_disabled(
+def test_opencode_workspace_preparation_keeps_control_instructions_when_optional_context_is_disabled(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2933,8 +3787,14 @@ def test_opencode_workspace_preparation_disables_config_when_memory_and_skills_d
         prepared_state=prepared,
     )
 
-    assert 'OPENCODE_CONFIG=' not in cmd
-    assert not config_path.exists()
+    assert f'OPENCODE_CONFIG={shlex.quote(str(config_path))}' in cmd
+    config = json.loads(config_path.read_text(encoding='utf-8'))
+    assert config['instructions'] == ['.ccb/runtime/skills/agent1/opencode/ask.md']
+    control_text = (
+        project_root / '.ccb' / 'runtime' / 'skills' / 'agent1' / 'opencode' / 'ask.md'
+    ).read_text(encoding='utf-8')
+    assert '# CCB Ask Skill' in control_text
+    assert '# CCB Clear Skill' in control_text
 
 
 def test_opencode_start_cmd_respects_explicit_session_without_auto_continue(monkeypatch, tmp_path: Path) -> None:
@@ -3063,6 +3923,8 @@ def test_codex_launcher_build_start_cmd_api_override_clears_global_route_config(
     )
     (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"system-key"}\n', encoding='utf-8')
     monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setenv('OPENAI_API_KEY', 'ambient-key')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://ambient.example.test/v1')
     _write_provider_profile(
         runtime_dir,
         ResolvedProviderProfile(
@@ -3092,6 +3954,8 @@ def test_codex_launcher_build_start_cmd_api_override_clears_global_route_config(
     assert 'unset OPENAI_API_KEY' in cmd
     assert 'unset OPENAI_BASE_URL' in cmd
     assert f'OPENAI_API_KEY={shlex.quote("profile-key")}' in cmd
+    assert 'ambient-key' not in cmd
+    assert 'https://ambient.example.test/v1' not in cmd
     assert f'OPENAI_BASE_URL={shlex.quote("https://api.rootflowai.com")}' not in cmd
     config_text = (profile_home / 'config.toml').read_text(encoding='utf-8')
     assert 'model_provider = "custom"' in config_text
@@ -3114,27 +3978,41 @@ def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_authority
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     profile_home = project_root / '.ccb' / 'provider-profiles' / 'agent1' / 'codex'
-    _write_provider_profile(
-        runtime_dir,
-        ResolvedProviderProfile(
-            provider='codex',
-            agent_name='agent1',
-            mode='isolated',
-            profile_root=str(profile_home),
-            runtime_home=str(profile_home),
-            env={
-                'OPENAI_API_KEY': 'profile-key',
-                'OPENAI_BASE_URL': 'https://api.rootflowai.com',
-            },
-            inherit_api=False,
-            inherit_auth=False,
-            inherit_config=False,
-        ),
+    current_profile = ResolvedProviderProfile(
+        provider='codex',
+        agent_name='agent1',
+        mode='isolated',
+        profile_root=str(profile_home),
+        runtime_home=str(profile_home),
+        env={
+            'OPENAI_API_KEY': 'profile-key',
+            'OPENAI_BASE_URL': 'https://api.rootflowai.com',
+        },
+        inherit_api=False,
+        inherit_auth=False,
+        inherit_config=False,
     )
+    _write_provider_profile(runtime_dir, current_profile)
+    old_profile = replace(
+        current_profile,
+        env={
+            'OPENAI_API_KEY': 'old-profile-key',
+            'OPENAI_BASE_URL': 'https://old-api.example.test',
+        },
+    )
+    old_fingerprint = codex_home_config.codex_provider_authority_fingerprint(old_profile)
     ccb_dir = project_root / '.ccb'
     ccb_dir.mkdir(parents=True, exist_ok=True)
     (ccb_dir / '.codex-agent1-session').write_text(
-        json.dumps({'codex_session_id': 'legacy-session-id'}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                'codex_session_id': 'legacy-session-id',
+                'codex_provider_authority_fingerprint': old_fingerprint,
+                'codex_session_authority_fingerprint': old_fingerprint,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding='utf-8',
     )
 
@@ -3144,6 +4022,76 @@ def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_authority
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-authority-change')
 
     assert 'resume legacy-session-id' not in cmd
+
+
+def test_codex_launcher_build_start_cmd_forks_linked_authority_generation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-codex-linked-authority'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    profile_home = project_root / '.ccb' / 'provider-profiles' / 'agent1' / 'codex'
+    profile = ResolvedProviderProfile(
+        provider='codex',
+        agent_name='agent1',
+        mode='isolated',
+        profile_root=str(profile_home),
+        runtime_home=str(profile_home),
+        env={
+            'OPENAI_API_KEY': 'new-profile-key',
+            'OPENAI_BASE_URL': 'https://new-api.example.test',
+        },
+        inherit_api=False,
+        inherit_auth=False,
+        inherit_config=False,
+    )
+    _write_provider_profile(runtime_dir, profile)
+
+    session_root = profile_home / 'sessions'
+    old_log = session_root / '2026' / '08' / '05' / 'old-session.jsonl'
+    old_log.parent.mkdir(parents=True, exist_ok=True)
+    old_log.write_text('{}\n', encoding='utf-8')
+    session_file = project_root / '.ccb' / '.codex-agent1-session'
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(profile_home),
+                'codex_session_root': str(session_root),
+                'codex_session_id': 'old-codex-session-id',
+                'codex_session_path': str(old_log),
+                'codex_provider_authority_fingerprint': 'old-authority',
+                'codex_session_authority_fingerprint': 'old-authority',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        'provider_backends.codex.launcher_runtime.command.supports_session_fork',
+        lambda parts: True,
+    )
+    monkeypatch.setattr(
+        'provider_backends.codex.launcher_runtime.command.supports_managed_app_server',
+        lambda parts: False,
+    )
+
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('agent1',),
+        restore=True,
+        auto_permission=False,
+    )
+    cmd = _codex_start_cmd(command, _spec('agent1'), runtime_dir, 'codex-linked-continuation')
+
+    assert 'fork old-codex-session-id' in cmd
+    assert 'resume old-codex-session-id' not in cmd
+    rewritten = json.loads(session_file.read_text(encoding='utf-8'))
+    assert rewritten['old_codex_session_id'] == 'old-codex-session-id'
+    assert rewritten['old_codex_session_path'] == str(old_log)
+    assert rewritten['ccb_resume_compatibility'] == 'linked_continuation'
+    assert old_log.is_file()
 
 
 def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
@@ -3162,11 +4110,12 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
     old_log = session_root / '2026' / '05' / '01' / 'legacy-session.jsonl'
     old_log.parent.mkdir(parents=True, exist_ok=True)
     old_log.write_text('', encoding='utf-8')
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
     (codex_home / '.ccb-session-namespace.json').write_text(
         json.dumps(
             {
                 'provider': 'codex',
-                'provider_authority_fingerprint': '',
+                'provider_authority_fingerprint': fingerprint,
                 'memory_projection_sha256': 'old-memory-sha',
             },
             ensure_ascii=False,
@@ -3190,6 +4139,8 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
                 'codex_session_id': 'legacy-session-id',
                 'codex_session_path': str(old_log),
                 'codex_memory_projection_sha256': 'old-memory-sha',
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
                 'start_cmd': resume_cmd,
                 'codex_start_cmd': resume_cmd,
             },
@@ -3204,7 +4155,7 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-memory-change')
 
-    assert cmd.endswith('resume legacy-session-id')
+    assert extract_resume_session_id(cmd) == 'legacy-session-id'
     data = json.loads(session_file.read_text(encoding='utf-8'))
     assert data['codex_session_id'] == 'legacy-session-id'
     assert data['codex_session_path'] == str(old_log)
@@ -3215,7 +4166,7 @@ def test_codex_launcher_build_start_cmd_resumes_when_memory_projection_changed(
     assert marker['memory_projection_sha256'] != 'old-memory-sha'
 
 
-def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_binding_proof_missing(tmp_path: Path) -> None:
+def test_codex_launcher_build_start_cmd_adopts_legacy_explicit_api_binding(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-binding-proof-missing'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3258,10 +4209,14 @@ def test_codex_launcher_build_start_cmd_skips_resume_when_explicit_api_binding_p
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-binding-proof-missing')
 
-    assert 'resume legacy-session-id' not in cmd
+    assert extract_resume_session_id(cmd) == 'legacy-session-id'
+    data = json.loads((ccb_dir / '.codex-agent1-session').read_text(encoding='utf-8'))
+    assert data['codex_session_id'] == 'legacy-session-id'
+    assert data['codex_provider_authority_fingerprint']
+    assert data['codex_session_authority_fingerprint'] == data['codex_provider_authority_fingerprint']
 
 
-def test_codex_launcher_build_start_cmd_rotates_legacy_explicit_session_namespace(
+def test_codex_launcher_build_start_cmd_adopts_legacy_explicit_session_namespace(
     monkeypatch, tmp_path: Path
 ) -> None:
     project_root = tmp_path / 'repo-codex-legacy-explicit-namespace'
@@ -3324,22 +4279,22 @@ def test_codex_launcher_build_start_cmd_rotates_legacy_explicit_session_namespac
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-legacy-explicit-namespace')
 
-    assert 'resume legacy-session-id' not in cmd
+    assert extract_resume_session_id(cmd) == 'legacy-session-id'
     assert session_root.is_dir()
-    assert not any(session_root.iterdir())
+    assert old_log.is_file()
     archive_root = profile_home / 'archived-sessions'
-    assert archive_root.is_dir()
-    assert any(archive_root.rglob('legacy-session.jsonl'))
+    assert not archive_root.exists()
     marker = json.loads((profile_home / '.ccb-session-namespace.json').read_text(encoding='utf-8'))
-    assert marker['provider_authority_fingerprint'] == fingerprint
+    assert marker['provider_authority_fingerprint'] == current_provider_authority_fingerprint(
+        profile,
+        runtime_dir=runtime_dir,
+    )
     data = json.loads(session_file.read_text(encoding='utf-8'))
-    assert 'codex_session_id' not in data
-    assert 'codex_session_path' not in data
-    assert 'codex_session_authority_fingerprint' not in data
-    assert data['old_codex_session_id'] == 'legacy-session-id'
-    assert data['old_codex_session_path'] == str(old_log)
-    assert 'resume legacy-session-id' not in data['start_cmd']
-    assert 'resume legacy-session-id' not in data['codex_start_cmd']
+    assert data['codex_session_id'] == 'legacy-session-id'
+    assert data['codex_session_path'] == str(old_log)
+    assert data['codex_session_authority_fingerprint'] == marker['provider_authority_fingerprint']
+    assert extract_resume_session_id(data['start_cmd']) == 'legacy-session-id'
+    assert extract_resume_session_id(data['codex_start_cmd']) == 'legacy-session-id'
 
 
 def test_codex_launcher_build_start_cmd_exports_inherited_api_env(monkeypatch, tmp_path: Path) -> None:
@@ -3402,17 +4357,19 @@ def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkey
         skill_body='plugin skill v1\n',
     )
     monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setenv('OPENAI_API_KEY', 'old-env-key')
 
     spec = _spec('agent1')
     command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
 
-    _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-1')
+    first_cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-1')
 
     isolated_home = runtime_dir / 'codex-state' / 'home'
     config_text = (isolated_home / 'config.toml').read_text(encoding='utf-8')
     assert 'model = "gpt-5"' in config_text
     assert 'external_migration = false' in config_text
     assert (isolated_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"old-key"}\n'
+    assert f'OPENAI_API_KEY={shlex.quote("old-env-key")}' in first_cmd
     assert (isolated_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
     assert (
         isolated_home / '.tmp' / 'plugins' / 'plugins' / 'weatherpromise' / 'skills' / 'weatherpromise' / 'SKILL.md'
@@ -3420,6 +4377,7 @@ def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkey
 
     (source_home / 'config.toml').write_text('model = "gpt-5.1"\n', encoding='utf-8')
     (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"new-key"}\n', encoding='utf-8')
+    monkeypatch.setenv('OPENAI_API_KEY', 'new-env-key')
     _write_codex_plugin_source(
         source_home,
         plugin_name='weatherpromise',
@@ -3428,12 +4386,14 @@ def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkey
         skill_body='plugin skill v2\n',
     )
 
-    _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-2')
+    second_cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-refresh-2')
 
     config_text = (isolated_home / 'config.toml').read_text(encoding='utf-8')
     assert 'model = "gpt-5.1"' in config_text
     assert 'external_migration = false' in config_text
     assert (isolated_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"new-key"}\n'
+    assert f'OPENAI_API_KEY={shlex.quote("new-env-key")}' in second_cmd
+    assert 'old-env-key' not in second_cmd
     assert (isolated_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v2\n'
     marketplace_payload = json.loads(
         (isolated_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json').read_text(encoding='utf-8')
@@ -3503,7 +4463,8 @@ def test_codex_launcher_build_start_cmd_reuses_legacy_session_root_from_persiste
     assert f'CODEX_HOME={shlex.quote(str(migrated_home))}' in cmd
     assert f'CODEX_SESSION_ROOT={shlex.quote(str(migrated_root))}' in cmd
     assert migrated_root.is_dir()
-    assert (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
+    assert not (migrated_root / '2026' / '04' / '19' / 'rollout-legacy-session.jsonl').is_file()
+    assert any((migrated_home / 'archived-sessions').rglob('rollout-legacy-session.jsonl'))
 
 
 def test_claude_launcher_build_start_cmd_uses_isolated_profile_api_env(monkeypatch, tmp_path: Path) -> None:
@@ -3898,6 +4859,10 @@ def test_claude_launcher_build_start_cmd_preserves_managed_auth_when_system_home
 def test_claude_launcher_build_start_cmd_projects_official_login_auth_into_managed_home(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(
+        'provider_backends.claude.launcher_runtime.home.platform.system',
+        lambda: 'Linux',
+    )
     project_root = tmp_path / 'repo-claude-login-auth'
     runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
     runtime_dir.mkdir(parents=True, exist_ok=True)

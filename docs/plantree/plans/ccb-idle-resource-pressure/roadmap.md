@@ -4,6 +4,27 @@ Date: 2026-06-23
 
 ## Done
 
+- Removed callback-ledger idle read amplification (2026-08-01): callback
+  latest-state queries now load append-only JSONL once and reuse an
+  inode/size/mtime-validated memory view; callback repair takes one locked
+  snapshot, skips historical submitted continuations unless their linked job
+  is still queued, skips pending edges whose child is still outstanding, and
+  batches crash-window job-history discovery once per target. A production-
+  shape 2,953-row/18.51 MB source-runtime smoke reduced `dispatcher_tick` from
+  about 26.8 seconds to about 0.25 ms and sampled idle `ccbd` at 0.4% CPU with
+  no physical reads.
+- Diagnosed and bounded a production pane-crash write storm (2026-07-30):
+  one 70.6-hour `ccbd` had written about 71.9 GB while two provider panes
+  crashed every 30 seconds, producing 19,602 crash logs. The source fix now
+  makes respawn provisional for 90 seconds, blocks dispatch during probing,
+  applies 30s/60s/120s/5m/10m/30m recovery backoff, opens a circuit after six
+  unstable attempts, retains at most 50 crash artifacts per runtime, clears
+  stale pane history before respawn, and skips unchanged helper-manifest
+  writes.
+- Added provider-specific containment for the observed causes: stale Claude
+  `--continue` state is repaired without touching authentication, while a
+  missing Codex managed app server fails closed and requests explicit
+  restart/remount.
 - Identified the idle pressure classes from live local diagnosis:
   daemon heartbeat writes, agent runtime/helper rewrite amplification, provider
   bridge/CLI residency, provider SQLite/session writes, and shared-cache disk
@@ -52,29 +73,32 @@ Date: 2026-06-23
 
 ## Next
 
-1. Finish PR234 full regression gates after the packaging and callback-hot-work
+1. Ship the callback-ledger fix, restart the affected project only after the
+   release is installed, and verify heartbeat freshness plus `/proc` CPU/read
+   deltas against the 2026-08-01 production baseline.
+2. Finish PR234 full regression gates after the packaging and callback-hot-work
    fixes: targeted provider/accelerator tests, ccbd idle tests, Rust
    fmt/test/build, compileall, diff check, and any affordable release script
    dry-run.
-2. Use [topics/worker-execution-goal.md](topics/worker-execution-goal.md) as
+3. Use [topics/worker-execution-goal.md](topics/worker-execution-goal.md) as
    the worker contract for phased landing, tests, source runtime validation, and
    plan-tree evidence updates.
-3. Add an ask-stability gate for every idle optimization:
+4. Add an ask-stability gate for every idle optimization:
    plain ask submit, queued ask, callback continuation, reply delivery, cancel,
    resubmit, and first ask after idle or suspend.
-4. Add measurement hooks for idle write bytes, runtime-store save count, helper
+5. Add measurement hooks for idle write bytes, runtime-store save count, helper
    manifest save count, provider process RSS, and provider idle age.
-5. Add content-equality and debounce guards around JSON runtime writes:
+6. Add content-equality and debounce guards around JSON runtime writes:
    `runtime.json`, `helper.json`, lifecycle records, and lease heartbeat.
-6. Introduce idle-mode heartbeat pacing:
+7. Introduce idle-mode heartbeat pacing:
    active interval, idle interval, deep-idle interval, and immediate wake on
    incoming socket requests.
-7. Move rebuildable runtime residue toward tmpfs:
+8. Move rebuildable runtime residue toward tmpfs:
    provider-runtime, FIFOs, bridge scratch state, activity snapshots, and
    transient pid/socket markers.
-8. Add provider idle suspend/resume for mounted-but-unused agents, starting with
+9. Add provider idle suspend/resume for mounted-but-unused agents, starting with
    an opt-in Codex policy.
-9. Add cleanup/compaction for provider-state:
+10. Add cleanup/compaction for provider-state:
    WAL checkpoint, session JSONL size policy, old cache pruning, and shared
    cache retention limits.
 

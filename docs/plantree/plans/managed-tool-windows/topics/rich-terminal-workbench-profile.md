@@ -161,16 +161,31 @@ user's global `~/.wezterm.lua`.
 Current visual contract:
 
 - use `wezterm.config_builder()` when available;
-- disable auto reload and update prompts for the managed workbench profile;
+- enable managed-config reload so CCB theme changes apply, while disabling
+  WezTerm update prompts for the managed workbench profile;
 - set compact workbench geometry with `initial_cols = 132`,
   `initial_rows = 38`, and tight window padding;
 - keep tab chrome simple with `use_fancy_tab_bar = false` and
   `hide_tab_bar_if_only_one_tab = true`;
-- set a quiet dark workbench palette in the generated config so user global
-  themes do not leak into CCB rich windows;
+- default to the quiet CCB dark workbench palette and expose only the complete
+  CCB-owned presets selected by `ccb theme` or **Appearance** in
+  `ccb config ui`; presets include ANSI/bright colors, and user-global WezTerm
+  themes never leak into CCB rich windows;
+- support an explicit `system` selection that maps OS dark/light appearance to
+  the CCB dark/latte palettes through `wezterm.gui.get_appearance()`;
 - launch with `start --always-new-process --no-auto-connect --cwd "$PWD"` so
   old WezTerm GUI/mux state does not silently reuse user-global or stale rich
   config, and the project directory remains the cwd authority;
+- launch the CCB-owned GUI in a new process session with stdin, stdout, and
+  stderr detached from the invoking shell. A long-lived WezTerm process must
+  not retain the parent TTY, write GUI diagnostics into `cmd`, receive its
+  foreground job-control signals, or cause unrelated stopped shell jobs to be
+  resumed or signalled;
+- on Linux Wayland, provision a private XCursor compatibility asset and prepend
+  a CCB-owned overlay to `XCURSOR_PATH`. The overlay supplies WezTerm's missing
+  `hand` name for the currently selected `XCURSOR_THEME`; it must not replace
+  that theme, force XWayland, or edit `~/.icons`, system icon themes, or desktop
+  settings;
 - never pass `-n` / `--skip-config` with `--config-file`.
 
 Current font contract:
@@ -292,6 +307,8 @@ Optional rich-media Yazi wrapper/profile.
 Capabilities:
 
 - all `ccb-yazi` behavior;
+- a compact two-column layout that hides the parent-directory column and keeps
+  the current-directory and preview columns at the default `4:3` proportion;
 - image preview when terminal support passes;
 - PDF page preview through Poppler image conversion;
 - video thumbnail preview through FFmpeg;

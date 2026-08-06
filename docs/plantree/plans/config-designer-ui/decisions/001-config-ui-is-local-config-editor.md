@@ -18,12 +18,20 @@ loader, and write only after preview and confirmation.
 The UI and `ccb-config` skill will not edit workflow memory, provider-state
 homes, installed role stores, or runtime records during ordinary config work.
 
+The panel may also expose the global CCB Appearance preference as a narrowly
+scoped exception. That control writes only
+`$XDG_CONFIG_HOME/ccb/theme.json` through the same service as `ccb theme`; it
+does not add theme fields to project TOML and does not read or write user
+terminal-emulator configuration.
+
 The sidebar may expose a config icon, but that icon will launch the same config
 UI command instead of becoming a second configuration authority.
 
 ## Consequences
 
 - Config remains file-backed and reviewable.
+- User appearance remains separately file-backed and global; it cannot drift
+  into a project config slot.
 - The browser UI can be added without making `ccbd` a web server.
 - Sidebar integration can stay thin and optional.
 - Workflow memory remains a separate explicit user request.

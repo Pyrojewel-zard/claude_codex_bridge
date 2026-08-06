@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from provider_backends.claude.launcher_runtime.history import ClaudeHistoryLocat
 from provider_backends.claude.launcher_runtime import session_paths as claude_session_paths
 from provider_backends.gemini import launcher as gemini_launcher
 from provider_backends.gemini.launcher_runtime import session_paths as gemini_session_paths
+from provider_backends.runtime_restore import ProviderRestoreTarget
+from provider_backends.session_authority import current_provider_authority_fingerprint
 
 
 def _spec(name: str, provider: str) -> AgentSpec:
@@ -48,6 +51,7 @@ def test_claude_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
     runtime_dir.mkdir(parents=True)
     workspace_path.mkdir(parents=True)
     managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
+    authority_fingerprint = current_provider_authority_fingerprint('claude', None, runtime_dir)
 
     session_path = project_root / '.ccb' / '.claude-reviewer-session'
     session_path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +61,7 @@ def test_claude_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
                 'work_dir': str(workspace_path),
                 'claude_session_id': 'claude-sess-1',
                 'claude_home': str(managed_home),
+                'claude_provider_authority_fingerprint': authority_fingerprint,
             },
             ensure_ascii=False,
         ),
@@ -119,6 +124,7 @@ def test_gemini_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
     workspace_path.mkdir(parents=True)
     managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'gemini' / 'home'
     managed_root = managed_home / '.gemini' / 'tmp'
+    authority_fingerprint = current_provider_authority_fingerprint('gemini', None, runtime_dir)
 
     session_path = project_root / '.ccb' / '.gemini-reviewer-session'
     session_path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,6 +135,7 @@ def test_gemini_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
                 'gemini_session_id': 'gemini-sess-1',
                 'gemini_home': str(managed_home),
                 'gemini_root': str(managed_root),
+                'gemini_provider_authority_fingerprint': authority_fingerprint,
             },
             ensure_ascii=False,
         ),
@@ -138,7 +145,7 @@ def test_gemini_restore_prefers_project_session_work_dir(monkeypatch, tmp_path: 
     project_hash = hashlib.sha256(str(workspace_path).encode()).hexdigest()
     chats_dir = managed_root / project_hash / 'chats'
     chats_dir.mkdir(parents=True)
-    (chats_dir / 'session-1.json').write_text('{}', encoding='utf-8')
+    (chats_dir / 'session-1.jsonl').write_text('{}\n', encoding='utf-8')
     monkeypatch.setenv('GEMINI_ROOT', str(tmp_path / 'ignored-root'))
 
     target = gemini_launcher._resolve_gemini_restore_target(
@@ -207,6 +214,45 @@ def test_gemini_build_start_cmd_skips_resume_without_history(tmp_path: Path) -> 
     )
 
     assert '--resume latest' not in cmd
+
+
+def test_gemini_build_start_cmd_imports_linked_continuation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'repo' / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'gemini'
+    runtime_dir.mkdir(parents=True)
+    old_session = tmp_path / 'managed home' / '.gemini' / 'tmp' / 'hash' / 'chats' / 'session-old.jsonl'
+    old_session.parent.mkdir(parents=True)
+    old_session.write_text('{}\n', encoding='utf-8')
+    monkeypatch.setattr(
+        gemini_launcher,
+        '_resolve_gemini_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(
+            run_cwd=runtime_dir,
+            has_history=False,
+            continuation_session_path=old_session,
+            continuation_mode='import',
+        ),
+    )
+    monkeypatch.setattr(
+        gemini_launcher,
+        'gemini_cli_supports_flag',
+        lambda cmd_parts, flag: flag == '--session-file',
+    )
+
+    prepared_state = _prepared(runtime_dir)
+    cmd = gemini_launcher.build_start_cmd(
+        ParsedStartCommand(project=None, agent_names=('reviewer',), restore=True, auto_permission=False),
+        _spec('reviewer', 'gemini'),
+        runtime_dir,
+        'launch-linked',
+        prepared_state=prepared_state,
+    )
+
+    assert f'--session-file {shlex.quote(str(old_session))}' in cmd
+    assert '--resume latest' not in cmd
+    assert prepared_state['ccb_continuation_launch_mode'] == 'import'
 
 
 def test_gemini_build_start_cmd_ignores_ambient_global_history_for_fresh_agent(monkeypatch, tmp_path: Path) -> None:

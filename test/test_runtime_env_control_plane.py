@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from provider_core.runtime_shared import provider_start_env_vars
 from runtime_env.control_plane import control_plane_env
+from terminal_runtime.env import isolated_tmux_env
 
 
 def test_control_plane_env_keeps_provider_api_env(monkeypatch) -> None:
@@ -66,6 +67,18 @@ def test_control_plane_env_keeps_source_test_wrapper_signals(monkeypatch) -> Non
     assert env['CCB_SOURCE_ALLOWED_ROOTS'] == '/tmp/source-test-root'
     assert env['CCB_TEST_ROOTS'] == '/tmp/extra-test-root'
     assert 'CCB_CALLER_ACTOR' not in env
+
+
+def test_control_plane_env_keeps_pi_execution_policy(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_PI_EXECUTION_MODE', 'headless')
+    monkeypatch.setenv('CCB_PI_EXTENSION_READY_TIMEOUT_S', '45')
+    monkeypatch.setenv('CCB_PI_NO_TERMINAL_TIMEOUT_S', '1800')
+
+    env = control_plane_env()
+
+    assert env['CCB_PI_EXECUTION_MODE'] == 'headless'
+    assert env['CCB_PI_EXTENSION_READY_TIMEOUT_S'] == '45'
+    assert env['CCB_PI_NO_TERMINAL_TIMEOUT_S'] == '1800'
 
 
 def test_control_plane_env_keeps_mobile_host_state_override(monkeypatch) -> None:
@@ -176,3 +189,111 @@ def test_control_plane_env_drops_outer_pythonpath(monkeypatch) -> None:
 
     assert 'PYTHONPATH' not in env
     assert env['PYTHONUNBUFFERED'] == '1'
+
+
+def test_managed_provider_caller_does_not_flow_back_into_control_plane(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    managed_home = (
+        tmp_path
+        / 'repo'
+        / '.ccb'
+        / 'agents'
+        / 'codex1'
+        / 'provider-state'
+        / 'codex'
+        / 'home'
+    )
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.setenv('CCB_SESSION_FILE', str(tmp_path / 'repo' / '.ccb' / '.codex-codex1-session'))
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'codex1')
+    monkeypatch.setenv('HOME', str(managed_home))
+    monkeypatch.setenv('USERPROFILE', str(managed_home))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(managed_home / '.config'))
+    monkeypatch.setenv('XDG_DATA_HOME', str(managed_home / '.local' / 'share'))
+    monkeypatch.setenv('XDG_STATE_HOME', str(managed_home / '.local' / 'state'))
+    monkeypatch.setenv(
+        'XDG_CACHE_HOME',
+        str(source_home / '.cache' / 'ccb' / 'provider-cache' / 'gemini' / 'xdg'),
+    )
+    monkeypatch.setenv('CODEX_HOME', str(managed_home))
+    monkeypatch.setenv('OPENAI_API_KEY', 'managed-agent-key')
+
+    env = control_plane_env()
+
+    assert env['HOME'] == str(source_home)
+    assert env['USERPROFILE'] == str(source_home)
+    assert env['XDG_CONFIG_HOME'] == str(source_home / '.config')
+    assert env['XDG_DATA_HOME'] == str(source_home / '.local' / 'share')
+    assert env['XDG_STATE_HOME'] == str(source_home / '.local' / 'state')
+    assert env['XDG_CACHE_HOME'] == str(source_home / '.cache')
+    assert env['CCB_SOURCE_HOME'] == str(source_home)
+    assert 'CCB_SESSION_FILE' not in env
+    assert 'CCB_CALLER_ACTOR' not in env
+    assert 'CODEX_HOME' not in env
+    assert 'OPENAI_API_KEY' not in env
+
+
+def test_tmux_control_env_scrubs_provider_runtime_but_keeps_safe_shell_state(
+    tmp_path,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    managed_home = (
+        tmp_path
+        / '.ccb'
+        / 'agents'
+        / 'cursor1'
+        / 'provider-state'
+        / 'cursor'
+        / 'home'
+    )
+    env = isolated_tmux_env(
+        {
+            'CCB_SOURCE_HOME': str(source_home),
+            'CCB_SESSION_FILE': str(tmp_path / '.ccb' / '.cursor-cursor1-session'),
+            'CCB_CALLER_ACTOR': 'cursor1',
+            'HOME': str(managed_home),
+            'PATH': '/usr/bin',
+            'SAFE_CUSTOM_ENV': 'keep-me',
+            'AGENT_CLI_CREDENTIAL_STORE': 'file',
+            'OPENAI_API_KEY': 'managed-agent-key',
+            'TMUX': '/tmp/outer,1,0',
+            'TMUX_PANE': '%9',
+        }
+    )
+
+    assert env['HOME'] == str(source_home)
+    assert env['PATH'] == '/usr/bin'
+    assert env['SAFE_CUSTOM_ENV'] == 'keep-me'
+    assert 'CCB_SESSION_FILE' not in env
+    assert 'CCB_CALLER_ACTOR' not in env
+    assert 'AGENT_CLI_CREDENTIAL_STORE' not in env
+    assert 'OPENAI_API_KEY' not in env
+    assert 'TMUX' not in env
+    assert 'TMUX_PANE' not in env
+
+
+def test_control_plane_restores_source_home_for_nonstandard_managed_home(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    account_home = tmp_path / 'account-home'
+    managed_home = tmp_path / '.ccb_agy_homes' / 'runtime-id'
+    monkeypatch.setenv('HOME', str(managed_home))
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'agy1')
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    import provider_core.source_home as source_home_module
+
+    if source_home_module.pwd is not None:
+        monkeypatch.setattr(
+            source_home_module.pwd,
+            'getpwuid',
+            lambda _uid: type('Account', (), {'pw_dir': str(account_home)})(),
+        )
+
+    env = control_plane_env()
+
+    assert env['HOME'] == str(account_home)
+    assert 'CCB_CALLER_ACTOR' not in env

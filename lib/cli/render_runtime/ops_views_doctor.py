@@ -196,6 +196,23 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
         lines.append(f'runtime_warning: {warning}')
     for error in ccbd.get('diagnostic_errors') or ():
         lines.append(f'ccbd_diagnostic_error: {error}')
+    diagnostics = payload.get('active_inbound_diagnostics') or ()
+    lines.append(f'active_inbound_diagnostic_count: {len(diagnostics)}')
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping):
+            continue
+        lines.append(
+            'active_inbound_diagnostic: '
+            f'condition={diagnostic.get("condition_kind")} '
+            f'reason={diagnostic.get("reason")} '
+            f'job={diagnostic.get("job_id")} '
+            f'inbound={diagnostic.get("inbound_event_id")} '
+            f'lease={diagnostic.get("lease_state")} '
+            f'observed_for_s={diagnostic.get("observed_for_s")} '
+            f'required_s={diagnostic.get("required_observation_s")} '
+            f'recommended_action={diagnostic.get("recommended_action")} '
+            f'automatic_action={diagnostic.get("automatic_action")}'
+        )
     for agent in payload['agents']:
         lines.append(
             f'agent: name={agent["agent_name"]} health={agent["health"]} provider={agent["provider"]} completion={agent["completion_family"]}'
@@ -253,6 +270,7 @@ def _format_mapping(value: object) -> str:
 
 
 def render_doctor_storage(payload: Mapping[str, object]) -> tuple[str, ...]:
+    user_provider_cache_bytes = payload.get('user_provider_cache_bytes')
     lines = [
         'storage_status: ok',
         f'storage_schema_version: {payload.get("schema_version")}',
@@ -264,6 +282,13 @@ def render_doctor_storage(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'storage_shared_cache_root_usable: {payload.get("shared_cache_root_usable", False)}',
         f'storage_shared_cache_status: {payload.get("shared_cache_status")}',
         f'storage_shared_cache_reason: {payload.get("shared_cache_reason")}',
+        f'storage_legacy_provider_cache_root: {payload.get("legacy_provider_cache_root") or ""}',
+        f'storage_legacy_provider_cache_present: {payload.get("legacy_provider_cache_present", False)}',
+        f'storage_legacy_provider_cache_bytes: {payload.get("legacy_provider_cache_bytes", 0)}',
+        f'storage_user_provider_cache_root: {payload.get("user_provider_cache_root") or ""}',
+        f'storage_user_provider_cache_present: {payload.get("user_provider_cache_present", False)}',
+        f'storage_user_provider_cache_bytes: {user_provider_cache_bytes if user_provider_cache_bytes is not None else ""}',
+        f'storage_user_provider_cache_size_status: {payload.get("user_provider_cache_size_status") or ""}',
         f'storage_total_bytes: {payload.get("total_bytes")}',
         f'storage_total_count: {payload.get("total_count")}',
     ]

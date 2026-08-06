@@ -67,7 +67,10 @@ def build_start_cmd(
     provider_start_parts_fn,
     cli_supports_flag_fn,
     is_root_user_fn,
+    prepared_state: dict[str, object] | None = None,
 ) -> str:
+    launch_context = prepared_state if isinstance(prepared_state, dict) else {}
+    launch_context.pop('ccb_continuation_launch_mode', None)
     root_user = bool(is_root_user_fn())
     profile = load_profile_fn(runtime_dir)
     restore_target = resolve_restore_target_fn(
@@ -89,6 +92,18 @@ def build_start_cmd(
         _ensure_bypass_permission_acceptance(home_overrides, project_root=restore_target.run_cwd)
     env_prefix = join_env_prefix(
         build_env_prefix_fn(profile=profile, extra_env=spec.env),
+        export_env_clause(
+            {
+                'DISABLE_AUTOUPDATER': '1',
+                # A managed Claude process inherits a private credential copy.
+                # Disable /login and /logout so neither command can reach an
+                # ambient OS credential backend and mutate the user's external
+                # login. Authentication changes are made outside CCB and
+                # inherited again on the next managed start.
+                'DISABLE_LOGIN_COMMAND': '1',
+                'DISABLE_LOGOUT_COMMAND': '1',
+            }
+        ),
         export_env_clause(provider_user_session_env()),
         export_env_clause(home_overrides),
         export_env_clause(_ROOT_SANDBOX_ENV if root_user else {}),
@@ -115,7 +130,20 @@ def build_start_cmd(
             cmd_parts.extend(['--permission-mode', 'bypassPermissions'])
         else:
             _append_unique_flag(cmd_parts, _ROOT_SKIP_PERMISSIONS_FLAG, spec.startup_args)
-    if restore_target.has_history:
+    if (
+        restore_target.continuation_mode == 'fork'
+        and restore_target.continuation_session_id
+        and cli_supports_flag_fn(cmd_parts, '--fork-session')
+    ):
+        launch_context['ccb_continuation_launch_mode'] = 'fork'
+        cmd_parts.extend(
+            [
+                '--resume',
+                restore_target.continuation_session_id,
+                '--fork-session',
+            ]
+        )
+    elif restore_target.has_history:
         cmd_parts.append('--continue')
     cmd_parts.extend(spec.startup_args)
 
@@ -181,6 +209,13 @@ def build_session_payload(
         payload['claude_home'] = str(layout.home_root)
         payload['claude_projects_root'] = str(layout.projects_root)
         payload['claude_session_env_root'] = str(layout.session_env_root)
+    authority_fingerprint = str(
+        prepared_state.get('claude_provider_authority_fingerprint') or ''
+    ).strip()
+    if authority_fingerprint:
+        payload['claude_provider_authority_fingerprint'] = authority_fingerprint
+    if str(prepared_state.get('ccb_continuation_launch_mode') or '').strip() == 'fork':
+        payload['ccb_continuation_launch_mode'] = 'fork'
     return payload
 
 
@@ -274,7 +309,12 @@ def _ensure_bypass_permission_acceptance(home_overrides: dict[str, str], *, proj
     home = str(home_overrides.get('HOME') or '').strip()
     if not home:
         return
-    path = Path(home).expanduser() / '.claude.json'
+    config_dir = str(home_overrides.get('CLAUDE_CONFIG_DIR') or '').strip()
+    path = (
+        Path(config_dir).expanduser() / '.claude.json'
+        if config_dir
+        else Path(home).expanduser() / '.claude.json'
+    )
     payload = {}
     if path.is_file():
         try:

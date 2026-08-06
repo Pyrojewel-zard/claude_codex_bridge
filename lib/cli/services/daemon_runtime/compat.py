@@ -5,6 +5,9 @@ import time
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.socket_client import CcbdClient, CcbdClientError
+from cli.services.config_restart_intent import (
+    config_restart_required_for_inspection,
+)
 
 from .models import CcbdServiceError, DaemonHandle
 
@@ -47,6 +50,7 @@ def connect_compatible_daemon(
     inspection,
     *,
     restart_on_mismatch: bool,
+    honor_config_restart_intent: bool = False,
     socket_path=None,
     probe_client_factory=CcbdClient,
     runtime_client_factory=None,
@@ -57,6 +61,20 @@ def connect_compatible_daemon(
         return None
     effective_socket_path = socket_path or context.paths.ccbd_socket_path
     runtime_client_factory = runtime_client_factory or probe_client_factory
+    if (
+        honor_config_restart_intent
+        and restart_on_mismatch
+        and config_restart_required_for_inspection(context, inspection)
+    ):
+        if shutdown_incompatible_daemon_fn is None:
+            raise ValueError(
+                'shutdown_incompatible_daemon_fn is required for a pending config restart'
+            )
+        shutdown_incompatible_daemon_fn(
+            context,
+            runtime_client_factory(effective_socket_path),
+        )
+        return None
     if inspection_matches_project_config(context, inspection):
         return DaemonHandle(
             client=runtime_client_factory(effective_socket_path),

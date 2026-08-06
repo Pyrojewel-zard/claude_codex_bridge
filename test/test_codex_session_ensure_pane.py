@@ -77,6 +77,57 @@ class RevokedAuthTmuxBackend(FakeTmuxBackend):
         )
 
 
+class HelperUnavailableTmuxBackend(FakeTmuxBackend):
+    def save_crash_log(self, pane_id: str, crash_log_path: str, *, lines: int = 1000) -> None:
+        super().save_crash_log(pane_id, crash_log_path, lines=lines)
+        Path(crash_log_path).write_text(
+            'Error: failed to connect to remote app server\n',
+            encoding='utf-8',
+        )
+
+
+def test_codex_ensure_pane_blocks_when_managed_helper_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_path = tmp_path / '.codex-session'
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir()
+    session_path.write_text(
+        json.dumps(
+            {
+                'ccb_session_id': 'test-session',
+                'terminal': 'tmux',
+                'pane_id': '%1',
+                'runtime_dir': str(runtime_dir),
+                'work_dir': str(tmp_path),
+                'active': True,
+                'start_cmd': 'codex resume deadbeef',
+            }
+        ),
+        encoding='utf-8',
+    )
+    backend = HelperUnavailableTmuxBackend()
+    backend.alive = {'%1': False}
+    backend.exists = {'%1': True}
+    monkeypatch.setattr(codex_session, 'get_backend_for_session', lambda data: backend)
+    monkeypatch.setattr(
+        codex_session,
+        'find_project_session_file',
+        lambda work_dir, instance=None: session_path,
+    )
+
+    session = codex_session.load_project_session(tmp_path)
+    assert session is not None
+    ok, detail = session.ensure_pane()
+
+    assert ok is False
+    assert 'app server' in detail
+    assert backend.respawned == []
+    persisted = json.loads(session_path.read_text(encoding='utf-8'))
+    assert persisted['pane_recovery_block']['reason'] == 'provider_helper_unavailable'
+
+
 def test_codex_ensure_pane_respawns_dead_pane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When pane is dead, ensure_pane should respawn it and update session file."""
     session_path = tmp_path / ".codex-session"

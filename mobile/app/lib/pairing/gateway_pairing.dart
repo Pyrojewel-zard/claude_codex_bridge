@@ -5,6 +5,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../transport/route_provider.dart';
 
+const gatewayPairingConnectionCodePrefix = 'ccb1_';
+const gatewayCompactRelayQrPrefix = 'ccbr1_';
+const _maxGatewayPairingTextLength = 16 * 1024;
+
 class GatewayPairingException implements Exception {
   GatewayPairingException(this.uri, this.statusCode, this.message);
 
@@ -27,6 +31,13 @@ class GatewayPairingPayload {
     required this.scopes,
     this.projectId,
     this.expiresAt,
+    this.hostId,
+    this.websocketUrl,
+    this.relayMode,
+    this.hostFingerprint,
+    this.relayBootstrap,
+    this.relayBootstrapExpiresAt,
+    this.relayBootstrapSingleUse = false,
   });
 
   final String pairingCode;
@@ -36,33 +47,95 @@ class GatewayPairingPayload {
   final Set<String> scopes;
   final String? projectId;
   final DateTime? expiresAt;
+  final String? hostId;
+  final Uri? websocketUrl;
+  final RelayDeploymentMode? relayMode;
+  final String? hostFingerprint;
+  final RelayPhoneSessionBootstrap? relayBootstrap;
+  final DateTime? relayBootstrapExpiresAt;
+  final bool relayBootstrapSingleUse;
 
   factory GatewayPairingPayload.fromJson(Map<String, Object?> json) {
+    final routeProvider = RouteProviderKind.fromWireName(
+      _requiredText(json['route_provider'], 'route_provider'),
+    );
+    final gatewayUrl = _requiredUri(json['gateway_url'], 'gateway_url');
+    final websocketUrl = _optionalUri(json['websocket_url']);
+    final relayMode = RelayDeploymentMode.maybeFromJson(json['relay_mode']);
+    validateRelayDeployment(
+      kind: routeProvider,
+      mode: relayMode,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+    );
     return GatewayPairingPayload(
       pairingCode: _requiredText(json['pairing_code'], 'pairing_code'),
       claimEndpoint: _requiredUri(json['claim_endpoint'], 'claim_endpoint'),
-      routeProvider: RouteProviderKind.fromWireName(
-        _requiredText(json['route_provider'], 'route_provider'),
-      ),
-      gatewayUrl: _requiredUri(json['gateway_url'], 'gateway_url'),
+      routeProvider: routeProvider,
+      gatewayUrl: gatewayUrl,
       scopes: _stringSet(json['scopes']),
       projectId: _optionalText(json['project_id']),
       expiresAt: _optionalDateTime(json['expires_at']),
+      hostId: _optionalText(json['host_id']),
+      websocketUrl: websocketUrl,
+      relayMode: relayMode,
+      hostFingerprint: _optionalText(json['server_fingerprint']),
+      relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(json),
+      relayBootstrapExpiresAt: _optionalDateTime(
+        json['relay_bootstrap_expires_at'],
+      ),
+      relayBootstrapSingleUse: json['relay_bootstrap_single_use'] == true,
     );
   }
 
   factory GatewayPairingPayload.fromQrText(String text) {
+    return GatewayPairingPayload.fromConnectionText(text);
+  }
+
+  factory GatewayPairingPayload.fromConnectionText(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
-      throw const FormatException('pairing QR payload is empty');
+      throw const FormatException('connection code is empty');
     }
-    final decoded = jsonDecode(trimmed);
+    if (trimmed.length > _maxGatewayPairingTextLength) {
+      throw const FormatException('connection code is too large');
+    }
+    if (trimmed.startsWith(gatewayCompactRelayQrPrefix)) {
+      return _compactRelayPairingPayload(trimmed);
+    }
+    var payloadText = trimmed;
+    if (trimmed.startsWith(gatewayPairingConnectionCodePrefix)) {
+      final encoded = trimmed.substring(
+        gatewayPairingConnectionCodePrefix.length,
+      );
+      if (encoded.isEmpty) {
+        throw const FormatException('connection code payload is empty');
+      }
+      try {
+        final decodedBytes = base64Url.decode(base64Url.normalize(encoded));
+        if (decodedBytes.length > _maxGatewayPairingTextLength) {
+          throw const FormatException('connection code payload is too large');
+        }
+        payloadText = utf8.decode(decodedBytes, allowMalformed: false);
+      } on FormatException {
+        throw const FormatException('connection code is invalid');
+      }
+    }
+    final decoded = jsonDecode(payloadText);
     if (decoded is Map) {
       return GatewayPairingPayload.fromJson({
         for (final entry in decoded.entries) entry.key.toString(): entry.value,
       });
     }
-    throw const FormatException('pairing QR payload must be a JSON object');
+    throw const FormatException(
+      'connection code must contain a pairing object',
+    );
+  }
+
+  String toConnectionCode() {
+    final payload = utf8.encode(jsonEncode(toJson()));
+    final encoded = base64Url.encode(payload).replaceFirst(RegExp(r'=+$'), '');
+    return '$gatewayPairingConnectionCodePrefix$encoded';
   }
 
   Map<String, Object?> toJson() {
@@ -74,8 +147,113 @@ class GatewayPairingPayload {
       'scopes': scopes.toList()..sort(),
       if (_hasText(projectId)) 'project_id': projectId,
       if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
+      if (_hasText(hostId)) 'host_id': hostId,
+      if (websocketUrl != null) 'websocket_url': websocketUrl.toString(),
+      if (relayMode != null) 'relay_mode': relayMode!.wireName,
+      if (_hasText(hostFingerprint)) 'server_fingerprint': hostFingerprint,
+      if (relayBootstrap != null) ...relayBootstrap!.toJson(),
+      if (relayBootstrapExpiresAt != null)
+        'relay_bootstrap_expires_at':
+            relayBootstrapExpiresAt!.toUtc().toIso8601String(),
+      if (relayBootstrapSingleUse) 'relay_bootstrap_single_use': true,
     };
   }
+}
+
+GatewayPairingPayload _compactRelayPairingPayload(String text) {
+  final fields = text.substring(gatewayCompactRelayQrPrefix.length).split('|');
+  if (fields.length != 5 || fields.any((value) => value.trim().isEmpty)) {
+    throw const FormatException('compact relay QR is incomplete');
+  }
+  final [
+    pairingCode,
+    clientPrivateKeyB64,
+    hostFingerprint,
+    modeCode,
+    rendezvousCapability,
+  ] = fields;
+  final relayMode = switch (modeCode) {
+    'o' => RelayDeploymentMode.official,
+    's' => RelayDeploymentMode.selfHosted,
+    _ => throw const FormatException('compact relay QR mode is invalid'),
+  };
+  final capability = _relayCapabilityPayload(rendezvousCapability);
+  if (_optionalText(capability['typ']) != 'ccb-relay-rv-v1') {
+    throw const FormatException('compact relay QR capability type is invalid');
+  }
+  final websocketUrl = _requiredUri(
+    capability['aud'],
+    'relay capability audience',
+  );
+  if ((websocketUrl.scheme != 'wss' && websocketUrl.scheme != 'ws') ||
+      !websocketUrl.hasAuthority ||
+      websocketUrl.userInfo.isNotEmpty ||
+      (websocketUrl.path.isNotEmpty && websocketUrl.path != '/') ||
+      websocketUrl.hasQuery ||
+      websocketUrl.hasFragment) {
+    throw const FormatException('compact relay QR audience is invalid');
+  }
+  final gatewayUrl = Uri(
+    scheme: websocketUrl.scheme == 'wss' ? 'https' : 'http',
+    host: websocketUrl.host,
+    port: websocketUrl.hasPort ? websocketUrl.port : null,
+  );
+  final expiresAt = _relayCapabilityExpiry(capability['exp']);
+  return GatewayPairingPayload.fromJson({
+    'pairing_code': pairingCode,
+    'claim_endpoint': gatewayUrl.resolve('/v1/pairing/claim').toString(),
+    'route_provider': RouteProviderKind.relay.wireName,
+    'gateway_url': gatewayUrl.toString(),
+    'scopes': const <String>[],
+    'host_id': _requiredText(capability['host_id'], 'relay capability host_id'),
+    'websocket_url': websocketUrl.toString(),
+    'relay_mode': relayMode.wireName,
+    'server_fingerprint': hostFingerprint,
+    'relay_session_id': _requiredText(
+      capability['session_id'],
+      'relay capability session_id',
+    ),
+    'relay_client_private_key_b64': clientPrivateKeyB64,
+    'relay_phone_nonce_b64': _requiredText(
+      capability['phone_nonce_b64'],
+      'relay capability phone_nonce_b64',
+    ),
+    'relay_rendezvous_capability': rendezvousCapability,
+    'relay_bootstrap_expires_at': expiresAt.toIso8601String(),
+    'relay_bootstrap_single_use': true,
+  });
+}
+
+Map<String, Object?> _relayCapabilityPayload(String capability) {
+  final segments = capability.split('.');
+  if (segments.length != 3 || segments.any((segment) => segment.isEmpty)) {
+    throw const FormatException('compact relay QR capability is invalid');
+  }
+  try {
+    final bytes = base64Url.decode(base64Url.normalize(segments[1]));
+    final decoded = jsonDecode(utf8.decode(bytes, allowMalformed: false));
+    if (decoded is Map) {
+      return {
+        for (final entry in decoded.entries) entry.key.toString(): entry.value,
+      };
+    }
+  } on FormatException {
+    // Report one stable pairing error without exposing capability contents.
+  }
+  throw const FormatException('compact relay QR capability is invalid');
+}
+
+DateTime _relayCapabilityExpiry(Object? value) {
+  if (value is! num ||
+      !value.isFinite ||
+      value <= 0 ||
+      value != value.truncateToDouble()) {
+    throw const FormatException('compact relay QR expiry is invalid');
+  }
+  return DateTime.fromMillisecondsSinceEpoch(
+    value.toInt() * Duration.millisecondsPerSecond,
+    isUtc: true,
+  );
 }
 
 class GatewayPairedHost {
@@ -106,6 +284,7 @@ class GatewayPairedHost {
   factory GatewayPairedHost.fromClaimJson(
     Map<String, Object?> json, {
     required GatewayPairingPayload pairing,
+    String? relayPhoneAuthPrivateKeyB64,
   }) {
     final hostProfile = _map(json['host_profile']);
     final device = _map(json['device']);
@@ -119,15 +298,50 @@ class GatewayPairedHost {
         _optionalText(hostProfile['host_id']) ??
         projectId ??
         _requiredText(device['project_id'], 'device.project_id');
+    final claimedAccessGrant = _optionalText(hostProfile['relay_access_grant']);
+    final relayAccess =
+        _hasText(claimedAccessGrant) && _hasText(relayPhoneAuthPrivateKeyB64)
+            ? RelayPhoneAccessCredentials(
+              accessGrant: claimedAccessGrant!,
+              phoneAuthPrivateKeyB64: relayPhoneAuthPrivateKeyB64!,
+            )
+            : RelayPhoneAccessCredentials.maybeFromJson(hostProfile);
+    final routeKind = RouteProviderKind.fromWireName(
+      _optionalText(hostProfile['route_provider']) ??
+          pairing.routeProvider.wireName,
+    );
+    final gatewayUrl =
+        _optionalUri(hostProfile['gateway_url']) ?? pairing.gatewayUrl;
+    final websocketUrl =
+        _optionalUri(hostProfile['websocket_url']) ?? pairing.websocketUrl;
+    final claimedRelayMode = RelayDeploymentMode.maybeFromJson(
+      hostProfile['relay_mode'],
+    );
+    if (claimedRelayMode != null &&
+        pairing.relayMode != null &&
+        claimedRelayMode != pairing.relayMode) {
+      throw const FormatException(
+        'claimed relay deployment mode does not match pairing',
+      );
+    }
+    final relayMode = claimedRelayMode ?? pairing.relayMode;
+    validateRelayDeployment(
+      kind: routeKind,
+      mode: relayMode,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+    );
     final routeProvider = RouteProvider(
-      kind: RouteProviderKind.fromWireName(
-        _optionalText(hostProfile['route_provider']) ??
-            pairing.routeProvider.wireName,
-      ),
-      gatewayUrl:
-          _optionalUri(hostProfile['gateway_url']) ?? pairing.gatewayUrl,
-      websocketUrl: _optionalUri(hostProfile['websocket_url']),
+      kind: routeKind,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+      relayMode: relayMode,
       hostFingerprint: _optionalText(hostProfile['server_fingerprint']),
+      relayBootstrap:
+          relayAccess == null
+              ? RelayPhoneSessionBootstrap.maybeFromJson(hostProfile)
+              : null,
+      relayAccess: relayAccess,
       capabilities: _stringSet(hostProfile['capabilities']),
       diagnostics: _stringMap(hostProfile['diagnostics']),
     );
@@ -149,13 +363,28 @@ class GatewayPairedHost {
 
   factory GatewayPairedHost.fromSecureJson(Map<String, Object?> json) {
     final profileJson = _map(json['profile']);
+    final routeKind = RouteProviderKind.fromWireName(
+      _requiredText(profileJson['route_provider'], 'route_provider'),
+    );
+    final gatewayUrl = _requiredUri(profileJson['gateway_url'], 'gateway_url');
+    final websocketUrl = _optionalUri(profileJson['websocket_url']);
+    final relayMode = RelayDeploymentMode.maybeFromJson(
+      profileJson['relay_mode'],
+    );
+    validateRelayDeployment(
+      kind: routeKind,
+      mode: relayMode,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+    );
     final routeProvider = RouteProvider(
-      kind: RouteProviderKind.fromWireName(
-        _requiredText(profileJson['route_provider'], 'route_provider'),
-      ),
-      gatewayUrl: _requiredUri(profileJson['gateway_url'], 'gateway_url'),
-      websocketUrl: _optionalUri(profileJson['websocket_url']),
+      kind: routeKind,
+      gatewayUrl: gatewayUrl,
+      websocketUrl: websocketUrl,
+      relayMode: relayMode,
       hostFingerprint: _optionalText(profileJson['server_fingerprint']),
+      relayBootstrap: RelayPhoneSessionBootstrap.maybeFromJson(profileJson),
+      relayAccess: RelayPhoneAccessCredentials.maybeFromJson(profileJson),
       capabilities: _stringSet(profileJson['capabilities']),
       diagnostics: _stringMap(profileJson['diagnostics']),
     );

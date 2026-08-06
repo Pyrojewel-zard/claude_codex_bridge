@@ -3,6 +3,10 @@
 Date: 2026-06-17
 Status: In Progress
 
+Deployment modes: [official and self-hosted Relay](../../../relay/relay-deployment-modes.md).
+Guided setup: [interactive mobile route onboarding](topics/mobile-update-interactive-route-onboarding.md).
+Phone pairing: [scan-or-code onboarding](topics/mobile-pairing-scan-or-code.md).
+
 ## Purpose
 
 Design a mobile and iPad remote-control surface for CCB that connects to
@@ -75,6 +79,10 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
   architecture while adopting Paseo-inspired host persistence, unified
   reconnect, cursor catch-up, Push, presence, and optional foreground-service
   behavior with strict emulator and physical-phone evidence.
+- [topics/lan-network-awareness-and-recovery.md](topics/lan-network-awareness-and-recovery.md)
+  is the execute-ready LAN reliability package for phone-side Wi-Fi/VPN
+  guidance, reconnect diagnostics, terminal heartbeat, and DHCP/address-change
+  recovery instructions.
 - [roadmap.md](roadmap.md) tracks likely implementation phases.
 - [implementation-status.md](implementation-status.md) is the current
   execution handoff for the active landing phase.

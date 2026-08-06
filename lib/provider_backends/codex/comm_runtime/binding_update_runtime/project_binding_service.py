@@ -152,9 +152,9 @@ def _apply_binding_updates(
         updated = True
         binding_changed = True
     if path_str or session_id:
-        before = str(data.get("codex_session_authority_fingerprint") or "").strip()
+        before = dict(data)
         remember_bound_session_authority(data)
-        if str(data.get("codex_session_authority_fingerprint") or "").strip() != before:
+        if data != before:
             updated = True
     if ccb_project_id and data.get("ccb_project_id") != ccb_project_id:
         data["ccb_project_id"] = ccb_project_id

@@ -12,6 +12,47 @@ from provider_backends.claude.session import ClaudeProjectSession
 from project.identity import normalize_work_dir
 
 
+def test_claude_missing_session_recovery_drops_only_managed_continue_binding(tmp_path: Path) -> None:
+    session_file = tmp_path / '.claude-session'
+    session = ClaudeProjectSession(
+        session_file=session_file,
+        data={
+            'work_dir': str(tmp_path),
+            'start_cmd': (
+                'export ANTHROPIC_BASE_URL=https://example.invalid; '
+                'claude --continue --setting-sources user,project,local'
+            ),
+            'claude_start_cmd': (
+                'export ANTHROPIC_BASE_URL=https://example.invalid; '
+                'claude --continue --setting-sources user,project,local'
+            ),
+            'claude_session_id': 'missing-session',
+            'claude_session_path': str(tmp_path / 'missing-session.jsonl'),
+        },
+    )
+
+    result = session.prepare_crash_recovery('provider_session_missing')
+
+    assert result is not None and result[0] is True
+    persisted = json.loads(session_file.read_text(encoding='utf-8'))
+    assert '--continue' not in persisted['start_cmd']
+    assert 'ANTHROPIC_BASE_URL=https://example.invalid' in persisted['start_cmd']
+    assert persisted['claude_session_id'] == ''
+    assert persisted['claude_session_path'] == ''
+
+
+def test_claude_missing_session_recovery_fails_closed_without_managed_continue(tmp_path: Path) -> None:
+    session = ClaudeProjectSession(
+        session_file=tmp_path / '.claude-session',
+        data={'work_dir': str(tmp_path), 'start_cmd': 'claude --verbose'},
+    )
+
+    result = session.prepare_crash_recovery('provider_session_missing')
+
+    assert result is not None and result[0] is False
+    assert 'no CCB-owned --continue' in result[1]
+
+
 def test_claude_session_update_backfills_work_dir_fields(tmp_path: Path) -> None:
     cfg = tmp_path / ".ccb"
     cfg.mkdir(parents=True, exist_ok=True)
@@ -30,6 +71,29 @@ def test_claude_session_update_backfills_work_dir_fields(tmp_path: Path) -> None
     data = json.loads(session_file.read_text(encoding="utf-8"))
     assert data["work_dir"] == str(tmp_path)
     assert data["work_dir_norm"] == normalize_work_dir(str(tmp_path))
+
+
+def test_claude_session_update_binds_new_fork_to_current_authority(tmp_path: Path) -> None:
+    session_file = tmp_path / '.ccb' / '.claude-session'
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text('{}', encoding='utf-8')
+    session = ClaudeProjectSession(
+        session_file=session_file,
+        data={
+            'claude_provider_authority_fingerprint': 'authority-b',
+            'ccb_resume_compatibility': 'linked_continuation',
+            'ccb_continuation_launch_mode': 'fork',
+        },
+    )
+    session_path = tmp_path / 'managed-home' / '.claude' / 'projects' / 'workspace' / 'native-b.jsonl'
+    session_path.parent.mkdir(parents=True)
+    session_path.write_text('{}\n', encoding='utf-8')
+
+    session.update_claude_binding(session_path=session_path, session_id='native-b')
+
+    data = json.loads(session_file.read_text(encoding='utf-8'))
+    assert data['claude_session_authority_fingerprint'] == 'authority-b'
+    assert data['ccb_resume_compatibility'] == 'native_fork_continuation'
 
 
 def test_registry_direct_update_backfills_work_dir_fields(tmp_path: Path) -> None:

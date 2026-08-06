@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tarfile
 from pathlib import Path
@@ -18,9 +19,32 @@ class _TtyOutput(StringIO):
         return True
 
 
+class _TtyInput(StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 class _PipeOutput(StringIO):
     def isatty(self) -> bool:
         return False
+
+
+def _npm_managed_release(monkeypatch, tmp_path: Path, *, version: str = "8.2.1") -> Path:
+    package_root = tmp_path / "npm-package"
+    script_root = package_root / ".ccb-release" / "ccb-linux-x86_64"
+    script_root.mkdir(parents=True)
+    (script_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (script_root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (script_root / "ccb").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (package_root / "package.json").write_text(
+        json.dumps({"name": "@seemseam/ccb", "version": version}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CCB_INSTALL_KIND", "npm")
+    monkeypatch.setenv("CCB_NPM_PACKAGE_NAME", "@seemseam/ccb")
+    monkeypatch.setenv("CCB_NPM_PACKAGE_ROOT", str(package_root))
+    monkeypatch.setenv("CCB_NPM_PACKAGE_VERSION", version)
+    return script_root
 
 
 def _clear_post_update_env(monkeypatch) -> None:
@@ -29,6 +53,12 @@ def _clear_post_update_env(monkeypatch) -> None:
         "CCB_POST_UPDATE_REQUIRED",
         "CCB_POST_UPDATE_TIMEOUT_SECONDS",
         "CCB_ENTRYPOINT_SMOKE_TIMEOUT_SECONDS",
+        "CCB_PROVIDER_UPDATE_FLOW",
+        "CCB_PROVIDER_UPDATE_MODE",
+        "CCB_UPDATE_PROVIDERS",
+        "CCB_POST_UPDATE_CACHE_CLEANUP_FLOW",
+        "CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED",
+        "CCB_UPDATE_CACHE_CLEANUP",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -45,11 +75,21 @@ def test_cmd_update_defaults_to_latest_release(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(update_runtime, "pick_temp_base_dir", lambda _install_dir: tmp_base)
     monkeypatch.setattr(update_runtime, "get_available_versions", lambda: ["5.1.0", "5.3.0", "5.2.8"])
 
-    def _fake_update_via_tarball(tmp_base_arg, *, install_dir, target_version, old_info):
+    def _fake_update_via_tarball(
+        tmp_base_arg,
+        *,
+        install_dir,
+        target_version,
+        old_info,
+        provider_mode,
+        cache_cleanup_enabled,
+    ):
         captured["tmp_base"] = tmp_base_arg
         captured["install_dir"] = install_dir
         captured["target_version"] = target_version
         captured["old_info"] = old_info
+        captured["provider_mode"] = provider_mode
+        captured["cache_cleanup_enabled"] = cache_cleanup_enabled
         return 0
 
     monkeypatch.setattr(update_runtime, "_update_via_tarball", _fake_update_via_tarball)
@@ -60,6 +100,52 @@ def test_cmd_update_defaults_to_latest_release(monkeypatch, tmp_path: Path) -> N
     assert captured["tmp_base"] == tmp_base
     assert captured["install_dir"] == install_dir
     assert captured["target_version"] == "5.3.0"
+    assert captured["provider_mode"] == "prompt"
+    assert captured["cache_cleanup_enabled"] is True
+
+
+def test_cmd_update_delegates_npm_managed_install_without_mutating_payload(monkeypatch, tmp_path: Path, capsys) -> None:
+    script_root = _npm_managed_release(monkeypatch, tmp_path, version="8.2.1")
+    before = (script_root / "VERSION").read_bytes()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        update_runtime,
+        "_update_via_tarball",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("npm payload must not update in place")),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "get_available_versions",
+        lambda: (_ for _ in ()).throw(AssertionError("latest npm update should delegate without a release lookup")),
+    )
+
+    code = update_runtime.cmd_update(SimpleNamespace(target=None), script_root=script_root)
+
+    assert code == 0
+    assert (script_root / "VERSION").read_bytes() == before
+    output = capsys.readouterr().out
+    assert "managed by npm" in output
+    assert "npm install -g @seemseam/ccb@latest" in output
+    assert "Updating to" not in output
+
+
+def test_cmd_update_resolves_explicit_version_before_npm_delegation(monkeypatch, tmp_path: Path, capsys) -> None:
+    script_root = _npm_managed_release(monkeypatch, tmp_path)
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime, "get_available_versions", lambda: ["8.1.3", "8.2.1", "8.3.0"])
+
+    code = update_runtime.cmd_update(SimpleNamespace(target="8.1"), script_root=script_root)
+
+    assert code == 0
+    assert "npm install -g @seemseam/ccb@8.1.3" in capsys.readouterr().out
+
+
+def test_npm_provenance_rejects_payload_outside_attested_package(monkeypatch, tmp_path: Path) -> None:
+    _npm_managed_release(monkeypatch, tmp_path)
+    foreign_root = tmp_path / "foreign-release"
+    foreign_root.mkdir()
+
+    assert install_runtime.npm_install_provenance(script_root=foreign_root) is None
 
 
 def test_cmd_update_errors_when_latest_release_cannot_be_resolved(monkeypatch, tmp_path: Path) -> None:
@@ -76,6 +162,47 @@ def test_cmd_update_errors_when_latest_release_cannot_be_resolved(monkeypatch, t
     code = update_runtime.cmd_update(SimpleNamespace(target=None), script_root=tmp_path / "script-root")
 
     assert code == 1
+
+
+def test_cmd_update_current_release_runs_provider_flow_without_reinstall(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    tmp_base = tmp_path / "tmp-base"
+    tmp_base.mkdir()
+    provider_modes: list[str] = []
+
+    monkeypatch.setenv("CODEX_INSTALL_PREFIX", str(install_dir))
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime, "pick_temp_base_dir", lambda _install_dir: tmp_base)
+    monkeypatch.setattr(update_runtime, "_resolve_latest_release_version", lambda: "8.3.0")
+    monkeypatch.setattr(
+        update_runtime,
+        "get_version_info",
+        lambda _path: {"version": "8.3.0", "commit": "same-build"},
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "_run_provider_updates_nonblocking",
+        lambda *, mode: provider_modes.append(mode),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "_update_via_tarball",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("current CCB must not reinstall")),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target=None, providers="check"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert provider_modes == ["check"]
+    assert "Already up to date" in capsys.readouterr().out
 
 
 def test_cmd_update_rejects_non_unix_platform(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -100,11 +227,21 @@ def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeyp
     monkeypatch.setattr(update_runtime, "_resolve_latest_release_version", lambda: "6.0.12")
     calls: dict[str, object] = {}
 
-    def _fake_update_via_tarball(tmp_base_arg, *, install_dir, target_version, old_info):
+    def _fake_update_via_tarball(
+        tmp_base_arg,
+        *,
+        install_dir,
+        target_version,
+        old_info,
+        provider_mode,
+        cache_cleanup_enabled,
+    ):
         calls["tmp_base"] = tmp_base_arg
         calls["install_dir"] = install_dir
         calls["target_version"] = target_version
         calls["old_info"] = old_info
+        calls["provider_mode"] = provider_mode
+        calls["cache_cleanup_enabled"] = cache_cleanup_enabled
         return 0
 
     monkeypatch.setattr(update_runtime, "_update_via_tarball", _fake_update_via_tarball)
@@ -127,6 +264,8 @@ def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeyp
     assert calls["install_dir"] == managed_prefix
     assert calls["target_version"] == "6.0.12"
     assert calls["old_info"]["install_mode"] == "source"
+    assert calls["provider_mode"] == "prompt"
+    assert calls["cache_cleanup_enabled"] is True
 
 
 def test_release_artifact_name_uses_linux_arch_aliases(monkeypatch) -> None:
@@ -224,6 +363,8 @@ def test_update_via_tarball_uses_staged_unix_installer(monkeypatch, tmp_path: Pa
             "install_dir": install_dir,
             "old_info": {"version": "6.0.7"},
             "new_info": {"version": "6.0.8", "commit": "targetbuild"},
+            "provider_mode": "prompt",
+            "cache_cleanup_enabled": True,
         }
     ]
 
@@ -488,6 +629,39 @@ def test_post_update_delegation_runs_installed_entrypoint(monkeypatch, tmp_path:
     assert calls[1]["kwargs"]["cwd"] == Path.cwd()
     assert calls[1]["kwargs"]["env"]["CODEX_INSTALL_PREFIX"] == str(install_dir)
     assert calls[1]["kwargs"]["env"]["CCB_SKIP_STARTUP_UPDATE_CHECK"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_PROVIDER_UPDATE_FLOW"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_PROVIDER_UPDATE_MODE"] == "prompt"
+    assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_CACHE_CLEANUP_FLOW"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED"] == "1"
+    assert calls[1]["kwargs"]["timeout"] == update_runtime.POST_UPDATE_WITH_PROVIDERS_TIMEOUT_SECONDS
+
+
+def test_post_update_without_provider_flow_keeps_short_default_timeout(monkeypatch, tmp_path: Path) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.delenv("CODEX_BIN_DIR", raising=False)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    ccb_entry = install_dir / "ccb"
+    ccb_entry.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def _fake_run(command, **kwargs):
+        calls.append({"command": list(command), "kwargs": dict(kwargs)})
+        return update_runtime.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(update_runtime.subprocess, "run", _fake_run)
+
+    ok = update_runtime._run_post_update_with_new_entrypoint(
+        install_dir=install_dir,
+        old_info={"version": "8.2.0"},
+        new_info={"version": "8.3.0"},
+        provider_mode="none",
+        cache_cleanup_enabled=False,
+    )
+
+    assert ok is True
+    assert calls[1]["kwargs"]["timeout"] == update_runtime.POST_UPDATE_TIMEOUT_SECONDS
+    assert calls[1]["command"][-1] == "--no-cache-cleanup"
 
 
 def test_post_update_delegation_prefers_current_bin_wrapper(monkeypatch, tmp_path: Path) -> None:
@@ -811,6 +985,137 @@ def test_post_update_internal_command_runs_new_process_provisioning(monkeypatch,
     assert calls == [{"roles": {"install_dir": install_dir}}]
 
 
+def test_post_update_internal_command_runs_provider_flow_when_authorized(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    install_dir = tmp_path / "install"
+    provider_modes: list[str] = []
+    monkeypatch.setenv("CCB_PROVIDER_UPDATE_FLOW", "1")
+    monkeypatch.setenv("CCB_PROVIDER_UPDATE_MODE", "all")
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "_run_provider_updates_nonblocking",
+        lambda *, mode: provider_modes.append(mode),
+    )
+
+    code = update_runtime.maybe_handle_post_update_command(
+        [update_runtime.POST_UPDATE_COMMAND, "--from-version", "8.2.0", "--to-version", "8.3.0"],
+        script_root=install_dir,
+    )
+
+    assert code == 0
+    assert provider_modes == ["all"]
+
+
+def test_post_update_internal_command_runs_cache_migration_when_authorized(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    install_dir = tmp_path / "install"
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **kwargs: calls.append(dict(kwargs)),
+    )
+
+    code = update_runtime.maybe_handle_post_update_command(
+        [update_runtime.POST_UPDATE_COMMAND, "--from-version", "8.3.0", "--to-version", "8.4.0"],
+        script_root=install_dir,
+    )
+
+    assert code == 0
+    assert calls == [
+        {
+            "from_version": "8.3.0",
+            "to_version": "8.4.0",
+            "cwd": Path.cwd(),
+        }
+    ]
+
+
+def test_post_update_cache_migration_opt_out_is_honored(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED", "0")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("cleanup must be skipped")),
+    )
+
+    code = update_runtime.maybe_handle_post_update_command(
+        [
+            update_runtime.POST_UPDATE_COMMAND,
+            "--from-version",
+            "8.3.0",
+            "--to-version",
+            "8.4.0",
+            "--no-cache-cleanup",
+        ],
+        script_root=tmp_path / "install",
+    )
+
+    assert code == 0
+
+
+def test_post_update_cache_migration_failure_does_not_fail_core_update(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("disk busy")),
+    )
+
+    code = update_runtime._run_post_update_provisioning(
+        install_dir=tmp_path / "install",
+        from_version="8.3.0",
+        to_version="8.4.0",
+    )
+
+    assert code == 0
+    assert "core update is unaffected" in capsys.readouterr().out
+
+
+def test_required_post_update_failure_skips_cache_migration_before_rollback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_CACHE_CLEANUP_FLOW", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_REQUIRED", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(update_runtime, "_update_builtin_roles_after_update", lambda **_kwargs: 1)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_post_update_provider_cache_cleanup",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("cleanup must wait for a committed update")),
+    )
+
+    code = update_runtime._run_post_update_provisioning(install_dir=tmp_path / "install")
+
+    assert code == 1
+
+
 def test_entrypoint_routes_internal_post_update_command(monkeypatch, tmp_path: Path) -> None:
     calls: list[dict[str, object]] = []
 
@@ -1092,7 +1397,8 @@ def test_cmd_update_mobile_runs_onboarding_without_release_lookup(monkeypatch, t
         calls.append(dict(kwargs))
         return _Result()
 
-    def _onboarding(*, start_service_fn):
+    def _onboarding(*, start_service_fn, listen):
+        assert listen == '127.0.0.1:8787'
         service = start_service_fn(
             SimpleNamespace(
                 mobile_serve=(
@@ -1127,6 +1433,184 @@ def test_cmd_update_mobile_runs_onboarding_without_release_lookup(monkeypatch, t
             'rotate_pairing': True,
         }
     ]
+
+
+def test_cmd_update_mobile_interactive_lan_uses_direct_lan_route(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    stdin = _TtyInput("2\n192.168.31.155:8787\n")
+    stdout = _TtyOutput()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime.sys, "stdin", stdin)
+    monkeypatch.setattr(update_runtime.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        update_runtime,
+        "suggest_lan_listen_address",
+        lambda: "192.168.31.20:8787",
+    )
+
+    class _Result:
+        def to_record(self):
+            return {"route_provider": "lan"}
+
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **kwargs: calls.append(dict(kwargs)) or _Result(),
+    )
+
+    def _lan_onboarding(*, start_service_fn, listen):
+        assert listen == "192.168.31.155:8787"
+        assert start_service_fn() == {"route_provider": "lan"}
+        return 0
+
+    monkeypatch.setattr(update_runtime, "run_mobile_lan_onboarding", _lan_onboarding)
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_update_onboarding",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("LAN route must not enter Tailscale onboarding")
+        ),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target="mobile"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert calls == [
+        {
+            "script_root": tmp_path / "script-root",
+            "listen": "192.168.31.155:8787",
+            "public_url": None,
+            "route_provider": "lan",
+            "rotate_pairing": True,
+        }
+    ]
+    assert "Choose how this computer connects" in stdout.getvalue()
+
+
+def test_cmd_update_mobile_interactive_official_relay_activates_then_starts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    stdin = _TtyInput("3\n")
+    stdout = _TtyOutput()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime.sys, "stdin", stdin)
+    monkeypatch.setattr(update_runtime.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        update_runtime,
+        "ensure_guided_relay_credentials",
+        lambda **kwargs: (
+            calls.append(
+                {
+                    "credential_mode": kwargs["relay_mode"],
+                    "read_fn": kwargs["read_fn"],
+                }
+            )
+            or SimpleNamespace(ready=True, cancelled=False)
+        ),
+    )
+
+    class _Result:
+        def to_record(self):
+            return {"route_provider": "relay"}
+
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **kwargs: calls.append(dict(kwargs)) or _Result(),
+    )
+
+    def _relay_onboarding(*, start_service_fn):
+        assert start_service_fn() == {"route_provider": "relay"}
+        return 0
+
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_relay_onboarding",
+        _relay_onboarding,
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target="mobile"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert calls[0]["credential_mode"] == "official"
+    assert calls[1]["route_provider"] == "relay"
+
+
+def test_cmd_update_mobile_interactive_cancel_never_starts_gateway(
+    monkeypatch, tmp_path: Path
+) -> None:
+    stdin = _TtyInput("\n")
+    stdout = _TtyOutput()
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(update_runtime.sys, "stdin", stdin)
+    monkeypatch.setattr(update_runtime.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cancelled setup must not touch gateway")
+        ),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(target="mobile"),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert "no gateway was changed" in stdout.getvalue()
+
+
+def test_cmd_update_mobile_explicit_lan_never_enters_tailscale(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Linux")
+
+    class _Result:
+        def to_record(self):
+            return {"route_provider": "lan"}
+
+    monkeypatch.setattr(
+        update_runtime,
+        "start_or_replace_mobile_host_service",
+        lambda **kwargs: calls.append(dict(kwargs)) or _Result(),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_lan_onboarding",
+        lambda *, start_service_fn, listen: (start_service_fn() and 0),
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "run_mobile_update_onboarding",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("explicit LAN must not enter Tailscale")
+        ),
+    )
+
+    code = update_runtime.cmd_update(
+        SimpleNamespace(
+            target="mobile",
+            route_provider="lan",
+            listen="10.0.0.8:8787",
+            public_url=None,
+        ),
+        script_root=tmp_path / "script-root",
+    )
+
+    assert code == 0
+    assert calls[0]["route_provider"] == "lan"
+    assert calls[0]["listen"] == "10.0.0.8:8787"
 
 
 def test_cmd_update_rich_allows_degraded_workbench_status(monkeypatch, tmp_path: Path) -> None:

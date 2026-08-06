@@ -20,6 +20,10 @@ from completion.models import (
     CompletionStatus,
 )
 from provider_core.instance_resolution import named_agent_instance
+from provider_backends.native_cli_support.home import (
+    build_native_private_env,
+    ensure_native_provider_storage_isolation,
+)
 from provider_core.protocol import request_anchor_for_job
 from provider_execution.active_runtime.polling_runtime.result import runtime_error_result
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
@@ -31,7 +35,21 @@ from .session import load_native_project_session
 
 _RUN_PROCS: dict[str, subprocess.Popen] = {}
 _MAX_STDERR_CHARS = 4000
-_STOP_REASONS = {"stop", "end_turn", "turn_end", "completed", "complete", "done", "finished", "success", "ok"}
+_STOP_REASONS = {
+    "stop",
+    "end_turn",
+    "turn_end",
+    "agent_settled",
+    "agent_end_terminal",
+    "completed",
+    "complete",
+    "done",
+    "finished",
+    "success",
+    "ok",
+}
+_FAILED_OUTCOME_REASONS = {"error", "failed", "failure"}
+_SUCCESS_OUTCOME_REASONS = {"stop", "end_turn", "yield"}
 
 
 @dataclass(frozen=True)
@@ -43,6 +61,8 @@ class NativeCliObservation:
     completed_at: object | None = None
     error: str = ""
     intermediate: bool = False
+    outcome_reason: str = ""
+    protocol_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,6 +86,8 @@ class NativeCliExecutionConfig:
     session_filename: str
     command_builder: CommandBuilder
     env_builder: EnvBuilder | None = None
+    private_path_env_names: tuple[str, ...] = ()
+    private_raw_env_names: tuple[str, ...] = ()
     observer: Observer | None = None
     output_kind: str = "jsonl"
     mode: str = "native_cli_run"
@@ -77,8 +99,12 @@ class NativeCliExecutionConfig:
     process_exit_complete_reason: str = ""
     missing_terminal_reason: str = ""
     timeout_reason: str = ""
+    invalid_protocol_reason: str = ""
+    missing_outcome_reason: str = ""
     run_timeout_s: float = 900.0
     terminal_on_process_exit: bool = True
+    terminal_requires_process_exit: bool = False
+    require_outcome_reason: bool = False
 
     def reason(self, name: str) -> str:
         explicit = str(getattr(self, name) or "").strip()
@@ -348,7 +374,8 @@ def _terminal_result_if_ready(
 ) -> ProviderPollResult | None:
     provider = str(config.provider or submission.provider)
     reply = str(state.get("reply_buffer") or clean_native_reply(observation.text or "", str(state.get("request_anchor") or submission.job_id))).strip()
-    if observation.error:
+    wait_for_process_exit = config.terminal_requires_process_exit and returncode is None
+    if observation.error and not wait_for_process_exit:
         return _terminal(
             config,
             submission,
@@ -359,7 +386,12 @@ def _terminal_result_if_ready(
             reason=config.reason("run_error_reason"),
             reply=reply,
             confidence=CompletionConfidence.DEGRADED,
-            diagnostics_extra={"error": observation.error},
+            diagnostics_extra={
+                "error": observation.error,
+                "finish_reason": observation.finish_reason,
+                "outcome_reason": observation.outcome_reason,
+                "returncode": returncode,
+            },
         )
 
     timeout_s = _state_float(state, "run_timeout_s", config.run_timeout_s)
@@ -401,9 +433,46 @@ def _terminal_result_if_ready(
             },
         )
 
+    if wait_for_process_exit:
+        return None
+
+    if observation.protocol_error:
+        return _terminal(
+            config,
+            submission,
+            state,
+            items,
+            now,
+            status=CompletionStatus.INCOMPLETE,
+            reason=config.reason("invalid_protocol_reason"),
+            reply=reply,
+            confidence=CompletionConfidence.DEGRADED,
+            diagnostics_extra={
+                "protocol_error": observation.protocol_error,
+                "finish_reason": observation.finish_reason,
+                "outcome_reason": observation.outcome_reason,
+                "returncode": returncode,
+                "stdout_path": str(state.get("stdout_path") or ""),
+                "stderr_path": str(state.get("stderr_path") or ""),
+            },
+        )
+
     if observation.finished:
         reason = _normalized_reason(observation.finish_reason)
-        if reason and reason not in _STOP_REASONS:
+        outcome_reason = _normalized_reason(observation.outcome_reason)
+        if config.require_outcome_reason and not outcome_reason:
+            status = CompletionStatus.INCOMPLETE
+            terminal_reason = config.reason("missing_outcome_reason")
+            confidence = CompletionConfidence.DEGRADED
+        elif outcome_reason in _FAILED_OUTCOME_REASONS:
+            status = CompletionStatus.FAILED
+            terminal_reason = config.reason("run_error_reason")
+            confidence = CompletionConfidence.OBSERVED
+        elif outcome_reason and outcome_reason not in _SUCCESS_OUTCOME_REASONS:
+            status = CompletionStatus.INCOMPLETE
+            terminal_reason = f"{provider}_run_finished:{outcome_reason}"
+            confidence = CompletionConfidence.OBSERVED
+        elif reason and reason not in _STOP_REASONS:
             status = CompletionStatus.INCOMPLETE
             terminal_reason = f"{provider}_run_finished:{reason}"
             confidence = CompletionConfidence.OBSERVED
@@ -428,6 +497,7 @@ def _terminal_result_if_ready(
             confidence=confidence,
             diagnostics_extra={
                 "finish_reason": observation.finish_reason,
+                "outcome_reason": observation.outcome_reason,
                 "stdout_path": str(state.get("stdout_path") or ""),
                 "stderr_path": str(state.get("stderr_path") or ""),
                 "returncode": returncode,
@@ -867,9 +937,27 @@ def _nested_text_value(event: Any, keys: tuple[str, ...]) -> str:
 
 
 def _native_cli_env(config: NativeCliExecutionConfig, request: NativeCliExecutionRequest) -> dict[str, str]:
+    ensure_native_provider_storage_isolation(request.provider)
     env = dict(os.environ)
     if config.env_builder is not None:
         env.update(config.env_builder(request))
+    raw_home = str(request.session_data.get(f"{request.provider}_home") or "").strip()
+    if raw_home:
+        managed_home = Path(raw_home).expanduser()
+        raw_data = str(request.session_data.get(f"{request.provider}_data_dir") or "").strip()
+        managed_data = (
+            Path(raw_data).expanduser()
+            if raw_data
+            else managed_home.parent / "data"
+        )
+        env.update(
+            build_native_private_env(
+                managed_home,
+                data_dir=managed_data,
+                extra_path_env_names=config.private_path_env_names,
+                extra_raw_env_names=config.private_raw_env_names,
+            )
+        )
     return env
 
 

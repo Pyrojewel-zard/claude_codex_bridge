@@ -57,9 +57,17 @@ def handle_connection(server, conn) -> str | None:
     try:
         conn.sendall((json.dumps(response.to_record(), ensure_ascii=False) + '\n').encode('utf-8'))
     except OSError:
-        _queue_after_response_action(server, after_response_action)
+        _queue_after_response_action(
+            server,
+            after_response_action,
+            request_op=getattr(request, 'op', None),
+        )
         return getattr(request, 'op', None)
-    _queue_after_response_action(server, after_response_action)
+    _queue_after_response_action(
+        server,
+        after_response_action,
+        request_op=getattr(request, 'op', None),
+    )
     return getattr(request, 'op', None)
 
 
@@ -75,11 +83,14 @@ def _recv_request_line(conn) -> bytes:
     return raw
 
 
-def _queue_after_response_action(server, action) -> None:
+def _queue_after_response_action(server, action, *, request_op: str | None) -> None:
     if action is None:
         return
     try:
-        server.queue_after_response_action(action)
+        server.queue_after_response_action(
+            action,
+            run_during_shutdown=request_op in {'stop-all', 'shutdown'},
+        )
     except Exception:
         pass
 

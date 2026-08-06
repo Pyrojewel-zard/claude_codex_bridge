@@ -6,6 +6,7 @@ import re
 _SETTING_SOURCES_RE = re.compile(
     r"(?P<prefix>(?:^|[;\s])--setting-sources\s+)(?P<quote>['\"]?)project,local(?P=quote)(?=$|[\s;])"
 )
+_CONTINUE_ARG_RE = re.compile(r"(?P<prefix>^|[ \t])--continue(?=$|[ \t;])")
 
 
 def normalize_claude_start_cmd(value: str) -> tuple[str, bool]:
@@ -43,7 +44,17 @@ def normalize_session_data(data: dict) -> bool:
     return changed
 
 
+def strip_claude_continue_start_cmd(value: str) -> tuple[str, bool]:
+    raw = str(value or '').strip()
+    if not raw:
+        return raw, False
+    stripped, count = _CONTINUE_ARG_RE.subn(lambda match: match.group('prefix'), raw)
+    stripped = stripped.strip()
+    return stripped, count > 0 and stripped != raw
+
+
 __all__ = [
     "normalize_claude_start_cmd",
     "normalize_session_data",
+    "strip_claude_continue_start_cmd",
 ]

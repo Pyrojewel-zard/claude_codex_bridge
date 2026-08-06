@@ -112,9 +112,23 @@ ccb kill -f
 
 \begin{lstlisting}
 ccb cleanup
+ccb cleanup --legacy-provider-caches
 \end{lstlisting}
 
-用于清理运行残留。cleanup 不应被当作常规启动步骤，只有诊断确认 residue 影响当前环境时再用。
+用于在当前 ccbd 已停止且没有待处理 ask 时清理可重建缓存和运行残留。普通命令只处理当前项目；增加
+\cmd{--legacy-provider-caches} 后，还会删除 manifest 校验通过、且记录的项目根目录已经不存在的旧版
+Claude/Gemini 项目级缓存。该选项不会删除仍存在项目的缓存，也不会删除 provider session、auth、mailbox
+或 runtime authority。cleanup 不应被当作常规启动步骤。
+
+新版本安装成功后，\cmd{ccb update} 会自动执行同一安全边界的迁移：
+已删除项目中逐 Provider manifest 校验通过的缓存会清理；活跃项目不被
+停止，其缓存会推迟到该项目下一次成功 \cmd{ccb kill}。普通
+\cmd{ccb kill} 也会清理当前项目的旧缓存。无法验证的路径保持不动，
+\cmd{ccb update --no-cache-cleanup} 可跳过单次更新迁移。
+
+清理前可运行 \cmd{ccb doctor storage}。输出会列出旧项目级 Provider 缓存的路径、存在状态和字节数，
+并列出新的用户级 Provider 缓存路径和存在状态。用户级缓存由多个项目共享，常规项目诊断不会递归统计
+它的大小；这些外部缓存不混入项目 \src{.ccb} 的 \cmd{storage_total_bytes}。
 
 \section{fault injection}
 

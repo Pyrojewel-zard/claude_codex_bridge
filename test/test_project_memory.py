@@ -291,9 +291,29 @@ def test_materialize_runtime_memory_bundle_writes_generated_bundle(tmp_path: Pat
     assert '## CCB Runtime Coordination Rules' in text
     assert 'CCB `ask` is submit-only' in text
     assert 'Do not wait, poll, or run `pend`/`watch`/`ping`' in text
-    assert 'use `ask --chain` when a child result is needed' in text
+    assert 'run `command ccb clear` for all configured agents' in text
+    assert 'without deleting `.ccb` state, workspaces, auth, sessions, logs, or project memory' in text
+    assert 'use `ask --chain` only when the current task cannot finish without that exact child result' in text
+    assert 'never add it merely to bypass a rejected plain ask' in text
+    assert 'Finish an inbound CCB task in its current turn' in text
+    assert 'If the original caller is a registered CCB agent' in text
+    assert "routes that turn's terminal result through the existing lineage" in text
+    assert 'do not open a new `ask` to report completion to the original caller' in text
+    assert 'Direct CLI submitters read terminal results from control output' in text
+    assert 'such as `watch` or `trace`' in text
     assert 'During a CCB result-chain continuation, answer directly with the final result' in text
     assert 'do not use `ask`, `--chain`, or `--silence`' in text
+    assert '`--silence` is not an active-job correction channel' in text
+    assert '`ccb followup <active_job_id> --message "<correction>"`' in text
+    assert 'only `injected` is success' in text
+    assert 'cancel and resubmit the complete corrected task' in text
+    assert 'A `completed` CCB job means provider execution ended normally' in text
+    assert 'For every inbound CCB task, answer directly and concisely' in text
+    assert '`CCB_REPLY_MODE: compact` means distill aggressively' in text
+    assert '`CCB_REPLY_MODE: silent` means return the shortest useful terminal status' in text
+    assert 'CCB runtime interruption is the primary cancellation mechanism' in text
+    assert 'Do not poll cancellation files during ordinary work' in text
+    assert '<project_root>/.ccb/agents/<agent>/cancel_flags/<job>.cancel' in text
     assert '## CCB Shared Project Memory' in text
     assert 'shared ask rules' in text
     assert text.index('## CCB Runtime Coordination Rules') < text.index('## CCB Shared Project Memory')

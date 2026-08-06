@@ -1286,7 +1286,8 @@ def test_ccbd_heartbeat_recovers_degraded_agent_and_drains_queue(tmp_path: Path,
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text('codex:codex\n', encoding='utf-8')
     ctx = bootstrap_project(project_root)
-    app = CcbdApp(project_root)
+    now = {'value': '2026-03-18T00:00:00Z'}
+    app = CcbdApp(project_root, clock=lambda: now['value'])
     degraded = replace(
         _runtime('codex', project_id=ctx.project_id, layout=app.paths, pid=1234),
         state=AgentState.DEGRADED,
@@ -1302,6 +1303,17 @@ def test_ccbd_heartbeat_recovers_degraded_agent_and_drains_queue(tmp_path: Path,
         recovered_pane_id='%77',
         recovered_session_id='codex-session-new',
     )
+    healthy_backend = FakeTmuxBackend(
+        owner_agent='codex',
+        owner_project_id=ctx.project_id,
+    )
+    session.backend = lambda: healthy_backend
+    session.data = {
+        'agent_name': 'codex',
+        'ccb_project_id': ctx.project_id,
+        'pane_id': '%77',
+        'terminal': 'tmux',
+    }
     binding = type(
         'Binding',
         (),
@@ -1333,6 +1345,27 @@ def test_ccbd_heartbeat_recovers_degraded_agent_and_drains_queue(tmp_path: Path,
 
     app.heartbeat()
 
+    queued = app.dispatcher.get(job_id)
+    assert queued is not None
+    assert queued.status.value == 'accepted'
+    runtime = app.registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.DEGRADED
+    assert runtime.health == 'recovering'
+    assert runtime.reconcile_state == 'probing'
+    assert runtime.runtime_ref == 'tmux:%77'
+    assert runtime.session_ref == 'codex-session-new'
+    assert session.ensure_calls == 1
+
+    now['value'] = '2026-03-18T00:00:30Z'
+    app._last_full_heartbeat_at = 0.0
+    app.heartbeat()
+    assert app.dispatcher.get(job_id).status.value == 'accepted'
+
+    now['value'] = '2026-03-18T00:01:30Z'
+    app._last_full_heartbeat_at = 0.0
+    app.heartbeat()
+
     running = app.dispatcher.get(job_id)
     assert running is not None
     assert running.status.value == 'running'
@@ -1340,9 +1373,7 @@ def test_ccbd_heartbeat_recovers_degraded_agent_and_drains_queue(tmp_path: Path,
     assert runtime is not None
     assert runtime.state is AgentState.BUSY
     assert runtime.health == 'healthy'
-    assert runtime.runtime_ref == 'tmux:%77'
-    assert runtime.session_ref == 'codex-session-new'
-    assert session.ensure_calls == 1
+    assert runtime.reconcile_state == 'steady'
 
 
 def test_ccbd_heartbeat_does_not_proactively_mount_missing_agent_without_start_policy(tmp_path: Path, monkeypatch) -> None:
@@ -1502,14 +1533,23 @@ def test_ccbd_heartbeat_keeps_backend_mounted_on_background_supervision_failure(
     monkeypatch.setattr(app.job_heartbeat, 'tick', lambda dispatcher: ())
     monkeypatch.setattr('ccbd.app_runtime.lifecycle.full_heartbeat_due', lambda app, started: True)
 
-    app.heartbeat()
+    expected_failure = 'heartbeat:runtime_supervision: RuntimeError: tmux boom'
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        app.heartbeat()
+        lifecycle = app.lifecycle_store.load()
+        if lifecycle is not None and lifecycle.last_failure_reason == expected_failure:
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError('ccbd did not record the background supervision failure')
 
     inspection = app.ownership_guard.inspect()
     assert inspection.health is LeaseHealth.HEALTHY
     lifecycle = app.lifecycle_store.load()
     assert lifecycle is not None
     assert lifecycle.phase == 'mounted'
-    assert lifecycle.last_failure_reason == 'heartbeat:runtime_supervision: RuntimeError: tmux boom'
+    assert lifecycle.last_failure_reason == expected_failure
 
     app.request_shutdown()
     server_thread.join(timeout=3.0)
@@ -1638,7 +1678,7 @@ def test_ccbd_foreign_pane_reflow_uses_persisted_start_policy(tmp_path: Path, mo
 
     statuses = app.runtime_supervision.reconcile_once()
 
-    assert statuses == {'codex': 'healthy', 'claude': 'healthy'}
+    assert statuses == {'codex': 'recovering', 'claude': 'healthy'}
     assert seen == [(
         ('codex', 'claude'),
         True,

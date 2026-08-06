@@ -6,7 +6,7 @@
 **Coordene Codex, Claude, Gemini e outros agentes CLI em fluxos visíveis e controláveis que você pode assumir diretamente**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.6-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -54,17 +54,19 @@
 
 ## Como instalar
 
-Instale ou atualize com npm:
+Instale ou atualize uma instalação gerenciada pelo npm com npm:
 
 ```bash
-npm install -g @seemseam/ccb
+npm install -g @seemseam/ccb@latest
 ```
 
-Depois de instalar o CCB, use o updater integrado:
+Para instalações via GitHub release ou fonte, use o updater transacional do CCB:
 
 ```bash
 ccb update
 ```
+
+Em uma instalação gerenciada pelo npm, `ccb update` mostra o comando npm equivalente sem modificar o payload incluído.
 
 <details>
 <summary><b>Pacote GitHub release e instalação por fonte como fallback</b></summary>
@@ -180,9 +182,9 @@ Esse comando orienta a instalação e a configuração.
 <details>
 <summary><b>Detalhes do Mobile App, limite de segurança e fonte</b></summary>
 
-O CCB 8.2.1 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
+O CCB 8.5.6 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
 
-- [Baixar CCB Mobile v8.2.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [Baixar CCB Mobile v8.5.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
 - Fonte do app: [`mobile/app`](../mobile/app)
 - Fonte do gateway servidor: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -245,7 +247,7 @@ Para a configuração normal do projeto, use o painel **⚙ Configurações**. P
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png" alt="Grupo WeChat" width="240">
+  <img src="../assets/weixin.png?v=77e83abf" alt="Grupo WeChat" width="240">
 </p>
 
 <a id="community"></a>
@@ -261,6 +263,38 @@ Obrigado ao [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 
 ## Notas de versão
 
 <details open>
+<summary><b>v8.4.0</b> - Relay móvel criptografado, pareamento simples, identidade estável e reconexão Codex</summary>
+
+- Adiciona Relay móvel com criptografia ponta a ponta, convites de uso único, streams multiplexados e modos oficial ou auto-hospedado.
+- Move a escolha de Tailscale, LAN privada ou Relay para `ccb update mobile`; o telefone apenas lê o QR ou informa um código.
+- Verifica metadados oficiais do GitHub, tamanho e SHA-256 antes de entregar uma atualização APK assinada ao Android.
+- Preserva a identidade após mover projetos, acompanha o tema do sistema e integra a reconexão opcional e limitada do Codex.
+
+</details>
+
+<details>
+<summary><b>v8.3.1</b> - Atualizações de providers unificadas, retirada segura de caches e acesso persistente à Config UI</summary>
+
+- Centraliza upgrades de providers suportados em `ccb update`, com verificação exata, recusa e salto por versão, sem reiniciar panes ativos.
+- Retira caches de software Claude/Gemini por projeto e limpa apenas dados legados com propriedade comprovada; projetos ativos, sessões e autenticação são preservados.
+- Permite uma porta loopback estável e uma fonte de token protegida para a Config UI sem exibir o valor do token.
+- Preserva finalizadores de shutdown durante a parada do servidor e adota um layout Yazi compacto de duas colunas no Rich mode.
+- Sincroniza CLI, npm, Linux, macOS, Android e todos os artefatos de release com 8.3.1.
+
+</details>
+
+<details>
+<summary><b>v8.3.0</b> - Turnos exatos dos providers, integridade dos jobs e terminal Mobile dentro do projeto</summary>
+
+- Vincula Kimi, Claude e Qoder aos contratos nativos de turno, ativação, sessão e conclusão.
+- Adiciona follow-ups para o job ativo exato, fases de execução correlacionadas, diagnóstico de inbounds órfãos e cancelamento terminal.
+- Herda extensões de providers e plugins do Copilot com proteção explícita de ownership dos assets projetados.
+- Delega upgrades gerenciados por npm ao próprio npm e torna conservadora a remoção de worktrees que contêm apenas marcadores.
+- Mantém chat e terminal Mobile no workspace do projeto selecionado e sincroniza todas as superfícies de release com 8.3.0.
+
+</details>
+
+<details>
 <summary><b>v8.2.1</b> - Inicialização determinística, recuperação de autenticação acionável e conexão Android em segundo plano</summary>
 
 - Adiciona cercas de geração de inicialização, prova limitada de prontidão e diagnósticos de operações e linha do tempo.

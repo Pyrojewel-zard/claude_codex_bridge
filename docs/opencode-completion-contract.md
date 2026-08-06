@@ -5,6 +5,8 @@ provider in `ccb_source`.
 
 Managed OpenCode startup/config isolation is also anchored here because
 OpenCode does not yet have a separate session-isolation contract.
+Authentication projection and logout isolation must also satisfy
+[docs/provider-auth-inheritance-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-auth-inheritance-contract.md).
 
 ### Authority
 
@@ -62,6 +64,25 @@ OpenCode does not yet have a separate session-isolation contract.
   loading through both native discovery and the generated instructions bridge.
 - `.ccb/agents/<agent>/memory.md` remains a CCB bundle input; CCB does not edit
   project `AGENTS.md` during OpenCode startup.
+
+### Managed State And Authentication
+
+- Managed OpenCode must use agent-local `HOME`, `XDG_CONFIG_HOME`,
+  `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` roots under
+  `.ccb/agents/<agent>/provider-state/opencode/`.
+- Its structured session storage and logs must resolve from the persisted
+  agent-local `OPENCODE_STORAGE_ROOT` and `OPENCODE_LOG_ROOT`, not from an
+  import-time or caller-global `~/.local/share/opencode` path.
+- `auth.json` and `account.json` may be inherited only as ordinary one-way
+  copies into the managed XDG data root. Provider refresh or logout may change
+  only those managed copies.
+- Visible panes, headless execution, health inspection, and completion readers
+  must use the same session-persisted managed roots.
+- On WSL, managed Windows-facing `USERPROFILE`, `LOCALAPPDATA`, and `APPDATA`
+  roots must not fall back to the user's global Windows OpenCode state.
+- Startup must fail or remain on an unauthenticated private managed home if
+  these roots cannot be prepared; it must not regain authentication by writing
+  to the user's global OpenCode data directory.
 
 ### Managed Session Startup
 

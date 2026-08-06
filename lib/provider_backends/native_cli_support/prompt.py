@@ -10,14 +10,7 @@ _ASSISTANT_UI_PREFIX_RE = re.compile(r"^•\s+")
 
 def wrap_native_prompt(message: str, req_id: str) -> str:
     rendered = (message or "").rstrip()
-    return (
-        f"{REQ_ID_PREFIX} {req_id}\n\n"
-        f"{rendered}\n\n"
-        "CCB reply guidance:\n"
-        "- Answer directly and concisely.\n"
-        "- Include only relevant conclusions, blockers, risks, evidence, and next actions.\n"
-        "- Avoid raw logs and background unless explicitly requested.\n"
-    )
+    return f"{REQ_ID_PREFIX} {req_id}\n\n{rendered}\n"
 
 
 def clean_native_reply(text: str, req_id: str) -> str:

@@ -28,6 +28,19 @@ class _FakeSession:
         self.sent.append(content)
 
 
+class _FakeReconnectAutostart:
+    def __init__(self) -> None:
+        self.arm_attempts = 0
+        self.stop_attempts = 0
+
+    def maybe_arm(self) -> bool:
+        self.arm_attempts += 1
+        return False
+
+    def stop(self) -> None:
+        self.stop_attempts += 1
+
+
 def test_dual_bridge_processes_request_and_records_history(tmp_path: Path, monkeypatch) -> None:
     tracker = _FakeTracker()
     session = _FakeSession()
@@ -156,3 +169,34 @@ def test_dual_bridge_respects_explicit_idle_sleep_override(tmp_path: Path, monke
     assert bridge.run() == 0
 
     assert observed_timeouts == [0.05]
+
+
+def test_dual_bridge_runs_reconnect_autostart_and_shutdown(tmp_path: Path, monkeypatch) -> None:
+    tracker = _FakeTracker()
+    session = _FakeSession()
+    reconnect = _FakeReconnectAutostart()
+    monkeypatch.setenv('CODEX_TMUX_SESSION', '%11')
+    monkeypatch.setattr(
+        'provider_backends.codex.bridge_runtime.runtime_state.CodexBindingTracker',
+        lambda runtime_dir: tracker,
+    )
+    monkeypatch.setattr(
+        'provider_backends.codex.bridge_runtime.runtime_state.TerminalCodexSession',
+        lambda pane_id: session,
+    )
+    monkeypatch.setattr(
+        'provider_backends.codex.bridge_runtime.service.CodexReconnectAutostart',
+        lambda runtime_dir, log: reconnect,
+    )
+    bridge = DualBridge(tmp_path / 'runtime')
+
+    def fake_read_request(*, timeout: float = 0.0):
+        del timeout
+        bridge._running = False
+        return None
+
+    monkeypatch.setattr(bridge, '_read_request', fake_read_request)
+
+    assert bridge.run() == 0
+    assert reconnect.arm_attempts == 1
+    assert reconnect.stop_attempts == 1

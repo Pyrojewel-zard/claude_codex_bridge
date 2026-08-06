@@ -9,6 +9,14 @@ from runtime_env.user_session import user_session_transport_env
 from storage.path_helpers import runtime_project_root_from_path
 
 
+_MANAGED_PROVIDER_PROCESS_ENV = {
+    'AGY_CLI_DISABLE_AUTO_UPDATE': '1',
+    'FACTORYD_DISABLE_AUTO_UPDATE': '1',
+    'GROK_DISABLE_AUTOUPDATER': '1',
+    'NO_UPDATE_NOTIFIER': '1',
+}
+
+
 def caller_context_env(*, actor: str, runtime_dir: Path, launch_session_id: str) -> dict[str, str]:
     env = {
         'CCB_CALLER_ACTOR': str(actor or '').strip(),
@@ -28,7 +36,10 @@ def caller_context_env(*, actor: str, runtime_dir: Path, launch_session_id: str)
 
 
 def provider_user_session_env() -> dict[str, str]:
-    return user_session_transport_env()
+    return {
+        **user_session_transport_env(),
+        **_MANAGED_PROVIDER_PROCESS_ENV,
+    }
 
 
 def export_env_clause(env_map: dict[str, str]) -> str:

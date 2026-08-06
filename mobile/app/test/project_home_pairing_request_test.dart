@@ -5,119 +5,90 @@ import 'package:test/test.dart';
 
 void main() {
   group('project home pairing request', () {
-    test('rejects invalid manual gateway URL', () {
-      for (final gatewayUrlText in ['', '127.0.0.1:8787', 'https:/']) {
-        expect(
-          () => buildProjectHomePairingRequest(
-            gatewayUrlText: gatewayUrlText,
-            pairingCodeText: 'pair-code',
-            deviceNameText: 'Pixel Fold',
-            routeKind: RouteProviderKind.lan,
+    test('requires one connection code when there is no scan result', () {
+      expect(
+        () => buildProjectHomePairingRequest(connectionCodeText: '   '),
+        throwsA(
+          isA<ProjectHomePairingRequestException>().having(
+            (error) => error.message,
+            'message',
+            'Connection code is required',
           ),
-          throwsA(
-            isA<ProjectHomePairingRequestException>().having(
-              (error) => error.message,
-              'message',
-              'Gateway URL is required',
-            ),
-          ),
-          reason: gatewayUrlText,
-        );
-      }
+        ),
+      );
     });
 
-    test('rejects missing manual pairing code', () {
+    test('rejects an invalid connection code with a stable message', () {
       expect(
         () => buildProjectHomePairingRequest(
-          gatewayUrlText: 'http://127.0.0.1:8787',
-          pairingCodeText: '   ',
-          deviceNameText: 'Pixel Fold',
-          routeKind: RouteProviderKind.lan,
+          connectionCodeText: 'ccb1_not-valid-json',
         ),
         throwsA(
           isA<ProjectHomePairingRequestException>().having(
             (error) => error.message,
             'message',
-            'Pairing code is required',
+            'Connection code is invalid',
           ),
         ),
       );
     });
 
-    test('defaults blank device name to Phone', () {
+    test('builds a complete Relay request from one connection code', () {
+      final pairing = _relayPairing();
+
       final request = buildProjectHomePairingRequest(
-        gatewayUrlText: 'http://127.0.0.1:8787',
-        pairingCodeText: 'pair-code',
-        deviceNameText: '   ',
-        routeKind: RouteProviderKind.lan,
+        connectionCodeText: pairing.toConnectionCode(),
       );
 
-      expect(request.deviceName, 'Phone');
-    });
-
-    test('builds manual scopes and claim endpoint exactly', () {
-      final request = buildProjectHomePairingRequest(
-        gatewayUrlText: 'http://127.0.0.1:8787',
-        pairingCodeText: ' pair-code ',
-        deviceNameText: ' Pixel Fold ',
-        routeKind: RouteProviderKind.relay,
-      );
-
-      expect(request.deviceName, 'Pixel Fold');
-      expect(request.pairing.pairingCode, 'pair-code');
-      expect(
-        request.pairing.claimEndpoint,
-        Uri.parse('http://127.0.0.1:8787/v1/pairing/claim'),
-      );
-      expect(request.pairing.gatewayUrl, Uri.parse('http://127.0.0.1:8787'));
+      expect(request.deviceName, projectHomePairingDefaultDeviceName);
+      expect(request.pairing.pairingCode, 'relay-code');
       expect(request.pairing.routeProvider, RouteProviderKind.relay);
-      expect(request.pairing.scopes, {
-        'view',
-        'content',
-        'focus',
-        'message_submit',
-        'file_upload',
-        'file_download',
-        'terminal_input',
-        'lifecycle',
-        'notify',
-      });
+      expect(request.pairing.hostId, 'host-relay');
+      expect(request.pairing.relayBootstrap?.sessionId, 'relay-session');
+      expect(
+        request.pairing.relayBootstrap?.rendezvousCapability,
+        'ccb-relay-rv-v1.payload.signature',
+      );
     });
 
-    test('passes QR pairing override through without rebuilding fields', () {
-      final expiresAt = DateTime.utc(2026, 6, 18, 0, 10);
+    test('scan override is used without a typed connection code', () {
       final override = GatewayPairingPayload(
         pairingCode: 'qr-code',
         claimEndpoint: Uri.parse('https://mobile.example.com/pair/claim'),
         routeProvider: RouteProviderKind.cloudflareTunnel,
         gatewayUrl: Uri.parse('https://mobile.example.com/base'),
         projectId: 'proj-qr',
-        expiresAt: expiresAt,
+        expiresAt: DateTime.utc(2026, 6, 18, 0, 10),
         scopes: const {'view', 'focus', 'terminal_input'},
       );
 
       final request = buildProjectHomePairingRequest(
-        gatewayUrlText: '',
-        pairingCodeText: '',
-        deviceNameText: '',
-        routeKind: RouteProviderKind.lan,
+        connectionCodeText: '',
         pairingOverride: override,
       );
 
       expect(request.pairing, same(override));
       expect(request.deviceName, 'Phone');
-      expect(request.pairing.projectId, 'proj-qr');
-      expect(request.pairing.expiresAt, expiresAt);
-      expect(request.pairing.scopes, {'view', 'focus', 'terminal_input'});
-      expect(
-        request.pairing.gatewayUrl,
-        Uri.parse('https://mobile.example.com/base'),
-      );
-      expect(
-        request.pairing.claimEndpoint,
-        Uri.parse('https://mobile.example.com/pair/claim'),
-      );
-      expect(request.pairing.routeProvider, RouteProviderKind.cloudflareTunnel);
     });
+  });
+}
+
+GatewayPairingPayload _relayPairing() {
+  return GatewayPairingPayload.fromJson({
+    'pairing_code': 'relay-code',
+    'claim_endpoint': 'https://relay.example.com/v1/pairing/claim',
+    'route_provider': 'relay',
+    'gateway_url': 'https://relay.example.com',
+    'scopes': ['view', 'notify'],
+    'project_id': 'host-relay',
+    'host_id': 'host-relay',
+    'websocket_url': 'wss://relay.example.com',
+    'server_fingerprint': 'sha256:relay-host',
+    'relay_session_id': 'relay-session',
+    'relay_client_private_key_b64': 'bootstrap-private-key',
+    'relay_phone_nonce_b64': 'bootstrap-phone-nonce',
+    'relay_rendezvous_capability': 'ccb-relay-rv-v1.payload.signature',
+    'relay_bootstrap_expires_at': '2026-07-25T00:00:00Z',
+    'relay_bootstrap_single_use': true,
   });
 }

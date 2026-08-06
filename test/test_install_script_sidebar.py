@@ -131,9 +131,10 @@ def test_sidebar_package_script_stages_release_artifact() -> None:
     assert 'CCB_AGENT_SIDEBAR_WRAPPER' in text
     assert 'tar -C "$REPO_ROOT/dist" -czf "$OUT_TAR" "$ARTIFACT_NAME"' in text
     assert 'write_sha256_file "$OUT_TAR" "$OUT_SHA"' in text
-    assert 'sha256sum "$path" > "$output"' in text
-    assert 'shasum -a 256 "$path" > "$output"' in text
+    assert '(cd "$directory" && sha256sum "$filename") > "$output"' in text
+    assert '(cd "$directory" && shasum -a 256 "$filename") > "$output"' in text
     assert 'hashlib.sha256' in text
+    assert 'path.name' in text
 
 
 def test_sidebar_build_script_executes_copy_path_with_fake_cargo(tmp_path: Path) -> None:
@@ -273,7 +274,16 @@ def test_sidebar_package_script_executes_artifact_dry_run(tmp_path: Path) -> Non
     checksum_parts = checksum_text.split()
     assert len(checksum_parts) == 2
     assert len(checksum_parts[0]) == 64
-    assert checksum_parts[1].endswith('ccb-agent-sidebar-linux-x86_64.tar.gz')
+    assert checksum_parts[1] == 'ccb-agent-sidebar-linux-x86_64.tar.gz'
+    checksum_check = subprocess.run(
+        ['sha256sum', '-c', checksum.name],
+        cwd=artifact.parent,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    assert checksum_check.returncode == 0, checksum_check.stderr
     listing = subprocess.run(
         ['tar', '-tzf', str(artifact)],
         stdout=subprocess.PIPE,
@@ -643,6 +653,16 @@ def test_ci_runs_rust_sidebar_checks() -> None:
     assert 'bin/build-ccb-rs-helper' in text
 
 
+def test_ci_full_matrix_uses_short_tmpdir_for_unix_sockets() -> None:
+    text = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
+    run_tests_step = text.split('- name: Run tests', 1)[1].split(
+        '- name: Guard dynamic layout provider matrix smoke',
+        1,
+    )[0]
+
+    assert 'TMPDIR: /tmp' in run_tests_step
+
+
 def test_macos_install_smoke_uses_prebuilt_sidebar_helper() -> None:
     text = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
 
@@ -652,6 +672,26 @@ def test_macos_install_smoke_uses_prebuilt_sidebar_helper() -> None:
     assert text.index(build_marker) < text.index(smoke_marker)
     assert 'bin/build-ccb-agent-sidebar' in text
     assert 'bin/build-ccb-rs-helper' in text
+
+
+def test_wsl_workflows_pin_python_inside_wsl_shells() -> None:
+    expected = 'export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python'
+    tests_workflow = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
+    real_workflow = Path('.github/workflows/ccbd-real-platform.yml').read_text(
+        encoding='utf-8',
+    )
+
+    smoke_step = tests_workflow.split(
+        '- name: Smoke ccb startup from /mnt/c in WSL',
+        1,
+    )[1].split('- name: Run tests in WSL with tmux', 1)[0]
+    communication_step = real_workflow.split(
+        '- name: Communication matrix in WSL mounted checkout',
+        1,
+    )[1].split('- name: Short soak in WSL mounted checkout', 1)[0]
+
+    assert expected in smoke_step
+    assert expected in communication_step
 
 
 def test_sidebar_release_workflow_publishes_linux_artifact() -> None:
@@ -674,6 +714,7 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
     assert f'default: "v{version}"' in text
+    assert 'test "$TAG_NAME" = "v$version"' in text
     assert 'os: ubuntu-22.04' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
     assert 'rustup target add x86_64-apple-darwin aarch64-apple-darwin' in text
@@ -699,12 +740,19 @@ def test_release_artifacts_workflow_accepts_runtime_accelerator_socket_fallback(
     assert 'Unexpected runtime accelerator socket path' in text
 
 
-def test_release_artifacts_workflow_writes_release_notes_from_changelog() -> None:
+def test_release_artifacts_workflow_uses_committed_bilingual_release_notes() -> None:
     text = Path('.github/workflows/release-artifacts.yml').read_text(encoding='utf-8')
+    version = Path('VERSION').read_text(encoding='utf-8').strip()
+    notes = Path(f'docs/releases/v{version}.md').read_text(encoding='utf-8')
 
     assert 'Checkout release notes' in text
-    assert 'changelog = Path(os.environ["GITHUB_WORKSPACE"]) / "CHANGELOG.md"' in text
-    assert 'release notes missing for {tag}' in text
+    assert 'notes_file="$GITHUB_WORKSPACE/docs/releases/${TAG_NAME}.md"' in text
+    assert "grep -Fx '## English' \"$notes_file\"" in text
+    assert "grep -Fx '## 中文' \"$notes_file\"" in text
+    assert '## English' in notes
+    assert '## 中文' in notes
     assert 'gh release edit "$TAG_NAME"' in text
     assert 'gh release create "$TAG_NAME"' in text
+    assert '--verify-tag' in text
+    assert '--fail-on-no-commits' in text
     assert '--notes-file "$notes_file"' in text

@@ -12,6 +12,7 @@ from terminal_runtime import TmuxBackend
 
 from .daemon import ensure_daemon_started
 from .daemon_runtime.policy import STARTUP_TRANSACTION_TIMEOUT_S
+from .config_restart_intent import clear_applied_config_restart_intent
 from .layout_status import layout_status
 from .maintenance import startup_ensure_maintenance_heartbeat
 from .start_runtime import StartSummary, start_agents as _start_agents_impl
@@ -45,6 +46,7 @@ def start_agents(
         enrich_summary_fn=_merge_workspace_guard_summary,
         start_rpc_timeout_s=STARTUP_TRANSACTION_TIMEOUT_S,
     )
+    clear_applied_config_restart_intent(context)
     post_rpc_started_ns = time.perf_counter_ns()
     stage_started_ns = time.perf_counter_ns()
     sidebar_helper_refresh = _refresh_running_sidebar_helpers(context)

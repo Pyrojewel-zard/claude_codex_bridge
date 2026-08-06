@@ -21,6 +21,13 @@ List<CcbProject> projectsFromSnapshotPayload(Map<String, Object?> payload) {
 }
 
 Map<String, Object?> projectViewSnapshotPayload(CcbProjectView view) => {
+  if (view.generatedAt != null || view.sequence != null || view.ttlMs != null)
+    'cache': {
+      if (view.generatedAt != null)
+        'generated_at': view.generatedAt!.toUtc().toIso8601String(),
+      if (view.sequence != null) 'sequence': view.sequence,
+      if (view.ttlMs != null) 'ttl_ms': view.ttlMs,
+    },
   'view': {
     'project': _projectJson(view.project),
     'namespace': {

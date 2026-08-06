@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -15,12 +17,16 @@ import pytest
 
 import cli.services.config_ui as config_ui_module
 from cli.models import ParsedConfigUiCommand
+from cli.services.config_restart_intent import load_config_restart_intent
 from cli.services.config_ui import (
     config_ui_asset_path,
     config_ui_provider_capabilities,
     open_config_ui_url,
     prepare_config_ui,
 )
+from cli.services.config_ui_settings import resolve_config_ui_settings
+from agents.config_loader import ConfigValidationError
+from storage.paths import PathLayout
 
 
 def _context(project_root: Path):
@@ -29,18 +35,41 @@ def _context(project_root: Path):
 
 def test_config_ui_asset_is_packaged_source_content() -> None:
     path = config_ui_asset_path()
+    repo_root = Path(__file__).resolve().parents[1]
 
+    assert path == repo_root / 'assets' / 'config_ui' / 'index.html'
     assert path.is_file()
     page = path.read_text(encoding='utf-8')
+    assert '<html lang="en">' in page
     assert '<title>CCB Config Control Panel Demo</title>' in page
     assert 'id="staticDeletePane"' in page
     assert 'id="basicDeletePane"' in page
     assert 'function deleteSelectedPane()' in page
+    assert 'id="themeSelect"' in page
+    assert 'data-i18n="appearance"' in page
+    assert 'function loadThemePreference()' in page
+    assert 'function saveThemePreference(value)' in page
+    assert 'apiJson("/api/theme"' in page
+    assert 'document.documentElement.dataset.ccbTheme = rendered' in page
+    assert 'id="historyScanBtn"' in page
+    assert 'id="historyCleanupBtn"' in page
+    assert 'function scanAgentHistory()' in page
+    assert 'function cleanupAgentHistory()' in page
+    assert '/api/storage/history' in page
+    assert 'id="config-editor-section"' in page
+    assert 'id="agent-session-storage"' in page
+    assert 'id="observe-section"' not in page
+    assert 'id="agent-communication-flow"' not in page
+    assert 'id="commFlowPanel"' not in page
+    assert 'id="pauseFlow"' not in page
+    assert 'data-drawer="messageTrace"' not in page
+    assert '2.8 GB' not in page
+    assert 'data-i18n="deleteAll"' not in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
     assert match is not None
     embedded_icon = base64.b64decode(match.group(1))
     mobile_icon = (
-        path.parents[6]
+        repo_root
         / 'mobile'
         / 'app'
         / 'android'
@@ -87,6 +116,9 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         token='test-token',
         idle_timeout_s=0.3,
     )
+    assert 'test-token' not in json.dumps(handle.summary)
+    assert handle.summary['url'].endswith('/')
+    assert handle.summary['bind'] == 'loopback'
     time.sleep(0.35)
     thread = threading.Thread(target=handle.serve_forever)
     thread.start()
@@ -139,6 +171,210 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         thread.join(timeout=2)
         handle.close()
     assert not thread.is_alive()
+
+
+def test_config_ui_reads_and_saves_user_theme_preference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-theme'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        'version = 2\nentry_window = "main"\n\n[windows]\nmain = "demo:codex"\n',
+        encoding='utf-8',
+    )
+    config_home = tmp_path / 'config'
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config_home))
+    monkeypatch.setenv('CCB_SYSTEM_THEME', 'light')
+    monkeypatch.delenv('TMUX', raising=False)
+    monkeypatch.delenv('TMUX_PANE', raising=False)
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        token='theme-token',
+        idle_timeout_s=0.3,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        initial = _get_json(handle.url, '/api/theme')
+        assert initial['theme'] == 'dark'
+        assert initial['effective_theme'] == 'dark'
+        assert initial['available_themes'][0] == 'system'
+
+        saved = _post_json(handle.url, '/api/theme', {'theme': 'system'})
+        assert saved['status'] == 'ok'
+        assert saved['theme'] == 'system'
+        assert saved['palette'] == 'system'
+        assert saved['effective_theme'] == 'light'
+        assert saved['effective_palette'] == 'latte'
+        assert saved['effective_tmux_profile'] == 'light'
+        assert saved['tmux_refresh'] == 'skipped'
+
+        theme_path = config_home / 'ccb' / 'theme.json'
+        assert json.loads(theme_path.read_text(encoding='utf-8')) == {
+            'palette': 'system',
+            'schema_version': 1,
+            'theme': 'system',
+            'tmux_profile': 'system',
+        }
+
+        with pytest.raises(HTTPError) as invalid:
+            _post_json(handle.url, '/api/theme', {'theme': 'unknown'})
+        assert invalid.value.code == 422
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_uses_project_port_and_environment_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+port = 43123
+token_env = "CCB_CONFIG_UI_TEST_TOKEN"
+''',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CCB_CONFIG_UI_TEST_TOKEN', 'stable-secret')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+    )
+    try:
+        assert urlparse(handle.url).port == 43123
+        assert parse_qs(urlparse(handle.url).query)['token'] == ['stable-secret']
+        assert handle.summary['token_source'] == 'environment'
+        assert 'stable-secret' not in json.dumps(handle.summary)
+    finally:
+        handle.close()
+
+
+def test_config_ui_cli_port_overrides_project_port(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+port = 43123
+''',
+        encoding='utf-8',
+    )
+
+    resolved = resolve_config_ui_settings(project_root=project_root, cli_port=0)
+
+    assert resolved.port == 0
+    assert resolved.token is None
+    assert resolved.token_source == 'ephemeral'
+
+
+def test_config_ui_reads_owner_only_project_token_file(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    token_path = project_root / '.ccb' / 'config-ui.token'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+token_file = ".ccb/config-ui.token"
+''',
+        encoding='utf-8',
+    )
+    token_path.write_text('file-secret\n', encoding='utf-8')
+    token_path.chmod(0o600)
+
+    resolved = resolve_config_ui_settings(project_root=project_root, cli_port=None)
+
+    assert resolved.token == 'file-secret'
+    assert resolved.token_source == 'file'
+
+
+@pytest.mark.parametrize(
+    ('config_ui', 'message'),
+    [
+        ('token = "must-not-be-accepted"', 'unknown fields: token'),
+        ('token_env = "TOKEN"\ntoken_file = ".ccb/token"', 'mutually exclusive'),
+        ('token_env = "not-a-valid-name"', 'valid environment variable name'),
+        ('port = 70000', 'between 0 and 65535'),
+    ],
+)
+def test_config_ui_rejects_unsafe_project_settings(
+    tmp_path: Path,
+    config_ui: str,
+    message: str,
+) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        f'''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+{config_ui}
+''',
+        encoding='utf-8',
+    )
+
+    with pytest.raises(ConfigValidationError, match=message) as exc_info:
+        resolve_config_ui_settings(project_root=project_root, cli_port=None)
+    assert 'must-not-be-accepted' not in str(exc_info.value)
+
+
+def test_config_ui_rejects_insecure_token_file_without_leaking_contents(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    token_path = project_root / '.ccb' / 'config-ui.token'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[config_ui]
+token_file = ".ccb/config-ui.token"
+''',
+        encoding='utf-8',
+    )
+    token_path.write_text('do-not-leak', encoding='utf-8')
+    token_path.chmod(0o644)
+
+    with pytest.raises(ConfigValidationError, match='owner-only permissions') as exc_info:
+        resolve_config_ui_settings(project_root=project_root, cli_port=None)
+    assert 'do-not-leak' not in str(exc_info.value)
 
 
 def test_config_ui_uses_builtin_demo_config_when_project_config_is_missing(
@@ -323,6 +559,195 @@ def test_config_ui_validates_saves_with_digest_guard_and_hot_reloads(tmp_path: P
     assert not thread.is_alive()
 
 
+def test_config_ui_saves_api_change_without_hot_reload_and_schedules_restart(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-api-restart'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = '''version = 2
+
+[windows]
+main = "agent1:codex"
+
+[agents.agent1]
+key = "old-secret"
+url = "https://old.example.test"
+'''
+    updated = original.replace('old-secret', 'new-secret').replace(
+        'https://old.example.test',
+        'https://new.example.test',
+    )
+    config_path.write_text(original, encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    reload_calls: list[bool] = []
+
+    def _reload(dry_run: bool) -> dict[str, object]:
+        reload_calls.append(dry_run)
+        assert dry_run is True
+        return {
+            'status': 'ok',
+            'plan_class': 'replace_agent',
+            'future_safe_to_apply': True,
+            'operations': [
+                {
+                    'op': 'replace_agent',
+                    'agent': 'agent1',
+                    'fields': ['api', 'provider_profile'],
+                }
+            ],
+        }
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=1.0,
+        reload_action=_reload,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        applied = _post_json(
+            handle.url,
+            '/api/apply',
+            {
+                'text': updated,
+                'expected_digest': config['digest'],
+                'mode': 'hot_reload',
+            },
+        )
+
+        assert applied['status'] == 'restart_required'
+        assert applied['restart_required'] is True
+        assert applied['affected_agents'] == ['agent1']
+        assert applied['dry_run']['plan_class'] == 'replace_agent'
+        assert 'reload' not in applied
+        assert reload_calls == [True]
+        assert config_path.read_text(encoding='utf-8') == updated
+
+        layout = PathLayout(project_root)
+        intent = load_config_restart_intent(layout)
+        assert intent is not None
+        assert intent.affected_agents == ('agent1',)
+        persisted = layout.ccbd_config_restart_intent_path.read_text(encoding='utf-8')
+        assert 'old-secret' not in persisted
+        assert 'new-secret' not in persisted
+        assert 'https://new.example.test' not in persisted
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_schedules_api_restart_when_daemon_dry_run_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-api-restart-offline'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = '''version = 2
+
+[windows]
+main = "agent1:codex"
+
+[agents.agent1]
+key = "old-secret"
+url = "https://old.example.test"
+'''
+    updated = original.replace('old-secret', 'new-secret')
+    config_path.write_text(original, encoding='utf-8')
+    expected_digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    def _unavailable(_dry_run: bool) -> dict[str, object]:
+        raise RuntimeError('daemon unavailable')
+
+    status, applied = config_ui_module._apply_candidate(
+        {
+            'text': updated,
+            'expected_digest': expected_digest,
+            'mode': 'hot_reload',
+        },
+        config_path=config_path,
+        project_root=project_root,
+        path_layout=PathLayout(project_root),
+        reload_action=_unavailable,
+        mutation_lock=threading.Lock(),
+    )
+
+    assert int(status) == 200
+    assert applied['status'] == 'restart_required'
+    assert applied['restart_required'] is True
+    assert applied['affected_agents'] == ['agent1']
+    assert applied['dry_run']['status'] == 'unavailable'
+    assert applied['reload_warning'] == 'daemon unavailable'
+    assert config_path.read_text(encoding='utf-8') == updated
+    assert load_config_restart_intent(PathLayout(project_root)) is not None
+
+
+def test_config_ui_safe_apply_clears_matching_save_only_restart_intent(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-safe-apply-after-save'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = 'version = 2\n\n[windows]\nmain = "agent1:codex"\n'
+    updated = original.replace('agent1:codex', 'agent1:codex, agent2:claude')
+    config_path.write_text(original, encoding='utf-8')
+    layout = PathLayout(project_root)
+    original_digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    status, saved = config_ui_module._apply_candidate(
+        {
+            'text': updated,
+            'expected_digest': original_digest,
+            'mode': 'save',
+        },
+        config_path=config_path,
+        project_root=project_root,
+        path_layout=layout,
+        reload_action=lambda _dry_run: {},
+        mutation_lock=threading.Lock(),
+    )
+
+    assert int(status) == 200
+    assert saved['restart_required'] is True
+    assert load_config_restart_intent(layout) is not None
+    reload_calls: list[bool] = []
+
+    def _reload(dry_run: bool) -> dict[str, object]:
+        reload_calls.append(dry_run)
+        if dry_run:
+            return {
+                'status': 'ok',
+                'plan_class': 'add_agent',
+                'future_safe_to_apply': True,
+            }
+        return {'status': 'published', 'plan_class': 'add_agent'}
+
+    status, applied = config_ui_module._apply_candidate(
+        {
+            'text': updated,
+            'expected_digest': saved['digest'],
+            'mode': 'hot_reload',
+        },
+        config_path=config_path,
+        project_root=project_root,
+        path_layout=layout,
+        reload_action=_reload,
+        mutation_lock=threading.Lock(),
+    )
+
+    assert int(status) == 200
+    assert applied['status'] == 'reloaded'
+    assert reload_calls == [True, False]
+    assert load_config_restart_intent(layout) is None
+
+
 def test_config_ui_rejects_invalid_candidate_without_writing(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -431,6 +856,79 @@ role = "agentroles.coder"
     assert not thread.is_alive()
 
 
+def test_config_ui_scans_and_cleans_agent_history_through_token_guarded_api(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-history'
+    (project_root / '.ccb').mkdir(parents=True)
+    scan_calls: list[tuple[int, str | None]] = []
+    cleanup_calls: list[tuple[int, str | None]] = []
+    scan_payload = {
+        'schema_version': 1,
+        'status': 'ok',
+        'retention_days': 7,
+        'agent': 'worker1',
+        'candidate_count': 2,
+        'candidate_bytes': 123,
+        'agents': [],
+    }
+
+    def _scan(retention_days: int, agent: str | None) -> dict[str, object]:
+        scan_calls.append((retention_days, agent))
+        return dict(scan_payload)
+
+    def _cleanup(retention_days: int, agent: str | None) -> dict[str, object]:
+        cleanup_calls.append((retention_days, agent))
+        return {
+            'schema_version': 1,
+            'status': 'ok',
+            'retention_days': retention_days,
+            'agent': agent or 'all',
+            'deleted_count': 2,
+            'deleted_bytes': 123,
+            'skipped_count': 0,
+            'scan': {**scan_payload, 'candidate_count': 0, 'candidate_bytes': 0},
+        }
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        token='history-token',
+        idle_timeout_s=1.0,
+        reload_action=lambda _dry_run: {'status': 'unused'},
+        history_scan_action=_scan,
+        history_cleanup_action=_cleanup,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        scanned = _get_json(handle.url, '/api/storage/history?retention_days=7&agent=worker1')
+        assert scanned['candidate_count'] == 2
+        assert scan_calls == [(7, 'worker1')]
+
+        cleaned = _post_json(
+            handle.url,
+            '/api/storage/history/cleanup',
+            {'retention_days': 7, 'agent': 'worker1'},
+        )
+        assert cleaned['deleted_count'] == 2
+        assert cleanup_calls == [(7, 'worker1')]
+
+        with pytest.raises(HTTPError) as invalid_get:
+            _get_json(handle.url, '/api/storage/history?retention_days=1&agent=worker1')
+        assert invalid_get.value.code == 422
+        with pytest.raises(HTTPError) as invalid_post:
+            _post_json(
+                handle.url,
+                '/api/storage/history/cleanup',
+                {'retention_days': 365, 'agent': 'worker1'},
+            )
+        assert invalid_post.value.code == 422
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
 def _get_json(base_url: str, path: str) -> dict[str, object]:
     parsed = urlparse(base_url)
     token = parse_qs(parsed.query)['token'][0]
@@ -456,6 +954,7 @@ def _post_json(base_url: str, path: str, payload: dict[str, object]) -> dict[str
 
 def test_config_ui_browser_open_uses_wsl_fallback(monkeypatch) -> None:
     seen: list[tuple[str, ...]] = []
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
     monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         config_ui_module.shutil,
@@ -465,11 +964,145 @@ def test_config_ui_browser_open_uses_wsl_fallback(monkeypatch) -> None:
     monkeypatch.setattr(
         config_ui_module.subprocess,
         'Popen',
-        lambda command, **_kwargs: seen.append(tuple(command)),
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
     )
 
     assert open_config_ui_url('http://127.0.0.1:43123/?token=test') is True
     assert seen == [('wslview', 'http://127.0.0.1:43123/?token=test')]
+
+
+def test_config_ui_browser_open_prefers_wsl_host_opener_over_webbrowser(monkeypatch) -> None:
+    seen: list[object] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setattr(
+        config_ui_module.webbrowser,
+        'open',
+        lambda *_args, **_kwargs: seen.append('webbrowser') or True,
+    )
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name == 'wslview' else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert seen == [('wslview', url)]
+
+
+def test_config_ui_browser_open_prefers_macos_open_over_linux_opener(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.delenv('WSL_DISTRO_NAME', raising=False)
+    monkeypatch.delenv('WSL_INTEROP', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(config_ui_module, '_is_wsl_environment', lambda: False)
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name in {'open', 'xdg-open'} else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert seen == [('open', url)]
+
+
+def test_config_ui_browser_open_prefers_linux_configured_browser_over_xdg(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.delenv('WSL_DISTRO_NAME', raising=False)
+    monkeypatch.delenv('WSL_INTEROP', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(config_ui_module, '_is_wsl_environment', lambda: False)
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name in {'sensible-browser', 'xdg-open'} else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: (
+            seen.append(tuple(command))
+            or SimpleNamespace(wait=lambda **_wait_kwargs: 0)
+        ),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert seen == [('sensible-browser', url)]
+
+
+def test_config_ui_browser_open_retries_after_wsl_opener_exits_nonzero(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name in {'wslview', 'cmd.exe'} else None,
+    )
+
+    def _popen(command, **_kwargs):
+        argv = tuple(command)
+        seen.append(argv)
+        return SimpleNamespace(wait=lambda **_wait_kwargs: 1 if argv[0] == 'wslview' else 0)
+
+    monkeypatch.setattr(config_ui_module.subprocess, 'Popen', _popen)
+
+    assert open_config_ui_url(url) is True
+    assert seen == [
+        ('wslview', url),
+        ('cmd.exe', '/c', 'start', '', url),
+    ]
+
+
+def test_config_ui_browser_open_reaps_opener_that_outlives_confirmation(monkeypatch) -> None:
+    reaped = threading.Event()
+    url = 'http://127.0.0.1:43123/?token=test'
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name == 'wslview' else None,
+    )
+
+    class _SlowProcess:
+        def wait(self, timeout=None):
+            if timeout is not None:
+                raise config_ui_module.subprocess.TimeoutExpired('wslview', timeout)
+            reaped.set()
+            return 0
+
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda _command, **_kwargs: _SlowProcess(),
+    )
+
+    assert open_config_ui_url(url) is True
+    assert reaped.wait(timeout=1.0)
 
 
 def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path: Path) -> None:

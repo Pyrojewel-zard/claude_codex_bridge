@@ -73,6 +73,8 @@ MIMO_RUNTIME_SPEC = _provider_runtime_spec("mimo")
 COPILOT_RUNTIME_SPEC = _provider_runtime_spec("copilot")
 CODEBUDDY_RUNTIME_SPEC = _provider_runtime_spec("codebuddy")
 QWEN_RUNTIME_SPEC = _provider_runtime_spec("qwen")
+QODER_RUNTIME_SPEC = _provider_runtime_spec("qoder")
+QODERCLICN_RUNTIME_SPEC = _provider_runtime_spec("qoderclicn")
 CURSOR_RUNTIME_SPEC = _provider_runtime_spec("cursor")
 CRUSH_RUNTIME_SPEC = _provider_runtime_spec("crush")
 GROK_RUNTIME_SPEC = _provider_runtime_spec("grok")
@@ -130,6 +132,14 @@ QWEN_CLIENT_SPEC = _client_spec(
     provider_key="qwen",
     session_filename=".qwen-session",
 )
+QODER_CLIENT_SPEC = _client_spec(
+    provider_key="qoder",
+    session_filename=".qoder-session",
+)
+QODERCLICN_CLIENT_SPEC = _client_spec(
+    provider_key="qoderclicn",
+    session_filename=".qoderclicn-session",
+)
 CURSOR_CLIENT_SPEC = _client_spec(
     provider_key="cursor",
     session_filename=".cursor-session",
@@ -176,6 +186,8 @@ RUNTIME_SPECS_BY_PROVIDER = {
     "copilot": COPILOT_RUNTIME_SPEC,
     "codebuddy": CODEBUDDY_RUNTIME_SPEC,
     "qwen": QWEN_RUNTIME_SPEC,
+    "qoder": QODER_RUNTIME_SPEC,
+    "qoderclicn": QODERCLICN_RUNTIME_SPEC,
     "cursor": CURSOR_RUNTIME_SPEC,
     "crush": CRUSH_RUNTIME_SPEC,
     "grok": GROK_RUNTIME_SPEC,
@@ -199,6 +211,8 @@ CLIENT_SPECS_BY_PROVIDER = {
     "copilot": COPILOT_CLIENT_SPEC,
     "codebuddy": CODEBUDDY_CLIENT_SPEC,
     "qwen": QWEN_CLIENT_SPEC,
+    "qoder": QODER_CLIENT_SPEC,
+    "qoderclicn": QODERCLICN_CLIENT_SPEC,
     "cursor": CURSOR_CLIENT_SPEC,
     "crush": CRUSH_CLIENT_SPEC,
     "grok": GROK_CLIENT_SPEC,
@@ -263,6 +277,10 @@ __all__ = [
     "PI_RUNTIME_SPEC",
     "ProviderClientSpec",
     "ProviderRuntimeSpec",
+    "QODER_CLIENT_SPEC",
+    "QODERCLICN_CLIENT_SPEC",
+    "QODERCLICN_RUNTIME_SPEC",
+    "QODER_RUNTIME_SPEC",
     "QWEN_CLIENT_SPEC",
     "QWEN_RUNTIME_SPEC",
     "RUNTIME_SPECS_BY_PROVIDER",

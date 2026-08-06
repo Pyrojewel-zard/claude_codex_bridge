@@ -19,49 +19,42 @@ class CcbMobileLocalizations {
 
   String get connectDescription =>
       isChinese
-          ? '把手机作为电脑上 CCB 项目的实时查看和输入界面。'
-          : 'Use your phone as a live view and input surface for CCB projects running on your computer.';
-
-  String get installTailscaleTitle =>
-      isChinese ? '安装 Tailscale' : 'Install Tailscale';
-
-  String get installTailscaleBody =>
-      isChinese
-          ? '在这台手机上安装 Tailscale，并登录到和电脑相同的 tailnet。'
-          : 'Install Tailscale on this phone and sign in to the same tailnet as your computer.';
+          ? '连接方式由电脑端选择；手机只需扫码或粘贴连接码。'
+          : 'Choose the route on the computer, then scan or paste its connection code.';
 
   String get runComputerCommandTitle =>
       isChinese ? '在电脑上运行一条命令' : 'Run one command on the computer';
 
   String get runComputerCommandBody =>
       isChinese
-          ? '在任意已启用 CCB 的终端运行这条命令。它会启动服务器级网关并打印配对二维码。'
-          : 'In any CCB-enabled terminal, run this command. It starts the server-wide gateway and prints a pairing QR.';
+          ? '命令会让你在电脑端选择连接方式，然后生成二维码和连接码。'
+          : 'Choose the connection route in the computer prompt; it then prints a QR and connection code.';
 
   String get scanQrTitle => isChinese ? '扫描二维码' : 'Scan the QR';
 
   String get scanQrBody =>
       isChinese
-          ? '保持手机上的 Tailscale VPN 开启，然后扫描电脑显示的二维码。'
-          : 'Keep Tailscale VPN enabled on the phone, then scan the QR shown by the computer.';
+          ? '扫描电脑显示的二维码；地址和路由配置已经包含在其中。'
+          : 'Scan the computer QR; it already contains the address and route configuration.';
 
   String get pairing => isChinese ? '正在配对' : 'Pairing';
 
   String get scanComputerQr => isChinese ? '扫描电脑二维码' : 'Scan computer QR';
 
-  String get pairGateway => isChinese ? '配对网关' : 'Pair Gateway';
+  String get enterConnectionCode =>
+      isChinese ? '输入连接码' : 'Enter connection code';
 
-  String get gatewayUrl => isChinese ? '网关地址' : 'Gateway URL';
+  String get connectionCodeSummary =>
+      isChinese ? '无法扫码时使用' : 'Use when scanning is unavailable';
 
-  String get pairingCode => isChinese ? '配对码' : 'Pairing code';
+  String get connectionCode => isChinese ? '连接码' : 'Connection code';
 
-  String get deviceName => isChinese ? '设备名称' : 'Device name';
+  String get connectionCodeHint =>
+      isChinese
+          ? '粘贴电脑端完整输出的 ccb1_ 连接码'
+          : 'Paste the complete ccb1_ code printed by the computer';
 
-  String get route => isChinese ? '路由' : 'Route';
-
-  String get scanQr => isChinese ? '扫码' : 'Scan QR';
-
-  String get claim => isChinese ? '连接' : 'Claim';
+  String get connectWithCode => isChinese ? '使用连接码连接' : 'Connect with code';
 
   String get couldNotLoadProject =>
       isChinese ? '无法加载项目' : 'Could not load project';
@@ -70,6 +63,55 @@ class CcbMobileLocalizations {
       isChinese ? '无法加载项目列表' : 'Could not load projects';
 
   String get retry => isChinese ? '重试' : 'Retry';
+
+  String get continueAnyway => isChinese ? '仍然继续' : 'Continue anyway';
+
+  String get lanPairingWarningTitle =>
+      isChinese
+          ? '连接 LAN 前请检查手机网络'
+          : 'Check the phone network before LAN pairing';
+
+  String get lanPairingWarningIntroduction =>
+      isChinese
+          ? '这个连接码使用电脑的局域网地址。当前手机网络可能无法访问它。'
+          : 'This code uses the computer\'s local-network address, which may not be reachable from the phone\'s current network.';
+
+  String get lanPhoneOfflineTitle =>
+      isChinese ? '手机当前没有可用网络' : 'The phone is offline';
+
+  String get lanPhoneOfflineBody =>
+      isChinese
+          ? '请打开 Wi-Fi，并确认手机和电脑连接到同一个可信局域网。'
+          : 'Turn on Wi-Fi and connect the phone and computer to the same trusted local network.';
+
+  String get lanLocalNetworkRequiredTitle =>
+      isChinese ? '请连接与电脑相同的 Wi-Fi' : 'Connect to the computer\'s Wi-Fi';
+
+  String lanLocalNetworkRequiredBody(String gatewayHost) {
+    return isChinese
+        ? '当前未检测到 Wi-Fi 或以太网，仅使用移动数据通常无法访问 $gatewayHost。若手机正在共享热点，请确认电脑已连接该热点。'
+        : 'No Wi-Fi or Ethernet connection was detected. Mobile data normally cannot reach $gatewayHost. If this phone is sharing a hotspot, confirm the computer joined it.';
+  }
+
+  String get lanVpnMayBlockTitle =>
+      isChinese ? 'VPN 可能阻止局域网连接' : 'A VPN may block the LAN connection';
+
+  String lanVpnMayBlockBody(String gatewayHost) {
+    return isChinese
+        ? '请允许 VPN 访问本地网络，或暂时关闭 VPN 后重试 $gatewayHost。'
+        : 'Allow local-network access in the VPN, or temporarily disable it and retry $gatewayHost.';
+  }
+
+  String get lanGatewayUnreachableTitle =>
+      isChinese
+          ? '已连接本地网络，但电脑端不可达'
+          : 'Local network connected, but the computer is unreachable';
+
+  String lanGatewayUnreachableBody(String gatewayHost) {
+    return isChinese
+        ? '确认手机和电脑在同一 Wi-Fi，未使用访客/设备隔离网络，防火墙允许 $gatewayHost。若电脑 IP 已变化，请在电脑重新运行 ccb update mobile 并扫码。'
+        : 'Check that both devices use the same Wi-Fi, guest/client isolation is off, and the firewall allows $gatewayHost. If the computer IP changed, rerun ccb update mobile and scan the new code.';
+  }
 
   String get rePair => isChinese ? '重新配对' : 'Re-pair';
 
@@ -163,15 +205,58 @@ class CcbMobileLocalizations {
 
   String get mobileUpdatesDescription =>
       isChinese
-          ? '打开官方发布页下载新的 APK，并通过相同签名渠道覆盖安装。'
-          : 'Open the official release page to download a newer APK and install it over the same signed channel.';
+          ? '启动时会自动检查新版本，也可以在这里手动检查。'
+          : 'Updates are checked automatically at startup, or you can check manually here.';
 
   String get mobileUpdateInstallNote =>
       isChinese
           ? '覆盖安装会保留已配对资料。若 Android 提示签名冲突，说明曾安装不同签名的测试包，需要一次性卸载后再安装正式包。'
           : 'Cover-installing preserves paired data. If Android reports a signature conflict, an older test APK used a different signature and must be uninstalled once before installing the official build.';
 
-  String get openApkDownload => isChinese ? '打开 APK 下载' : 'Open APK download';
+  String get checkForUpdates => isChinese ? '检查更新' : 'Check for updates';
+
+  String get checkingForUpdates => isChinese ? '正在检查' : 'Checking';
+
+  String get alreadyLatestVersion =>
+      isChinese ? '当前已是最新版本。' : 'You are up to date.';
+
+  String newVersionAvailable(String version) =>
+      isChinese ? '发现新版本 $version。' : 'Version $version is available.';
+
+  String get downloadAndInstall => isChinese ? '下载并安装' : 'Download and install';
+
+  String get downloadingUpdate => isChinese ? '正在下载' : 'Downloading';
+
+  String downloadingVersion(String version) =>
+      isChinese
+          ? '正在下载 $version 并校验安装包…'
+          : 'Downloading and verifying $version…';
+
+  String get androidInstallerOpened =>
+      isChinese
+          ? '安装包已校验，已打开 Android 安装器。'
+          : 'APK verified. Android installer opened.';
+
+  String get updateCheckFailed =>
+      isChinese
+          ? '检查更新失败，请检查网络或打开发布页。'
+          : 'Update check failed. Check your network or open the release page.';
+
+  String get updateDownloadFailed =>
+      isChinese
+          ? '更新下载或校验失败，请重试或打开发布页。'
+          : 'Update download or verification failed. Retry or open the release page.';
+
+  String get openReleasePage => isChinese ? '打开发布页' : 'Open release page';
+
+  String get updateAvailableTitle =>
+      isChinese ? '发现 CCB Mobile 更新' : 'CCB Mobile update available';
+
+  String get later => isChinese ? '稍后' : 'Later';
+
+  String get updateNow => isChinese ? '立即更新' : 'Update now';
+
+  String get openApkDownload => openReleasePage;
 
   String get couldNotOpenUpdateUrl =>
       isChinese ? '无法打开更新下载链接' : 'Could not open update download';
@@ -179,6 +264,8 @@ class CcbMobileLocalizations {
   String get projects => isChinese ? '项目' : 'Projects';
 
   String get openTerminal => isChinese ? '打开终端' : 'Open Terminal';
+
+  String get returnToChat => isChinese ? '返回对话' : 'Return to Chat';
 
   String messageAgent(String agentName) {
     return isChinese ? '给 $agentName 发消息' : 'Message $agentName';

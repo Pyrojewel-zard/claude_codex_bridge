@@ -82,6 +82,10 @@ def _payload_cancel(job_id: str) -> dict:
     return {'job_id': job_id}
 
 
+def _payload_followup(job_id: str, message: str) -> dict:
+    return {'job_id': job_id, 'message': message}
+
+
 def _payload_start(
     *,
     agent_names: tuple[str, ...] = (),
@@ -264,6 +268,7 @@ client_endpoints = {
     'mailbox_head': ('mailbox_head', _payload_mailbox_head),
     'ack': ('ack', _payload_ack),
     'cancel': ('cancel', _payload_cancel),
+    'followup': ('followup', _payload_followup),
     'start': ('start', _payload_start),
     'attach': ('attach', _payload_attach),
     'restore': ('restore', _payload_restore),

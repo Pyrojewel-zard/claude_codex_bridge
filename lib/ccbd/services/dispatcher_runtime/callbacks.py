@@ -166,6 +166,7 @@ def submit_callback_continuation(
         return latest
     existing_continuation = _existing_continuation_job(dispatcher, latest)
     if existing_continuation is not None:
+        _repair_pending_continuation_attempt(dispatcher, latest, existing_continuation)
         persisted_reply = _latest_child_reply(dispatcher, latest)
         state = (
             CallbackEdgeState.DONE
@@ -228,15 +229,58 @@ def submit_callback_continuation(
 def repair_callback_edges(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
     if dispatcher._message_bureau is None:
         return ()
+    with dispatcher._chain_transition_lock:
+        return _repair_callback_edges_locked(dispatcher)
+
+
+def _repair_callback_edges_locked(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
     repaired: list[CallbackEdgeRecord] = []
-    for edge in dispatcher._message_bureau.pending_callback_edges():
-        latest = dispatcher._message_bureau.callback_edge(edge.edge_id) or edge
+    latest_edges = _latest_callback_edges(dispatcher)
+    repair_candidates = tuple(
+        edge
+        for edge in latest_edges
+        if edge.state in {CallbackEdgeState.PENDING, CallbackEdgeState.CHILD_COMPLETED}
+        and not edge.continuation_job_id
+        and not _pending_edge_waits_on_child(dispatcher, edge)
+    )
+    unlinked_submitted = tuple(
+        edge
+        for edge in latest_edges
+        if edge.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+        and not edge.continuation_job_id
+    )
+    existing_continuations = _existing_continuation_jobs_by_edge(
+        dispatcher,
+        (*repair_candidates, *unlinked_submitted),
+    )
+    repair_candidate_ids = {edge.edge_id for edge in repair_candidates}
+    for latest in latest_edges:
+        if latest.state in {
+            CallbackEdgeState.DONE,
+            CallbackEdgeState.FAILED,
+            CallbackEdgeState.TIMED_OUT,
+        }:
+            continue
+        if latest.state is CallbackEdgeState.CONTINUATION_SUBMITTED:
+            existing_continuation = (
+                _queued_continuation_job(dispatcher, latest)
+                if latest.continuation_job_id
+                else existing_continuations.get(latest.edge_id)
+            )
+            if existing_continuation is not None and _repair_pending_continuation_attempt(
+                dispatcher,
+                latest,
+                existing_continuation,
+            ):
+                repaired.append(latest)
+            continue
         if latest.state in _TERMINAL_CALLBACK_STATES:
             continue
-        if latest.continuation_job_id:
+        if latest.edge_id not in repair_candidate_ids:
             continue
-        existing_continuation = _existing_continuation_job(dispatcher, latest)
+        existing_continuation = existing_continuations.get(latest.edge_id)
         if existing_continuation is not None:
+            _repair_pending_continuation_attempt(dispatcher, latest, existing_continuation)
             reply = _latest_child_reply(dispatcher, latest)
             reply_job = _job_for_reply(dispatcher, reply)
             repaired.append(
@@ -267,6 +311,73 @@ def repair_callback_edges(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
             )
         )
     return tuple(repaired)
+
+
+def _latest_callback_edges(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
+    return dispatcher._message_bureau._callback_edge_store.list_latest()
+
+
+def _existing_continuation_jobs_by_edge(
+    dispatcher,
+    edges: tuple[CallbackEdgeRecord, ...],
+) -> dict[str, JobRecord]:
+    targets = {edge.callback_target_agent for edge in edges}
+    existing: dict[str, JobRecord] = {}
+    for target in targets:
+        for job in dispatcher._job_store.list_agent(target):
+            options = dict(getattr(job.request, 'route_options', None) or {})
+            edge_id = str(options.get('chain_edge_id') or '').strip()
+            if edge_id:
+                existing[edge_id] = job
+    return existing
+
+
+def _queued_continuation_job(dispatcher, edge: CallbackEdgeRecord):
+    job_id = str(edge.continuation_job_id or '').strip()
+    if not job_id:
+        return None
+    target = dispatcher._state.target_for_job(job_id)
+    if target is None:
+        return None
+    if job_id not in dispatcher._state.queued_items_for(target[0], target[1]):
+        return None
+    return dispatcher._job_store.get_latest_target(target[0], target[1], job_id)
+
+
+def _pending_edge_waits_on_child(dispatcher, edge: CallbackEdgeRecord) -> bool:
+    if edge.state is not CallbackEdgeState.PENDING:
+        return False
+    return _job_is_outstanding(dispatcher, edge.child_job_id)
+
+
+def _job_is_outstanding(dispatcher, job_id: str) -> bool:
+    target = dispatcher._state.target_for_job(job_id)
+    if target is None:
+        return False
+    if dispatcher._state.active_job_for(target[0], target[1]) == job_id:
+        return True
+    return job_id in dispatcher._state.queued_items_for(target[0], target[1])
+
+
+def _repair_pending_continuation_attempt(dispatcher, edge: CallbackEdgeRecord, job) -> bool:
+    if job.status not in {JobStatus.ACCEPTED, JobStatus.QUEUED}:
+        return False
+    bureau = dispatcher._message_bureau
+    existing_attempt = bureau._attempt_store.get_latest_by_job_id(job.job_id)
+    existing_inbound = None
+    if existing_attempt is not None:
+        existing_inbound = bureau._inbound_store.get_latest_for_attempt(
+            job.agent_name,
+            existing_attempt.attempt_id,
+        )
+    if existing_attempt is not None and existing_inbound is not None:
+        return False
+    bureau.record_retry_attempt(
+        edge.parent_message_id,
+        job,
+        accepted_at=job.created_at or edge.updated_at,
+    )
+    return existing_attempt is None or existing_inbound is None
 
 
 def sweep_callback_timeouts(dispatcher) -> tuple[CallbackEdgeRecord, ...]:
@@ -323,10 +434,7 @@ def mark_callback_done(dispatcher, job, *, finished_at: str) -> None:
 
 
 def _mark_prior_continuation_edges_done(dispatcher, completed_edge: CallbackEdgeRecord, *, updated_at: str) -> None:
-    latest_by_id: dict[str, CallbackEdgeRecord] = {}
-    for edge in dispatcher._message_bureau._callback_edge_store.list_all():
-        latest_by_id[edge.edge_id] = edge
-    for edge in latest_by_id.values():
+    for edge in dispatcher._message_bureau._callback_edge_store.list_latest():
         if edge.edge_id == completed_edge.edge_id:
             continue
         if edge.parent_message_id != completed_edge.parent_message_id:
@@ -355,6 +463,29 @@ def delegated_terminal_job(job, edge: CallbackEdgeRecord):
             'suppress_reply': True,
             'chain_edge_id': edge.edge_id,
             'chain_child_job_id': edge.child_job_id,
+        },
+    )
+
+
+def terminalize_cancelled_parent_edge(
+    dispatcher,
+    edge: CallbackEdgeRecord,
+    *,
+    parent_job,
+    updated_at: str,
+) -> CallbackEdgeRecord:
+    latest = dispatcher._message_bureau.callback_edge(edge.edge_id) or edge
+    if latest.state in _TERMINAL_CALLBACK_STATES:
+        return latest
+    return dispatcher._message_bureau.update_callback_edge(
+        latest,
+        state=CallbackEdgeState.FAILED,
+        updated_at=updated_at,
+        diagnostics={
+            **dict(latest.diagnostics or {}),
+            'failure_reason': 'chain_parent_cancelled',
+            'parent_cancelled': True,
+            'cancelled_parent_job_id': parent_job.job_id,
         },
     )
 
@@ -441,11 +572,7 @@ def _append_submission_job(dispatcher, submission_id: str | None, *, job_id: str
 
 
 def _existing_continuation_job(dispatcher, edge: CallbackEdgeRecord):
-    for job in reversed(dispatcher._job_store.list_agent(edge.callback_target_agent)):
-        options = dict(getattr(job.request, 'route_options', None) or {})
-        if str(options.get('chain_edge_id') or '').strip() == edge.edge_id:
-            return job
-    return None
+    return _existing_continuation_jobs_by_edge(dispatcher, (edge,)).get(edge.edge_id)
 
 
 def _latest_child_reply(dispatcher, edge: CallbackEdgeRecord):
@@ -477,7 +604,15 @@ def _active_parent_job(dispatcher, actor: str):
     parent_job_id = dispatcher._state.active_job(normalized)
     if not parent_job_id:
         return None
-    return get_job(dispatcher, parent_job_id)
+    parent = get_job(dispatcher, parent_job_id)
+    if parent is None:
+        return None
+    # Reply delivery preparation imports callback submission, so keep this lazy.
+    from .reply_delivery import is_reply_delivery_job
+
+    if is_reply_delivery_job(parent):
+        return None
+    return parent
 
 
 def _message_for_job(dispatcher, job):
@@ -770,10 +905,12 @@ def _reply_summary(decision: CompletionDecision) -> str:
 
 
 def _strip_ccb_guidance(body: str) -> str:
-    marker = '\n\nCCB reply guidance:'
-    if marker not in body:
-        return body
-    return body.split(marker, 1)[0].rstrip()
+    indexes = [
+        index
+        for marker in ('\n\nCCB_REPLY_MODE:', '\n\nCCB reply guidance:')
+        if (index := body.find(marker)) >= 0
+    ]
+    return body[: min(indexes)].rstrip() if indexes else body
 
 
 __all__ = [
@@ -790,6 +927,7 @@ __all__ = [
     'request_callback_route',
     'sweep_callback_timeouts',
     'submit_callback_continuation',
+    'terminalize_cancelled_parent_edge',
     'validate_nested_ask_request',
     'validate_callback_request',
 ]

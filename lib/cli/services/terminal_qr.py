@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
+import secrets
+import struct
+import zlib
 
 
 _BYTE_MODE = 0b0100
@@ -23,6 +28,19 @@ _VERSION_BLOCKS_L: dict[int, tuple[int, tuple[int, ...]]] = {
     12: (24, (92, 92, 93, 93)),
     13: (26, (107, 107, 107, 107)),
     14: (30, (115, 115, 115, 116)),
+    15: (22, (87, 87, 87, 87, 87, 88)),
+    16: (24, (98, 98, 98, 98, 98, 99)),
+    17: (28, (107, 108, 108, 108, 108, 108)),
+    18: (30, (120, 120, 120, 120, 120, 121)),
+    19: (28, (113, 113, 113, 114, 114, 114, 114)),
+    20: (28, (107, 107, 107, 108, 108, 108, 108, 108)),
+    21: (28, (116, 116, 116, 116, 117, 117, 117, 117)),
+    22: (28, (111, 111, 112, 112, 112, 112, 112, 112, 112)),
+    23: (30, (121, 121, 121, 121, 122, 122, 122, 122, 122)),
+    24: (30, (117, 117, 117, 117, 117, 117, 118, 118, 118, 118)),
+    25: (26, (106, 106, 106, 106, 106, 106, 106, 106, 107, 107, 107, 107)),
+    26: (28, (114, 114, 114, 114, 114, 114, 114, 114, 114, 114, 115, 115)),
+    27: (30, (122, 122, 122, 122, 122, 122, 122, 122, 123, 123, 123, 123)),
 }
 
 _ALIGNMENT_POSITIONS: dict[int, tuple[int, ...]] = {
@@ -40,6 +58,19 @@ _ALIGNMENT_POSITIONS: dict[int, tuple[int, ...]] = {
     12: (6, 32, 58),
     13: (6, 34, 62),
     14: (6, 26, 46, 66),
+    15: (6, 26, 48, 70),
+    16: (6, 26, 50, 74),
+    17: (6, 30, 54, 78),
+    18: (6, 30, 56, 82),
+    19: (6, 30, 58, 86),
+    20: (6, 34, 62, 90),
+    21: (6, 28, 50, 72, 94),
+    22: (6, 26, 50, 74, 98),
+    23: (6, 30, 54, 78, 102),
+    24: (6, 28, 54, 80, 106),
+    25: (6, 32, 58, 84, 110),
+    26: (6, 30, 58, 86, 114),
+    27: (6, 34, 62, 90, 118),
 }
 
 
@@ -96,6 +127,93 @@ def render_terminal_qr(
     return tuple(rows)
 
 
+def render_terminal_qr_png(
+    text: str,
+    *,
+    quiet_zone: int = 4,
+    module_size: int = 8,
+) -> bytes:
+    qr = make_terminal_qr(text)
+    border = max(0, int(quiet_zone))
+    scale = max(1, int(module_size))
+    module_width = qr.size + border * 2
+    pixel_width = module_width * scale
+    raw = bytearray()
+
+    for module_row in range(module_width):
+        source_row = (
+            qr.modules[module_row - border]
+            if border <= module_row < border + qr.size
+            else ()
+        )
+        scanline = bytearray((0,))
+        for module_col in range(module_width):
+            dark = (
+                bool(source_row[module_col - border])
+                if border <= module_col < border + qr.size and source_row
+                else False
+            )
+            scanline.extend(bytes((0 if dark else 255,)) * scale)
+        for _ in range(scale):
+            raw.extend(scanline)
+
+    header = struct.pack(
+        ">IIBBBBB",
+        pixel_width,
+        pixel_width,
+        8,
+        0,
+        0,
+        0,
+        0,
+    )
+    return b"".join(
+        (
+            b"\x89PNG\r\n\x1a\n",
+            _png_chunk(b"IHDR", header),
+            _png_chunk(b"IDAT", zlib.compress(bytes(raw), level=9)),
+            _png_chunk(b"IEND", b""),
+        )
+    )
+
+
+def write_terminal_qr_png(
+    path: str | Path,
+    text: str,
+    *,
+    quiet_zone: int = 4,
+    module_size: int = 8,
+) -> Path:
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    payload = render_terminal_qr_png(
+        text,
+        quiet_zone=quiet_zone,
+        module_size=module_size,
+    )
+    temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(temporary, flags, 0o600)
+    opened = True
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            opened = False
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        os.chmod(target, 0o600)
+    except BaseException:
+        if opened:
+            os.close(fd)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return target
+
+
 def _render_compact_terminal_qr(
     qr: TerminalQrCode, *, ansi: bool, border: int
 ) -> tuple[str, ...]:
@@ -134,6 +252,17 @@ def _render_compact_cell(top_dark: bool, bottom_dark: bool, *, ansi: bool) -> st
     if top_dark and not bottom_dark:
         return "▄"
     return "▀"
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    checksum = zlib.crc32(kind)
+    checksum = zlib.crc32(payload, checksum) & 0xFFFFFFFF
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", checksum)
+    )
 
 
 def _select_version(data: bytes) -> tuple[int, tuple[int, ...], int]:
@@ -502,4 +631,10 @@ def _version_bits(version: int) -> int:
     return (version << 12) | value
 
 
-__all__ = ["TerminalQrCode", "make_terminal_qr", "render_terminal_qr"]
+__all__ = [
+    "TerminalQrCode",
+    "make_terminal_qr",
+    "render_terminal_qr",
+    "render_terminal_qr_png",
+    "write_terminal_qr_png",
+]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,11 @@ from provider_backends.claude.execution_runtime.event_reading_runtime.api_errors
     api_error_event,
     terminal_api_error_payload,
 )
+from .control_messages import is_provider_local_control_message
 from .claude_pane import ACTIVE_STATES as PANE_ACTIVE_STATES, ClaudePaneStatus
+
+
+CLAUDE_ACTIVE_ACTIVITY_MAX_AGE_S = 180.0
 
 
 RUNTIME_STATUS_CATALOG: dict[str, str] = {
@@ -34,6 +39,7 @@ class ClaudeActivityStatus:
     activity_state: str | None = None
     activity_reason: str | None = None
     event_name: str | None = None
+    updated_at: str | None = None
     notes: tuple[str, ...] = ()
 
     def to_record(self) -> dict[str, object]:
@@ -44,6 +50,7 @@ class ClaudeActivityStatus:
             "activity_state": self.activity_state,
             "activity_reason": self.activity_reason,
             "event_name": self.event_name,
+            "updated_at": self.updated_at,
             "notes": list(self.notes),
         }
 
@@ -99,18 +106,29 @@ class ClaudeRuntimeStatus:
         }
 
 
-def claude_activity_status(activity: object | None) -> ClaudeActivityStatus | None:
+def claude_activity_status(
+    activity: object | None,
+    *,
+    now: str | None = None,
+    active_max_age_s: float = CLAUDE_ACTIVE_ACTIVITY_MAX_AGE_S,
+) -> ClaudeActivityStatus | None:
     if activity is None:
         return None
     activity_state = _clean(getattr(activity, "state", None))
     reason = str(getattr(activity, "reason", "") or "").strip()
     event_name = str(getattr(activity, "event_name", "") or "").strip()
+    updated_at = str(getattr(activity, "updated_at", "") or "").strip() or None
     diagnostics = getattr(activity, "diagnostics", None)
     diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    if activity_state in {"active", "pending"}:
+        age_s = _age_seconds(now, updated_at)
+        if age_s is not None and age_s > max(0.0, float(active_max_age_s)):
+            return None
     base = {
         "activity_state": activity_state or None,
         "activity_reason": reason or None,
         "event_name": event_name or None,
+        "updated_at": updated_at,
     }
 
     if activity_state == "active":
@@ -187,9 +205,6 @@ def compose_claude_runtime_status(
     job_running: bool,
     pane_status: ClaudePaneStatus | None = None,
 ) -> ClaudeRuntimeStatus:
-    if activity_status is not None and activity_status.state in {"api_error", "failed", "waiting_for_user"}:
-        return _runtime_from_activity(activity_status, session_status, pane_status)
-
     if pane_status is not None and pane_status.state in {
         *PANE_ACTIVE_STATES,
         "waiting_for_user",
@@ -210,21 +225,46 @@ def compose_claude_runtime_status(
             notes=pane_status.notes,
         )
 
+    if activity_status is not None and activity_status.state in {"api_error", "failed"}:
+        return _runtime_from_activity(activity_status, session_status, pane_status)
+
+    if pane_status is not None and pane_status.state == "free":
+        return ClaudeRuntimeStatus(
+            "free",
+            pane_status.reason,
+            "pane",
+            activity_status.activity_state if activity_status is not None else None,
+            activity_status.activity_reason if activity_status is not None else None,
+            session_status.state if session_status is not None else None,
+            session_status.reason if session_status is not None else None,
+            pane_status.state,
+            pane_status.reason,
+            notes=pane_status.notes,
+        )
+
+    if activity_status is not None and activity_status.state == "waiting_for_user":
+        return _runtime_from_activity(activity_status, session_status, pane_status)
+
+    if (
+        activity_status is not None
+        and session_status is not None
+        and session_status.state != "unknown"
+        and _session_is_newer_than_activity(session_status, activity_status)
+    ):
+        return _runtime_from_session(
+            session_status,
+            activity_status=activity_status,
+            pane_status=pane_status,
+        )
+
     if activity_status is not None:
         return _runtime_from_activity(activity_status, session_status, pane_status)
 
     if session_status is not None and session_status.state != "unknown":
-        return ClaudeRuntimeStatus(
-            session_status.state,
-            session_status.reason,
-            "session",
-            None,
-            None,
-            session_status.state,
-            session_status.reason,
-            pane_status.state if pane_status is not None else None,
-            pane_status.reason if pane_status is not None else None,
-            notes=session_status.notes,
+        return _runtime_from_session(
+            session_status,
+            activity_status=None,
+            pane_status=pane_status,
         )
 
     if job_running:
@@ -288,6 +328,26 @@ def _runtime_from_activity(
     )
 
 
+def _runtime_from_session(
+    session_status: ClaudeSessionStatus,
+    *,
+    activity_status: ClaudeActivityStatus | None,
+    pane_status: ClaudePaneStatus | None,
+) -> ClaudeRuntimeStatus:
+    return ClaudeRuntimeStatus(
+        session_status.state,
+        session_status.reason,
+        "session",
+        activity_status.activity_state if activity_status is not None else None,
+        activity_status.activity_reason if activity_status is not None else None,
+        session_status.state,
+        session_status.reason,
+        pane_status.state if pane_status is not None else None,
+        pane_status.reason if pane_status is not None else None,
+        notes=session_status.notes,
+    )
+
+
 def _latest_claude_session_signal(entries: list[dict[str, Any]]) -> tuple[str, str, str, tuple[str, ...]] | None:
     latest: tuple[str, str, str, tuple[str, ...]] | None = None
     for entry in entries:
@@ -307,6 +367,9 @@ def _latest_claude_session_signal(entries: list[dict[str, Any]]) -> tuple[str, s
             continue
 
         if role == "user":
+            if is_provider_local_control_message(event.get("text")):
+                latest = ("free", "claude_session_local_control", "local_control", ())
+                continue
             latest = ("working", "claude_session_user_turn", "user", ())
             continue
 
@@ -402,6 +465,40 @@ def _raw_session_notes(session_status: ClaudeSessionStatus | None) -> tuple[str,
     )
 
 
+def _session_is_newer_than_activity(
+    session_status: ClaudeSessionStatus,
+    activity_status: ClaudeActivityStatus,
+) -> bool:
+    session_mtime_s = session_status.latest_session_mtime_s
+    activity_time = _parse_timestamp(activity_status.updated_at)
+    if session_mtime_s is None or activity_time is None:
+        return False
+    return session_mtime_s > activity_time.timestamp()
+
+
+def _age_seconds(now: str | None, updated_at: str | None) -> float | None:
+    current = _parse_timestamp(now)
+    observed = _parse_timestamp(updated_at)
+    if current is None or observed is None:
+        return None
+    return max(0.0, (current - observed).total_seconds())
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _safe_mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
@@ -414,6 +511,7 @@ def _clean(value: object) -> str:
 
 
 __all__ = [
+    "CLAUDE_ACTIVE_ACTIVITY_MAX_AGE_S",
     "ClaudeActivityStatus",
     "ClaudeRuntimeStatus",
     "ClaudeSessionStatus",

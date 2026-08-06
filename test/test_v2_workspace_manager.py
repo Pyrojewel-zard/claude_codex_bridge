@@ -394,6 +394,7 @@ def test_reconcile_does_not_remove_group_worktree_still_referenced(tmp_path: Pat
     store.save(spec2)
     plan = WorkspacePlanner().plan(spec1, ctx)
     WorkspaceMaterializer().materialize(plan)
+    WorkspaceBindingStore().save(WorkspacePlanner().plan(spec2, ctx))
 
     summary = reconcile_start_workspaces(project_root, type('Config', (), {'agents': {'agent2': spec2}})())
 
@@ -402,6 +403,28 @@ def test_reconcile_does_not_remove_group_worktree_still_referenced(tmp_path: Pat
     assert paths.agent_dir('agent2').exists() is True
     assert len(summary.retired) == 1
     assert summary.retired[0].agent_name == 'agent1'
+
+
+def test_reconcile_keeps_user_untracked_file_as_retirement_blocker(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    _init_git_repo(project_root)
+    context = bootstrap_project(project_root)
+    paths = PathLayout(project_root)
+    spec = _spec(name='agent1')
+    AgentSpecStore(paths).save(spec)
+    plan = WorkspacePlanner().plan(spec, context)
+    WorkspaceMaterializer().materialize(plan)
+    WorkspaceBindingStore().save(plan)
+    user_artifact = plan.workspace_path / 'user-artifact.txt'
+    user_artifact.write_text('keep me\n', encoding='utf-8')
+
+    summary = reconcile_start_workspaces(project_root, type('Config', (), {'agents': {}})())
+
+    assert len(summary.blockers) == 1
+    assert summary.blockers[0].dirty is True
+    assert summary.retired == ()
+    assert user_artifact.read_text(encoding='utf-8') == 'keep me\n'
+    assert plan.workspace_path.exists()
 
 
 def _init_git_repo(project_root: Path) -> None:

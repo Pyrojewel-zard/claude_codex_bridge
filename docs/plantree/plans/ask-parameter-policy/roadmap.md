@@ -30,26 +30,34 @@ Date: 2026-06-07
   active job, and B-to-C routing depends on whether B needs C's result.
 - Clarified that each dependent child ask from an active parent uses `--chain`;
   CCB owns continuation propagation after chain edges exist.
+- Moved stable reply and cancellation policy into managed CCB project memory.
+  Ordinary asks now preserve the user body, while `--compact` and `--silence`
+  add only a one-line mode marker; native-provider duplicate guidance and the
+  per-job cancellation paragraph were removed.
+- Aligned inherited ask skills, compatibility cleaners, developer/user manual
+  chapters, and focused tests with the memory-first prompt policy.
+- Promoted `--chain` into an explicit dependency gate across all inherited
+  provider ask skill templates. Communication tests, batch sends,
+  notifications, and independent asks no longer imply a chain dependency.
+- Excluded control-plane `reply_delivery` jobs from active chain-parent
+  detection, so asynchronous ACK delivery cannot make an ordinary ask look
+  like nested dependent work or create a false chain edge.
+- Added regression coverage for cross-provider template alignment,
+  reply-delivery overlap with independent asks, and preserved normal
+  multi-hop chain behavior.
 
 ## In Progress
 
-- Keep docs and inherited ask skill wording aligned around result-intent-first
-  selection and proactive use of `--silence`, `--compact`, and
-  `--artifact-reply`.
+- Keep docs and every inherited provider ask skill aligned around the
+  dependency-first gate and result-intent selection.
 - Coordinate chain-continuation finalization wording with
   [callback-continuation-safety](../callback-continuation-safety/README.md).
   That plan owns the runtime guard; this plan owns inherited ask skill wording.
 
 ## Next
 
-- Keep Codex, Claude, and Droid inherited ask skill policy wording aligned.
-- Project the chain-continuation finalization rule from
-  [topics/skill-update-draft.md](topics/skill-update-draft.md) into inherited
-  ask skill templates after the runtime guard contract is implementation-ready.
-- Add or maintain template checks for result-intent and artifact-policy text.
-- Add static assertions that each inherited ask skill template includes the
-  chain-continuation finalization rule where an ask skill is projected.
-- Run focused unit tests for ask skill templates and ask route option mapping.
+- Keep all provider-specific ask projections synchronized when the shared
+  dependency policy changes.
 - Re-run external source-under-test validation from
   `/home/bfly/yunwei/test_ccb2` when the matrix or skill wording changes.
 
@@ -69,3 +77,10 @@ This policy update is ready when:
 - ask route option mapping tests still pass;
 - external `ccb_test` starts from an isolated project and projects updated ask
   skill text into managed provider homes where those providers are configured.
+
+Latest verification (2026-07-31):
+
+- 589 related unit, dispatcher, CLI, memory, and provider-projection tests
+  passed;
+- the isolated external source wrapper passed `--diagnose` and `--help` from
+  `/home/bfly/yunwei/test_ccb2`.

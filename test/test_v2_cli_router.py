@@ -57,6 +57,55 @@ def test_dispatch_management_command_parses_and_routes() -> None:
     assert name == "update"
     assert args.command == "update"
     assert args.target == "5.3.0"
+    assert args.providers is None
+    assert args.cache_cleanup is True
+
+
+def test_dispatch_management_command_parses_provider_update_mode() -> None:
+    calls: list[argparse.Namespace] = []
+
+    def update_handler(args: argparse.Namespace) -> int:
+        calls.append(args)
+        return 7
+
+    def fail(_args: argparse.Namespace) -> int:
+        raise AssertionError("handler should not be called")
+
+    result = dispatch_management_command(
+        ["update", "--providers", "all"],
+        install_handler=fail,
+        update_handler=update_handler,
+        version_handler=fail,
+        uninstall_handler=fail,
+        reinstall_handler=fail,
+    )
+
+    assert result == 7
+    assert calls[0].target is None
+    assert calls[0].providers == "all"
+
+
+def test_dispatch_management_command_can_skip_post_update_cache_cleanup() -> None:
+    calls: list[argparse.Namespace] = []
+
+    def update_handler(args: argparse.Namespace) -> int:
+        calls.append(args)
+        return 0
+
+    def fail(_args: argparse.Namespace) -> int:
+        raise AssertionError("handler should not be called")
+
+    result = dispatch_management_command(
+        ["update", "--no-cache-cleanup"],
+        install_handler=fail,
+        update_handler=update_handler,
+        version_handler=fail,
+        uninstall_handler=fail,
+        reinstall_handler=fail,
+    )
+
+    assert result == 0
+    assert calls[0].cache_cleanup is False
 
 
 def test_dispatch_management_command_routes_update_rich() -> None:
@@ -221,6 +270,7 @@ def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
     assert "ccb -s" in stdout.getvalue()
     assert "ccb clear [agent...]" in stdout.getvalue()
     assert "ccb maintenance status Show maintenance heartbeat config and stored status." in stdout.getvalue()
+    assert "ccb theme [system|dark|light|+|-|PRESET]" in stdout.getvalue()
     assert "Core commands:" in stdout.getvalue()
     assert "ccb ask <agent> [from <sender>] <message>" in stdout.getvalue()
     assert "ccb doctor" in stdout.getvalue()
@@ -431,6 +481,7 @@ def test_run_cli_entrypoint_prints_theme_help() -> None:
     assert result == 0
     assert "usage: ccb theme" in stdout.getvalue()
     assert "ccb theme +" in stdout.getvalue()
+    assert "ccb theme system" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
 

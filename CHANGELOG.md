@@ -1,5 +1,452 @@
 # Changelog
 
+## v8.5.6 (2026-08-06)
+
+### Continuous Provider Inheritance
+
+- **Explicit Authority Wins Per Dimension**: CCB uses configured API, token,
+  URL, route, account, and Provider profile values first. Only dimensions not
+  explicitly owned are read from the current external Provider environment or
+  login state.
+- **Restart Refreshes Without Reverse Effects**: a stopped Provider generation
+  is rebuilt from the current external snapshot and private projection. CCB
+  never writes the inherited result back to the user's shell, Provider home,
+  IDE, keyring, or remote login.
+- **Conversation History Survives Authority Changes**: same-authority launches
+  use native resume. Codex, Claude, and Gemini use a qualified fork/import path
+  when available; otherwise CCB records a linked continuation while preserving
+  the stable conversation, workspace, queue, session record, and transcript
+  history. The withdrawn v8.5.5 archive shape is recovered only with matching
+  ownership evidence.
+
+### Codex Reconnect
+
+- **Bundled Automatic Activation**: CCB installs and arms `codex-reconnect`
+  automatically for managed Codex panes after a concrete thread binding.
+- **Bounded Capacity Recovery**: terminal network and selected-model capacity
+  failures are classified only for the exact thread and pane, then receive at
+  most one literal `continue` after the existing safety and readiness gates.
+
+### Withdrawal And Compatibility
+
+- **v8.5.5 Withdrawn**: the GitHub release was withdrawn on 2026-08-05 after a
+  legacy-session migration regression made existing managed conversations
+  unavailable to native `resume`. v8.5.6 is the replacement; no manual clear or
+  history deletion is required.
+
+## v8.5.5 (2026-08-05)
+
+> Withdrawn from GitHub on 2026-08-05 after a legacy-session migration
+> regression made existing managed conversations unavailable to native resume.
+> Use v8.5.4 until the replacement release is published.
+
+### Provider State Refresh
+
+- **Restart Uses Current Provider Authority**: `ccb restart <agent>` now rebuilds
+  the Provider launch from the current profile, login, API key, endpoint, proxy,
+  and model state instead of replaying the command persisted when the pane was
+  first created. Switching accounts or API routes no longer requires
+  `ccb clear`.
+- **Cross-Authority Resume Is Blocked Safely**: Codex archives an incompatible
+  managed session binding before starting fresh; Claude and Gemini suppress
+  native resume when the saved session belongs to another Provider authority.
+  Provider login state and history files remain intact.
+- **Credentials Stay Private**: managed session metadata stores only an
+  Agent-private HMAC fingerprint of Provider authority inputs, never raw API
+  keys, tokens, endpoints, or proxy credentials.
+
+### Relay And Community
+
+- **New Relay Invitations Default To 1 GiB/Day**: newly issued Relay Host
+  invitations now allow 1 GiB per 24-hour quota window. Explicit
+  `--max-bytes-per-day` values and existing Host credentials are unchanged.
+- **Community QR Refreshed**: the WeChat group image and README cache key now
+  point to the current invitation image.
+
+## v8.5.4 (2026-08-03)
+
+### Ask Routing
+
+- **Chains Now Require A Real Dependency**: inherited ask guidance for every
+  supported Provider defaults to plain routing. `--chain` is reserved for an
+  active parent task that cannot finish without that exact child result;
+  communication tests, batch sends, notifications, and independent asks no
+  longer imply a chain dependency.
+- **Reply Delivery Cannot Become A False Parent**: control-plane
+  `reply_delivery` work is excluded from active-parent detection, so an
+  overlapping ordinary ask is not rejected or attached to an acknowledgement.
+
+### Agent History And Config UI
+
+- **History Cleanup Is Bounded Per Agent**: Config UI can scan or clean one
+  Agent or all Agents with 7/30/90-day retention. Current session bindings,
+  records inside the retention window, and each Provider's newest transcript
+  remain protected; deletion is restricted to the managed transcript allowlist.
+- **The Panel Is Focused Again**: the current Config UI keeps configuration,
+  activation review, and history cleanup while temporarily delisting the
+  read-only Agent communication-flow observer.
+
+### Mobile LAN Recovery
+
+- **LAN Failures Are Actionable**: Android uses coarse, non-identifying
+  connectivity evidence to warn before LAN pairing and explain reconnecting
+  LAN routes. Stored profiles are preserved, and users can Retry or open the
+  existing authenticated Diagnostics flow.
+- **Silent Terminal Disconnects Recover**: terminal WebSockets use a 15-second
+  client ping interval so Wi-Fi half-open connections enter the existing
+  reconnect/cursor-resume path without replaying input.
+- **Network Identity Stays Private**: CCB Mobile requests only
+  `ACCESS_NETWORK_STATE`; it does not read SSID, BSSID, location, or other
+  network identity. Computer-side onboarding now covers same-network, hotspot,
+  guest isolation, VPN, firewall, and DHCP address-change recovery.
+
+## v8.5.3 (2026-08-01)
+
+### Relay Capacity
+
+- **New Invitations Default To 200 MiB/Day**: newly issued Relay Host
+  invitations now allow 200 MiB per 24-hour quota window instead of
+  100 MiB. Explicit `--max-bytes-per-day` values still override the default;
+  existing Host credentials retain the quota issued with them.
+
+### Callback Repair Efficiency
+
+- **Large Ledgers No Longer Amplify Idle Reads**: callback-edge latest state
+  is cached from the append-only authority and safely invalidated on external
+  changes. Repair inspects only nonterminal candidates and scans each target's
+  job history at most once per tick, preventing historical callback growth
+  from causing sustained idle CPU and cached-read pressure.
+- **No Ledger Migration Required**: JSONL remains the durable authority and
+  existing ledgers are rebuilt into the derived in-memory view on restart.
+
+### Claude Agent Environment
+
+- **General Agent Variables Reach Claude**: non-API variables from
+  `agents.<name>.env`, including proxy and tool configuration paths, are now
+  exported to managed Claude launches. CCB-managed API credentials, endpoints,
+  and runtime-home overrides retain precedence (PR #284).
+
+## v8.5.2 (2026-07-30)
+
+### Bounded Pane Recovery
+
+- **Recovery Requires Stability**: a respawned pane remains probing for
+  90 seconds and must receive a new healthy observation before it can drain
+  queued work.
+- **Crash Loops Back Off And Stop**: unstable recovery uses
+  30s/60s/120s/5m/10m/30m delays and opens a durable circuit after six
+  attempts. Runtime diagnostics expose the probe, consecutive-failure, and
+  circuit state.
+- **Crash Writes Stay Bounded**: each Provider runtime retains only the newest
+  50 pane-crash records, pane history is cleared before respawn, and unchanged
+  helper manifests are not rewritten.
+- **Provider Failures Are Contained**: stale CCB-owned Claude continuation
+  state can be removed without changing authentication, while a missing
+  managed Codex app server fails closed and requests restart/remount.
+
+### Concise Managed Communication
+
+- **Stable Guidance Lives In Memory**: normal asks no longer repeat the default
+  reply-policy and cancellation-file blocks. Compact/silent mode remains
+  explicit, and runtime interruption is the primary cancellation path.
+
+### Rich Terminal Isolation
+
+- **GUI Launches Detach Cleanly**: CCB Rich WezTerm starts in a new process
+  session with standard streams detached, preventing GUI diagnostics and
+  job-control signals from polluting or stopping the invoking terminal.
+- **Wayland Cursor Compatibility Is Private**: a CCB-owned XCursor overlay
+  supplies the missing `hand` cursor without replacing the selected theme or
+  modifying user/system cursor files.
+
+## v8.5.1 (2026-07-30)
+
+### Claude Completion Integrity
+
+- **Late Final Snapshots Win**: Claude assistant snapshots are aggregated by
+  API message id, so a thinking-only `end_turn` waits for the visible final
+  text instead of completing with earlier `Let me...` process narration.
+- **Terminal Replies Are Isolated From Progress**: completion artifacts now use
+  only the confirmed terminal assistant message; tool-only boundaries and
+  stop-reason-free process text cannot promote the cumulative progress buffer.
+- **Failure And Attribution Are Fail-Closed**: stalled mid-stream responses are
+  failed, empty Stop hooks allow a bounded late-final grace, and all normal or
+  recovery hook paths require exact request, workspace, timestamp, and Claude
+  session identity.
+
+### Pi Visible Completion
+
+- **Pi Replies Stay Visible In The Managed TUI**: new Pi asks execute in the
+  existing managed pane and publish exact lifecycle evidence through the
+  official extension API instead of running in a hidden one-shot process.
+- **Only The Settled Final Message Completes**: exact dispatch, actor, launch
+  session, runtime instance, and request identity bind the final
+  `agent_settled` reply. Tool narration, retries, stale sessions, manual input,
+  and partial or malformed events cannot become a successful reply.
+- **Long Runs Are Not Arbitrarily Truncated**: Pi pane execution has no default
+  terminal wall-clock cutoff. Native cancellation no longer asks the model to
+  probe a cancel file, avoiding an extra tool call and uncached-token cost.
+  Persisted 8.5.0 jobs and `CCB_PI_EXECUTION_MODE=headless` retain the
+  compatible one-shot path.
+
+### Mobile Host Health
+
+- **Loopback Health Checks Ignore Proxies**: Mobile host startup checks connect
+  directly to the local gateway even when `HTTP_PROXY`, `HTTPS_PROXY`, or
+  `ALL_PROXY` is configured, preventing false startup failures.
+
+## v8.5.0 (2026-07-29)
+
+### Pi And OMP Completion
+
+- **Native Terminal Evidence Is Exact**: Pi `0.82.1` requires its final
+  `agent_settled` event, while OMP `17.1.6` requires
+  `agent_end.isTerminal=true`. Intermediate turns, retries, and legacy event
+  shapes cannot complete a CCB job.
+- **Completion Waits For Stream Closure**: semantic completion is accepted only
+  after the one-shot process exits and output closes. Missing outcomes,
+  malformed or truncated JSONL, provider errors, and nonzero exits fail
+  closed; terminal OMP `yield` results remain supported.
+
+### npm Runtime And Config UI
+
+- **npm Installs Repair Their Managed Python**: postinstall now creates or
+  repairs the release-managed virtual environment and installs the required
+  runtime dependencies instead of falling back to an incomplete system Python.
+- **Linked Worktrees Stay In Source Mode**: source installs now recognize both
+  Git directories and linked-worktree `.git` files instead of applying packaged
+  release behavior inside a development checkout.
+- **Sidebar Settings Opens Reliably**: the settings launcher recovers the
+  release-managed interpreter and opens Config UI even when inherited runtime
+  paths are stale.
+
+### Mobile Activity
+
+- **Provider Activity Is Synchronized**: Mobile ask state, provider activity,
+  completion notifications, and selected-agent views now follow exact
+  server-side state across reconnects.
+- **Automatic Recovery Is Quiet**: expected reconnect transitions no longer
+  surface misleading snackbar errors.
+
+### Managed Provider Assets
+
+- **Asset Projection Is One-Way And Owned**: managed Provider assets are
+  refreshed inside private homes without writable aliases back to user-global
+  state, and packaged Qoder `ask` / `ccb-clear` controls are now guaranteed.
+
+## v8.4.3 (2026-07-27)
+
+### Managed Provider Authentication
+
+- **Authentication Is One-Way And Agent-Private**: managed visible and
+  headless provider processes now use private HOME, XDG, provider, session,
+  storage, and credential roots. Safe external credentials are inherited into
+  ordinary agent-local files without writable aliases back to user state.
+- **Global Credentials Stay Read-Only**: managed refresh and logout operations
+  cannot rewrite the user's shell, IDE, another agent, or another project's
+  authentication. Unsupported or ambiguous credential backends fail closed
+  instead of escaping the managed boundary.
+
+### Managed Control Skills
+
+- **Required CCB Controls Are Always Present**: packaged `ask` and `ccb-clear`
+  controls are projected for supported managed agents even when optional skill
+  inheritance is disabled. Managed Codex also retains its required `reconnect`
+  control.
+- **Broken Optional Skills Stay Isolated**: optional skills are projected per
+  entry, so a broken external skill cannot suppress CCB-owned controls or
+  unrelated valid skills.
+
+### Mobile Pairing And Terminal
+
+- **Relay Pairing Fits Narrow Terminals**: Relay pairing can render a compact
+  signed-capability QR that fits a 97-column terminal while retaining the
+  owner-only PNG fallback. The Mobile app validates and reconstructs the full
+  pairing payload from the compact form.
+- **Terminal Resize And Recovery Are Race-Safe**: synchronized snapshot
+  generations prevent resize/read races, resize triggers a clean repaint, and
+  the Mobile client renews terminal handles after closed, output, or stream
+  failures.
+
+## v8.4.2 (2026-07-27)
+
+### Config UI And Appearance
+
+- **Settings Opens With The Managed Runtime**: the sidebar launcher now
+  recovers from stale inherited Python paths and opens Config UI with the
+  release-managed interpreter.
+- **Theme Selection Is Persistent**: Config UI exposes the supported CCB
+  themes, including system-default behavior. The saved preference is
+  authoritative across Rich WezTerm and sidebar restarts instead of being
+  overwritten by stale process environment.
+
+### Mobile Relay And Pairing
+
+- **Relay Terminal Streaming Is Stable**: bounded backpressure, initial
+  snapshot handling, incremental screen updates, and wide-character accounting
+  prevent dropped or corrupted mobile terminal output.
+- **Dense Pairing Codes Stay Scannable**: when a QR payload cannot fit safely
+  in the current terminal, CCB writes an owner-only PNG and prints its path
+  instead of rendering wrapped, unreadable terminal art.
+
+### Provider Updates
+
+- **Package-Manager Ownership Is Preserved**: npm packages update through their
+  detected user or NVM prefix, Bun-owned packages retain their Bun home, and
+  non-writable system installations remain report-only.
+- **Unsafe Registry Metadata Fails Closed**: releases that resolve to local
+  package dependencies are reported but not installed.
+
+## v8.4.1 (2026-07-26)
+
+### Release Installer
+
+- **Linux Release Dependencies Are Isolated**: official release installs now
+  create a CCB-managed Python virtual environment on Linux as well as macOS.
+  Mobile Relay dependencies no longer require or modify the system Python's
+  pip installation.
+- **Interrupted Downloads Retry Safely**: transient pip download failures such
+  as `IncompleteRead` and broken connections retry on the same package index
+  when no configured fallback index is available.
+
+## v8.4.0 (2026-07-26)
+
+### Mobile Relay And Pairing
+
+- **Encrypted Relay Transport**: CCB Mobile can connect through an AEAD
+  encrypted Relay with bounded admission, multiplexed unary/terminal/event/file
+  streams, one-time host invitations, and official or self-hosted deployment
+  modes. Relay operators cannot read application payloads.
+- **Route Choice Lives On The Computer**: `ccb update mobile` guides Tailscale,
+  validated private-LAN, official Relay, and self-hosted Relay setup. The phone
+  now only scans a QR code or enters a pairing code.
+- **Trusted Android Updates**: the app checks canonical GitHub release metadata
+  and verifies the signed APK's exact size and SHA-256 before asking Android to
+  install it.
+
+### Identity, Appearance, And Recovery
+
+- **Projects Survive Relocation**: stable project identity is preserved when a
+  project directory is moved or renamed, while ambiguous or foreign identity
+  claims fail closed.
+- **System Theme Following**: terminal, workbench, and Config UI surfaces can
+  follow the operating system's light/dark appearance without changing project
+  behavior.
+- **Managed Codex Reconnect**: the opt-in reconnect watcher is projected into
+  managed Codex homes, binds exact pane/session identity, retains only bounded
+  terminal failure evidence, and refuses unsafe recovery input.
+
+### Configuration And Operations
+
+- **Config Changes Apply Predictably**: provider-affecting Config UI edits are
+  recorded for the next CCB start instead of silently mutating active panes.
+- **Relay Deployment Is Operator-Bounded**: production service, TLS proxy,
+  invitation issuance, quota, rollback, and self-hosting guidance are included;
+  public invitations remain operator-issued and single use.
+
+## v8.3.1 (2026-07-24)
+
+### Unified Provider Updates
+
+- **Provider Upgrades Are Managed By `ccb update`**: managed panes suppress
+  supported provider-native startup prompts, while `ccb update` detects the
+  executable owner, compares exact versions, and offers update, decline, or
+  version-scoped skip choices without restarting active panes.
+- **Non-Interactive Policy Is Explicit**: `--providers check`,
+  `--providers all`, and `--providers none` provide report-only, supported
+  bulk-update, and skip behavior for automation and controlled deployments.
+
+### Provider Storage And Cleanup
+
+- **Project Provider Caches Are Retired**: Claude uses the user-installed
+  executable and Gemini uses one user-scoped rebuildable cache instead of
+  copying provider software into every CCB project.
+- **Legacy Cleanup Is Bounded And Automatic**: post-update and successful
+  project shutdown clean only ownership-verified legacy Claude/Gemini cache
+  payloads. Active projects, malformed manifests, foreign links, sessions,
+  authentication data, and user-scoped caches are preserved; one update can
+  opt out with `--no-cache-cleanup`.
+
+### Configuration, Lifecycle, And Rich Mode
+
+- **Qoder CLI CN Is A Native Provider**: the official
+  `@qodercn-ai/qoderclicn` distribution is registered as `qoderclicn`, with
+  isolated visible/headless config and session state, UUID session ids,
+  permission mapping, native stream-result completion, and managed suppression
+  of provider-owned update prompts.
+- **Qoder Uses Its Documented Headless Contract**: Qoder and Qoder CLI CN use
+  native `--print`, workspace, and `--config-dir` arguments instead of the
+  retired generic bare-mode assumptions.
+- **Config UI Access Can Be Persistent**: projects can configure a stable
+  loopback port and a token source through `token_env` or a protected
+  project-relative `token_file`, while the CLI avoids printing token values.
+- **Shutdown Finalizers Stay Reliable**: accepted shutdown work keeps its
+  completion path while the server is stopping, preventing cleanup callbacks
+  from being abandoned.
+- **Kill Tolerates The Expected Socket-Close Race**: if the keeper closes ccbd
+  immediately after shutdown intent is recorded, the CLI continues bounded
+  local authority cleanup instead of surfacing a transient missing-socket
+  error.
+- **WSL Process Audits Degrade Safely**: live processes remain visible when WSL
+  does not expose per-process procfs I/O counters; the audit reports partial I/O
+  capability instead of misclassifying those processes as vanished.
+- **Yazi Uses A Compact Two-Column Layout**: Rich mode removes the redundant
+  preview column and allocates more width to the file list and active preview.
+
+### Release Surface
+
+- **Packaging Is Portable And Synchronized**: sidebar checksum generation works
+  across supported hosts, and CLI, npm, Linux, macOS, and Android versions,
+  assets, links, and workflow defaults target 8.3.1.
+
+## v8.3.0 (2026-07-22)
+
+### Managed Provider Reliability
+
+- **Requests Stay Bound To Their Native Turns**: Kimi resumes the exact native
+  session and accepts replies only from the current wire turn, while Claude
+  queued prompts become eligible only after their activation boundary.
+- **Qoder Follows Its Real CLI Contract**: managed execution uses qodercli's
+  native non-interactive, session, resume, update, storage, and completion
+  behavior instead of assumptions inherited from other providers.
+- **Provider Extensions Are Inherited Safely**: managed Claude, Gemini, Droid,
+  Qwen, and Copilot homes project supported extensions and plugins only with
+  explicit ownership evidence, preserving user-owned assets and cleanup
+  boundaries.
+
+### Job Integrity And Diagnostics
+
+- **Follow-Ups Target The Exact Active Job**: active work can receive bounded
+  follow-up steering without starting a competing request or losing the
+  original job, message, attempt, and provider-turn lineage.
+- **Execution State Is Correlated End To End**: project view, trace, doctor,
+  heartbeat, sidebar, and Mobile surfaces expose shared execution phases and
+  bounded diagnosis for orphaned active inbound work.
+- **Cancelled Callback Chains Terminate Cleanly**: cancellation now records a
+  terminal continuation outcome instead of leaving child callbacks or delivery
+  state indefinitely active.
+
+### Update, Workspace, And Mobile Safety
+
+- **npm Owns npm-Managed Upgrades**: vendored npm payloads delegate updates to
+  the package manager, keeping package metadata and installed files atomic.
+- **Marker-Only Worktrees Retire Conservatively**: CCB removes an owned binding
+  only after proving no user payload is present, while retaining legacy or
+  ambiguous worktrees for recovery.
+- **Mobile Terminal Mode Stays In The Project**: chat and terminal views share
+  the selected project workspace, preserve agent/window navigation, and avoid
+  escaping into a detached screen.
+- **Sidebar Settings Open Reliably On WSL And macOS**: project tmux panes retain
+  desktop/browser transport state, host-native openers run before generic
+  browser discovery, immediate opener failures fall through, and the sidebar
+  displays a manual-open warning instead of appearing to ignore the click.
+
+### Release Surface
+
+- **Release Versions Are Synchronized**: CLI, npm, Linux, macOS, Android,
+  localized badges, workflow defaults, download links, and checksums target
+  8.3.0.
+
 ## v8.2.1 (2026-07-17)
 
 ### Startup And Lifecycle Reliability

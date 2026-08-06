@@ -47,7 +47,7 @@ class CcbdSocketServer:
         self._runtime_bootstrap_active = False
         self._bound_socket_stat: tuple[int, int] | None = None
         self._maintenance_state_lock = threading.Lock()
-        self._after_response_actions: list[callable] = []
+        self._after_response_actions: list[tuple[callable, bool]] = []
         self._pending_maintenance_ticks = 0
         self._maintenance_pending_event = threading.Event()
         self._stop_event = threading.Event()
@@ -172,19 +172,32 @@ class CcbdSocketServer:
         with self._maintenance_state_lock:
             return self._pending_maintenance_ticks > 0 or bool(self._after_response_actions)
 
-    def queue_after_response_action(self, action) -> None:
+    def queue_after_response_action(
+        self,
+        action,
+        *,
+        run_during_shutdown: bool = False,
+    ) -> None:
         if callable(action):
             with self._maintenance_state_lock:
-                self._after_response_actions.append(action)
+                self._after_response_actions.append((action, bool(run_during_shutdown)))
                 self._maintenance_pending_event.set()
 
-    def pop_after_response_actions(self) -> tuple[callable, ...]:
+    def pop_after_response_actions(
+        self,
+        *,
+        shutdown_only: bool = False,
+    ) -> tuple[callable, ...]:
         with self._maintenance_state_lock:
-            actions = tuple(self._after_response_actions)
+            queued = tuple(self._after_response_actions)
             self._after_response_actions.clear()
             if self._pending_maintenance_ticks <= 0:
                 self._maintenance_pending_event.clear()
-        return actions
+        return tuple(
+            action
+            for action, run_during_shutdown in queued
+            if not shutdown_only or run_during_shutdown
+        )
 
     def _record_pending_maintenance_ticks_value(self, value: int) -> None:
         callback = getattr(self, '_record_pending_maintenance_ticks', None)

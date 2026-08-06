@@ -241,6 +241,22 @@ def test_maintenance_worker_drains_after_response_actions_without_tick_callback(
     assert server.maintenance_pending() is False
 
 
+def test_maintenance_shutdown_drains_finalizer_queued_after_stop_signal() -> None:
+    server = CcbdSocketServer('/tmp/test.sock')
+    seen: list[str] = []
+    server._stop_event.set()
+    server.queue_after_response_action(
+        lambda: seen.append('done'),
+        run_during_shutdown=True,
+    )
+
+    start_maintenance_worker(server, interval=999999.0, on_tick=None)
+    stop_maintenance_worker(server)
+
+    assert seen == ['done']
+    assert server.maintenance_pending() is False
+
+
 def test_post_request_tick_discards_queued_maintenance_when_on_tick_missing() -> None:
     server = CcbdSocketServer('/tmp/test.sock')
     server.queue_maintenance_ticks(2)
@@ -519,9 +535,8 @@ def test_stop_all_after_response_finalize_is_queued_when_response_write_fails() 
 
     assert handled == 'stop-all'
     assert order == ['handler', 'sendall_failed']
-    actions = server.pop_after_response_actions()
-    assert len(actions) == 1
-    actions[0]()
+    server._stop_event.set()
+    run_after_response_actions(server, shutdown_only=True)
     assert order == ['handler', 'sendall_failed', 'finalize']
 
 

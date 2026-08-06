@@ -78,6 +78,22 @@ tmux compatibility:
 - clipboard fallback diagnostics distinguish OSC52, tmux clipboard, and missing
   platform helper.
 
+Rich WezTerm launch:
+
+- both `ccb rich` and `ccb tools launch workbench` use a new process session
+  with stdin/stdout/stderr detached from the caller;
+- a real subprocess probe proves `sid == pid` and no standard stream remains a
+  TTY, while inherited outer tmux/CCB socket variables are absent;
+- Linux provisioning resolves a bounded local XCursor pointer asset without
+  changing user or system cursor files;
+- a Wayland wrapper probe preserves `XCURSOR_THEME`, prepends only the managed
+  overlay to `XCURSOR_PATH`, materializes `<theme>/cursors/hand`, and exposes
+  the compatibility status through workbench doctor output;
+- a missing optional cursor asset degrades only the compatibility diagnostic;
+  it must not make the safe workbench unusable;
+- CCB never sends `SIGCONT`, foregrounds, terminates, or otherwise mutates an
+  unrelated shell-managed stopped Pi job.
+
 ## Manual Tests In `/home/bfly/yunwei/test_ccb2`
 
 1. Start a project with two agent windows and no tool windows.
@@ -106,6 +122,9 @@ tmux compatibility:
    is not interrupted.
 10. Verify `~/.config/nvim`, the user's default Neovim data/cache/state
     directories, and global tmux config were not modified.
+11. From a normal shell, launch CCB Rich, hover hyperlinks in the new WezTerm
+    window, and verify the original shell receives neither Wayland cursor
+    errors nor background job-control notifications.
 
 ## Release Gate
 

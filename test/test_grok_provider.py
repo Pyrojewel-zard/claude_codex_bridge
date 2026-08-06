@@ -64,7 +64,7 @@ def test_grok_command_session_data_overrides_env(monkeypatch) -> None:
     assert cmd[cmd.index('--reasoning-effort') + 1] == 'xhigh'
 
 
-def test_grok_skills_project_per_home_and_disable_without_touching_provider_skills(tmp_path: Path) -> None:
+def test_grok_skills_project_per_home_even_when_optional_inheritance_is_disabled(tmp_path: Path) -> None:
     home = tmp_path / 'managed-home'
     bundled = home / '.grok' / 'skills' / 'help' / 'SKILL.md'
     bundled.parent.mkdir(parents=True)
@@ -83,14 +83,14 @@ def test_grok_skills_project_per_home_and_disable_without_touching_provider_skil
 
     disabled = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=False))
 
-    assert disabled == ()
-    assert grok_ccb_skills_ready(home) is False
-    assert not (home / '.grok' / 'skills' / 'ask').exists()
-    assert not (home / '.grok' / 'skills' / 'ccb-clear').exists()
+    assert disabled == ('ask', 'ccb-clear')
+    assert grok_ccb_skills_ready(home) is True
+    assert (home / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
+    assert (home / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     assert bundled.read_text(encoding='utf-8') == 'provider help\n'
 
 
-def test_grok_skill_projection_preserves_unmarked_conflict(tmp_path: Path) -> None:
+def test_grok_skill_projection_repairs_unmarked_control_skill_conflict(tmp_path: Path) -> None:
     home = tmp_path / 'managed-home'
     conflict = home / '.grok' / 'skills' / 'ask' / 'SKILL.md'
     conflict.parent.mkdir(parents=True)
@@ -98,10 +98,10 @@ def test_grok_skill_projection_preserves_unmarked_conflict(tmp_path: Path) -> No
 
     active = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
 
-    assert active == ('ccb-clear',)
-    assert conflict.read_text(encoding='utf-8') == 'user owned ask\n'
-    assert not (home / '.grok' / 'skills' / 'ask.ccb-projection.json').exists()
-    assert grok_ccb_skills_ready(home) is False
+    assert active == ('ask', 'ccb-clear')
+    assert 'name: ask' in conflict.read_text(encoding='utf-8')
+    assert (home / '.grok' / 'skills' / 'ask.ccb-projection.json').is_file()
+    assert grok_ccb_skills_ready(home) is True
 
 
 def test_grok_headless_command_and_env_use_managed_skills_and_exact_caller(
@@ -156,6 +156,7 @@ def test_grok_prompt_uses_request_anchor_without_semantic_done_marker() -> None:
 
     assert 'CCB_REQ_ID: job_grok_native_end' in prompt
     assert 'CCB_DONE' not in prompt
+    assert 'CCB reply guidance:' not in prompt
 
 
 class _FakeGrokSession:
@@ -306,7 +307,7 @@ def test_grok_reply_delivery_is_dispatched_to_visible_pane_without_headless_sess
     assert result.decision.diagnostics['submission_mode'] == 'grok_pane'
 
 
-def test_grok_pane_adapter_does_not_duplicate_existing_reply_guidance(
+def test_grok_pane_adapter_preserves_compact_reply_mode_without_static_guidance(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -316,7 +317,7 @@ def test_grok_pane_adapter_does_not_duplicate_existing_reply_guidance(
     monkeypatch.setattr(pane_execution, '_load_session', lambda work_dir, agent_name: session)
     monkeypatch.setattr(pane_execution, 'get_backend_for_session', lambda data: backend)
     job = _pane_job()
-    job.request.body = 'visible request\n\nCCB reply guidance:\n- Keep it short.'
+    job.request.body = 'visible request\n\nCCB_REPLY_MODE: compact'
 
     GrokPaneExecutionAdapter().start(
         job,
@@ -324,7 +325,8 @@ def test_grok_pane_adapter_does_not_duplicate_existing_reply_guidance(
         now='2026-07-13T00:00:00Z',
     )
 
-    assert backend.sent[0][1].count('CCB reply guidance:') == 1
+    assert backend.sent[0][1].count('CCB_REPLY_MODE: compact') == 1
+    assert 'CCB reply guidance:' not in backend.sent[0][1]
 
 
 def test_grok_observer_extracts_text_from_aggregated_json(tmp_path: Path) -> None:

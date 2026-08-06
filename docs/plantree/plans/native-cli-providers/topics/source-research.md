@@ -220,6 +220,57 @@ CCB direction:
 - Consider a visible pane later using `--json-file` dual output, but do not
   make that the first completion authority.
 
+## Qoder CLI
+
+- Official package: `@qoder-ai/qodercli`; isolated npm metadata and install on
+  2026-07-22 resolved version `1.1.2`, binary `qodercli`, Node `>=20`.
+- Official print-mode contract uses `-p` / `--print` with
+  `--output-format text|json|stream-json`; `-w` selects the workspace,
+  `--config-dir` selects the user-level config root, and `--permission-mode`
+  controls headless authorization.
+- Real `qodercli 1.1.2 --help` also exposes `--session-id`, but a direct probe
+  proved it accepts UUIDs only. A CCB `job_*` identifier is rejected before
+  execution, so CCB derives a deterministic UUIDv5 from each job id.
+- A credential-free real print probe emitted `system/init`, an assistant error,
+  and `result` with `is_error=true` for missing login. CCB uses a Qoder-specific
+  stream observer so this becomes a failed native run rather than a successful
+  reply containing the login error.
+- Both visible and headless launches use the same exact agent-local
+  `--config-dir`. CCB does not depend on undocumented `QODER_HOME` behavior.
+  Users may authenticate through the visible managed pane or provide the
+  documented `QODER_PERSONAL_ACCESS_TOKEN`; CCB does not acquire or inspect it.
+- Official references:
+  [Using CLI](https://docs.qoder.com/en/cli/using-cli),
+  [Quick Start](https://docs.qoder.com/en/cli/quick-start), and
+  [Permissions](https://docs.qoder.com/en/cli/permissions).
+
+## Qoder CLI CN
+
+- Official npm package: `@qodercn-ai/qoderclicn`; isolated install and runtime
+  probes on 2026-07-24 used version `1.1.3`, binary `qoderclicn`, Node `>=20`.
+- The native command contract matches Qoder's documented print surface:
+  `-p` / `--print`, `-w <workspace>`, `--output-format stream-json`,
+  `--config-dir <root>`, `--permission-mode <mode>`, and `--session-id <uuid>`.
+  A raw CCB id such as `job_qoderclicn_*` exits `42` with
+  `Invalid session ID. Must be a valid UUID`, so CCB derives a deterministic
+  provider-scoped UUIDv5.
+- A credential-free `1.1.3` probe emitted an assistant envelope with
+  `error=authentication_failed`, followed by `result.is_error=true`. Assistant
+  text is non-terminal; only a successful result envelope with a normal stop
+  reason completes. A clean process exit without that result fails closed.
+- Visible and headless commands share the agent-local `qoderclicn_home` /
+  `qoderclicn_config_dir`. Explicit config and permission flags from
+  `QODERCLICN_START_CMD` or startup args remain authoritative and are not
+  duplicated. Auto permission maps to `auto`; normal headless execution uses
+  `dont_ask`.
+- Qoder CN defaults to update checks. CCB merges
+  `general.enableAutoUpdate=false` and
+  `general.enableAutoUpdateNotification=false` into the agent-local
+  `settings.json`, preserving unrelated settings and leaving the user's global
+  `~/.qoder-cn/settings.json` untouched. Official references:
+  [CLI arguments and permissions](https://docs.qoder.cn/cli/using-the-cli) and
+  [installation and updates](https://docs.qoder.cn/cli/qoder-cli-cn-get-started-quickly).
+
 ## GitHub Copilot CLI
 
 Observed upstream/local lab:
@@ -340,6 +391,12 @@ Observed official docs:
 - JSON event stream docs define turn lifecycle events including `turn_start`
   and `turn_end`; `turn_end` carries the final assistant `message` and tool
   results.
+- The official extension API exposes `before_agent_start`, assistant/tool
+  events, `agent_end`, and `agent_settled`. Pi 0.82.1 documents
+  `agent_settled` as the boundary after automatic retry, compaction, and
+  queued continuation have finished.
+- CLI extension loading uses `--extension <path>`, so CCB can observe native
+  lifecycle state without screen scraping or modifying Pi's auth/config files.
 - Session options include `--session-dir <dir>`, `--session`, `--resume`,
   `--continue`, `--no-session`, and `--name`.
 - Trust options include `--approve` and `--no-approve`; noninteractive modes do
@@ -351,10 +408,14 @@ Observed official docs:
 CCB direction:
 
 - Provider key `pi`; default command `pi`; override `PI_START_CMD`.
-- Prefer per-job structured subprocess execution:
-  `PI_CODING_AGENT_DIR=<state>/home PI_CODING_AGENT_SESSION_DIR=<state>/sessions pi --mode json --session-dir <state>/sessions --no-approve --name <job> <wrapped prompt>`.
-- Terminalize on native `turn_end`, extracting final assistant text from the
-  embedded `message.content`.
+- Prefer managed visible-pane execution. Load a runtime-owned extension with
+  `--extension`, bind its append-only lifecycle sidecar to exact dispatch,
+  actor, launch-session, and runtime-instance identity, and terminalize only
+  on `agent_settled` with final `stop` plus non-empty visible text.
+- Retain the per-job structured subprocess
+  `pi --mode json --session-dir ... --no-approve --name <job>` for
+  `CCB_PI_EXECUTION_MODE=headless` rollback and persisted 8.5.0 `pi_run`
+  jobs. That path still waits for both `agent_settled` and process exit.
 - Keep visible pane state isolated with `PI_CODING_AGENT_DIR` and
   `PI_CODING_AGENT_SESSION_DIR`; skip startup version checks with
   `PI_SKIP_VERSION_CHECK=1`.

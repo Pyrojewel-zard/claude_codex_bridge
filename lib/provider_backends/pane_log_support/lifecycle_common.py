@@ -21,6 +21,14 @@ _AUTH_REVOKED_SIGNATURES = (
     'run codex login',
     'you are not signed in',
 )
+_SESSION_MISSING_SIGNATURES = ('no conversation found to continue',)
+_HELPER_UNAVAILABLE_SIGNATURES = ('failed to connect to remote app server',)
+_CRASH_SIGNATURES = {
+    'provider_auth_revoked': _AUTH_REVOKED_SIGNATURES,
+    'provider_session_missing': _SESSION_MISSING_SIGNATURES,
+    'provider_helper_unavailable': _HELPER_UNAVAILABLE_SIGNATURES,
+}
+MAX_PANE_CRASH_LOGS = 50
 
 _CRASH_REASON_DETAIL = {
     'provider_auth_revoked': (
@@ -29,23 +37,31 @@ _CRASH_REASON_DETAIL = {
         'Codex auth once; otherwise run `codex login` in the source profile or '
         'repair agent-local auth, then remount.'
     ),
+    'provider_session_missing': (
+        'The provider resume target no longer exists. CCB may remove its own '
+        'stale Claude --continue flag and start a fresh managed conversation.'
+    ),
+    'provider_helper_unavailable': (
+        'The managed provider helper/app server is unavailable. Automatic pane '
+        'respawn is blocked; restart the affected agent or remount the project.'
+    ),
 }
 
 
 def classify_crash_reason(text: str) -> str | None:
     """Classify a captured pane crash log against known unrecoverable conditions.
 
-    Returns a short reason code (currently only ``'provider_auth_revoked'``) when
-    the crash is caused by a provider auth failure that a pane restart cannot
-    recover, otherwise ``None``. Pure and side-effect free so it can be unit
-    tested without a live pane.
+    Returns a short reason code for known provider/session failures that need
+    guarded preparation or fail-closed handling before a pane restart. Pure and
+    side-effect free so it can be unit tested without a live pane.
     """
     if not text:
         return None
     haystack = text.lower()
-    for signature in _AUTH_REVOKED_SIGNATURES:
-        if signature in haystack:
-            return 'provider_auth_revoked'
+    for reason, signatures in _CRASH_SIGNATURES.items():
+        for signature in signatures:
+            if signature in haystack:
+                return reason
     return None
 
 
@@ -90,14 +106,16 @@ def persist_crash_log(session, backend: object, pane_id: str) -> str | None:
         ts = int(time.time())
         crash_log = runtime / f'pane-crash-{ts}.log'
         saver(pane_id, str(crash_log), lines=1000)
-        return _persist_crash_reason(runtime, crash_log, ts)
+        reason = _persist_crash_reason(runtime, crash_log, ts)
+        _prune_crash_artifacts(runtime)
+        return reason
     except Exception:
         return None
 
 
 def _persist_crash_reason(runtime, crash_log, ts: int) -> str | None:
     """Classify the freshly captured crash log and, when it matches a known
-    unrecoverable condition, drop an actionable ``pane-crash-<ts>.reason.json``
+    known condition, drop an actionable ``pane-crash-<ts>.reason.json``
     sidecar next to it. Returns the reason code, or ``None`` when unclassified.
 
     Best-effort: any failure here must not disrupt crash-log capture or the
@@ -131,10 +149,40 @@ def _persist_crash_reason(runtime, crash_log, ts: int) -> str | None:
 
 def _matched_signature(text: str) -> str | None:
     haystack = text.lower()
-    for signature in _AUTH_REVOKED_SIGNATURES:
-        if signature in haystack:
-            return signature
+    for signatures in _CRASH_SIGNATURES.values():
+        for signature in signatures:
+            if signature in haystack:
+                return signature
     return None
+
+
+def _prune_crash_artifacts(runtime) -> None:
+    try:
+        logs = sorted(
+            runtime.glob('pane-crash-*.log'),
+            key=lambda path: (path.stat().st_mtime_ns, path.name),
+            reverse=True,
+        )
+    except Exception:
+        return
+    retained = {path.stem for path in logs[:MAX_PANE_CRASH_LOGS]}
+    for crash_log in logs[MAX_PANE_CRASH_LOGS:]:
+        try:
+            crash_log.unlink()
+        except Exception:
+            pass
+    try:
+        reason_paths = tuple(runtime.glob('pane-crash-*.reason.json'))
+    except Exception:
+        return
+    for reason_path in reason_paths:
+        crash_stem = reason_path.name.removesuffix('.reason.json')
+        if crash_stem in retained:
+            continue
+        try:
+            reason_path.unlink()
+        except Exception:
+            pass
 
 
 def pane_exists(backend: object, pane_id: str) -> bool:
@@ -166,6 +214,7 @@ __all__ = [
     'bind_session_to_pane',
     'classify_crash_reason',
     'live_owned_pane',
+    'MAX_PANE_CRASH_LOGS',
     'pane_exists',
     'persist_crash_log',
 ]

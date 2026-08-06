@@ -161,6 +161,16 @@ def handle_mobile(context, command, out, services) -> int:
     return 0
 
 
+def handle_relay(context, command, out, services) -> int:
+    payload = services.relay_operator_command(context, command)
+    if bool(getattr(command, 'json_output', False)):
+        out.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        out.write('\n')
+        return 0
+    services.write_lines(out, services.render_relay_operator(payload))
+    return 0
+
+
 def handle_ps(context, command, out, services) -> int:
     payload = services.ps_summary(context, command)
     services.write_lines(out, services.render_ps(payload))
@@ -237,6 +247,7 @@ __all__ = [
     'handle_plan_task',
     'handle_ps',
     'handle_question',
+    'handle_relay',
     'handle_reload',
     'handle_restart',
 ]

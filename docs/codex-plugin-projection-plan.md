@@ -12,6 +12,10 @@ catalog and installed plugin assets required to satisfy that intent.
 This document complements the authority contract in
 [docs/codex-session-isolation-contract.md](/home/bfly/yunwei/ccb_source/docs/codex-session-isolation-contract.md).
 
+It also covers the current Codex plugin layout added by PR257. That layout has
+both immutable startup authority and provider-writable state; those classes
+must not share the same projection mechanism.
+
 ## 2. Problem Statement
 
 The broken state was:
@@ -43,12 +47,28 @@ Codex plugin projection is startup-owned managed-home authority.
   - `commands/`
   - plugin bundle authority under `.tmp/plugins/`
   - plugin freshness marker under `.tmp/plugins.sha` when present
+- per-agent writable plugin state
+  - `.tmp/marketplaces/`
+  - `plugins/cache/`
 - non-authoritative runtime residue
   - session logs
   - history and request transcripts
   - provider runtime logs
   - any future provider-generated ephemeral caches outside the plugin bundle
     authority described above
+
+CCB-owned control skills are mandatory startup authority, not optional user
+inheritance. The owned set is `ask`, `ccb-clear`, and `reconnect`. Startup
+projects those entries from the packaged CCB assets even when
+`inherit_skills=false`, a role disables inherited assets, or the optional
+source skill tree contains a broken entry. If Codex has already created an
+unmarked `skills/` directory for system or user assets, startup repairs only
+those named CCB-owned entries and preserves every unrelated entry.
+
+Optional source-home skills use the common per-entry projection contract rather
+than a whole-root copy. This keeps the managed `skills/` directory local while
+valid ordinary skills and the nested `.system` collection follow their source
+through independent symlink-first, marker-owned entries.
 
 Rejected designs:
 
@@ -78,12 +98,24 @@ layout.
 
 Those subsets recreate the same incoherent-home failure in a different shape.
 
+The current-layout paths are not part of that immutable bundle:
+
+- `<source-codex-home>/.tmp/marketplaces/` is an optional seed source for the
+  managed home's local `.tmp/marketplaces/`.
+- `<source-codex-home>/plugins/cache/` is an optional seed source for the
+  managed home's local `plugins/cache/`.
+
+Each managed agent receives an independent writable copy. These paths must not
+be symlinked to the source home or to another agent, because Codex may write to
+them while running.
+
 ## 5. Refresh Rules
 
 Startup refresh must be deterministic:
 
-1. If the source plugin tree is absent, remove the managed plugin tree and its
-   freshness marker from the managed home.
+1. If the source plugin tree is absent, remove the managed immutable plugin
+   tree and freshness marker only when a matching CCB projection marker proves
+   ownership. Preserve unmarked state.
 2. If the source plugin tree is present and the source freshness marker differs
    from the managed one, replace the managed projection.
 3. If no source freshness marker exists, `ccb` may fall back to a tree-signature
@@ -93,6 +125,21 @@ Startup refresh must be deterministic:
 
 The fast path should use `.tmp/plugins.sha` when available because the plugin
 bundle tree can be large and should not be fully recopied on every launch.
+
+Writable seed refresh follows different rules:
+
+1. A missing source seed never deletes an existing managed local tree.
+2. An absent target is populated through a staged local copy and receives a
+   CCB projection marker containing the source fingerprint.
+3. An unmarked target, or a target with a foreign/invalid marker, is preserved
+   without modification.
+4. A PR257-era marker-owned source symlink is migrated to a local copy.
+5. If the source fingerprint is unchanged, the managed local tree is retained
+   so provider runtime writes survive ordinary restarts.
+6. If the source fingerprint changes, only a matching CCB-owned seed may be
+   atomically refreshed. Marker-write or replacement failure restores the
+   previous tree.
+7. Disabling inherited assets removes only matching CCB-owned projections.
 
 Binding classification precedes this refresh. An already live,
 identity-proven Codex binding performs no plugin projection because no Codex
@@ -116,6 +163,10 @@ not in:
 - completion polling
 - ad hoc cold-start repair code
 
+Projection ownership is proven by a valid `ccb_projected_asset` marker with the
+expected Codex plugin label. File equality, path similarity, or residence under
+a managed home is not sufficient permission to replace a target.
+
 ## 7. Tests
 
 The regression surface must include:
@@ -127,5 +178,17 @@ The regression surface must include:
   freshness marker changes
 - refresh removes stale managed plugin residue when the source projection is no
   longer present
+- current-layout marketplace and cache seeds are local directories rather than
+  source/shared symlinks
+- two managed agents do not share writable plugin state
+- PR257-era marked symlinks migrate to local seed copies
+- unmarked targets and missing-source local state are preserved
+- source changes refresh only marker-owned seed copies and failed marker update
+  restores the previous target
 - accepted binding reuse performs zero plugin refreshes, while one managed
   launch performs exactly one refresh
+- an unmarked managed-home `skills/` directory receives the current CCB-owned
+  `ask`, `ccb-clear`, and `reconnect` entries without replacing unrelated
+  system or user skills
+- a broken symlink in the optional source skill tree cannot prevent the three
+  packaged CCB control skills from being projected

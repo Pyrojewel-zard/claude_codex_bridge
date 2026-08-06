@@ -11,7 +11,7 @@ void main() {
       hostId: 'host-relay',
       deviceId: 'dev-relay',
       clientPublicKeyB64: _b64('client ephemeral public key'),
-      supportedVersions: const {1},
+      supportedVersions: const {relayProtocolVersion},
     );
     final hostHello = RelayFrame.hostHello(
       sessionId: 'relay-session-demo',
@@ -30,7 +30,7 @@ void main() {
     expect(transcript.sessionId, 'relay-session-demo');
     expect(transcript.hostId, 'host-relay');
     expect(transcript.deviceId, 'dev-relay');
-    expect(transcript.protocolVersion, 1);
+    expect(transcript.protocolVersion, relayProtocolVersion);
     expect(transcript.serverFingerprint, 'host-fp-demo');
     _expectNoRelaySecrets(clientHello.toJson());
     _expectNoRelaySecrets(hostHello.toJson());
@@ -43,7 +43,7 @@ void main() {
       hostId: 'host-relay',
       deviceId: 'dev-relay',
       clientPublicKeyB64: _b64('client ephemeral public key'),
-      supportedVersions: const {1},
+      supportedVersions: const {relayProtocolVersion},
     );
     final hostHello = RelayFrame.hostHello(
       sessionId: 'relay-session-demo',
@@ -95,7 +95,33 @@ void main() {
           hostId: 'host-relay',
           serverFingerprint: 'host-fp-demo',
           hostPublicKeyB64: _b64('host ephemeral public key'),
-          acceptedVersion: 2,
+          acceptedVersion: 1,
+        ),
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('rejects relay v1 downgrade when legacy version is also listed', () {
+    final clientHello = RelayFrame.clientHello(
+      sessionId: 'relay-session-demo',
+      sequence: 1,
+      hostId: 'host-relay',
+      deviceId: 'dev-relay',
+      clientPublicKeyB64: _b64('client ephemeral public key'),
+      supportedVersions: const {1, relayProtocolVersion},
+    );
+
+    expect(
+      () => RelayHandshakeTranscript.negotiate(
+        clientHello: clientHello,
+        hostHello: RelayFrame.hostHello(
+          sessionId: 'relay-session-demo',
+          sequence: 2,
+          hostId: 'host-relay',
+          serverFingerprint: 'host-fp-demo',
+          hostPublicKeyB64: _b64('host ephemeral public key'),
+          acceptedVersion: 1,
         ),
       ),
       throwsFormatException,
@@ -130,7 +156,7 @@ void main() {
           'host_id': 'host-relay',
           'device_id': 'dev-relay',
           'client_pubkey_b64': _b64('client key'),
-          'supported_versions': [1],
+          'supported_versions': [relayProtocolVersion],
           'gateway_url': 'https://relay.seemlab.top',
         },
       ),
@@ -143,7 +169,7 @@ void main() {
         kind: RelayFrameKind.gatewayEnvelope,
         payload: {
           'envelope': {
-            'schema_version': 1,
+            'schema_version': relayProtocolVersion,
             'session_id': 'relay-session-demo',
             'seq': 1,
             'op': 'open_terminal',

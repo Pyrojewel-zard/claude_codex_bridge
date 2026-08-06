@@ -4,12 +4,15 @@ from uuid import uuid4
 
 from agents.models import AgentState, AgentValidationError
 from completion.tracker import CompletionTrackerView
+from execution_phase import derive_execution_phase, execution_phase_evidence_from_records
+from message_bureau.reply_payloads import reply_id_from_payload
 
 from .completion import apply_tracker_view, merge_terminal_decision
 from .lifecycle import resubmit_message, retry_attempt
 from .records import append_event, append_job, rebuild_dispatcher_state
 from .routing import build_watch_payload, resolve_targets, resolve_watch_target, validate_sender, validate_targets_available
 from .runtime_state import sync_runtime
+from .active_followups import followups_for_trace, trace_active_followups
 
 
 class DispatcherFacadeMixin:
@@ -29,7 +32,14 @@ class DispatcherFacadeMixin:
         return payload
 
     def trace(self, target: str) -> dict:
-        return self._message_bureau_control.trace(target)
+        direct = trace_active_followups(self, target)
+        if direct is not None:
+            return direct
+        result = dict(self._message_bureau_control.trace(target))
+        followups = followups_for_trace(self, result)
+        if followups:
+            result['active_followups'] = followups
+        return result
 
     def resubmit(self, message_id: str) -> dict:
         return resubmit_message(self, message_id)
@@ -124,7 +134,98 @@ class DispatcherFacadeMixin:
             runtime = None
         agent['runtime_state'] = runtime.state.value if runtime is not None else 'stopped'
         agent['runtime_health'] = runtime.health if runtime is not None else 'stopped'
+        agent.update(self._queue_execution_phase(agent))
         return agent
+
+    def _queue_execution_phase(self, agent: dict) -> dict[str, object]:
+        control = self._message_bureau_control
+        agent_name = str(agent.get('agent_name') or '').strip()
+        mailbox = _safe_store_call(getattr(control, '_mailbox_store', None), 'load', agent_name)
+        event_id = str(
+            getattr(mailbox, 'active_inbound_event_id', None)
+            or getattr(mailbox, 'head_inbound_event_id', None)
+            or ''
+        ).strip()
+        inbound = _safe_store_call(
+            getattr(control, '_inbound_store', None),
+            'get_latest',
+            agent_name,
+            event_id,
+        )
+        attempt = _safe_store_call(
+            getattr(control, '_attempt_store', None),
+            'get_latest',
+            getattr(inbound, 'attempt_id', None),
+        )
+        job_id = str(getattr(attempt, 'job_id', '') or '').strip()
+        job = self.get(job_id) if job_id else None
+        if job is None:
+            return {}
+        if _enum_value(getattr(inbound, 'event_type', None)) == 'task_reply':
+            reply_id = reply_id_from_payload(getattr(inbound, 'payload_ref', None))
+            reply = _safe_store_call(
+                getattr(control, '_reply_store', None),
+                'get_latest',
+                reply_id,
+            )
+            source_attempt = _safe_store_call(
+                getattr(control, '_attempt_store', None),
+                'get_latest',
+                getattr(reply, 'attempt_id', None),
+            )
+            source_job_id = str(getattr(source_attempt, 'job_id', '') or '').strip()
+            source_job = self.get(source_job_id) if source_job_id else None
+            if source_job is None:
+                return {}
+            active_job_id = self._state.active_job(agent_name)
+            active_job = self.get(active_job_id) if active_job_id else None
+            is_reply_delivery = (
+                getattr(getattr(active_job, 'request', None), 'message_type', None)
+                == 'reply_delivery'
+            )
+            delivery_job = active_job if is_reply_delivery else None
+            evidence = execution_phase_evidence_from_records(
+                job=source_job,
+                reply_expected=True,
+                reply_delivery=delivery_job,
+                reply_delivery_source_job_id=source_job_id if delivery_job is not None else None,
+            )
+            return derive_execution_phase(evidence).to_record()
+        lease = _safe_store_call(getattr(control, '_lease_store', None), 'load', agent_name)
+        completion = _safe_store_call(self._snapshot_writer, 'load', job_id)
+        evidence = execution_phase_evidence_from_records(
+            job=job,
+            attempt=attempt,
+            inbound=inbound,
+            mailbox=mailbox,
+            lease=lease,
+            completion=completion,
+            provider_state=None,
+            provider_identity_current=False,
+            reply_expected=_queue_reply_expected(self, job),
+        )
+        return derive_execution_phase(evidence).to_record()
+
+
+def _safe_store_call(store, method_name: str, *args):
+    method = getattr(store, method_name, None)
+    if not callable(method) or any(arg is None or str(arg).strip() == '' for arg in args):
+        return None
+    try:
+        return method(*args)
+    except Exception:
+        return None
+
+
+def _enum_value(value) -> str:
+    return str(getattr(value, 'value', value) or '').strip().lower()
+
+
+def _queue_reply_expected(dispatcher, job) -> bool:
+    sender = str(getattr(getattr(job, 'request', None), 'from_actor', '') or '').strip()
+    target = str(getattr(job, 'target_name', '') or '').strip()
+    configured = getattr(getattr(dispatcher, '_config', None), 'agents', {})
+    return sender in configured and sender != target
 
 
 __all__ = ['DispatcherFacadeMixin']

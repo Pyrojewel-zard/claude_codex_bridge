@@ -44,6 +44,9 @@ Landed runtime details:
 - `GET /api/session` exposes project root, config path, and config existence;
 - `GET /api/capabilities` exposes provider/model suggestions and separates
   model discoverability from writable CCB model shortcuts;
+- `GET /api/theme` exposes the selected and effective user-level CCB appearance
+  preference; token-guarded `POST /api/theme` is the only user-preference
+  mutation exposed by the panel;
 - current mode is explicitly reported as `editor`.
 
 The page embeds the existing Android 48px launcher icon as a data URI for its
@@ -84,11 +87,26 @@ Left navigation:
 Default visible sections should prioritize Project, Windows, Agents, Tools, and
 Sidebar. Workspace and later sections are advanced.
 
+Current release surface:
+
+- keep the configuration/editor and activation-review controls;
+- keep bounded Agent history scan and cleanup;
+- temporarily delist the read-only Agent communication-flow observer. It is
+  absent from the shipped DOM and has no animation, trace drawer, or event
+  handlers in the current panel.
+
+The sticky header also exposes **Appearance** independently from project config.
+Choices are `system`, `dark`, `light`, `solarized`, `tokyo`, `gruvbox`, and
+`rose-pine`. `system` follows browser appearance in the panel and OS appearance
+in CCB runtime consumers. Saving Appearance writes only the global CCB
+`theme.json`; it never inserts presentation state into `.ccb/ccb.config`.
+
 ## API Sketch
 
 ```text
 GET  /api/session
 GET  /api/capabilities
+GET  /api/theme
 GET  /api/config
 GET  /api/profile?name=NAME
 POST /api/validate
@@ -96,6 +114,7 @@ POST /api/render
 POST /api/apply
 POST /api/reload
 POST /api/profile
+POST /api/theme
 ```
 
 The browser keeps the draft in memory. The source of truth remains the file
@@ -222,3 +241,8 @@ The UI must not:
 - implement reload itself instead of delegating to the mounted daemon;
 - open a remote listener;
 - become a long-running daemon.
+
+The one deliberate exception to the project-file-only boundary is the
+Appearance control. It may write `$XDG_CONFIG_HOME/ccb/theme.json` only through
+the shared theme service. It must not mutate user terminal dotfiles, provider
+state, role stores, or another global preference.

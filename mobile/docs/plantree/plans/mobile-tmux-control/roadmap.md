@@ -14,6 +14,9 @@ Status: In Progress (2026-07-13).
   operation rather than relying on an ordinary background WebSocket;
 - provide optional user-controlled Android foreground connectivity for active
   Terminal/large-transfer use;
+- make LAN failures actionable with coarse Android network awareness,
+  phone-side Wi-Fi/VPN/guest-network/DHCP guidance, and a client terminal
+  WebSocket heartbeat;
 - preserve reusable unlimited pairing claims until explicit
   `ccb update mobile` rotation, while existing device credentials remain valid;
 - require same-commit emulator and physical-phone background/Doze/reconnect/
@@ -22,6 +25,8 @@ Status: In Progress (2026-07-13).
 Execution authority:
 [goal-paseo-inspired-runtime-hardening.md](goal-paseo-inspired-runtime-hardening.md)
 and [Decision 021](decisions/021-reusable-pairing-until-manual-rotation.md).
+LAN hardening detail:
+[topics/lan-network-awareness-and-recovery.md](topics/lan-network-awareness-and-recovery.md).
 
 ## Phase 4G: Realtime Authority, Recovery, and Bounded Cache — In Progress (review correction)
 
@@ -506,8 +511,9 @@ Acceptance criteria:
 
 ## Phase 5: Relay-First Remote Alpha
 
-Status: In Progress after app/UI emulator regression completion; real local
-CCB backend matrix is the next gate.
+Status: In Progress. Local Relay Packages A-D and their protocol/load gates
+are implemented; Alibaba deployment and the no-`adb reverse` public Android
+Emulator matrix are the next gates.
 
 Goal: support real remote use when the phone is outside the server LAN without
 requiring ordinary users to own a domain, configure Cloudflare, open router

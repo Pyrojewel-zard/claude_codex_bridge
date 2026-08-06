@@ -6,8 +6,10 @@ from .state_machine_runtime import (
     build_poll_state,
     finalize_poll_result,
     handle_assistant_event,
+    handle_prompt_lifecycle_event,
     handle_system_event,
     handle_user_event,
+    is_top_level_user_prompt,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "build_poll_state",
     "finalize_poll_result",
     "handle_assistant_event",
+    "handle_prompt_lifecycle_event",
     "handle_system_event",
     "handle_user_event",
+    "is_top_level_user_prompt",
 ]

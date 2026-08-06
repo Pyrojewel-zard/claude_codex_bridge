@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope, TargetKind
 from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
-from message_bureau import AttemptStore, MessageBureauFacade
+from message_bureau import AttemptRecord, AttemptState, AttemptStore, MessageBureauFacade
 from message_bureau.control import MessageBureauControlService
 from message_bureau.control_queue_runtime.views_runtime.agent import agent_queue
 from mailbox_kernel import InboundEventStatus, InboundEventStore, InboundEventType, MailboxStore
@@ -137,6 +137,66 @@ def test_record_retry_attempt_does_not_refresh_mailbox(tmp_path: Path, monkeypat
     assert mailbox.mailbox_state.value == 'blocked'
     queue = agent_queue(control, 'agent1')
     assert queue['queue_depth'] == 2
+
+
+def test_record_retry_attempt_repairs_partial_persistence_idempotently(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo')
+    bureau = MessageBureauFacade(
+        layout,
+        config=SimpleNamespace(agents={'agent1': {}}, cmd_enabled=True),
+        clock=lambda: '2026-05-08T00:00:00Z',
+    )
+    original_message_id = bureau.record_submission(
+        MessageEnvelope(
+            project_id='proj-1',
+            to_agent='agent1',
+            from_actor='user',
+            body='hello',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        ),
+        (_job('job_1', agent_name='agent1'),),
+        submission_id=None,
+        accepted_at='2026-05-08T00:00:00Z',
+    )
+    assert original_message_id is not None
+    partial_attempt = AttemptRecord(
+        attempt_id='att_partial',
+        message_id=original_message_id,
+        agent_name='agent1',
+        provider='codex',
+        job_id='job_2',
+        retry_index=1,
+        health_snapshot_ref=None,
+        started_at='2026-05-08T00:01:00Z',
+        updated_at='2026-05-08T00:01:00Z',
+        attempt_state=AttemptState.PENDING,
+    )
+    AttemptStore(layout).append(partial_attempt)
+
+    retry_job = _job('job_2', agent_name='agent1')
+    first = bureau.record_retry_attempt(
+        original_message_id,
+        retry_job,
+        accepted_at='2026-05-08T00:01:00Z',
+    )
+    second = bureau.record_retry_attempt(
+        original_message_id,
+        retry_job,
+        accepted_at='2026-05-08T00:01:01Z',
+    )
+
+    assert first == second == partial_attempt.attempt_id
+    assert len(AttemptStore(layout).list_message(original_message_id)) == 2
+    events = InboundEventStore(layout).list_agent('agent1')
+    assert len(events) == 2
+    assert events[-1].attempt_id == partial_attempt.attempt_id
+    assert events[-1].status is InboundEventStatus.QUEUED
+    mailbox = MailboxStore(layout).load('agent1')
+    assert mailbox is not None
+    assert mailbox.queue_depth == 2
 
 
 def test_record_reply_delivery_skips_non_mailbox_caller(tmp_path: Path) -> None:

@@ -53,7 +53,11 @@ class OpenCodeCommunicator:
         return self._check_session_health_impl(probe_terminal=True)
 
     def _check_session_health_impl(self, probe_terminal: bool) -> tuple[bool, str]:
-        return _check_session_health_impl(self, probe_terminal=probe_terminal, storage_root=OPENCODE_STORAGE_ROOT)
+        return _check_session_health_impl(
+            self,
+            probe_terminal=probe_terminal,
+            storage_root=self.opencode_storage_root or OPENCODE_STORAGE_ROOT,
+        )
 
     def ping(self, display: bool = True) -> tuple[bool, str]:
         return _ping_impl(self, display=display)

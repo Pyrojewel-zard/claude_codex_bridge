@@ -1,7 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
 from pathlib import Path
+import stat
 import subprocess
+
+from project.discovery import WORKSPACE_BINDING_FILENAME
+
+
+@dataclass(frozen=True)
+class WorkspaceBindingAuthority:
+    target_project: Path
+    project_id: str
+    workspace_path: Path
+    branch_name: str
+    agent_name: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'target_project', _normalize_path(self.target_project))
+        object.__setattr__(self, 'workspace_path', _normalize_path(self.workspace_path))
 
 
 def can_use_git_worktree(repo_root: Path) -> bool:
@@ -92,20 +110,37 @@ def is_git_workspace_root(workspace_path: Path) -> bool:
     return git_dir.exists()
 
 
-def workspace_is_dirty(workspace_path: Path) -> bool | None:
+def workspace_is_dirty(
+    workspace_path: Path,
+    *,
+    binding_authority: WorkspaceBindingAuthority | None = None,
+) -> bool | None:
     target = _normalize_path(workspace_path)
     if not target.exists() or not is_git_workspace_root(target):
         return None
     result = subprocess.run(
-        ['git', '-C', str(target), 'status', '--porcelain'],
+        ['git', '-C', str(target), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(_detail(result) or f'failed to inspect workspace status: {target}')
-    return bool((result.stdout or '').strip())
+        detail = bytes(result.stderr or result.stdout or b'').decode('utf-8', errors='replace').strip()
+        raise RuntimeError(detail or f'failed to inspect workspace status: {target}')
+    records = tuple(record for record in bytes(result.stdout or b'').split(b'\0') if record)
+    marker_record = f'?? {WORKSPACE_BINDING_FILENAME}'.encode('utf-8')
+    marker = target / WORKSPACE_BINDING_FILENAME
+    if (marker.is_symlink() or marker.exists()) and marker_record not in records:
+        return True
+    for record in records:
+        if (
+            record == marker_record
+            and binding_authority is not None
+            and _binding_marker_is_owned(target, binding_authority)
+        ):
+            continue
+        return True
+    return False
 
 
 def remove_registered_worktree(repo_root: Path, workspace_path: Path) -> bool:
@@ -119,21 +154,107 @@ def remove_registered_worktree(repo_root: Path, workspace_path: Path) -> bool:
     return False
 
 
-def remove_clean_registered_worktree(repo_root: Path, workspace_path: Path) -> bool:
+def remove_clean_registered_worktree(
+    repo_root: Path,
+    workspace_path: Path,
+    *,
+    binding_authority: WorkspaceBindingAuthority | None = None,
+) -> bool:
     target = _normalize_path(workspace_path)
     if not is_registered_worktree(repo_root, target):
         return False
     if not target.exists():
         raise RuntimeError(f'registered worktree is missing: {target}')
-    dirty = workspace_is_dirty(target)
+    dirty = workspace_is_dirty(target, binding_authority=binding_authority)
     if dirty is not False:
         raise RuntimeError(f'refusing to remove dirty or unreadable worktree: {target}')
+    marker = target / WORKSPACE_BINDING_FILENAME
+    if marker.is_symlink() or marker.exists():
+        if (
+            binding_authority is None
+            or not _binding_marker_is_owned(target, binding_authority)
+            or not _binding_marker_is_untracked(target)
+        ):
+            raise RuntimeError(f'refusing to remove worktree with tracked or unowned workspace binding: {target}')
+        marker.unlink()
+    dirty_after_marker_removal = workspace_is_dirty(target, binding_authority=binding_authority)
+    if dirty_after_marker_removal is not False:
+        raise RuntimeError(f'refusing to remove worktree changed during retirement: {target}')
     _run_git(
         repo_root,
         ['worktree', 'remove', str(target)],
         error=f'failed to remove clean git worktree {target}',
     )
     return True
+
+
+def _binding_marker_is_owned(target: Path, authority: WorkspaceBindingAuthority) -> bool:
+    if target != authority.workspace_path:
+        return False
+    marker = target / WORKSPACE_BINDING_FILENAME
+    try:
+        marker_stat = marker.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(marker_stat.st_mode) or marker.is_symlink():
+        return False
+    try:
+        record = json.loads(marker.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(record, dict):
+        return False
+    if record.get('schema_version') != 2 or record.get('record_type') != 'workspace_binding':
+        return False
+    if record.get('workspace_mode') != 'git-worktree':
+        return False
+    if str(record.get('project_id') or '') != authority.project_id:
+        return False
+    if str(record.get('branch_name') or '') != authority.branch_name:
+        return False
+    record_agent_name = str(record.get('agent_name') or '').strip()
+    if not record_agent_name:
+        return False
+    if authority.agent_name is not None and record_agent_name != authority.agent_name:
+        return False
+    target_project_text = str(record.get('target_project') or '').strip()
+    workspace_path_text = str(record.get('workspace_path') or '').strip()
+    if not target_project_text or not workspace_path_text:
+        return False
+    if (
+        not Path(target_project_text).expanduser().is_absolute()
+        or not Path(workspace_path_text).expanduser().is_absolute()
+    ):
+        return False
+    try:
+        target_project = _normalize_path(Path(target_project_text))
+        workspace_path = _normalize_path(Path(workspace_path_text))
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return target_project == authority.target_project and workspace_path == authority.workspace_path
+
+
+def _binding_marker_is_untracked(target: Path) -> bool:
+    result = subprocess.run(
+        [
+            'git',
+            '-C',
+            str(target),
+            'status',
+            '--porcelain=v1',
+            '-z',
+            '--untracked-files=all',
+            '--',
+            WORKSPACE_BINDING_FILENAME,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return False
+    records = tuple(record for record in bytes(result.stdout or b'').split(b'\0') if record)
+    return records == (f'?? {WORKSPACE_BINDING_FILENAME}'.encode('utf-8'),)
 
 
 def delete_owned_branch(repo_root: Path, branch_name: str, *, expected_commit: str) -> bool:
@@ -191,6 +312,7 @@ def _run_git(repo_root: Path, args: list[str], *, error: str) -> None:
 
 
 __all__ = [
+    'WorkspaceBindingAuthority',
     'branch_exists',
     'branch_is_merged_into_head',
     'can_use_git_worktree',

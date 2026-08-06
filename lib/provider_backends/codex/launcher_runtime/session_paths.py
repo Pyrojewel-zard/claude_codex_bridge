@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 from provider_core.pathing import session_filename_for_agent
-from provider_backends.codex.session_authority import resume_authority_matches
 from storage.path_helpers import runtime_project_anchor_from_path
+
+from provider_backends.codex.session_authority import resume_authority_matches
 
 from ..start_cmd import extract_resume_session_id
 
@@ -24,16 +25,50 @@ def load_resume_session_id(
     data = read_session_payload(session_path)
     if data is None:
         return None
-    if not _provider_authority_matches(
+    authority_matches = _provider_authority_matches(
         data,
         profile=profile,
         current_fingerprint=current_fingerprint,
         current_memory_fingerprint=current_memory_fingerprint,
+    )
+    if not authority_matches and not _legacy_namespace_authority_matches(
+        data,
+        runtime_dir=runtime_dir,
+        current_fingerprint=current_fingerprint,
     ):
         return None
     if not _resume_session_binding_is_usable(data):
         return None
     return payload_resume_session_id(data)
+
+
+def load_linked_continuation_session_id(
+    spec,
+    runtime_dir: Path,
+    *,
+    current_fingerprint: str,
+) -> str | None:
+    """Return a transcript that should seed a new native Codex fork."""
+    session_path = preferred_session_path(spec, runtime_dir)
+    if session_path is None:
+        return None
+    data = read_session_payload(session_path)
+    if not isinstance(data, dict):
+        return None
+    if str(data.get('ccb_resume_compatibility') or '').strip() != 'linked_continuation':
+        return None
+    if str(data.get('codex_provider_authority_fingerprint') or '').strip() != str(current_fingerprint or '').strip():
+        return None
+    if str(data.get('codex_session_id') or '').strip() or str(data.get('codex_session_path') or '').strip():
+        return None
+    old_id = str(data.get('old_codex_session_id') or '').strip()
+    old_path = _path_or_none(data.get('old_codex_session_path'))
+    session_root = _path_or_none(data.get('codex_session_root'))
+    if not old_id or old_path is None or session_root is None:
+        return None
+    if not old_path.is_file() or not _is_within(old_path, session_root):
+        return None
+    return old_id
 
 
 def agent_session_path(spec, runtime_dir: Path) -> Path | None:
@@ -120,6 +155,45 @@ def _provider_authority_matches(
     )
 
 
+def _legacy_namespace_authority_matches(
+    data: dict,
+    *,
+    runtime_dir: Path,
+    current_fingerprint: str | None,
+) -> bool:
+    """Allow legacy records only when the active home already proves authority."""
+    if str(data.get('codex_provider_authority_fingerprint') or '').strip():
+        return False
+    if str(data.get('codex_session_authority_fingerprint') or '').strip():
+        return False
+    fingerprint = str(current_fingerprint or '').strip()
+    if not fingerprint:
+        return False
+    codex_home = _path_or_none(data.get('codex_home'))
+    if codex_home is None:
+        from .command_runtime.home import _extract_command_path
+
+        for key in ('codex_start_cmd', 'start_cmd'):
+            codex_home = _extract_command_path(str(data.get(key) or ''), 'CODEX_HOME')
+            if codex_home is not None:
+                break
+    if codex_home is None:
+        state_dir = state_dir_for_runtime_dir(runtime_dir)
+        if state_dir is not None:
+            codex_home = state_dir / 'home'
+    if codex_home is None:
+        return False
+    marker_path = codex_home / '.ccb-session-namespace.json'
+    try:
+        marker = json.loads(marker_path.read_text(encoding='utf-8'))
+    except Exception:
+        return False
+    return (
+        isinstance(marker, dict)
+        and str(marker.get('provider_authority_fingerprint') or '').strip() == fingerprint
+    )
+
+
 def _resume_session_binding_is_usable(data: dict) -> bool:
     session_path = _path_or_none(data.get('codex_session_path'))
     if session_path is None:
@@ -154,4 +228,9 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-__all__ = ['load_resume_session_id', 'session_file_for_runtime_dir', 'state_dir_for_runtime_dir']
+__all__ = [
+    'load_linked_continuation_session_id',
+    'load_resume_session_id',
+    'session_file_for_runtime_dir',
+    'state_dir_for_runtime_dir',
+]

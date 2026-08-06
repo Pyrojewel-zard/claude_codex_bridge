@@ -53,15 +53,24 @@ def handle_config_validate(context, command, out, services) -> int:
 
 def handle_config_ui(context, command, out, services) -> int:
     handle = services.prepare_config_ui(context, command)
+    launch_summary = dict(handle.summary)
+    # The token-free URL in ConfigUiHandle.summary is safe for diagnostics, but
+    # this command's stdout is also the sidebar/manual-open handoff.  That
+    # consumer needs the authenticated URL or every copied fallback link is
+    # guaranteed to receive HTTP 403.
+    launch_summary['url'] = handle.url
     services.write_lines(
         out,
-        tuple(f'{key}: {value}' for key, value in handle.summary.items()),
+        tuple(f'{key}: {value}' for key, value in launch_summary.items()),
     )
     flush = getattr(out, 'flush', None)
     if callable(flush):
         flush()
     if not command.no_open and not services.open_config_ui_url(handle.url):
-        services.write_lines(out, ('browser_open: failed; open the URL above manually',))
+        services.write_lines(
+            out,
+            ('browser_open: failed; open the authenticated loopback URL above manually',),
+        )
         if callable(flush):
             flush()
     try:

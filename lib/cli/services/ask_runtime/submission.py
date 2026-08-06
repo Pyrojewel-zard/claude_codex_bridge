@@ -14,22 +14,8 @@ from storage.text_artifacts import artifact_stub, maybe_spill_text, write_text_a
 
 from .models import AskSummary
 
-_DEFAULT_REPLY_GUIDANCE = """CCB reply guidance:
-- Answer directly and concisely.
-- Include only relevant conclusions, blockers, risks, evidence, and next actions.
-- Avoid raw logs and background unless explicitly requested."""
-
-_COMPACT_REPLY_GUIDANCE = """CCB reply guidance:
-- Distill aggressively and lead with the answer.
-- Keep only details needed for this ask.
-- Omit empty sections, raw logs, repeated context, and background unless essential."""
-
-_SILENT_REPLY_GUIDANCE = """CCB reply guidance:
-- Silent-on-success requested.
-- Reply with the shortest useful status.
-- Include details only for failures, blockers, or required next actions."""
-
-_GUIDANCE_MARKER = 'CCB reply guidance:'
+_LEGACY_GUIDANCE_MARKER = 'CCB reply guidance:'
+_REPLY_MODE_MARKER = 'CCB_REPLY_MODE:'
 _EXPLICIT_OUTPUT_HINTS = (
     'output requirements',
     'reply format',
@@ -173,23 +159,28 @@ def message_with_reply_guidance(
     compact: bool = False,
     silence_on_success: bool = False,
 ) -> str:
+    """Preserve the legacy API while attaching only dynamic reply-mode metadata.
+
+    Stable reply guidance lives in the managed project-memory bundle so normal
+    asks do not repeat the same policy in every request body.
+    """
     if str(message_type or '').strip().lower() != 'ask':
         return message
     if _has_explicit_output_guidance(message):
         return message
     if silence_on_success:
-        guidance = _SILENT_REPLY_GUIDANCE
+        mode = 'silent'
     elif compact:
-        guidance = _COMPACT_REPLY_GUIDANCE
+        mode = 'compact'
     else:
-        guidance = _DEFAULT_REPLY_GUIDANCE
-    return f'{str(message).rstrip()}\n\n{guidance}'
+        return message
+    return f'{str(message).rstrip()}\n\n{_REPLY_MODE_MARKER} {mode}'
 
 
 def _has_explicit_output_guidance(message: str) -> bool:
     text = str(message or '')
     lowered = text.lower()
-    if _GUIDANCE_MARKER.lower() in lowered:
+    if _LEGACY_GUIDANCE_MARKER.lower() in lowered or _REPLY_MODE_MARKER.lower() in lowered:
         return True
     return any(hint in lowered for hint in _EXPLICIT_OUTPUT_HINTS)
 

@@ -18,6 +18,8 @@ typedef AgentMessageSubmitTimelineScrollToEnd = void Function(String agentName);
 typedef AgentMessageSubmitLoadConversation =
     Future<void> Function(String agentName);
 typedef AgentMessageDraftAccepted = void Function();
+typedef AgentMessageDeliveryUpdated =
+    void Function(CcbConversationItem replacement);
 
 class AgentMessageSubmitCoordinator {
   const AgentMessageSubmitCoordinator({
@@ -55,6 +57,7 @@ class AgentMessageSubmitCoordinator {
     List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
     required AgentMessageDraftAccepted onAccepted,
+    AgentMessageDeliveryUpdated? onDeliveryUpdated,
   }) async {
     if (_chatController.isSubmitting(agent.name)) {
       return;
@@ -92,6 +95,7 @@ class AgentMessageSubmitCoordinator {
         usePaneInput: usePaneInput,
         paneSubmitBytes: paneSubmitBytes,
         refreshView: refreshView,
+        onDeliveryUpdated: onDeliveryUpdated,
       );
     } finally {
       if (_isMounted()) {
@@ -110,6 +114,8 @@ class AgentMessageSubmitCoordinator {
     bool usePaneInput = false,
     List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
+    AgentMessageDraftAccepted? onAccepted,
+    AgentMessageDeliveryUpdated? onDeliveryUpdated,
   }) async {
     if (_chatController.isSubmitting(item.agentName)) {
       return;
@@ -122,6 +128,7 @@ class AgentMessageSubmitCoordinator {
     _mutateState(() {
       _chatController.beginSubmitting(item.agentName);
       _chatController.replaceLocalMessage(item.agentName, item.id, pending);
+      onAccepted?.call();
     });
     try {
       await _submitLocalMessageWithView(
@@ -133,6 +140,7 @@ class AgentMessageSubmitCoordinator {
         usePaneInput: usePaneInput,
         paneSubmitBytes: paneSubmitBytes,
         refreshView: refreshView,
+        onDeliveryUpdated: onDeliveryUpdated,
       );
     } finally {
       if (_isMounted()) {
@@ -152,6 +160,7 @@ class AgentMessageSubmitCoordinator {
     required bool usePaneInput,
     required List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
+    AgentMessageDeliveryUpdated? onDeliveryUpdated,
   }) async {
     if (usePaneInput && _paneSubmitter != null) {
       await _submitPaneMessageWithView(
@@ -162,6 +171,7 @@ class AgentMessageSubmitCoordinator {
         terminalTransport: terminalTransport,
         paneSubmitBytes: paneSubmitBytes,
         refreshView: refreshView,
+        onDeliveryUpdated: onDeliveryUpdated,
       );
       return;
     }
@@ -171,6 +181,7 @@ class AgentMessageSubmitCoordinator {
       view: view,
       repository: repository,
       refreshView: refreshView,
+      onDeliveryUpdated: onDeliveryUpdated,
     );
   }
 
@@ -182,6 +193,7 @@ class AgentMessageSubmitCoordinator {
     required TerminalTransport? terminalTransport,
     required List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
+    AgentMessageDeliveryUpdated? onDeliveryUpdated,
   }) async {
     if (terminalTransport == null) {
       final outcome = await _paneSubmitter!.submit(
@@ -196,6 +208,7 @@ class AgentMessageSubmitCoordinator {
         return;
       }
       _replaceLocalMessage(agent.name, message.id, outcome.replacement);
+      onDeliveryUpdated?.call(outcome.replacement);
       return;
     }
     final repositorySubmitter = AgentRepositoryMessageSubmitter(
@@ -212,11 +225,9 @@ class AgentMessageSubmitCoordinator {
       if (!_isMounted()) {
         return;
       }
-      _replaceLocalMessage(
-        agent.name,
-        message.id,
-        _failedMessage(message, error),
-      );
+      final replacement = _failedMessage(message, error);
+      _replaceLocalMessage(agent.name, message.id, replacement);
+      onDeliveryUpdated?.call(replacement);
       return;
     }
 
@@ -235,6 +246,7 @@ class AgentMessageSubmitCoordinator {
       return;
     }
     _replaceLocalMessage(agent.name, message.id, outcome.replacement);
+    onDeliveryUpdated?.call(outcome.replacement);
     if (outcome.shouldRefreshTerminalHistory) {
       unawaited(_loadConversation(agent.name));
     }
@@ -246,6 +258,7 @@ class AgentMessageSubmitCoordinator {
     required CcbProjectView view,
     required MobileCcbRepository repository,
     required AgentViewRefresh? refreshView,
+    AgentMessageDeliveryUpdated? onDeliveryUpdated,
   }) async {
     final outcome = await AgentRepositoryMessageSubmitter(
       repository: repository,
@@ -256,6 +269,9 @@ class AgentMessageSubmitCoordinator {
     final conversation = outcome.conversation;
     if (conversation != null) {
       final replacement = outcome.replacement;
+      if (replacement != null) {
+        onDeliveryUpdated?.call(replacement);
+      }
       final remoteCoversMessage = remoteConversationCoversUserMessage(
         remoteConversation: conversation,
         message: replacement ?? message,
@@ -287,6 +303,7 @@ class AgentMessageSubmitCoordinator {
     final replacement = outcome.replacement;
     if (replacement != null) {
       _replaceLocalMessage(agent.name, message.id, replacement);
+      onDeliveryUpdated?.call(replacement);
     }
     if (outcome.shouldRefreshConversation) {
       unawaited(_loadConversation(agent.name));

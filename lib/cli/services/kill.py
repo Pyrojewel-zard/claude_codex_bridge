@@ -4,7 +4,7 @@ from dataclasses import replace
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.system import utc_now
-from ccbd.socket_client import CcbdClient
+from ccbd.socket_client import CcbdClient, CcbdClientError
 from cli.context import CliContext
 from cli.services.kill_runtime.agent_cleanup import (
     extra_agent_dir_names as _extra_agent_dir_names_impl,
@@ -54,6 +54,10 @@ from .daemon_runtime.keeper import wait_for_keeper_exit as _wait_for_keeper_exit
 from .daemon_runtime.processes import lease_pid as _lease_pid
 from .daemon_runtime.processes import wait_for_pid_exit as _wait_for_pid_exit
 from .maintenance import stop_maintenance_heartbeat_runner
+from .cleanup import (
+    cleanup_current_project_legacy_provider_caches,
+    current_project_legacy_provider_cache_present,
+)
 from .tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
 from .tmux_project_cleanup import ProjectTmuxCleanupSummary, cleanup_project_tmux_orphans_by_socket
 from .tmux_ui import set_tmux_ui_active
@@ -90,19 +94,22 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
         remote_summary=remote_summary,
         summary=summary,
     )
-    runtime_actions = ()
+    runtime_actions = tuple(final_summary.runtime_actions)
     if accelerator_recovery.status == 'recovered':
-        runtime_actions = (
+        runtime_actions += (
             'recover_corrupt_runtime_accelerator_owner:'
             + ','.join(str(pid) for pid in accelerator_recovery.reclaimed_pids),
         )
-    runtime_warnings = (accelerator_recovery.warning,) if accelerator_recovery.warning else ()
+    runtime_warnings = tuple(final_summary.runtime_warnings)
+    if accelerator_recovery.warning:
+        runtime_warnings += (accelerator_recovery.warning,)
     if runtime_actions or runtime_warnings:
         final_summary = replace(
             final_summary,
             runtime_actions=runtime_actions,
             runtime_warnings=runtime_warnings,
         )
+    final_summary = _cleanup_legacy_provider_cache_after_kill(context, final_summary)
     if command.force:
         try:
             prune_missing_worktrees_under(context.project.project_root, context.paths.workspaces_dir)
@@ -112,6 +119,54 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
     if not guard_summary.warnings:
         return final_summary
     return replace(final_summary, worktree_warnings=tuple(guard_summary.warnings))
+
+
+def _cleanup_legacy_provider_cache_after_kill(
+    context: CliContext,
+    summary: KillSummary,
+) -> KillSummary:
+    if summary.state != 'unmounted':
+        return summary
+    if not current_project_legacy_provider_cache_present(context.paths):
+        return summary
+    try:
+        cleanup_summary = cleanup_current_project_legacy_provider_caches(
+            context,
+            measure_bytes=False,
+        )
+    except Exception as exc:
+        warning = (
+            'legacy Provider cache cleanup deferred after kill: '
+            f'{type(exc).__name__}: {exc}'
+        )
+        return replace(
+            summary,
+            runtime_warnings=tuple(summary.runtime_warnings) + (warning,),
+        )
+
+    actions = tuple(summary.runtime_actions)
+    deleted_cache_count = sum(
+        1
+        for item in cleanup_summary.actions
+        if item.kind == 'legacy_project_cache'
+    )
+    if deleted_cache_count:
+        actions += (
+            f'cleanup_legacy_provider_cache:deleted={deleted_cache_count}',
+        )
+    warnings = tuple(summary.runtime_warnings)
+    if cleanup_summary.skipped_count:
+        warnings += (
+            'legacy Provider cache cleanup preserved '
+            f'{cleanup_summary.skipped_count} unsafe path(s)',
+        )
+    if actions == summary.runtime_actions and warnings == summary.runtime_warnings:
+        return summary
+    return replace(
+        summary,
+        runtime_actions=actions,
+        runtime_warnings=warnings,
+    )
 
 
 def _recover_corrupt_accelerator_owner(context: CliContext, *, force: bool):
@@ -135,6 +190,7 @@ def _request_remote_stop(context: CliContext, *, force: bool) -> KillSummary | N
         summary_from_stop_all_payload_fn=_summary_from_stop_all_payload,
         stop_all_timeout_s=_STOP_ALL_TIMEOUT_S,
         service_error_cls=CcbdServiceError,
+        client_error_cls=CcbdClientError,
     )
 
 

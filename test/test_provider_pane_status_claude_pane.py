@@ -28,13 +28,36 @@ def test_claude_pane_reports_spinner_as_working() -> None:
     assert status.reason == "claude_pane_spinner_active"
 
 
-def test_claude_pane_reports_terminal_summary_without_completion_authority() -> None:
+def test_claude_pane_reports_every_spinner_animation_frame_as_working() -> None:
+    for glyph in ("·", "*", "✻", "✢", "✶", "✽"):
+        status = parse_claude_pane_status(
+            f"{glyph} Infusing… (13s · ↓ 105 tokens)\n"
+            "────────────────────────────────────────────────────────\n"
+            "❯\n"
+        )
+
+        assert status.state == "working", glyph
+        assert status.reason == "claude_pane_spinner_active", glyph
+
+
+def test_claude_pane_current_prompt_overrides_past_terminal_summary() -> None:
     status = parse_claude_pane_status(
         """
   Thought for 9s, ran 1 shell command
 
 ────────────────────────────────────────────────────────────────────
 ❯
+"""
+    )
+
+    assert status.state == "free"
+    assert status.reason == "claude_pane_idle_prompt"
+
+
+def test_claude_pane_reports_terminal_summary_without_current_prompt() -> None:
+    status = parse_claude_pane_status(
+        """
+  Thought for 9s, ran 1 shell command
 """
     )
 

@@ -3,12 +3,13 @@
 #
 # Resolution order:
 #   1. $CCB_PYTHON (when set, validated; lets parent CCB processes pin the choice for children)
-#   2. cache file at $CCB_PYTHON_CACHE (default: $HOME/.ccb/state/python-bin), validated
-#   3. probe candidate names (python3.13/3.12/3.11/python3) via PATH plus a few
-#      well-known absolute prefixes; pick the first that imports tomllib successfully.
+#   2. the managed interpreter beside an installed CCB release (.venv/bin/python), validated
+#   3. cache file at $CCB_PYTHON_CACHE (default: $HOME/.ccb/state/python-bin), validated
+#   4. probe candidate names (python3.13/3.12/3.11/3.10/python3) via PATH plus
+#      a few well-known absolute prefixes; pick the first compatible runtime.
 #
-# Validation requires Python >= 3.11 (so stdlib tomllib is available, matching
-# what CCB's rich TOML config loader needs).
+# Validation requires Python >= 3.10, a TOML reader, and the Python packages
+# used by CCB's mobile gateway and encrypted Relay transport.
 #
 # Usage:
 #   _ccb-python --resolve            print the chosen interpreter path
@@ -22,9 +23,15 @@ _ccb_python_validate() {
   command -v -- "$candidate" >/dev/null 2>&1 || [[ -x "$candidate" ]] || return 1
   "$candidate" - <<'PY' >/dev/null 2>&1
 import sys
-if sys.version_info < (3, 11):
+if sys.version_info < (3, 10):
     raise SystemExit(1)
-import tomllib  # noqa: F401
+try:
+    import tomllib  # noqa: F401
+except ModuleNotFoundError:
+    import tomli  # type: ignore[import-not-found]  # noqa: F401
+import aiohttp  # noqa: F401
+from cryptography.hazmat.primitives.asymmetric import ed25519, x25519  # noqa: F401
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305  # noqa: F401
 PY
 }
 
@@ -52,19 +59,38 @@ _ccb_python_write_cache() {
   printf '%s\n' "$path" > "$cache_path" 2>/dev/null || true
 }
 
+_ccb_python_install_local() {
+  local script_dir install_root candidate
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)" || return 1
+  install_root="$(dirname "$script_dir")"
+  for candidate in \
+    "$install_root/.venv/bin/python" \
+    "$install_root/.venv/bin/python3"
+  do
+    if _ccb_python_validate "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 _ccb_python_probe() {
   local candidates=(
     python3.13
     python3.12
     python3.11
+    python3.10
     python3
     /opt/homebrew/bin/python3.13
     /opt/homebrew/bin/python3.12
     /opt/homebrew/bin/python3.11
+    /opt/homebrew/bin/python3.10
     /opt/homebrew/bin/python3
     /usr/local/bin/python3.13
     /usr/local/bin/python3.12
     /usr/local/bin/python3.11
+    /usr/local/bin/python3.10
     /usr/local/bin/python3
     /usr/bin/python3
   )
@@ -90,9 +116,14 @@ _ccb_python_probe() {
 }
 
 _ccb_python_resolve() {
-  local cached
+  local install_local cached
   if [[ -n "${CCB_PYTHON:-}" ]] && _ccb_python_validate "$CCB_PYTHON"; then
     printf '%s\n' "$CCB_PYTHON"
+    return 0
+  fi
+  if install_local="$(_ccb_python_install_local)"; then
+    _ccb_python_write_cache "$install_local"
+    printf '%s\n' "$install_local"
     return 0
   fi
   cached="$(_ccb_python_cache_path)"
@@ -116,11 +147,14 @@ _ccb_python_resolve() {
 _ccb_python_die_no_interpreter() {
   cat >&2 <<'EOF'
 ccb: cannot find a Python interpreter compatible with CCB.
-     Required: Python >= 3.11 (with stdlib `tomllib`).
-     Tried: python3.13, python3.12, python3.11, python3, plus standard /opt/homebrew and /usr/local prefixes.
-     Set CCB_PYTHON=/absolute/path/to/python3.11 to override, or install Python 3.11+:
-       macOS:  brew install python@3.11
-       Debian: sudo apt-get install python3.11
+     Required: Python >= 3.10 with `tomllib`/`tomli`, `aiohttp`, and `cryptography`.
+     Tried: the CCB release's managed .venv, python3.13, python3.12, python3.11,
+            python3.10, python3, plus standard /opt/homebrew and /usr/local prefixes.
+     Install the pinned Python dependencies from deploy/mobile-relay/requirements.txt,
+     then set CCB_PYTHON=/absolute/path/to/python3 if an explicit override is needed.
+     Install Python 3.10+ with:
+       macOS:  brew install python
+       Debian: sudo apt-get install python3
 EOF
   exit 127
 }

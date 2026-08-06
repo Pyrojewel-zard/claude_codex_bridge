@@ -50,9 +50,11 @@ Stable homepage claims:
 - `ccb_self` is CCB's built-in self-understanding expert for usage guidance,
   active layout explanation, config design, runtime diagnostics, recovery, and
   workflow repair.
-- New installs should recommend `npm install -g @seemseam/ccb`; subsequent
-  updates should use `ccb update`; GitHub release packages and source checkout
-  install are fallback/development paths.
+- New installs should recommend `npm install -g @seemseam/ccb@latest`.
+  As of 2026-07-22, npm-managed updates remain owned by npm; release-package
+  and source installs use `ccb update`. This supersedes the earlier single
+  post-install updater rule; see
+  [install-update-stability decision 001](../../install-update-stability/decisions/001-npm-owns-vendored-payload.md).
 
 ## Must Preserve
 
@@ -84,9 +86,9 @@ Stable homepage claims:
   default.
 - Do not use `seemseam@ccb` as an npm install command; the verified package
   name is `@seemseam/ccb`.
-- Do not tell normal users to update CCB with
-  `npm install -g @seemseam/ccb@latest`; after installation, the update command
-  is `ccb update`.
+- Do not tell npm-managed users that `ccb update` mutates the vendored package
+  payload. It prints the npm-owned update command; release/source installs keep
+  the transactional updater.
 - Do not directly use `assets/ccb-promo.png` as the public README hero without
   generating/updating the language-specific canonical hero pair.
 - Do not replace the promo-style hero with the older

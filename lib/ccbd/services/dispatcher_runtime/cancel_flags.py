@@ -1,9 +1,8 @@
-"""Filesystem cancel flags (phase 2.1).
+"""Filesystem cancel flags retained as a cooperative compatibility signal.
 
-Marking a job CANCELLED in the stores does not reach an agent that is already
-mid-task in its pane. A flag file gives agents a cheap, transport-independent
-way to notice cancellation between work steps: the dispatch prompt tells them
-to check it and stop if present.
+Active execution is cancelled out of band by the provider execution service.
+Managed project memory documents the optional flag protocol once, so normal
+job prompts do not repeat cancellation instructions or require per-step polls.
 """
 
 from __future__ import annotations
@@ -45,4 +44,12 @@ def cleanup_cancel_flags(layout, agent_name: str, *, max_age_seconds: float = 86
         pass
 
 
-__all__ = ["cancel_flag_path", "cleanup_cancel_flags", "write_cancel_flag"]
+def clear_cancel_flag(layout, agent_name: str, job_id: str) -> None:
+    """Remove a losing-race flag after another terminal result wins."""
+    try:
+        cancel_flag_path(layout, agent_name, job_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+__all__ = ["cancel_flag_path", "cleanup_cancel_flags", "clear_cancel_flag", "write_cancel_flag"]

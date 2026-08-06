@@ -12,17 +12,45 @@ notifications, local/Tailnet gateway access, and file transfer.
 
 ## Android Alpha Release
 
-CCB Mobile v8.2.1 is published as an Android APK:
+CCB Mobile v8.5.6 is published as an Android APK:
 
-- [Download ccb-mobile-v8.2.1.apk](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
+- [Download ccb-mobile-v8.5.6.apk](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
 - Server setup entrypoint: `ccb update mobile`
 - App source: [`app/`](app/)
+
+### Android app updates
+
+The Android app checks the latest GitHub release after startup and also exposes
+a manual **Check for updates** action in the connection settings. Release
+metadata and the APK SHA-256 digest are accepted only from the canonical GitHub
+repository. The preferred API path also requires the manifest URL, APK URL,
+size, and SHA-256 to match GitHub's release-asset metadata. When the APK itself
+is difficult to download directly, its bytes may fall back through
+`gh-proxy.com`, `ghfast.top`, and `ghproxy.net`, in that order, but proxy
+responses must match the trusted manifest's exact size and SHA-256 digest.
+Proxies are never trusted to provide release metadata. Android still requires
+the user to approve the signed APK update; the app does not perform silent
+installation.
 
 The app is designed for real server-side CCB projects, not a demo-only flow.
 It connects to the server-wide mobile gateway, lists mounted CCB projects,
 renders agent transcripts, sends pane-native text input, opens terminal views,
 and supports image/document upload and download through the authenticated
 gateway.
+
+### LAN pairing and recovery
+
+For a LAN QR/code, connect the phone and computer to the same trusted Wi-Fi,
+wired LAN, or phone hotspot. Avoid guest/client-isolated Wi-Fi, and allow local
+network access through any active VPN. Android shows an advisory before a LAN
+claim when no local-network transport is visible; **Continue anyway** remains
+available because the phone itself may be providing the hotspot.
+
+If a paired LAN route becomes unreachable, the app keeps the profile and shows
+a persistent network notice with **Retry** and **Diagnostics**. Check the
+same-network, VPN, guest-isolation, and firewall conditions first. If the
+computer received a new LAN address, rerun `ccb update mobile` on the computer
+and scan the new code.
 
 ## Plan Tree
 
@@ -38,5 +66,5 @@ docs/plantree/       Planning tree and design decisions
 tools/               Emulator, gateway, and acceptance helpers
 ```
 
-iOS/iPadOS remain source-supported targets, but v8.2.1 release validation is
+iOS/iPadOS remain source-supported targets, but v8.5.6 release validation is
 Android-focused.

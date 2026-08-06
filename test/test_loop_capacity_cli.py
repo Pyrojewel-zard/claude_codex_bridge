@@ -10740,7 +10740,7 @@ def test_frontdesk_daemon_handler_preserves_exact_source_job_request_for_planner
                     to_agent='frontdesk',
                     from_actor='user',
                     message_type='ask',
-                    body=source_body + '\n\nCCB reply guidance:\n- Distill aggressively.',
+                    body=source_body + '\n\nCCB_REPLY_MODE: compact',
                     body_artifact=None,
                 ),
             )
@@ -10786,7 +10786,7 @@ def test_frontdesk_daemon_handler_preserves_exact_source_job_request_for_planner
     assert '`record_count`, `total_quantity`, `categories`, and `records`' in planner_body
     assert 'write_jsonl_archive(path, items)' in planner_body
     assert 'main(argv=None) -> int' in planner_body
-    assert 'CCB reply guidance:' not in planner_body
+    assert 'CCB_REPLY_MODE:' not in planner_body
     assert 'Frontdesk intake evidence:' in planner_body
     activation = json.loads(Path(str(payload['activation_path'])).read_text(encoding='utf-8'))
     assert activation['source_job']['job_id'] == source_job_id

@@ -162,6 +162,7 @@ def _agent_runtime_from_record(record: dict) -> AgentRuntime:
         desired_state=record.get('desired_state'),
         reconcile_state=record.get('reconcile_state'),
         restart_count=int(record.get('restart_count', 0)),
+        recovery_failure_count=int(record.get('recovery_failure_count', 0)),
         last_reconcile_at=record.get('last_reconcile_at'),
         last_failure_reason=record.get('last_failure_reason'),
         mount_attempt_id=record.get('mount_attempt_id'),

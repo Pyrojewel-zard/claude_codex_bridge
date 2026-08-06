@@ -9,8 +9,10 @@ import '../../models/ccb_window.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/selected_agent_workspace.dart';
+import '../terminal/agent_terminal_workspace.dart';
 import '../../cache/mobile_snapshot_store.dart';
 import 'gateway_reconnecting_banner.dart';
+import 'project_home_terminal_navigation.dart';
 import 'project_shell_widgets.dart';
 
 class ProjectHomeProjectListHost extends StatelessWidget {
@@ -201,7 +203,6 @@ class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
     required this.usePaneInputForMessages,
     required this.mobileAgentsCollapsed,
     required this.onBack,
-    required this.onOpenTerminal,
     required this.onOpenConnectionDetails,
     required this.onCollapseAgents,
     required this.onExpandAgents,
@@ -228,7 +229,6 @@ class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
   final bool usePaneInputForMessages;
   final bool mobileAgentsCollapsed;
   final VoidCallback onBack;
-  final ValueChanged<String> onOpenTerminal;
   final VoidCallback onOpenConnectionDetails;
   final VoidCallback onCollapseAgents;
   final VoidCallback onExpandAgents;
@@ -255,10 +255,17 @@ class _ProjectHomeMobileChatScaffoldHostState
     extends State<ProjectHomeMobileChatScaffoldHost> {
   final SelectedAgentWorkspaceController _workspaceController =
       SelectedAgentWorkspaceController();
+  var _terminalMode = false;
+  var _terminalActivated = false;
 
   @override
   void didUpdateWidget(covariant ProjectHomeMobileChatScaffoldHost oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.view.project.id != widget.view.project.id ||
+        widget.selectedAgent == null) {
+      _terminalMode = false;
+      _terminalActivated = false;
+    }
     if (oldWidget.conversationRefreshToken != widget.conversationRefreshToken) {
       _workspaceController.refreshLatest();
     }
@@ -276,9 +283,9 @@ class _ProjectHomeMobileChatScaffoldHostState
     final terminalAction =
         selectedAgent == null
             ? null
-            : () {
-              widget.onOpenTerminal(selectedAgent.name);
-            };
+            : _terminalMode
+            ? _showChat
+            : _showTerminal;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -295,6 +302,8 @@ class _ProjectHomeMobileChatScaffoldHostState
                   onExpandAgents: widget.onExpandAgents,
                   onRefreshConversation: _workspaceController.refreshLatest,
                   onOpenTerminal: terminalAction,
+                  terminalMode: _terminalMode,
+                  onShowChat: _showChat,
                   onOpenConnectionDetails: widget.onOpenConnectionDetails,
                 )
               else ...[
@@ -303,6 +312,8 @@ class _ProjectHomeMobileChatScaffoldHostState
                   onBack: widget.onBack,
                   onRefreshConversation: _workspaceController.refreshLatest,
                   onOpenTerminal: terminalAction,
+                  terminalMode: _terminalMode,
+                  onShowChat: _showChat,
                   onOpenConnectionDetails: widget.onOpenConnectionDetails,
                 ),
                 const SizedBox(height: 4),
@@ -313,7 +324,7 @@ class _ProjectHomeMobileChatScaffoldHostState
                   unreadAgentNames: widget.unreadAgentNames,
                   onCollapse: widget.onCollapseAgents,
                   onExpand: widget.onExpandAgents,
-                  onWindowSelected: widget.onWindowSelected,
+                  onWindowSelected: _handleWindowSelected,
                   onAgentSelected: widget.onAgentSelected,
                 ),
               ],
@@ -327,23 +338,59 @@ class _ProjectHomeMobileChatScaffoldHostState
               ],
               const SizedBox(height: 4),
               Expanded(
-                child: SelectedAgentWorkspace(
-                  repository: widget.repository,
-                  terminalTransport: widget.terminalTransport,
-                  usePaneInputForMessages: widget.usePaneInputForMessages,
-                  view: widget.view,
-                  agent: selectedAgent,
-                  enableComposerCollapse: true,
-                  onRefreshView: widget.onRefreshView,
-                  onUserScrollDirectionChanged:
-                      widget.onTimelineScrollDirectionChanged,
-                  onProjectActivity: widget.onProjectActivity,
-                  controller: _workspaceController,
-                  snapshotStore: widget.snapshotStore,
-                  snapshotNamespace: widget.snapshotNamespace,
-                  sendEnabled: widget.sendEnabled,
-                  sendDisabledReason: widget.sendDisabledReason,
-                  refreshToken: widget.conversationRefreshToken,
+                child: IndexedStack(
+                  key: const ValueKey('project-agent-content-modes'),
+                  index: _terminalMode ? 1 : 0,
+                  children: [
+                    TickerMode(
+                      enabled: !_terminalMode,
+                      child: IgnorePointer(
+                        ignoring: _terminalMode,
+                        child: ExcludeFocus(
+                          excluding: _terminalMode,
+                          child: KeyedSubtree(
+                            key: const ValueKey('project-agent-chat-mode'),
+                            child: SelectedAgentWorkspace(
+                              repository: widget.repository,
+                              terminalTransport: widget.terminalTransport,
+                              usePaneInputForMessages:
+                                  widget.usePaneInputForMessages,
+                              view: widget.view,
+                              agent: selectedAgent,
+                              enableComposerCollapse: true,
+                              onRefreshView: widget.onRefreshView,
+                              onUserScrollDirectionChanged:
+                                  widget.onTimelineScrollDirectionChanged,
+                              onProjectActivity: widget.onProjectActivity,
+                              controller: _workspaceController,
+                              snapshotStore: widget.snapshotStore,
+                              snapshotNamespace: widget.snapshotNamespace,
+                              sendEnabled: widget.sendEnabled,
+                              sendDisabledReason: widget.sendDisabledReason,
+                              refreshToken: widget.conversationRefreshToken,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    TickerMode(
+                      enabled: _terminalMode,
+                      child:
+                          _terminalActivated && selectedAgent != null
+                              ? AgentTerminalWorkspace(
+                                key: const ValueKey(
+                                  'project-agent-terminal-mode',
+                                ),
+                                repository: widget.repository,
+                                view: widget.view,
+                                agent: selectedAgent,
+                                terminalTransport: widget.terminalTransport,
+                                gatewayTerminal: widget.usePaneInputForMessages,
+                                active: _terminalMode,
+                              )
+                              : const SizedBox.shrink(),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -351,6 +398,65 @@ class _ProjectHomeMobileChatScaffoldHostState
         ),
       ),
     );
+  }
+
+  void _showTerminal() {
+    final selectedAgent = widget.selectedAgent;
+    if (selectedAgent == null) {
+      return;
+    }
+    final outcome =
+        widget.usePaneInputForMessages
+            ? projectHomeGatewayTerminalNavigation(
+              view: widget.view,
+              agentName: selectedAgent.name,
+              hasTerminalTransport: widget.terminalTransport != null,
+            )
+            : projectHomeFakeTerminalNavigation(
+              view: widget.view,
+              agentName: selectedAgent.name,
+            );
+    if (outcome.kind == ProjectHomeTerminalNavigationKind.noTransport) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(outcome.snackMessage!)));
+      return;
+    }
+    if (outcome.kind != ProjectHomeTerminalNavigationKind.open) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Terminal target is unavailable. Refresh and retry.'),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _terminalActivated = true;
+      _terminalMode = true;
+    });
+  }
+
+  void _showChat() {
+    if (!_terminalMode) {
+      return;
+    }
+    setState(() {
+      _terminalMode = false;
+    });
+  }
+
+  void _handleWindowSelected(String windowName) {
+    if (!_terminalMode) {
+      widget.onWindowSelected(windowName);
+      return;
+    }
+    final agentName = projectHomeLocalWindowSelectionAgentName(
+      widget.view,
+      windowName,
+    );
+    if (agentName != null) {
+      widget.onAgentSelected(agentName);
+    }
   }
 }
 
@@ -365,6 +471,8 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     required this.onExpandAgents,
     required this.onRefreshConversation,
     required this.onOpenTerminal,
+    required this.terminalMode,
+    required this.onShowChat,
     required this.onOpenConnectionDetails,
   });
 
@@ -375,6 +483,8 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
   final VoidCallback onExpandAgents;
   final VoidCallback onRefreshConversation;
   final VoidCallback? onOpenTerminal;
+  final bool terminalMode;
+  final VoidCallback onShowChat;
   final VoidCallback onOpenConnectionDetails;
 
   @override
@@ -464,11 +574,18 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
               icon: const Icon(Icons.refresh),
             ),
             IconButton(
-              key: const ValueKey('open-agent-terminal-button'),
-              tooltip: strings.openTerminal,
+              key: ValueKey(
+                terminalMode
+                    ? 'return-to-agent-chat-button'
+                    : 'open-agent-terminal-button',
+              ),
+              tooltip:
+                  terminalMode ? strings.returnToChat : strings.openTerminal,
               visualDensity: VisualDensity.compact,
-              onPressed: onOpenTerminal,
-              icon: const Icon(Icons.terminal),
+              onPressed: terminalMode ? onShowChat : onOpenTerminal,
+              icon: Icon(
+                terminalMode ? Icons.chat_bubble_outline : Icons.terminal,
+              ),
             ),
             PopupMenuButton<_MobileCollapsedProjectAction>(
               key: const ValueKey('project-chat-overflow-action'),

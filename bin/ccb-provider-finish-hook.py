@@ -118,6 +118,20 @@ def _empty_reply_diagnostics(*, reason: str) -> dict[str, Any]:
     }
 
 
+def _claude_stalled_response_diagnostics(reply: str) -> dict[str, Any] | None:
+    first_line = reply.strip().splitlines()[0].strip().casefold() if reply.strip() else ''
+    if not first_line.startswith('api error: response stalled mid-stream'):
+        return None
+    return {
+        'reason': 'claude_response_stalled_mid_stream',
+        'error_type': 'provider_api_error',
+        'error_message': reply,
+        'message': reply,
+        'diagnosis': reply,
+        'response_incomplete': True,
+    }
+
+
 def _gemini_event_status_and_diagnostics(payload: dict[str, Any], reply: str) -> tuple[str, dict[str, Any]]:
     diagnostics: dict[str, Any] = {
         'hook_event_name': _first_text(payload, 'hook_event_name') or 'AfterAgent',
@@ -232,7 +246,11 @@ def _handle_claude(*, payload: dict, completion_dir: Path, agent_name: str, work
         'hook_event_name': event_name,
         'stop_hook_active': bool(payload.get('stop_hook_active', False)),
     }
-    if status == 'completed' and not reply.strip():
+    stalled_diagnostics = _claude_stalled_response_diagnostics(reply)
+    if stalled_diagnostics is not None:
+        status = 'failed'
+        diagnostics.update(stalled_diagnostics)
+    elif status == 'completed' and not reply.strip():
         status = 'incomplete'
         diagnostics.update(_empty_reply_diagnostics(reason='hook_stop_empty_reply'))
     write_event(

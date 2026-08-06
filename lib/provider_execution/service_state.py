@@ -10,8 +10,10 @@ class ExecutionServiceRuntimeState:
     state_store: object
     fault_injection: object
     active: dict
+    starting: dict
     runtime_contexts: dict
     pending_replays: dict
+    active_transition_lock: object
 
 
 class ExecutionServiceStateMixin:
@@ -48,12 +50,20 @@ class ExecutionServiceStateMixin:
         self._runtime_state.runtime_contexts = value
 
     @property
+    def _starting(self):
+        return self._runtime_state.starting
+
+    @property
     def _pending_replays(self):
         return self._runtime_state.pending_replays
 
     @_pending_replays.setter
     def _pending_replays(self, value) -> None:
         self._runtime_state.pending_replays = value
+
+    @property
+    def _active_transition_lock(self):
+        return self._runtime_state.active_transition_lock
 
 
 __all__ = [

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_backends.runtime_restore import ProviderRestoreTarget
+from provider_backends.session_authority import current_provider_authority_fingerprint
 from provider_profiles import ResolvedProviderProfile
 from workspace.models import WorkspacePlan
 
@@ -64,6 +66,7 @@ def build_start_cmd(
         prepared_state=launch_context,
         resolve_restore_target_fn=_resolve_gemini_restore_target,
         prepare_home_overrides_fn=_prepare_gemini_home_overrides_impl,
+        cli_supports_flag_fn=gemini_cli_supports_flag,
     )
 
 
@@ -99,6 +102,9 @@ def build_session_payload(
     profile = load_resolved_provider_profile(Path(runtime_dir))
     prepared_state = dict(prepared_state or {})
     prepared_state['gemini_home_layout'] = _resolve_gemini_home_layout_impl(Path(runtime_dir), profile)
+    prepared_state['gemini_provider_authority_fingerprint'] = (
+        current_provider_authority_fingerprint('gemini', profile, Path(runtime_dir))
+    )
     return _build_session_payload_impl(
         context,
         spec,
@@ -138,4 +144,28 @@ def build_gemini_env_prefix(
     return _build_gemini_env_prefix_impl(profile=profile, extra_env=extra_env)
 
 
-__all__ = ["build_gemini_env_prefix", "build_runtime_launcher", "build_start_cmd", "resolve_run_cwd"]
+def gemini_cli_supports_flag(cmd_parts: list[str], flag: str) -> bool:
+    normalized = str(flag or '').strip()
+    command = [str(part) for part in cmd_parts if str(part or '').strip()]
+    if not normalized or not command:
+        return False
+    try:
+        completed = subprocess.run(
+            [*command, '--help'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:
+        return False
+    return normalized in f'{completed.stdout or ""}\n{completed.stderr or ""}'
+
+
+__all__ = [
+    "build_gemini_env_prefix",
+    "build_runtime_launcher",
+    "build_start_cmd",
+    "gemini_cli_supports_flag",
+    "resolve_run_cwd",
+]

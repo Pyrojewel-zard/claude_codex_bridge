@@ -587,7 +587,10 @@ def _mimo_run_env(session_data: dict[str, object]) -> dict[str, str]:
     mimo_home = str(session_data.get("mimo_home") or "").strip()
     if mimo_home:
         Path(mimo_home).mkdir(parents=True, exist_ok=True)
+        env["HOME"] = mimo_home
         env["MIMOCODE_HOME"] = mimo_home
+        if "WSL_DISTRO_NAME" in os.environ:
+            env["USERPROFILE"] = mimo_home
     config_path = str(session_data.get("mimo_config_path") or "").strip()
     if config_path and Path(config_path).is_file():
         env["MIMOCODE_CONFIG"] = config_path

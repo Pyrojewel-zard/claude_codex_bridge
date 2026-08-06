@@ -1,4 +1,5 @@
 import 'package:ccb_mobile/ccb_mobile.dart';
+import 'package:ccb_mobile/cache/mobile_snapshot_codec.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -182,4 +183,73 @@ void main() {
     expect(agent.activityReason, 'codex_runtime_reconnecting');
     expect(agent.lastProgressAt, '2026-06-29T10:00:00Z');
   });
+
+  test('project view retains cache watermark metadata', () {
+    final view = CcbProjectView.fromProjectViewPayload({
+      'cache': {
+        'generated_at': '2026-07-28T01:02:03Z',
+        'sequence': 42,
+        'ttl_ms': 1200,
+      },
+      'view': {
+        'project': {
+          'id': 'proj-cache',
+          'root': '/tmp/proj-cache',
+          'display_name': 'cache',
+        },
+        'namespace': {'epoch': 2},
+      },
+    });
+
+    expect(view.generatedAt, DateTime.utc(2026, 7, 28, 1, 2, 3));
+    expect(view.sequence, 42);
+    expect(view.ttlMs, 1200);
+
+    final restored = projectViewFromSnapshotPayload(
+      projectViewSnapshotPayload(view),
+    );
+    expect(restored?.generatedAt, view.generatedAt);
+    expect(restored?.sequence, view.sequence);
+    expect(restored?.ttlMs, view.ttlMs);
+  });
+
+  test(
+    'project view prefers additive execution phase with legacy fallback',
+    () {
+      final view = CcbProjectView.fromProjectViewPayload({
+        'view': {
+          'project': {
+            'id': 'proj-phase',
+            'root': '/tmp/proj-phase',
+            'display_name': 'phase',
+          },
+          'namespace': {'epoch': 2},
+          'comms': [
+            {
+              'id': 'job-new',
+              'status': 'running',
+              'business_status': 'replying',
+              'status_label': 'work',
+              'execution_phase': 'provider_idle_pending_terminal',
+              'execution_phase_reason': 'provider_idle_terminal_pending',
+            },
+            {
+              'id': 'job-old',
+              'status': 'running',
+              'business_status': 'replying',
+              'status_label': 'work',
+            },
+          ],
+        },
+      });
+
+      expect(view.comms[0].displayPhase, 'provider_idle_pending_terminal');
+      expect(
+        view.comms[0].executionPhaseReason,
+        'provider_idle_terminal_pending',
+      );
+      expect(view.comms[1].displayPhase, 'work');
+      expect(view.comms[1].executionPhase, isNull);
+    },
+  );
 }

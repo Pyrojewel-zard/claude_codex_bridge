@@ -17,6 +17,11 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".qwen-session",
             command_builder=_build_command,
             env_builder=_build_env,
+            private_path_env_names=("QWEN_HOME",),
+            private_raw_env_names=(
+                "QWEN_CODE_FORCE_FILE_STORAGE",
+                "QWEN_CODE_FORCE_ENCRYPTED_FILE_STORAGE",
+            ),
             output_kind="jsonl",
             mode="qwen_run",
             start_failed_reason="qwen_run_start_failed",
@@ -45,7 +50,11 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
 def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     qwen_home = _state_path(request, "qwen_home", fallback="home")
     qwen_home.mkdir(parents=True, exist_ok=True)
-    return {"QWEN_HOME": str(qwen_home)}
+    return {
+        "QWEN_HOME": str(qwen_home),
+        "QWEN_CODE_FORCE_FILE_STORAGE": "true",
+        "QWEN_CODE_FORCE_ENCRYPTED_FILE_STORAGE": "true",
+    }
 
 
 def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) -> Path:
