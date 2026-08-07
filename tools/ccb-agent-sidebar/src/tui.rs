@@ -1476,6 +1476,10 @@ fn window_row(window: &WindowView) -> ListItem<'static> {
 }
 
 fn agent_row(agent: &AgentView, theme: SidebarTheme) -> ListItem<'static> {
+    ListItem::new(Line::from(agent_row_spans(agent, theme)))
+}
+
+pub(crate) fn agent_row_spans(agent: &AgentView, theme: SidebarTheme) -> Vec<Span<'static>> {
     let drain_label = reload_drain_label(agent);
     let draining = drain_label.is_some();
     let auth_blocked = !draining && agent.reason.as_deref() == Some("provider_auth_revoked");
@@ -1514,13 +1518,35 @@ fn agent_row(agent: &AgentView, theme: SidebarTheme) -> ListItem<'static> {
     } else {
         spans.push(Span::raw(format!(" [{}]", agent.provider)));
     }
+    if agent.queue_depth > 0 {
+        spans.push(Span::styled(
+            format!(" ·{}", agent.queue_depth),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    if let Some(job_id) = agent
+        .current_job_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let suffix = if job_id.len() >= 4 {
+            &job_id[job_id.len() - 4..]
+        } else {
+            job_id
+        };
+        spans.push(Span::styled(
+            format!(" #{suffix}"),
+            Style::default().fg(theme.muted),
+        ));
+    }
     if let Some(label) = drain_label {
         spans.push(Span::styled(
             format!(" {label}"),
             Style::default().fg(theme.warning),
         ));
     }
-    ListItem::new(Line::from(spans))
+    spans
 }
 
 fn reload_drain_label(agent: &AgentView) -> Option<String> {
@@ -1812,10 +1838,11 @@ fn comms_lines_with_theme(
         .unwrap_or_default();
     let mut first_line_spans = comms_action_spans(item, theme);
     first_line_spans.push(Span::raw(format!(
-        "{} > {} ",
+        "{} > {}",
         empty_dash(&item.sender),
         empty_dash(&item.target)
     )));
+    push_comms_short_id_span(&mut first_line_spans, item, theme);
     first_line_spans.push(Span::styled(
         compact_comms_status(status).to_string(),
         Style::default().fg(comms_status_color_with_theme(item, theme)),
@@ -1833,18 +1860,43 @@ fn comms_lines_with_theme(
 fn compact_comms_lines(item: &CommsItem, width: usize, theme: SidebarTheme) -> Vec<Line<'static>> {
     let status = comms_display_status(item);
     let route = format!(
-        "{} > {} ",
+        "{} > {}",
         empty_dash(&item.sender),
         empty_dash(&item.target)
     );
     let compact_status = compact_comms_status(status).to_string();
     let mut spans = comms_action_spans(item, theme);
     spans.push(Span::raw(route.clone()));
+    push_comms_short_id_span(&mut spans, item, theme);
     spans.push(Span::styled(
         compact_status.clone(),
         Style::default().fg(comms_status_color_with_theme(item, theme)),
     ));
     vec![Line::from(spans), compact_comms_detail_line(item, width)]
+}
+
+fn push_comms_short_id_span(spans: &mut Vec<Span<'static>>, item: &CommsItem, theme: SidebarTheme) {
+    let token = comms_short_id_token(&item.short_id, &item.id);
+    if token.is_empty() {
+        return;
+    }
+    spans.push(Span::styled(token, Style::default().fg(theme.muted)));
+}
+
+fn comms_short_id_token(short_id: &str, full_id: &str) -> String {
+    let trimmed = short_id.trim();
+    if !trimmed.is_empty() {
+        return format!(" #{trimmed} ");
+    }
+    let fallback = full_id.trim();
+    if fallback.len() >= 4 {
+        let suffix = &fallback[fallback.len() - 4..];
+        return format!(" #{suffix} ");
+    }
+    if !fallback.is_empty() {
+        return format!(" #{fallback} ");
+    }
+    " ".to_string()
 }
 
 fn compact_comms_detail_line(item: &CommsItem, width: usize) -> Line<'static> {
@@ -2234,7 +2286,7 @@ mod tests {
         assert!(rendered.contains("◐* agent1 [codex]"));
         assert!(!rendered.contains("#job1"));
         assert!(rendered.contains("Comms"));
-        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 run"));
+        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 #msg1 run"));
 
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].fg, Color::DarkGray);
@@ -2547,7 +2599,7 @@ mod tests {
 
         assert!(rendered.contains("config ✕"));
         assert!(rendered.contains("config error: invalid TOML config"));
-        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 run"));
+        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 #msg1 run"));
     }
 
     #[test]
@@ -2560,7 +2612,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &app)).unwrap();
 
         let rendered = terminal.backend().to_string();
-        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 ok"));
+        assert!(rendered.contains("↻  X  ⌫  agent1 > agent1 #msg1 ok"));
+        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 #msg2 ok"));
         assert!(!rendered.contains("agent3 > agent1"));
         assert!(!rendered.contains("agent4 > agent1"));
         assert!(!rendered.contains("agent5 > agent1"));
@@ -2627,8 +2680,8 @@ mod tests {
 
         let rendered = render_to_string(&app, 80, 36);
 
-        assert!(!rendered.contains("agent1 > agent1 ok"));
-        assert!(rendered.contains("agent3 > agent1 ok"));
+        assert!(!rendered.contains("agent1 > agent1 #msg1 ok"));
+        assert!(rendered.contains("agent3 > agent1 #msg3 ok"));
         assert_eq!(
             app.comms_index_at(1, comms_row_y(&app, area, 0), area),
             Some(2)
@@ -2732,7 +2785,7 @@ mod tests {
         assert!(rendered.contains("◐* agent1 [codex]"));
         assert!(!rendered.contains("#job1"));
         assert!(rendered.contains("stale ProjectView"));
-        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 run"));
+        assert!(rendered.contains("↻  X  ⌫  agent2 > agent1 #msg1 run"));
         assert!(!rendered.contains("connect /tmp/ccbd.sock"));
     }
 
@@ -2782,7 +2835,7 @@ mod tests {
 
         assert_eq!(
             comms_line_text(&item),
-            "↻  X  ⌫  agent2 > agent1 err\n   check agent status timeout"
+            "↻  X  ⌫  agent2 > agent1 #abcd err\n   check agent status timeout"
         );
         assert_eq!(comms_status_color(&item), Color::Red);
     }
@@ -2885,7 +2938,7 @@ mod tests {
 
         assert_eq!(
             comms_line_text(&item),
-            "↻  X  ⌫  agent2 > agent1 run\n   check agent status pane_dead"
+            "↻  X  ⌫  agent2 > agent1 #job1 run\n   check agent status pane_dead"
         );
         assert_eq!(recover_job_id(&item), Some("job1"));
         assert_eq!(recover_reply_delivery_job_id(&item), Some("job2"));
@@ -2907,7 +2960,7 @@ mod tests {
 
         assert_eq!(
             comms_line_text(&item),
-            "↻  X  ⌫  agent2 > agent1 ok\n   all set"
+            "↻  X  ⌫  agent2 > agent1 #abcd ok\n   all set"
         );
         assert_eq!(comms_status_color(&item), Color::Blue);
     }
@@ -3509,6 +3562,13 @@ mod tests {
             .collect::<String>()
     }
 
+    fn spans_text(spans: &[Span<'static>]) -> String {
+        spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
     fn comms_row_y(app: &SidebarApp, area: Rect, offset: u16) -> u16 {
         app.sidebar_areas(area)
             .comms
@@ -3859,5 +3919,143 @@ mod tests {
             },
             "cache": {"sequence": epoch, "ttl_ms": 1000}
         })
+    }
+
+    fn comms_item_fixture(id: &str, short_id: &str, status: &str) -> CommsItem {
+        CommsItem {
+            id: id.into(),
+            short_id: short_id.into(),
+            sender: "pm".into(),
+            target: "agent1".into(),
+            status: status.into(),
+            business_status: status.into(),
+            status_label: status.into(),
+            body_preview: "R-099 hotfix payload".into(),
+            ..Default::default()
+        }
+    }
+
+    fn agent_fixture(
+        name: &str,
+        provider: &str,
+        state: &str,
+        symbol: &str,
+        color: &str,
+        queue_depth: u64,
+        current_job_id: Option<&str>,
+    ) -> AgentView {
+        AgentView {
+            name: name.into(),
+            provider: provider.into(),
+            window: "main".into(),
+            active: state != "idle",
+            activity_state: state.into(),
+            activity_symbol: Some(symbol.into()),
+            activity_color: Some(color.into()),
+            queue_depth,
+            current_job_id: current_job_id.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn comms_lines_include_short_id() {
+        let item = comms_item_fixture("job_7deaebaf8043", "8043", "injecting");
+        let lines = comms_lines(&item, 80, true);
+        let first = line_text(lines.into_iter().next().expect("first line"));
+        assert!(
+            first.contains("#8043"),
+            "first line should include #<short_id>, got: {first}"
+        );
+        assert!(
+            first.contains("inj"),
+            "first line should still include status, got: {first}"
+        );
+        assert!(
+            first.contains("pm > agent1"),
+            "first line should still include route, got: {first}"
+        );
+    }
+
+    #[test]
+    fn comms_lines_fallback_to_id_suffix_when_short_id_empty() {
+        let item = comms_item_fixture("job_7deaebaf8043", "", "injecting");
+        let lines = comms_lines(&item, 80, true);
+        let first = line_text(lines.into_iter().next().expect("first line"));
+        assert!(
+            first.contains("#8043"),
+            "should fallback to last 4 of full id, got: {first}"
+        );
+    }
+
+    #[test]
+    fn compact_comms_lines_include_short_id() {
+        let item = comms_item_fixture("job_7deaebaf8043", "8043", "completed");
+        let lines = compact_comms_lines(&item, 80, SidebarTheme::default_dark());
+        let first = line_text(lines.into_iter().next().expect("first line"));
+        assert!(
+            first.contains("#8043"),
+            "compact first line should include #<short_id>, got: {first}"
+        );
+        assert!(
+            first.contains("ok"),
+            "compact first line should still include status, got: {first}"
+        );
+    }
+
+    #[test]
+    fn agent_row_shows_queue_depth_and_active_jobid() {
+        let agent = agent_fixture(
+            "agent1",
+            "claude",
+            "running",
+            "◐",
+            "yellow",
+            3,
+            Some("job_7deaebaf8043"),
+        );
+        let text = spans_text(&agent_row_spans(&agent, SidebarTheme::default_dark()));
+        assert!(text.contains("·3"), "should include queue depth, got: {text}");
+        assert!(
+            text.contains("#8043"),
+            "should include active jobid short, got: {text}"
+        );
+        assert!(
+            text.contains("[claude]"),
+            "should still include provider tag, got: {text}"
+        );
+    }
+
+    #[test]
+    fn agent_row_omits_queue_depth_when_zero() {
+        let agent = agent_fixture("agent1", "claude", "idle", "●", "green", 0, None);
+        let text = spans_text(&agent_row_spans(&agent, SidebarTheme::default_dark()));
+        assert!(
+            !text.contains("·0"),
+            "queue_depth=0 should not be shown, got: {text}"
+        );
+        assert!(
+            !text.contains('#'),
+            "no current_job_id should mean no # token, got: {text}"
+        );
+    }
+
+    #[test]
+    fn agent_row_shows_jobid_only_without_queue_depth() {
+        let agent = agent_fixture(
+            "agent1",
+            "claude",
+            "running",
+            "◐",
+            "yellow",
+            0,
+            Some("job_xx1f9de3"),
+        );
+        let text = spans_text(&agent_row_spans(&agent, SidebarTheme::default_dark()));
+        assert!(
+            text.contains("#9de3"),
+            "should include last-4 of current_job_id, got: {text}"
+        );
+        assert!(!text.contains("·0"), "no queue depth marker, got: {text}");
     }
 }

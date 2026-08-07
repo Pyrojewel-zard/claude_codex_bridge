@@ -20,6 +20,8 @@ from .service_runtime import (
     apply_transition_summary_update,
     claim,
     claim_next,
+    expire_lease,
+    expired_delivery_leases,
     head_pending_event,
     latest_events,
     mark_terminal,
@@ -49,6 +51,7 @@ class MailboxKernelService(MailboxKernelStateMixin):
         mailbox_store: MailboxStore | None = None,
         inbound_store: InboundEventStore | None = None,
         lease_store: DeliveryLeaseStore | None = None,
+        lease_ttl_seconds: float | None = None,
     ) -> None:
         self._runtime_state = MailboxKernelRuntimeState(
             layout=layout,
@@ -68,6 +71,7 @@ class MailboxKernelService(MailboxKernelStateMixin):
             mailbox_state_idle=MailboxState.IDLE,
             status_delivering=InboundEventStatus.DELIVERING,
             status_consumed=InboundEventStatus.CONSUMED,
+            lease_ttl_seconds=lease_ttl_seconds,
         )
 
     def latest_events(self, agent_name: str) -> tuple[InboundEventRecord, ...]:
@@ -152,6 +156,17 @@ class MailboxKernelService(MailboxKernelStateMixin):
         finished_at: str | None = None,
     ) -> InboundEventRecord | None:
         return mark_terminal(self, agent_name, inbound_event_id, status=InboundEventStatus.SUPERSEDED, finished_at=finished_at)
+
+    def expired_delivery_leases(self, *, now: str | None = None) -> tuple[DeliveryLease, ...]:
+        return expired_delivery_leases(self, now=now)
+
+    def expire_lease(
+        self,
+        agent_name: str,
+        *,
+        finished_at: str | None = None,
+    ) -> InboundEventRecord | None:
+        return expire_lease(self, agent_name, finished_at=finished_at)
 
     def rebuild_mailbox_summary(self, agent_name: str, *, updated_at: str | None = None) -> MailboxRecord:
         return rebuild_mailbox_summary(self, agent_name, updated_at=updated_at)

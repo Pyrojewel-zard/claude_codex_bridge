@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ..mailbox import rebuild_mailbox_summary
+from ..lease_expiry import lease_expires_at_value
 from ..queries import head_pending_event, peek_next
 from ..summary import apply_transition_summary_update, summary_head_from_event
 from .leasing import next_lease_version
@@ -86,7 +87,7 @@ def _delivery_lease(service, agent_name: str, inbound_event_id: str, timestamp: 
         lease_version=next_lease_version(service, agent_name),
         acquired_at=timestamp,
         last_progress_at=timestamp,
-        expires_at=None,
+        expires_at=lease_expires_at_value(service, timestamp),
         lease_state=service._lease_state_acquired,
     )
 

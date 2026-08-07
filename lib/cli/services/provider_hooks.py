@@ -18,6 +18,7 @@ from provider_backends.droid.home import materialize_droid_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 from provider_backends.qwen.home import materialize_qwen_home_config
 from provider_backends.kimi.skills import materialize_kimi_skills
+from provider_backends.kiro.home import materialize_kiro_home_config
 from provider_backends.mimo.launcher import materialize_mimo_memory_config
 from provider_backends.opencode.launcher import materialize_opencode_memory_config
 from provider_hooks.settings import (
@@ -288,6 +289,13 @@ def _materialize_provider_home(
             agent_name=spec.name,
             state_dir=layout.agent_provider_state_dir(spec.name, 'kimi'),
             profile=resolved_profile,
+        )
+        return
+    if provider == 'kiro':
+        materialize_kiro_home_config(
+            layout.agent_provider_state_dir(spec.name, 'kiro') / 'home',
+            profile=resolved_profile,
+            source_home=current_provider_source_home(),
         )
         return
     if provider == 'mimo':

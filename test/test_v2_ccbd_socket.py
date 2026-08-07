@@ -436,6 +436,22 @@ def test_ccbd_heartbeat_records_step_metrics_without_background_worker(tmp_path:
     assert app.control_plane_metrics.last_heartbeat_runtime_store_writes == 0
 
 
+def test_ccbd_bootstrap_arms_job_heartbeat_reaper(tmp_path: Path) -> None:
+    # Regression: the daemon must construct the job heartbeat service with a
+    # positive terminal_notice_count so a wedged (no-progress) 'ask' job is
+    # eventually terminated instead of starving its mailbox queue forever.
+    # If this drifts back to None the 2026-07-09 comm stall class reappears.
+    from ccbd.app_runtime.bootstrap import JOB_HEARTBEAT_TERMINAL_NOTICE_COUNT
+
+    project_root = tmp_path / 'repo-heartbeat-reaper-armed'
+    _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
+    app = CcbdApp(project_root)
+
+    assert isinstance(JOB_HEARTBEAT_TERMINAL_NOTICE_COUNT, int)
+    assert JOB_HEARTBEAT_TERMINAL_NOTICE_COUNT > 0
+    assert app.job_heartbeat._terminal_notice_count == JOB_HEARTBEAT_TERMINAL_NOTICE_COUNT
+
+
 def test_ccbd_socket_bad_client_does_not_block_later_ping(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-bad-client'
     _prepare_project(project_root, _single_agent_config_text('demo', 'fake'))
