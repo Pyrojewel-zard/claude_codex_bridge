@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.6 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.7 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
+- [Download CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -311,6 +311,17 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.7</b> - Built-in agent diagnosis and stuck-delivery recovery</summary>
+
+- Keep `ccb-clear` in every supported managed Agent and add the required `ccb-diagnose` Skill. Run `$ccb_diagnose &lt;agentname&gt;` to combine daemon, lineage, queue, inbox, trace, provider-log, and live Pane evidence for one Agent.
+- Classify working, waiting-input, stale-prompt, Provider-error, dead/blank, and misframed Pane states; apply only evidence-backed bounded control-plane recovery and verify the Agent afterward.
+- Generate a redacted incident draft after diagnosis, but require fresh user authorization before creating any GitHub issue.
+- Recover abandoned mailbox deliveries without replaying business work, expose queue depth and active job identifiers in the sidebar, preserve Kiro login/settings through its isolated `KIRO_HOME`, forward Provider no-terminal timeout settings, and keep old Claude busy-turn records fenced from newly queued requests.
+- Probe reconnect readiness against the active Codex Provider route so custom Provider capacity and connectivity failures can continue through the existing guarded recovery path.
+
+</details>
+
+<details>
 <summary><b>v8.5.6</b> - Continuous Provider inheritance without clearing CCB conversations</summary>
 
 - Resolve each configured API, token, URL, route, and account dimension from CCB-local authority first, then read only the missing dimensions from the current external Provider state.

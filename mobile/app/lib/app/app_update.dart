@@ -7,7 +7,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-const ccbMobileDefaultVersion = '8.5.6+8050006';
+const ccbMobileDefaultVersion = '8.5.7+8050007';
 const ccbMobileDefaultApkDownloadUrl =
     'https://github.com/SeemSeam/claude_codex_bridge/releases/latest';
 const ccbMobileReleaseApiUrl =

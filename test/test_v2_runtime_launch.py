@@ -2606,9 +2606,13 @@ def test_grok_launcher_uses_bypass_permissions_and_allows_ccb_skills_on_normal_s
     )
     visible_parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
 
-    assert visible_parts.count('--allow') == 2
+    assert visible_parts.count('--allow') == 15
     assert 'Bash(command ask *)' in visible_parts
     assert 'Bash(command ccb clear*)' in visible_parts
+    assert 'Bash(command ccb ping *)' in visible_parts
+    assert 'Bash(command ccb repair *)' in visible_parts
+    assert 'Bash(command tmux -S * capture-pane *)' in visible_parts
+    assert 'Bash(command tmux -S * send-keys *)' not in visible_parts
     assert '--minimal' in visible_parts
     assert visible_parts[visible_parts.index('--permission-mode') + 1] == 'bypassPermissions'
     assert '--always-approve' not in visible_parts

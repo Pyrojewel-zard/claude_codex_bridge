@@ -1,5 +1,23 @@
 # Changelog
 
+## v8.5.7 (2026-08-08)
+
+- Keep the required `ccb-clear` control Skill and add `ccb-diagnose` for every
+  supported managed Agent. `$ccb_diagnose <agentname>` combines authoritative
+  runtime and job state with bounded deep Pane inspection, applies only guarded
+  recovery, verifies the result, and requires explicit approval before issue
+  submission.
+- Self-heal expired mailbox deliveries without replaying business work and
+  forward Provider no-terminal timeout settings to `ccbd` (PR #288). Remove
+  stale pre-activation Claude assistant bookkeeping so old busy turns cannot
+  contaminate newly queued requests.
+- Show communication short ids, Agent queue depth, and active job suffixes in
+  the sidebar; preserve Kiro settings under isolated `KIRO_HOME` without
+  copying sessions.
+- Resolve reconnect readiness probes against the active Codex Provider route,
+  extending guarded network/capacity recovery to custom Provider endpoints.
+- No configuration or conversation migration is required.
+
 ## v8.5.6 (2026-08-06)
 
 ### Continuous Provider Inheritance

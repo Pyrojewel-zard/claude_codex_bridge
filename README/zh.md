@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.6 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.7 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.6/ccb-mobile-v8.5.6.apk)
+- [下载 CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -302,6 +302,17 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.7</b> - 内置 Agent 诊断与卡住投递恢复</summary>
+
+- 所有受支持的托管 Agent 继续内置 `ccb-clear`，并新增必装的 `ccb-diagnose` Skill。运行 `$ccb_diagnose &lt;agentname&gt;` 可联合检查单个 Agent 的 daemon、lineage、队列、inbox、trace、Provider 日志和实时 Pane 证据。
+- 可识别正常工作、等待输入、提示符停滞、Provider 错误、Pane 死亡/空白和布局不可观察等状态；只执行证据支持的有界控制面恢复，并在操作后重新验证 Agent。
+- 诊断后可生成脱敏 incident 草稿，但创建 GitHub issue 前必须再次取得用户明确授权。
+- 无需重放业务任务即可清理已遗弃的 mailbox 投递；sidebar 显示队列深度和当前 job 短码；Kiro 通过隔离的 `KIRO_HOME` 继承登录设置；Provider 无终态超时配置可传入 daemon，旧 Claude busy turn 记录不会污染新排队请求。
+- reconnect 会探测当前 Codex Provider 的实际路由，让自定义 Provider 的容量或连接故障继续使用既有的受控恢复路径。
+
+</details>
+
+<details>
 <summary><b>v8.5.6</b> - 连续继承 Provider 状态且不清除 CCB 对话</summary>
 
 - 每个 API、token、URL、route 和账号维度都优先使用 CCB 配置；未显式配置的维度才从当前外部 Provider 状态单向读取。
