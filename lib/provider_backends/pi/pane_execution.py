@@ -45,7 +45,7 @@ from .pane_events import (
     normalized_event_type,
     read_pi_events,
 )
-from .session import load_project_session
+from .session import load_project_session, persist_native_session_binding
 
 PI_PANE_MODE = "pi_pane"
 PI_EXTENSION_READY_TIMEOUT_ENV = "CCB_PI_EXTENSION_READY_TIMEOUT_S"
@@ -59,12 +59,12 @@ class PiPaneExecutionAdapter:
     def restore_diagnostics(self) -> dict[str, object]:
         return {
             "resume_supported": True,
-            "restore_mode": "exact_runtime_rebind",
-            "restore_reason": "pi_pane_runtime_rebind",
+            "restore_mode": "exact_native_session",
+            "restore_reason": "pi_native_session_resume",
             "restore_detail": (
-                "Pi pane jobs persist their exact launch and extension-instance "
-                "identity; restore rebinds only while that managed Pi process is "
-                "still current"
+                "Pi pane jobs persist the native session id and path after startup; "
+                "restore selects that session only when its managed path and working "
+                "directory still match"
             ),
         }
 
@@ -135,8 +135,11 @@ class PiPaneExecutionAdapter:
             "pane_id": prepared.pane_id,
             "work_dir": str(prepared.work_dir),
             "actor": actor,
+            "project_id": _text(session_data.get("ccb_project_id")),
             "launch_session_id": launch_session_id,
             "runtime_instance_id": "",
+            "session_file": str(getattr(prepared.session, "session_file", "") or ""),
+            "session_dir": _text(session_data.get("pi_session_dir")),
             "event_path": str(event_path),
             "dispatch_path": str(dispatch_path),
             "event_offset": 0,
@@ -292,6 +295,12 @@ class PiPaneExecutionAdapter:
                             "observed_runtime_instance_id": event_instance,
                         },
                     )
+                _persist_native_session_fields(
+                    state,
+                    native_session_id=_text(event.get("pi_session_id")),
+                    native_session_path=_text(event.get("pi_session_path")),
+                    observed_at=_text(event.get("timestamp")),
+                )
                 continue
             if event_instance != runtime_instance_id:
                 continue
@@ -464,7 +473,7 @@ class PiPaneExecutionAdapter:
         persisted_state,
         now: str,
     ) -> ProviderSubmission | None:
-        del persisted_state, now
+        del persisted_state
         state = dict(submission.runtime_state)
         if _text(state.get("mode")) != PI_PANE_MODE:
             return None
@@ -508,6 +517,7 @@ class PiPaneExecutionAdapter:
             or observation.trailing_partial
         ):
             return None
+        _persist_observed_native_session(state, observation, observed_at=now)
         prompt_sent = bool(state.get("prompt_sent"))
         if (
             prompt_sent
@@ -570,6 +580,7 @@ def _dispatch_if_ready(
     if observation.busy:
         state["runtime_instance_id"] = observation.runtime_instance_id
         state["event_offset"] = observation.next_offset
+        _persist_observed_native_session(state, observation, observed_at=now)
         return replace(submission, runtime_state=state)
 
     prompt = _text(state.get("pending_prompt"))
@@ -586,6 +597,7 @@ def _dispatch_if_ready(
         )
     state["runtime_instance_id"] = observation.runtime_instance_id
     state["event_offset"] = observation.next_offset
+    _persist_observed_native_session(state, observation, observed_at=now)
     try:
         _append_dispatch(state, prompt=prompt, now=now)
         send_prompt_to_runtime_target(
@@ -608,6 +620,55 @@ def _dispatch_if_ready(
     state["prompt_sent_at"] = now
     state.pop("pending_prompt", None)
     return replace(submission, runtime_state=state)
+
+
+def _persist_observed_native_session(
+    state: dict[str, object],
+    observation,
+    *,
+    observed_at: str,
+) -> None:
+    _persist_native_session_fields(
+        state,
+        native_session_id=_text(getattr(observation, "native_session_id", "")),
+        native_session_path=_text(getattr(observation, "native_session_path", "")),
+        observed_at=_text(getattr(observation, "native_session_observed_at", "")) or observed_at,
+    )
+
+
+def _persist_native_session_fields(
+    state: dict[str, object],
+    *,
+    native_session_id: str,
+    native_session_path: str,
+    observed_at: str,
+) -> None:
+    session_file = _text(state.get("session_file"))
+    session_dir = _text(state.get("session_dir"))
+    if not native_session_id or not native_session_path or not session_file or not session_dir:
+        return
+    if (
+        native_session_id == _text(state.get("native_session_id"))
+        and native_session_path == _text(state.get("native_session_path"))
+    ):
+        return
+    ok, error = persist_native_session_binding(
+        Path(session_file),
+        expected_ccb_session_id=_text(state.get("launch_session_id")),
+        agent_name=_text(state.get("actor")),
+        project_id=_text(state.get("project_id")),
+        work_dir=Path(_text(state.get("work_dir"))),
+        session_dir=Path(session_dir),
+        native_session_id=native_session_id,
+        native_session_path=Path(native_session_path),
+        observed_at=observed_at,
+    )
+    if ok:
+        state["native_session_id"] = native_session_id
+        state["native_session_path"] = native_session_path
+        state.pop("native_session_binding_error", None)
+    else:
+        state["native_session_binding_error"] = error or "binding_persist_failed"
 
 
 def _ready_timeout_or_pending(
