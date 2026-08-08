@@ -214,9 +214,9 @@ When `ccb` starts a managed Codex agent:
   conflicts are preserved, symlink failure falls back to a marked copy, and
   Codex's nested `.system` collection is projected as one entry
 - independently of optional skill inheritance, it must verify the packaged
-  `ask`, `ccb-clear`, and Codex-only `reconnect` control skills immediately
-  before process creation; missing or stale named entries are repaired without
-  replacing unrelated skills
+  `ask`, `ccb-clear`, `ccb-diagnose`, and Codex-only `reconnect`
+  control skills immediately before process creation; missing or stale named
+  entries are repaired without replacing unrelated skills
 - accepting an already live, identity-proven binding is not a managed launch and
   must not re-project the Codex home underneath that running process; when
   startup must launch or relaunch, it performs the managed-home refresh exactly

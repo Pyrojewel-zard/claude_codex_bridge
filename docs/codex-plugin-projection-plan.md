@@ -58,7 +58,8 @@ Codex plugin projection is startup-owned managed-home authority.
     authority described above
 
 CCB-owned control skills are mandatory startup authority, not optional user
-inheritance. The owned set is `ask`, `ccb-clear`, and `reconnect`. Startup
+inheritance. The owned set is `ask`, `ccb-clear`,
+`ccb-diagnose`, and `reconnect`. Startup
 projects those entries from the packaged CCB assets even when
 `inherit_skills=false`, a role disables inherited assets, or the optional
 source skill tree contains a broken entry. If Codex has already created an
@@ -188,7 +189,7 @@ The regression surface must include:
 - accepted binding reuse performs zero plugin refreshes, while one managed
   launch performs exactly one refresh
 - an unmarked managed-home `skills/` directory receives the current CCB-owned
-  `ask`, `ccb-clear`, and `reconnect` entries without replacing unrelated
-  system or user skills
-- a broken symlink in the optional source skill tree cannot prevent the three
+  `ask`, `ccb-clear`, `ccb-diagnose`, and `reconnect` entries
+  without replacing unrelated system or user skills
+- a broken symlink in the optional source skill tree cannot prevent the five
   packaged CCB control skills from being projected

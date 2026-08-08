@@ -33,11 +33,12 @@ def test_qoder_skills_follow_effective_config_root(
         source_home=source_home,
     )
 
-    assert active == ('demo', 'ask', 'ccb-clear')
+    assert active == ('demo', 'ask', 'ccb-clear', 'ccb-diagnose')
     assert (config_dir / 'skills' / 'demo').is_symlink()
     assert (config_dir / 'skills' / 'demo.ccb-projection.json').is_file()
     assert (config_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (config_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (config_dir / 'skills' / 'ccb-diagnose' / 'SKILL.md').is_file()
 
 
 def test_qoder_skills_preserve_unmarked_conflicts_and_remove_only_owned_optional_entries(
@@ -71,6 +72,7 @@ def test_qoder_skills_preserve_unmarked_conflicts_and_remove_only_owned_optional
     assert not (config_dir / 'skills' / 'optional').exists()
     assert (config_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (config_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (config_dir / 'skills' / 'ccb-diagnose' / 'SKILL.md').is_file()
 
 
 def test_qoder_skills_do_not_mutate_explicit_source_config_root(tmp_path: Path) -> None:

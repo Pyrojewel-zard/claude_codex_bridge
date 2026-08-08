@@ -429,7 +429,7 @@ def test_materialize_kimi_skills_preserves_unmarked_packaged_target(
     monkeypatch,
 ) -> None:
     packaged = tmp_path / 'packaged-kimi-skills'
-    for skill_name in ('ask', 'ccb-clear'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-diagnose'):
         (packaged / skill_name).mkdir(parents=True)
         (packaged / skill_name / 'SKILL.md').write_text(f'{skill_name}\n', encoding='utf-8')
     state_dir = tmp_path / 'provider-state' / 'kimi'
@@ -452,6 +452,7 @@ def test_materialize_kimi_skills_preserves_unmarked_packaged_target(
     assert (inherited_dir / 'user-skill' / 'SKILL.md').read_text(encoding='utf-8') == 'user\n'
     assert (inherited_dir / 'ask' / 'SKILL.md').is_file()
     assert (inherited_dir / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (inherited_dir / 'ccb-diagnose' / 'SKILL.md').is_file()
     assert not Path(f'{inherited_dir}.ccb-projection.json').exists()
 
 

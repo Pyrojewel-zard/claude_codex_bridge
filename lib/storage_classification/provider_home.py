@@ -428,7 +428,7 @@ def _classify_native_cli_home(
         provider == 'grok'
         and len(remainder) >= 3
         and remainder[:2] == ('.grok', 'skills')
-        and remainder[2] in {'ask', 'ccb-clear'}
+        and remainder[2] in {'ask', 'ccb-clear', 'ccb-diagnose'}
     ):
         return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
     if provider in {'qoder', 'qoderclicn'} and remainder[0] == 'skills':

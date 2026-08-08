@@ -280,6 +280,8 @@ CCB supports [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec), a
 
 Use the **⚙ Settings** control panel for normal project configuration. If you want agent-assisted configuration and runtime diagnosis, `ccb_self` remains available as an optional Role Pack and can be added with `ccb roles add agentroles.ccb_self:codex`.
 
+Supported managed Agents receive the built-in `ask`, `ccb-clear`, and `ccb-diagnose` control skills even when optional skill inheritance is disabled. Use `$ccb_diagnose <agentname>` to inspect one Agent's authoritative runtime/job state and live pane evidence, apply bounded recovery when safe, and review a redacted issue draft before explicitly authorizing GitHub submission. Managed Codex also keeps `reconnect`.
+
 `.ccb/ccb_memory.md` is the project-wide shared memory document. Use it for team collaboration rules, project constraints, long-lived context, and agent handoff conventions. Stable cross-agent information belongs there instead of being copied into several provider-private memory files.
 
 <a id="contact"></a>

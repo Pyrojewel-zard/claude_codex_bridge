@@ -271,6 +271,8 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 
 普通项目配置推荐直接使用左上角的 **⚙ 设置** 控制面。如果希望由 Agent 辅助设计配置或诊断运行状态，`ccb_self` 仍作为可选 Role Pack 提供，可以用 `ccb roles add agentroles.ccb_self:codex` 添加。
 
+即使关闭可选 skill 继承，受支持的托管 Agent 也会获得内置 `ask`、`ccb-clear` 与 `ccb-diagnose` 控制 skill。使用 `$ccb_diagnose <agentname>` 可结合权威 runtime/job 状态和实时 Pane 证据诊断一个 Agent，在安全时执行受限恢复，并在明确授权提交 GitHub issue 前先审阅脱敏草稿。托管 Codex 还会保留 `reconnect`。
+
 `.ccb/ccb_memory.md` 是项目级共享记忆文档，适合记录团队协作规则、项目约束、长期上下文和 agent 交接约定。把跨 agent 的稳定信息放在这里，比把同一段说明复制到多个 provider 私有记忆里更可靠。
 
 <a id="contact"></a>

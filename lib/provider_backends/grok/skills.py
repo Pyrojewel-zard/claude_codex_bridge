@@ -8,7 +8,7 @@ from provider_core.inherited_skills import (
 )
 
 
-GROK_CCB_SKILL_NAMES = ('ask', 'ccb-clear')
+GROK_CCB_SKILL_NAMES = ('ask', 'ccb-clear', 'ccb-diagnose')
 
 
 def materialize_grok_skills(target_home: Path, *, profile=None) -> tuple[str, ...]:
@@ -34,6 +34,32 @@ def grok_skill_permission_args() -> tuple[str, ...]:
         'Bash(command ask *)',
         '--allow',
         'Bash(command ccb clear*)',
+        '--allow',
+        'Bash(command ccb ping *)',
+        '--allow',
+        'Bash(command ccb ps)',
+        '--allow',
+        'Bash(command ccb queue *)',
+        '--allow',
+        'Bash(command ccb pend *)',
+        '--allow',
+        'Bash(command ccb doctor *)',
+        '--allow',
+        'Bash(command ccb trace *)',
+        '--allow',
+        'Bash(command ccb cancel *)',
+        '--allow',
+        'Bash(command ccb repair *)',
+        '--allow',
+        'Bash(command ccb restart *)',
+        '--allow',
+        'Bash(command ccb config *)',
+        '--allow',
+        'Bash(command ccb reload *)',
+        '--allow',
+        'Bash(command tmux -S * display-message *)',
+        '--allow',
+        'Bash(command tmux -S * capture-pane *)',
     )
 
 

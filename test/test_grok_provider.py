@@ -73,7 +73,7 @@ def test_grok_skills_project_per_home_even_when_optional_inheritance_is_disabled
     active = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
     repeated = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
 
-    assert active == ('ask', 'ccb-clear')
+    assert active == ('ask', 'ccb-clear', 'ccb-diagnose')
     assert repeated == active
     assert grok_ccb_skills_ready(home) is True
     for skill_name in active:
@@ -83,7 +83,7 @@ def test_grok_skills_project_per_home_even_when_optional_inheritance_is_disabled
 
     disabled = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=False))
 
-    assert disabled == ('ask', 'ccb-clear')
+    assert disabled == ('ask', 'ccb-clear', 'ccb-diagnose')
     assert grok_ccb_skills_ready(home) is True
     assert (home / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (home / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
@@ -98,7 +98,7 @@ def test_grok_skill_projection_repairs_unmarked_control_skill_conflict(tmp_path:
 
     active = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
 
-    assert active == ('ask', 'ccb-clear')
+    assert active == ('ask', 'ccb-clear', 'ccb-diagnose')
     assert 'name: ask' in conflict.read_text(encoding='utf-8')
     assert (home / '.grok' / 'skills' / 'ask.ccb-projection.json').is_file()
     assert grok_ccb_skills_ready(home) is True
@@ -126,9 +126,14 @@ def test_grok_headless_command_and_env_use_managed_skills_and_exact_caller(
     cmd = _build_command(request)
     env = _build_env(request)
 
-    assert cmd.count('--allow') == 2
+    assert cmd.count('--allow') == 15
     assert 'Bash(command ask *)' in cmd
     assert 'Bash(command ccb clear*)' in cmd
+    assert 'Bash(command ccb ping *)' in cmd
+    assert 'Bash(command ccb repair *)' in cmd
+    assert 'Bash(command ccb kill *)' not in cmd
+    assert 'Bash(command tmux -S * capture-pane *)' in cmd
+    assert 'Bash(command tmux -S * send-keys *)' not in cmd
     assert env['HOME'] == str(home)
     assert env['CCB_CALLER_ACTOR'] == 'grok1'
     assert env['CCB_CALLER_RUNTIME_DIR'] == str(runtime_dir)

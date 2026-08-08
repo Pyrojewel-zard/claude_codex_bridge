@@ -912,7 +912,7 @@ function Uninstall-Native {
 
   # 3. Remove Claude skills
   $claudeSkillsDir = Join-Path $env:USERPROFILE ".claude\skills"
-  $ccbSkills = @("ask", "ccb-config", "ccb-clear", "reconnect")
+  $ccbSkills = @("ask", "ccb-config", "ccb-clear", "ccb-diagnose", "reconnect")
   $legacySkills = @("ccb_config", "ping", "pend", "autonew", "all-plan", "docs", "tp", "tr", "file-op", "review", "continue")
   if (Test-Path $claudeSkillsDir) {
     Write-Host "Removing CCB Claude skills..."
@@ -984,7 +984,7 @@ function Uninstall-Native {
   # 7. Remove Droid skills
   $factoryHome = if ($env:FACTORY_HOME) { $env:FACTORY_HOME } else { Join-Path $env:USERPROFILE ".factory" }
   $droidSkillsDir = Join-Path $factoryHome "skills"
-  $droidSkills = @("ask", "ccb-clear")
+  $droidSkills = @("ask", "ccb-clear", "ccb-diagnose")
   $legacyDroidSkills = @("ping", "pend", "autonew", "all-plan")
   if (Test-Path $droidSkillsDir) {
     Write-Host "Removing CCB Droid skills..."
