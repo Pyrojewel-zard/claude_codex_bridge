@@ -2207,7 +2207,10 @@ def test_native_cli_launcher_builds_provider_state_payload(
     assert payload[f'{provider}_state_dir'] == str(state_dir)
     assert payload[f'{provider}_home'] == str(state_dir / 'home')
     assert payload[f'{provider}_data_dir'] == str(state_dir / 'data')
-    assert payload[f'{provider}_session_id'] == 'sess-native'
+    if provider == 'pi':
+        assert 'pi_session_id' not in payload
+    else:
+        assert payload[f'{provider}_session_id'] == 'sess-native'
     assert f'HOME={shlex.quote(str(state_dir / "home"))}' in start_cmd
     assert f'XDG_CONFIG_HOME={shlex.quote(str(state_dir / "home" / ".config"))}' in start_cmd
     assert f'XDG_DATA_HOME={shlex.quote(str(state_dir / "data"))}' in start_cmd

@@ -35,6 +35,8 @@ NOW = "2026-07-29T00:00:00Z"
 class _FakeSession:
     def __init__(self, data: dict[str, object]) -> None:
         self.data = data
+        session_file = str(data.get("session_file") or "").strip()
+        self.session_file = Path(session_file) if session_file else ""
 
     def ensure_pane(self) -> tuple[bool, str]:
         return True, "%9"
@@ -812,6 +814,60 @@ def test_pi_runtime_observation_tracks_foreign_busy_state(
     _append(path, _event("agent_settled"))
     idle = inspect_pi_runtime(path, actor=ACTOR, launch_session_id=LAUNCH_ID)
     assert idle.busy is False
+
+
+def test_pi_initial_ready_observation_persists_native_session_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data, events, _ = _runtime(tmp_path)
+    session_dir = tmp_path / "state" / "sessions"
+    native_id = "019fdd2b-8362-7958-9e85-d0a5eed17084"
+    native_path = session_dir / f"2026-07-29T00-00-00-000Z_{native_id}.jsonl"
+    session_dir.mkdir(parents=True)
+    native_path.write_text(
+        json.dumps({"type": "session", "id": native_id, "cwd": str(tmp_path)}) + "\n",
+        encoding="utf-8",
+    )
+    session_file = tmp_path / ".ccb" / ".pi-pi1-session"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                "ccb_session_id": LAUNCH_ID,
+                "agent_name": ACTOR,
+                "ccb_project_id": "project-1",
+                "work_dir": str(tmp_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    data.update(
+        {
+            "session_file": str(session_file),
+            "work_dir": str(tmp_path),
+            "pi_session_dir": str(session_dir),
+        }
+    )
+    _append(
+        events,
+        _event(
+            "extension_ready",
+            pi_session_id=native_id,
+            pi_session_path=str(native_path),
+        ),
+    )
+    backend = _FakeBackend()
+    _bind(monkeypatch, session=_FakeSession(data), backend=backend)
+
+    submission = PiPaneExecutionAdapter().start(
+        _job(),
+        context=_context(tmp_path),
+        now=NOW,
+    )
+
+    assert submission.runtime_state["native_session_id"] == native_id
+    assert json.loads(session_file.read_text(encoding="utf-8"))["pi_session_id"] == native_id
 
 
 class _RoutingAdapter:
