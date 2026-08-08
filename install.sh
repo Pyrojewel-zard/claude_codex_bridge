@@ -3782,7 +3782,7 @@ except Exception:
 
 uninstall_claude_skills() {
   local skills_dst="$HOME/.claude/skills"
-  local ccb_skills="ask ccb-config ccb-clear ccb-compact"
+  local ccb_skills="ask ccb-config ccb-clear ccb-compact ccb-diagnose"
   local legacy_skills="ccb_config ping pend autonew all-plan docs tp tr file-op review continue"
 
   if [[ ! -d "$skills_dst" ]]; then
@@ -3804,7 +3804,7 @@ uninstall_claude_skills() {
 uninstall_codex_skills() {
   local skills_dst
   skills_dst="$(resolve_codex_source_home)/skills"
-  local ccb_skills="ask ccb-config ccb-clear ccb-compact reconnect"
+  local ccb_skills="ask ccb-config ccb-clear ccb-compact ccb-diagnose reconnect"
   local legacy_skills="ccb_config ping pend autonew all-plan file-op"
 
   if [[ ! -d "$skills_dst" ]]; then
@@ -3825,7 +3825,7 @@ uninstall_codex_skills() {
 
 uninstall_droid_skills() {
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
-  local ccb_skills="ask ccb-clear ccb-compact"
+  local ccb_skills="ask ccb-clear ccb-compact ccb-diagnose"
   local legacy_skills="ping pend autonew all-plan"
 
   if [[ ! -d "$skills_dst" ]]; then

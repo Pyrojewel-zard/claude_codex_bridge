@@ -363,6 +363,7 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     _write(pi_state / 'sessions' / 'session.jsonl', '{}\n')
     _write(grok_state / 'home' / '.grok' / 'sessions' / 'session.jsonl', '{}\n')
     _write(grok_state / 'home' / '.grok' / 'skills' / 'ask' / 'SKILL.md', '# ask\n')
+    _write(grok_state / 'home' / '.grok' / 'skills' / 'ccb-diagnose' / 'SKILL.md', '# diagnose\n')
     _write(grok_state / 'home' / '.grok' / 'skills' / 'help' / 'SKILL.md', '# help\n')
     _write(droid_state / 'home' / '.factory' / 'auth.v2.file', 'ciphertext\n')
     _write(droid_state / 'home' / '.factory' / 'auth.v2.key', 'key\n')
@@ -475,6 +476,7 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     assert records['agents/agent13/provider-state/grok/home/.grok/sessions/session.jsonl']['storage_class'] == 'session'
     assert records['agents/agent13/provider-state/grok/home/.grok/sessions/session.jsonl']['reason'] == 'native_cli_provider_state'
     assert records['agents/agent13/provider-state/grok/home/.grok/skills/ask/SKILL.md']['storage_class'] == 'projected_config'
+    assert records['agents/agent13/provider-state/grok/home/.grok/skills/ccb-diagnose/SKILL.md']['storage_class'] == 'projected_config'
     assert records['agents/agent13/provider-state/grok/home/.grok/skills/help/SKILL.md']['storage_class'] == 'session'
     assert records['agents/agent14/provider-state/droid/home/.factory/auth.v2.file']['storage_class'] == 'secret'
     assert records['agents/agent14/provider-state/droid/home/.factory/auth.v2.key']['storage_class'] == 'secret'

@@ -359,7 +359,7 @@ def test_codex_home_overrides_repairs_required_skills_without_full_refresh(
     )
 
     skills_dir = Path(overrides['CODEX_HOME']) / 'skills'
-    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-diagnose', 'reconnect'):
         assert (skills_dir / skill_name / 'SKILL.md').is_file()
 
 

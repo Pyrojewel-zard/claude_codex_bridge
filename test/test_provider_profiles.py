@@ -984,7 +984,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_optional_tree_
     )
 
     assert not (target_home / 'skills.ccb-projection.json').exists()
-    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
         assert (target_home / 'skills' / f'{skill_name}.ccb-projection.json').is_file()
     assert (source_skills / 'broken-role-skill').is_symlink()
@@ -1009,7 +1009,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is
     )
 
     assert not (target_home / 'skills' / 'optional').exists()
-    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
 
 
