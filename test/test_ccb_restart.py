@@ -298,6 +298,52 @@ def test_project_restart_agent_handler_restarts_one_agent(monkeypatch) -> None:
     assert calls == [('agent1',)]
 
 
+def test_hapi_manual_restart_rebuilds_fresh_launch_generation(monkeypatch, tmp_path: Path) -> None:
+    from agents.models import HapiConfig
+
+    runtime = _runtime(pane_id='%5')
+    app = _app(runtimes={'agent1': runtime})
+    app.config = SimpleNamespace(
+        agents={'agent1': SimpleNamespace(provider='claude')},
+        hapi=HapiConfig(enabled=True),
+    )
+    namespace = SimpleNamespace(
+        tmux_socket_path=str(tmp_path / 'tmux.sock'),
+        tmux_session_name='ccb-project',
+        namespace_epoch=3,
+        workspace_window_name='main',
+        workspace_window_id='@1',
+        workspace_epoch=2,
+    )
+    app.project_namespace = SimpleNamespace(load=lambda: namespace)
+    app.runtime_supervisor = SimpleNamespace(_start_policy_store=None)
+    monkeypatch.setattr(project_restart, '_load_agent_provider_session', lambda *args, **kwargs: None)
+    calls: list[dict[str, object]] = []
+
+    def _fresh_start(supervisor, namespace_arg, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            agent_results=(SimpleNamespace(agent_name='agent1', action='launched'),),
+        )
+
+    monkeypatch.setattr(project_restart, 'call_start_flow_for_additive_mount', _fresh_start)
+
+    results = project_restart.restart_project_agent_panes_in_place(
+        app,
+        agent_names=('agent1',),
+    )
+
+    assert results == ({
+        'agent': 'agent1',
+        'status': 'restarted',
+        'pane_id': '%5',
+        'launch_generation': 'fresh',
+    },)
+    assert calls[0]['agent_panes'] == {'agent1': '%5'}
+    assert calls[0]['requested_agents'] == ('agent1',)
+    assert calls[0]['run_start_flow_fn'] is project_restart.run_start_flow
+
+
 def test_project_restart_agent_socket_targets_one_agent(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-restart-socket'
     _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex,agent2:codex\n')

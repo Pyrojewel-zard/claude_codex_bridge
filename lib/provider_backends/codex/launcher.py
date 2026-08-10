@@ -5,6 +5,7 @@ from pathlib import Path
 from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
+from hapi_integration.command import load_hapi_launch_context
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 from provider_backends.codex.session_authority import (
@@ -48,6 +49,9 @@ def prepare_launch_context(
     payload['project_root'] = str(context.project.project_root)
     payload['workspace_path'] = str(prepared_state.get('run_cwd') or plan.workspace_path)
     payload['agent_events_path'] = str(context.paths.agent_events_path(spec.name))
+    hapi_launch_context = load_hapi_launch_context(context, spec)
+    if hapi_launch_context is not None:
+        payload['hapi_launch_context'] = hapi_launch_context
     return payload
 
 

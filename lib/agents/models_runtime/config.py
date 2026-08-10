@@ -3,6 +3,7 @@ from __future__ import annotations
 from .config_runtime import (
     AgentApiSpec,
     AgentSpec,
+    HapiConfig,
     LoopCapacityConfig,
     LoopRoleProfileSpec,
     MaintenanceHeartbeatConfig,
@@ -18,6 +19,7 @@ from .config_runtime import (
 __all__ = [
     'AgentApiSpec',
     'AgentSpec',
+    'HapiConfig',
     'LoopCapacityConfig',
     'LoopRoleProfileSpec',
     'MaintenanceHeartbeatConfig',

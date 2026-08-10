@@ -50,6 +50,7 @@ def prepare_start_agents(
     restore_state_builder,
     namespace_epoch: int | None = None,
     namespace_pane_records: dict[str, object] | None = None,
+    force_relaunch_agents: tuple[str, ...] = (),
 ) -> tuple[PreparedStartAgent, ...]:
     spec_store = AgentSpecStore(paths)
     restore_store = AgentRestoreStore(paths)
@@ -58,6 +59,7 @@ def prepare_start_agents(
     materializer = WorkspaceMaterializer()
     validator = WorkspaceValidator(binding_store)
     prepared: list[PreparedStartAgent] = []
+    forced = set(force_relaunch_agents)
 
     try:
         validate_provider_runtime_home_uniqueness(layout=paths, specs=config.agents.values())
@@ -88,14 +90,16 @@ def prepare_start_agents(
             if not result.ok:
                 raise RuntimeError(f'workspace validation failed for {agent_name}: {result.errors}')
 
-            raw_binding = resolve_agent_binding_fn(
+            raw_binding = None if agent_name in forced else resolve_agent_binding_fn(
                 provider=spec.provider,
                 agent_name=agent_name,
                 workspace_path=plan.workspace_path,
                 project_root=project_root,
                 ensure_usable=False,
             )
-            if tmux_socket_path is not None:
+            if agent_name in forced:
+                binding = None
+            elif tmux_socket_path is not None:
                 binding = project_binding_filter_fn(
                     raw_binding,
                     cmd_enabled=bool(getattr(config, 'cmd_enabled', False)),
@@ -129,7 +133,7 @@ def prepare_start_agents(
                     raw_binding=raw_binding,
                     binding=binding,
                     stale_binding=raw_binding is not None and binding is None,
-                    binding_reject_reason=_binding_reject_reason(
+                    binding_reject_reason=('forced_relaunch' if agent_name in forced else _binding_reject_reason(
                         raw_binding=raw_binding,
                         binding=binding,
                         cmd_enabled=bool(getattr(config, 'cmd_enabled', False)),
@@ -140,7 +144,7 @@ def prepare_start_agents(
                         window_name=binding_window_name,
                         namespace_epoch=namespace_epoch,
                         namespace_pane_records=namespace_pane_records,
-                    ),
+                    )),
                 )
             )
 

@@ -5,6 +5,12 @@ import json
 import shlex
 
 from agents.policy import should_restore_provider_history
+from hapi_integration.command import (
+    decorate_hapi_argv,
+    hapi_identity_env_from_context,
+    load_hapi_launch_context,
+    render_recorded_hapi_command,
+)
 from provider_core.caller_env import (
     caller_context_env,
     export_env_clause,
@@ -50,6 +56,9 @@ def prepare_launch_context(context, spec, plan, runtime_dir: Path, prepared_stat
     payload['project_root'] = str(context.project.project_root)
     payload['workspace_path'] = str(payload.get('run_cwd') or plan.workspace_path)
     payload['agent_events_path'] = str(context.paths.agent_events_path(spec.name))
+    hapi_launch_context = load_hapi_launch_context(context, spec)
+    if hapi_launch_context is not None:
+        payload['hapi_launch_context'] = hapi_launch_context
     return payload
 
 
@@ -67,6 +76,7 @@ def build_start_cmd(
     provider_start_parts_fn,
     cli_supports_flag_fn,
     is_root_user_fn,
+    prepared_state: dict[str, object] | None = None,
 ) -> str:
     root_user = bool(is_root_user_fn())
     profile = load_profile_fn(runtime_dir)
@@ -122,8 +132,15 @@ def build_start_cmd(
             cmd_parts.extend(['--settings', settings_inline])
         except Exception:
             cmd_parts.extend(['--settings', str(settings_path)])
+    hapi_launch_context = (prepared_state or {}).get('hapi_launch_context')
     if command.auto_permission:
-        if cli_supports_flag_fn(cmd_parts, '--permission-mode'):
+        # HAPI's claude parser consumes `--permission-mode` at the wrapper
+        # level but does not forward it to the spawned claude process; only
+        # `--dangerously-skip-permissions` reaches the real claude argv (and
+        # still maps to permissionMode='bypassPermissions' inside HAPI). Under
+        # HAPI mode emit the skip flag so the managed claude actually runs in
+        # bypassPermissions, matching native mode's `--permission-mode`.
+        if not hapi_launch_context and cli_supports_flag_fn(cmd_parts, '--permission-mode'):
             cmd_parts.extend(['--permission-mode', 'bypassPermissions'])
         else:
             _append_unique_flag(cmd_parts, _ROOT_SKIP_PERMISSIONS_FLAG, spec.startup_args)
@@ -131,8 +148,24 @@ def build_start_cmd(
         cmd_parts.append('--continue')
     cmd_parts.extend(spec.startup_args)
 
-    cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
-    cmd = apply_provider_command_template(cmd, spec.provider_command_template)
+    if hapi_launch_context:
+        hapi_env = hapi_identity_env_from_context(hapi_launch_context, launch_session_id)
+        if hapi_env:
+            env_prefix = join_env_prefix(env_prefix, export_env_clause(hapi_env))
+        wrapper_argv = decorate_hapi_argv(
+            command=str(hapi_launch_context.get('command') or 'hapi'),
+            flavor=str(hapi_launch_context.get('flavor') or 'claude'),
+            provider_argv=cmd_parts,
+        )
+        cmd = render_recorded_hapi_command(
+            wrapper_argv=wrapper_argv,
+            record_path=runtime_dir / 'hapi-wrapper.json',
+            launch_session_id=launch_session_id,
+        )
+    else:
+        cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
+    if not hapi_launch_context:
+        cmd = apply_provider_command_template(cmd, spec.provider_command_template)
     if env_prefix:
         return f'{env_prefix}; {cmd}'
     return cmd

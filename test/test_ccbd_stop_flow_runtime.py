@@ -287,3 +287,296 @@ def test_terminate_runtime_pids_reaps_helper_group_from_manifest(tmp_path: Path,
 
 
 __all__ = []
+
+
+# ---------------------------------------------------------------------------
+# W1.4: HAPI graceful stop ordering
+# ---------------------------------------------------------------------------
+
+
+def _hapi_stop_paths(tmp_path: Path):
+    return SimpleNamespace(
+        agents_dir=tmp_path / '.ccb' / 'agents',
+        ccbd_socket_path=tmp_path / '.ccb' / 'ccbd' / 'ccbd.sock',
+        shared_cache_dir=tmp_path / '.ccb' / 'shared-cache',
+        agent_dir=lambda agent_name: tmp_path / '.ccb' / 'agents' / agent_name,
+        agent_runtime_path=lambda agent_name: tmp_path / '.ccb' / 'agents' / agent_name / 'runtime.json',
+        agent_helper_path=lambda agent_name: tmp_path / '.ccb' / 'agents' / agent_name / 'helper.json',
+    )
+
+
+def _hapi_stop_registry(*, agent_name='claude', runtime):
+    class FakeRegistry:
+        def list_known_agents(self):
+            return (agent_name,) if runtime is not None else ()
+
+        def get(self, name):
+            return runtime
+
+        def upsert_authority(self, updated):
+            return updated
+
+    return FakeRegistry()
+
+
+def test_stop_all_hapi_enabled_graceful_stop_precedes_tmux_cleanup(tmp_path: Path) -> None:
+    from agents.models import HapiConfig
+
+    call_order: list[str] = []
+
+    def _graceful(records, *, timeout_s):
+        call_order.append(f'graceful:{len(records)}:{timeout_s}')
+        return 1, 1
+
+    def _cleanup_tmux(**kwargs):
+        call_order.append('tmux_cleanup')
+        return ()
+
+    def _namespace_destroy(**kwargs):
+        call_order.append('namespace_destroy')
+
+    class FakeNamespace:
+        def destroy(self, **kwargs):
+            _namespace_destroy(**kwargs)
+            return SimpleNamespace(destroyed=True, namespace_epoch=1)
+
+    paths = _hapi_stop_paths(tmp_path)
+    paths.agents_dir.mkdir(parents=True)
+    runtime = AgentRuntime(
+        agent_name='claude',
+        state=AgentState.IDLE,
+        pid=4242,
+        started_at='2026-08-01T00:00:00Z',
+        last_seen_at='2026-08-01T00:00:00Z',
+        runtime_ref='tmux:%42',
+        session_ref='sess-1',
+        workspace_path=str(tmp_path),
+        project_id='proj-1',
+        backend_type='tmux',
+        tmux_socket_name='ccb-proj-1',
+        queue_depth=0,
+        socket_path=None,
+        health='healthy',
+        provider='claude',
+    )
+    # Persist a runtime pid file so collect_pid_candidates finds 4242.
+    runtime_path = paths.agent_runtime_path('claude')
+    runtime_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_path.write_text('placeholder', encoding='utf-8')
+    pid_file = paths.agent_dir('claude') / 'provider-runtime' / 'claude' / 'runtime.pid'
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text('4242\n', encoding='utf-8')
+
+    config = SimpleNamespace(hapi=HapiConfig(enabled=True, command='hapi'))
+
+    execution = stop_all_project(
+        project_root=tmp_path,
+        project_id='proj-1',
+        paths=paths,
+        registry=_hapi_stop_registry(runtime=runtime),
+        project_namespace=FakeNamespace(),
+        clock=lambda: '2026-08-01T00:00:00Z',
+        force=False,
+        config=config,
+        cleanup_project_tmux_orphans_by_socket_fn=_cleanup_tmux,
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+        graceful_stop_wrappers_fn=_graceful,
+    )
+
+    # Graceful SIGTERM must occur before tmux pane cleanup.
+    graceful_idx = call_order.index('graceful:1:3.0')
+    tmux_idx = call_order.index('tmux_cleanup')
+    assert graceful_idx < tmux_idx
+    assert any(a.startswith('hapi_graceful_stop:') for a in execution.actions_taken)
+    # Residual PID cleanup still runs after.
+    assert any(a.startswith('terminate_runtime_pids:') for a in execution.actions_taken)
+
+
+def test_stop_all_hapi_enabled_graceful_failure_still_cleans_up(tmp_path: Path) -> None:
+    from agents.models import HapiConfig
+
+    call_order: list[str] = []
+
+    def _graceful(records, *, timeout_s):
+        call_order.append(f'graceful:{len(records)}')
+        raise RuntimeError('HAPI wrapper refused to exit')
+
+    def _cleanup_tmux(**kwargs):
+        call_order.append('tmux_cleanup')
+        return ()
+
+    class FakeNamespace:
+        def destroy(self, **kwargs):
+            call_order.append('namespace_destroy')
+            return SimpleNamespace(destroyed=True, namespace_epoch=1)
+
+    paths = _hapi_stop_paths(tmp_path)
+    paths.agents_dir.mkdir(parents=True)
+    runtime = AgentRuntime(
+        agent_name='claude',
+        state=AgentState.IDLE,
+        pid=999,
+        started_at='2026-08-01T00:00:00Z',
+        last_seen_at='2026-08-01T00:00:00Z',
+        runtime_ref='tmux:%42',
+        session_ref='sess-1',
+        workspace_path=str(tmp_path),
+        project_id='proj-1',
+        backend_type='tmux',
+        tmux_socket_name='ccb-proj-1',
+        queue_depth=0,
+        socket_path=None,
+        health='healthy',
+        provider='claude',
+    )
+    pid_file = paths.agent_dir('claude') / 'provider-runtime' / 'claude' / 'runtime.pid'
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text('999\n', encoding='utf-8')
+
+    config = SimpleNamespace(hapi=HapiConfig(enabled=True, command='hapi'))
+
+    execution = stop_all_project(
+        project_root=tmp_path,
+        project_id='proj-1',
+        paths=paths,
+        registry=_hapi_stop_registry(runtime=runtime),
+        project_namespace=FakeNamespace(),
+        clock=lambda: '2026-08-01T00:00:00Z',
+        force=True,
+        config=config,
+        cleanup_project_tmux_orphans_by_socket_fn=_cleanup_tmux,
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+        graceful_stop_wrappers_fn=_graceful,
+    )
+
+    # Graceful failure must not block tmux cleanup, residual PID cleanup, or summary.
+    assert 'graceful:1' in call_order
+    assert 'tmux_cleanup' in call_order
+    assert execution.summary.state == 'unmounted'
+    assert execution.deferred_actions  # namespace destroy still deferred
+
+
+def test_stop_all_hapi_disabled_leaves_ordering_unchanged(tmp_path: Path) -> None:
+    from agents.models import HapiConfig
+
+    call_order: list[str] = []
+
+    def _graceful(records, *, timeout_s):
+        call_order.append(f'graceful:{len(records)}')
+        return 1, 1
+
+    def _cleanup_tmux(**kwargs):
+        call_order.append('tmux_cleanup')
+        return ()
+
+    class FakeNamespace:
+        def destroy(self, **kwargs):
+            call_order.append('namespace_destroy')
+            return SimpleNamespace(destroyed=True, namespace_epoch=1)
+
+    paths = _hapi_stop_paths(tmp_path)
+    paths.agents_dir.mkdir(parents=True)
+    runtime = AgentRuntime(
+        agent_name='claude',
+        state=AgentState.IDLE,
+        pid=111,
+        started_at='2026-08-01T00:00:00Z',
+        last_seen_at='2026-08-01T00:00:00Z',
+        runtime_ref='tmux:%42',
+        session_ref='sess-1',
+        workspace_path=str(tmp_path),
+        project_id='proj-1',
+        backend_type='tmux',
+        tmux_socket_name='ccb-proj-1',
+        queue_depth=0,
+        socket_path=None,
+        health='healthy',
+        provider='claude',
+    )
+    pid_file = paths.agent_dir('claude') / 'provider-runtime' / 'claude' / 'runtime.pid'
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text('111\n', encoding='utf-8')
+
+    config = SimpleNamespace(hapi=HapiConfig())  # disabled
+
+    execution = stop_all_project(
+        project_root=tmp_path,
+        project_id='proj-1',
+        paths=paths,
+        registry=_hapi_stop_registry(runtime=runtime),
+        project_namespace=FakeNamespace(),
+        clock=lambda: '2026-08-01T00:00:00Z',
+        force=True,
+        config=config,
+        cleanup_project_tmux_orphans_by_socket_fn=_cleanup_tmux,
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+        graceful_stop_wrappers_fn=_graceful,
+    )
+
+    # Disabled mode must not invoke the graceful path.
+    assert call_order == ['tmux_cleanup']
+    assert not any(a.startswith('hapi_graceful_stop:') for a in execution.actions_taken)
+
+
+def test_stop_all_explicit_disabled_config_ignores_stale_hapi_cache(tmp_path: Path) -> None:
+    from agents.models import HapiConfig
+    from hapi_integration.store import HapiPreflightCache, write_preflight_cache
+
+    paths = _hapi_stop_paths(tmp_path)
+    paths.agents_dir.mkdir(parents=True)
+    write_preflight_cache(
+        paths.shared_cache_dir,
+        HapiPreflightCache(api_url='https://hub.example.invalid'),
+    )
+    runtime = AgentRuntime(
+        agent_name='claude', state=AgentState.IDLE, pid=222,
+        started_at='2026-08-01T00:00:00Z', last_seen_at='2026-08-01T00:00:00Z',
+        runtime_ref='tmux:%42', session_ref='sess-1', workspace_path=str(tmp_path),
+        project_id='proj-1', backend_type='tmux', queue_depth=0, socket_path=None,
+        health='healthy', provider='claude',
+    )
+    graceful_calls: list[tuple[Path, ...]] = []
+
+    stop_all_project(
+        project_root=tmp_path, project_id='proj-1', paths=paths,
+        registry=_hapi_stop_registry(runtime=runtime), project_namespace=None,
+        clock=lambda: '2026-08-01T00:00:00Z', force=False,
+        config=SimpleNamespace(hapi=HapiConfig(enabled=False)),
+        cleanup_project_tmux_orphans_by_socket_fn=lambda **kwargs: (),
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+        graceful_stop_wrappers_fn=lambda records, **kwargs: graceful_calls.append(records) or (1, 1),
+    )
+
+    assert graceful_calls == []
+
+
+def test_hapi_graceful_stop_targets_only_explicit_wrapper_record(tmp_path: Path) -> None:
+    from agents.models import HapiConfig
+
+    paths = _hapi_stop_paths(tmp_path)
+    paths.agents_dir.mkdir(parents=True)
+    runtime = AgentRuntime(
+        agent_name='claude', state=AgentState.IDLE, pid=333,
+        started_at='2026-08-01T00:00:00Z', last_seen_at='2026-08-01T00:00:00Z',
+        runtime_ref='tmux:%42', session_ref='sess-1', workspace_path=str(tmp_path),
+        project_id='proj-1', backend_type='tmux', queue_depth=0, socket_path=None,
+        health='healthy', provider='claude', runtime_root=str(paths.agent_dir('claude')),
+    )
+    child_pid_path = paths.agent_dir('claude') / 'provider-runtime' / 'claude' / 'child.pid'
+    child_pid_path.parent.mkdir(parents=True, exist_ok=True)
+    child_pid_path.write_text('444\n', encoding='utf-8')
+    graceful_calls: list[tuple[Path, ...]] = []
+
+    stop_all_project(
+        project_root=tmp_path, project_id='proj-1', paths=paths,
+        registry=_hapi_stop_registry(runtime=runtime), project_namespace=None,
+        clock=lambda: '2026-08-01T00:00:00Z', force=False,
+        config=SimpleNamespace(hapi=HapiConfig(enabled=True)),
+        cleanup_project_tmux_orphans_by_socket_fn=lambda **kwargs: (),
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+        graceful_stop_wrappers_fn=lambda records, **kwargs: graceful_calls.append(records) or (1, 1),
+    )
+
+    assert graceful_calls == [(
+        paths.agent_dir('claude') / 'provider-runtime' / 'claude' / 'hapi-wrapper.json',
+    )]

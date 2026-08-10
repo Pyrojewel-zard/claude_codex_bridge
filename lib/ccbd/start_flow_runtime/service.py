@@ -46,6 +46,7 @@ def run_start_flow(
     fresh_workspace: bool,
     clock,
     readiness_recorder=None,
+    force_relaunch_agents: tuple[str, ...] = (),
     deps,
 ) -> StartFlowSummary:
     flow_started_ns = time.monotonic_ns()
@@ -99,6 +100,7 @@ def run_start_flow(
         workspace_window_id=workspace_window_id,
         namespace_epoch=namespace_epoch,
         namespace_pane_records=namespace_pane_records,
+        force_relaunch_agents=force_relaunch_agents,
     )
     timings_ms['agent_prepare_and_classify'] = _elapsed_ms(stage_started_ns)
     prepared_by_agent = {item.agent_name: item for item in prepared_agents}

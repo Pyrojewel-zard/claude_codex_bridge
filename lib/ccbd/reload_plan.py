@@ -264,10 +264,59 @@ def _build_operations(current_config, new_config) -> list[dict[str, object]]:
                 }
             )
 
+    operations = _with_hapi_replacements(
+        operations,
+        current_config=current_config,
+        new_config=new_config,
+        common_agents=old_agents & new_agents,
+        old_window_by_agent=old_window_by_agent,
+    )
     operations.extend(_topology_operations(current_config, new_config, old_windows=old_windows, new_windows=new_windows))
     operations.extend(_tool_window_operations(current_config, new_config, old_tools=old_tools, new_tools=new_tools))
     operations.extend(_maintenance_operations(current_config, new_config))
     return operations
+
+
+def _with_hapi_replacements(
+    operations: list[dict[str, object]],
+    *,
+    current_config,
+    new_config,
+    common_agents: set[str],
+    old_window_by_agent: dict[str, str],
+) -> list[dict[str, object]]:
+    old_hapi = _record_or_none(getattr(current_config, 'hapi', None))
+    new_hapi = _record_or_none(getattr(new_config, 'hapi', None))
+    if old_hapi == new_hapi:
+        return operations
+
+    replaced_by_agent = {
+        str(item.get('agent') or ''): index
+        for index, item in enumerate(operations)
+        if str(item.get('op') or '') == 'replace_agent'
+    }
+    updated = [dict(item) for item in operations]
+    for agent_name in sorted(common_agents):
+        existing_index = replaced_by_agent.get(agent_name)
+        if existing_index is None:
+            updated.append(
+                {
+                    'op': 'replace_agent',
+                    'agent': agent_name,
+                    'window': old_window_by_agent.get(agent_name),
+                    'fields': ['hapi'],
+                    'reason': 'HAPI launch configuration changed',
+                }
+            )
+            continue
+        existing = dict(updated[existing_index])
+        fields = sorted(
+            {str(field) for field in tuple(existing.get('fields') or ())} | {'hapi'}
+        )
+        existing['fields'] = fields
+        existing['reason'] = 'existing agent spec and HAPI launch configuration changed'
+        updated[existing_index] = existing
+    return updated
 
 
 def _topology_operations(current_config, new_config, *, old_windows: dict[str, dict], new_windows: dict[str, dict]) -> list[dict[str, object]]:

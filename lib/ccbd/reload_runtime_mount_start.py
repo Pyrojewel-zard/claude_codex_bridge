@@ -38,6 +38,7 @@ def call_start_flow_for_additive_mount(
         fresh_namespace=False,
         fresh_workspace=False,
         clock=supervisor._clock,
+        force_relaunch_agents=requested_agents,
     )
 
 

@@ -19,7 +19,7 @@ from ..defaults import build_default_project_config
 from ..parsing import validate_project_config
 from ..paths import project_config_path, user_default_config_path
 
-_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop', 'config_ui'}
+_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop', 'config_ui', 'hapi'}
 _HYBRID_HEADER_OWNED_AGENT_KEYS = {'provider', 'workspace_mode'}
 
 
@@ -280,6 +280,8 @@ def _merge_hybrid_overlay(
         merged['loop'] = overlay_document['loop']
     if 'config_ui' in overlay_document:
         merged['config_ui'] = overlay_document['config_ui']
+    if 'hapi' in overlay_document:
+        merged['hapi'] = overlay_document['hapi']
     return merged
 
 

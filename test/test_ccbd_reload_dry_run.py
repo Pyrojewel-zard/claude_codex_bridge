@@ -163,6 +163,34 @@ def test_reload_plan_classifies_runtime_and_layout_changes(
     assert plan['mutation_enabled'] is False
 
 
+@pytest.mark.parametrize(
+    ('old_hapi', 'new_hapi'),
+    [
+        ('', '\n[hapi]\nenabled = true\n'),
+        ('\n[hapi]\nenabled = true\n', '\n[hapi]\nenabled = false\n'),
+        (
+            '\n[hapi]\nenabled = true\ncommand = "hapi"\n',
+            '\n[hapi]\nenabled = true\ncommand = "/opt/hapi-v2"\n',
+        ),
+    ],
+)
+def test_reload_plan_replaces_every_existing_agent_when_hapi_launch_config_changes(
+    tmp_path: Path,
+    old_hapi: str,
+    new_hapi: str,
+) -> None:
+    current = _load_config(tmp_path / 'current-hapi', BASE_CONFIG + old_hapi)
+    new = _load_config(tmp_path / 'new-hapi', BASE_CONFIG + new_hapi)
+
+    plan = build_reload_dry_run_plan(current, new)
+
+    replace_ops = [item for item in plan['operations'] if item['op'] == 'replace_agent']
+    assert plan['plan_class'] == 'replace_agent'
+    assert {item['agent'] for item in replace_ops} == {'agent1', 'agent2'}
+    assert all('hapi' in item['fields'] for item in replace_ops)
+    assert len(plan['drain_intents']) == 2
+
+
 def test_reload_plan_classifies_tool_window_add_remove_and_change(tmp_path: Path) -> None:
     current = _load_config(tmp_path / 'current-tool', BASE_CONFIG)
     added = _load_config(

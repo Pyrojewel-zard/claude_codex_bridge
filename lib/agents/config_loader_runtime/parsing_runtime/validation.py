@@ -8,6 +8,7 @@ from typing import Any
 from agents.config_loader_runtime.role_lookup import RoleLookupError, installed_role_default_agent_name, looks_like_role_id, normalize_role_id
 from agents.models import (
     AgentValidationError,
+    HapiConfig,
     LayoutLeaf,
     LayoutNode,
     MaintenanceHeartbeatConfig,
@@ -39,6 +40,7 @@ _MAINTENANCE_HEARTBEAT_KEYS = {
     'escalation_policy',
     'startup_ensure',
 }
+_HAPI_KEYS = {'enabled', 'command'}
 
 
 def validate_project_config(
@@ -60,6 +62,7 @@ def validate_project_config(
                 source_path=source_path,
                 project_root=resolved_project_root,
                 maintenance_heartbeat=_parse_maintenance_heartbeat(document),
+                hapi=_parse_hapi(document),
             )
         except StructuredConfigValidationError:
             raise
@@ -92,6 +95,7 @@ def validate_project_config(
     sidebar_view = parse_sidebar_view(document.get('ui'))
     maintenance_heartbeat = _parse_maintenance_heartbeat(document)
     loop_capacity = parse_loop_capacity(document.get('loop'), project_root=resolved_project_root)
+    hapi = _parse_hapi(document)
     entry_window = _parse_entry_window(document)
     _validate_legacy_and_windows_fields(document, windows=windows, tool_windows=tool_windows)
     return _build_project_config(
@@ -106,6 +110,7 @@ def validate_project_config(
         sidebar_view=sidebar_view,
         maintenance_heartbeat=maintenance_heartbeat,
         loop_capacity=loop_capacity,
+        hapi=hapi,
         source_path=source_path,
     )
 
@@ -241,6 +246,29 @@ def _optional_positive_int(table: dict[str, Any], key: str, *, default: int) -> 
     return int(value)
 
 
+def _parse_hapi(document: dict[str, Any]) -> HapiConfig:
+    raw_hapi = document.get('hapi')
+    if raw_hapi is None:
+        return HapiConfig()
+    hapi = expect_mapping(raw_hapi, field_name='hapi')
+    unknown = sorted(set(hapi) - _HAPI_KEYS)
+    if unknown:
+        raise ConfigValidationError(f'hapi contains unknown fields: {", ".join(unknown)}')
+    try:
+        return HapiConfig(
+            enabled=_optional_bool(hapi, 'enabled', default=False),
+            command=_optional_string_value(hapi, 'command', default='hapi'),
+        )
+    except AgentValidationError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+
+
+def _optional_string_value(table: dict[str, Any], key: str, *, default: str) -> str:
+    if key not in table:
+        return default
+    return expect_string(table[key], field_name=f'hapi.{key}')
+
+
 def _validate_legacy_and_windows_fields(
     document: dict[str, Any],
     *,
@@ -279,6 +307,7 @@ def _build_project_config(
     sidebar_view,
     maintenance_heartbeat: MaintenanceHeartbeatConfig,
     loop_capacity,
+    hapi: HapiConfig,
     source_path: Path | None,
 ) -> ProjectConfig:
     try:
@@ -295,6 +324,7 @@ def _build_project_config(
             sidebar_view=sidebar_view,
             maintenance_heartbeat=maintenance_heartbeat,
             loop_capacity=loop_capacity,
+            hapi=hapi,
             source_path=str(source_path) if source_path else None,
             windows_explicit=windows is not None,
         )

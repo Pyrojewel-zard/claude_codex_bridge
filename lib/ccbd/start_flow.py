@@ -27,10 +27,19 @@ from cli.services.tmux_cleanup_history import TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary, cleanup_project_tmux_orphans_by_socket
 from cli.services.tmux_start_layout import prepare_tmux_start_layout
 from cli.services.tmux_ui import apply_project_tmux_ui, set_tmux_ui_active
+from hapi_integration.preflight import HapiPreflight, run_hapi_preflight
+from hapi_integration.command import resolve_hapi_home
+from hapi_integration.store import HapiPreflightCache, clear_preflight_cache, write_preflight_cache
 from provider_core.session_binding_evidence import resolve_agent_binding
 from terminal_runtime import TmuxBackend
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 
+
+def _run_hapi_preflight_if_enabled(config, *, preflight_fn=run_hapi_preflight) -> HapiPreflight | None:
+    hapi = getattr(config, 'hapi', None)
+    if hapi is None or not getattr(hapi, 'enabled', False):
+        return None
+    return preflight_fn(hapi.command)
 
 def _deps() -> StartFlowDeps:
     return StartFlowDeps(
@@ -91,7 +100,24 @@ def run_start_flow(
     fresh_workspace: bool = False,
     clock=utc_now,
     readiness_recorder=None,
+    preflight_fn=run_hapi_preflight,
+    force_relaunch_agents: tuple[str, ...] = (),
 ) -> StartFlowSummary:
+    # Cache belongs to this start attempt. Clear first so disabled mode or a
+    # failed preflight cannot leave an older wrapper configuration active.
+    clear_preflight_cache(paths.shared_cache_dir)
+    preflight = _run_hapi_preflight_if_enabled(config, preflight_fn=preflight_fn)
+    if preflight is not None:
+        hapi_command = str(getattr(config.hapi, 'command', '') or 'hapi')
+        hapi_home = resolve_hapi_home()
+        write_preflight_cache(
+            paths.shared_cache_dir,
+            HapiPreflightCache(
+                api_url=preflight.api_url,
+                command=hapi_command,
+                hapi_home=hapi_home,
+            ),
+        )
     return run_start_flow_impl(
         project_root=project_root,
         project_id=project_id,
@@ -118,6 +144,7 @@ def run_start_flow(
         fresh_workspace=fresh_workspace,
         clock=clock,
         readiness_recorder=readiness_recorder,
+        force_relaunch_agents=force_relaunch_agents,
         deps=_deps(),
     )
 

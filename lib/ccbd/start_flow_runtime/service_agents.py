@@ -19,8 +19,9 @@ def prepare_agents(
     workspace_window_id: str | None,
     namespace_epoch: int | None,
     namespace_pane_records: dict[str, object] | None,
+    force_relaunch_agents: tuple[str, ...],
 ):
-    return deps.prepare_start_agents_fn(
+    kwargs = dict(
         targets=targets,
         config=config,
         paths=paths,
@@ -36,6 +37,9 @@ def prepare_agents(
         project_binding_filter_fn=lambda binding, **kwargs: usable_project_binding(deps, binding, **kwargs),
         restore_state_builder=deps.build_restore_state_impl,
     )
+    if force_relaunch_agents:
+        kwargs['force_relaunch_agents'] = force_relaunch_agents
+    return deps.prepare_start_agents_fn(**kwargs)
 
 
 __all__ = ['prepare_agents']

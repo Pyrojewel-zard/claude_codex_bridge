@@ -134,6 +134,43 @@ def test_prepare_start_agents_prepares_missing_binding_once(monkeypatch, tmp_pat
     assert prepared[0].binding_reject_reason == 'binding_missing'
 
 
+def test_prepare_start_agents_forced_relaunch_does_not_reuse_live_binding(monkeypatch, tmp_path: Path) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-forced')
+    prepare_calls: list[str] = []
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: prepare_calls.append(kwargs['agent_name']),
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-project',
+        workspace_window_id='@1',
+        force_relaunch_agents=('agent1',),
+        resolve_agent_binding_fn=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError('forced relaunch must not resolve the live provider binding')
+        ),
+        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert prepared[0].raw_binding is None
+    assert prepared[0].binding is None
+    assert prepared[0].binding_reject_reason == 'forced_relaunch'
+    assert prepared[0].provider_prepared is True
+    assert prepare_calls == ['agent1']
+
+
 def test_prepare_start_agents_reports_logical_window_reject_reason(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-start-prep-window-mismatch'
     (project_root / '.ccb').mkdir(parents=True)

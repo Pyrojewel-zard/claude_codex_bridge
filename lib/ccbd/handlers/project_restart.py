@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents.models import normalize_agent_name
+from ccbd.reload_runtime_mount_start import call_start_flow_for_additive_mount, start_options
+from ccbd.start_flow import run_start_flow
+from hapi_integration.command import hapi_enabled
 from provider_backends.pane_log_support.lifecycle_common import attach_pane_log
 from provider_backends.pane_log_support.lifecycle_recovery import respawn_existing_pane
 from provider_backends.pane_log_support.session import now_str
@@ -273,21 +276,35 @@ def restart_project_agent_panes_in_place(app, *, agent_names: tuple[str, ...]) -
     backend = TmuxBackend(socket_path=namespace.tmux_socket_path)
     results: list[dict[str, object]] = []
     for agent_name in agent_names:
-        results.append(_restart_agent_pane(app, backend=backend, agent_name=str(agent_name)))
+        results.append(
+            _restart_agent_pane(
+                app,
+                backend=backend,
+                namespace=namespace,
+                agent_name=str(agent_name),
+            )
+        )
     return tuple(results)
 
 
-def _restart_agent_pane(app, *, backend, agent_name: str) -> dict[str, object]:
+def _restart_agent_pane(app, *, backend, namespace, agent_name: str) -> dict[str, object]:
     runtime = app.registry.get(agent_name)
     session = _load_agent_provider_session(app, agent_name=agent_name, runtime=runtime)
     pane_id = _restart_pane_id(runtime=runtime, session=session)
-    if session is None:
+    if session is None and not hapi_enabled(app.config):
         return {'agent': agent_name, 'status': 'skipped', 'reason': 'session_missing'}
-    role_restart_block = _role_restart_blocked(session=session)
+    role_restart_block = _role_restart_blocked(session=session) if session is not None else None
     if role_restart_block is not None:
         return {'agent': agent_name, **role_restart_block}
     if not pane_id:
         return {'agent': agent_name, 'status': 'skipped', 'reason': 'pane_missing'}
+    if hapi_enabled(app.config):
+        return _restart_hapi_agent_generation(
+            app,
+            namespace=namespace,
+            agent_name=agent_name,
+            pane_id=pane_id,
+        )
     start_cmd = str(getattr(session, 'start_cmd', '') or '').strip()
     if not start_cmd:
         return {'agent': agent_name, 'status': 'skipped', 'reason': 'start_cmd_missing'}
@@ -307,6 +324,43 @@ def _restart_agent_pane(app, *, backend, agent_name: str) -> dict[str, object]:
         'agent': agent_name,
         'status': 'restarted',
         'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id),
+    }
+
+
+def _restart_hapi_agent_generation(app, *, namespace, agent_name: str, pane_id: str) -> dict[str, object]:
+    supervisor = app.runtime_supervisor
+    restore, auto_permission = start_options(supervisor, fallback_app=app)
+    summary = call_start_flow_for_additive_mount(
+        supervisor,
+        namespace,
+        agent_panes={agent_name: pane_id},
+        requested_agents=(agent_name,),
+        restore=restore,
+        auto_permission=auto_permission,
+        run_start_flow_fn=run_start_flow,
+    )
+    result = next(
+        (
+            item
+            for item in tuple(getattr(summary, 'agent_results', ()) or ())
+            if str(getattr(item, 'agent_name', '') or '') == agent_name
+        ),
+        None,
+    )
+    action = str(getattr(result, 'action', '') or '')
+    if result is None or action not in {'launched', 'relaunched'}:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': f'fresh_launch_not_confirmed:{action or "unknown"}',
+            'pane_id': pane_id,
+        }
+    refreshed = app.registry.get(agent_name)
+    return {
+        'agent': agent_name,
+        'status': 'restarted',
+        'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id),
+        'launch_generation': 'fresh',
     }
 
 

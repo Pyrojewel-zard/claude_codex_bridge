@@ -36,3 +36,4 @@ openspec
 *.log
 .hippocampus
 .DS_Store
+.planning/

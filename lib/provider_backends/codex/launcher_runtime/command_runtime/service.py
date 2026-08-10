@@ -7,6 +7,11 @@ from typing import Callable
 
 from agents.policy import should_restore_provider_history
 from cli.services.role_command_policy import role_command_policy_for_spec, role_command_policy_requires_enforcement
+from hapi_integration.command import (
+    decorate_hapi_argv,
+    hapi_identity_env_from_context,
+    render_recorded_hapi_command,
+)
 from provider_core.caller_env import caller_context_env, provider_user_session_env
 from provider_core.runtime_shared import apply_provider_command_template
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
@@ -63,12 +68,18 @@ def build_start_cmd(
         profile=profile,
         codex_home_overrides=codex_home_overrides,
     )
+    hapi_launch_context = launch_context.get('hapi_launch_context')
+    if hapi_launch_context:
+        hapi_env = hapi_identity_env_from_context(hapi_launch_context, launch_session_id)
+        if hapi_env:
+            env_map = {**env_map, **hapi_env}
     prefix_parts = build_codex_shell_prefix_fn(profile=profile)
     exports = ' '.join(f'{key}={shlex.quote(str(value))}' for key, value in env_map.items() if str(value).strip())
     if exports:
         prefix_parts.append(f'export {exports}')
     managed_enabled = bool(
-        not str(spec.provider_command_template or '').strip()
+        not hapi_launch_context
+        and not str(spec.provider_command_template or '').strip()
         and supports_managed_app_server_fn is not None
         and build_managed_app_server_command_fn is not None
         and supports_managed_app_server_fn(tuple(provider_start_parts))
@@ -84,8 +95,21 @@ def build_start_cmd(
         ]
     else:
         launch_context['codex_app_server_enabled'] = False
-        cmd = ' '.join(shlex.quote(str(part)) for part in codex_args)
-        cmd = apply_provider_command_template(cmd, spec.provider_command_template)
+        if hapi_launch_context:
+            wrapper_argv = decorate_hapi_argv(
+                command=str(hapi_launch_context.get('command') or 'hapi'),
+                flavor=str(hapi_launch_context.get('flavor') or 'codex'),
+                provider_argv=codex_args,
+            )
+            cmd = render_recorded_hapi_command(
+                wrapper_argv=wrapper_argv,
+                record_path=runtime_dir / 'hapi-wrapper.json',
+                launch_session_id=launch_session_id,
+            )
+        else:
+            cmd = ' '.join(shlex.quote(str(part)) for part in codex_args)
+        if not hapi_launch_context:
+            cmd = apply_provider_command_template(cmd, spec.provider_command_template)
     if prefix_parts:
         return f"{'; '.join(prefix_parts)}; {cmd}"
     return cmd

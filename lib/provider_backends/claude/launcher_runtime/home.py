@@ -223,6 +223,7 @@ def _claude_plugin_environment(
                 remove_projected_path(plugin_root, label=_CLAUDE_PLUGIN_BOOTSTRAP_LABEL)
         plugin_root.mkdir(parents=True, exist_ok=True)
         (plugin_root / 'cache').mkdir(parents=True, exist_ok=True)
+        _repair_claude_plugin_registry(plugin_root)
         empty_seed_root.mkdir(parents=True, exist_ok=True)
     except Exception:
         return {}
@@ -252,6 +253,92 @@ def _usable_claude_plugin_seed(seed_root: Path) -> bool:
             (seed_root / 'marketplaces').is_dir(),
             (seed_root / 'cache').is_dir(),
         )
+    )
+
+
+def _repair_claude_plugin_registry(plugin_root: Path) -> bool:
+    """Point stale plugin records at an already materialized cache entry.
+
+    Claude may refresh a plugin into a content-addressed directory while an
+    inherited registry still points at the old ``unknown`` directory. The
+    managed HOME must keep the registry and cache coherent before Claude
+    starts, otherwise plugin loading fails before the CLI can repair itself.
+    """
+    registry_path = Path(plugin_root) / 'installed_plugins.json'
+    if not registry_path.is_file():
+        return False
+    try:
+        payload = json.loads(registry_path.read_text(encoding='utf-8'))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    plugins = payload.get('plugins')
+    if not isinstance(plugins, dict):
+        return False
+
+    changed = False
+    for plugin_id, raw_entries in plugins.items():
+        if not isinstance(raw_entries, list):
+            continue
+        plugin_name, marketplace = _split_claude_plugin_id(plugin_id)
+        if not plugin_name or not marketplace:
+            continue
+        cache_root = Path(plugin_root) / 'cache' / marketplace / plugin_name
+        candidate = _latest_claude_plugin_cache(cache_root)
+        if candidate is None:
+            continue
+        for entry in raw_entries:
+            if not isinstance(entry, dict):
+                continue
+            raw_path = entry.get('installPath')
+            if isinstance(raw_path, str) and _claude_plugin_install_is_usable(Path(raw_path)):
+                continue
+            entry['installPath'] = str(candidate)
+            changed = True
+
+    if not changed:
+        return False
+    try:
+        atomic_write_text(
+            registry_path,
+            json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _split_claude_plugin_id(value: object) -> tuple[str, str]:
+    raw = str(value or '').strip()
+    if '@' not in raw:
+        return '', ''
+    plugin_name, marketplace = raw.rsplit('@', 1)
+    return plugin_name.strip(), marketplace.strip()
+
+
+def _latest_claude_plugin_cache(cache_root: Path) -> Path | None:
+    if not cache_root.is_dir() or cache_root.is_symlink():
+        return None
+    candidates = [
+        child
+        for child in cache_root.iterdir()
+        if child.is_dir()
+        and not child.is_symlink()
+        and child.name != 'unknown'
+        and _claude_plugin_install_is_usable(child)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda child: child.stat().st_mtime_ns)
+
+
+def _claude_plugin_install_is_usable(path: Path) -> bool:
+    candidate = Path(path).expanduser()
+    return (
+        candidate.is_dir()
+        and not candidate.is_symlink()
+        and (candidate / '.claude-plugin' / 'plugin.json').is_file()
     )
 
 

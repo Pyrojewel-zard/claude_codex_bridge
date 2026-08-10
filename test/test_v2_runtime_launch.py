@@ -454,6 +454,59 @@ def test_claude_home_overrides_preserve_existing_writable_plugin_cache(tmp_path:
     assert local_registry.read_text(encoding='utf-8') == '{"local": true}\n'
 
 
+def test_claude_home_overrides_repairs_stale_unknown_plugin_registry_after_refresh(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    unknown_cache = seed_root / 'cache' / 'claude-plugins-official' / 'code-review' / 'unknown'
+    (unknown_cache / '.claude-plugin').mkdir(parents=True)
+    (unknown_cache / '.claude-plugin' / 'plugin.json').write_text(
+        json.dumps({'name': 'code-review'}),
+        encoding='utf-8',
+    )
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'installed_plugins.json').write_text(
+        json.dumps(
+            {
+                'version': 2,
+                'plugins': {
+                    'code-review@claude-plugins-official': [
+                        {
+                            'scope': 'user',
+                            'installPath': str(unknown_cache),
+                            'version': 'unknown',
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    runtime_dir = tmp_path / 'runtime'
+    first = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    plugin_root = Path(first['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    stale_cache = plugin_root / 'cache' / 'claude-plugins-official' / 'code-review' / 'unknown'
+    refreshed_cache = plugin_root / 'cache' / 'claude-plugins-official' / 'code-review' / 'c917011ca692'
+    stale_cache.rename(refreshed_cache)
+
+    second = prepare_claude_home_overrides_for_test(
+        runtime_dir,
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    assert Path(second['CLAUDE_CODE_PLUGIN_CACHE_DIR']) == plugin_root
+    registry = json.loads((plugin_root / 'installed_plugins.json').read_text(encoding='utf-8'))
+    entry = registry['plugins']['code-review@claude-plugins-official'][0]
+    assert entry['installPath'] == str(refreshed_cache)
+    assert entry['version'] == 'unknown'
+
+
 def test_claude_home_overrides_use_empty_seed_for_non_seed_plugin_metadata(tmp_path: Path) -> None:
     source_home = tmp_path / 'source-home'
     plugin_root = source_home / '.claude' / 'plugins'

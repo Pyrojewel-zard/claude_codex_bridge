@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..names import SCHEMA_VERSION, AgentValidationError
+from .hapi import HapiConfig
 from .loop_capacity import LoopCapacityConfig
 from .workflow import CONFIG_SCHEMA_V2, CONFIG_SCHEMA_V3, WorkflowConfig
 from .maintenance import MaintenanceHeartbeatConfig
@@ -42,6 +43,7 @@ class ProjectConfig:
     maintenance_heartbeat: MaintenanceHeartbeatConfig | None = None
     loop_capacity: LoopCapacityConfig | None = None
     workflow: WorkflowConfig | None = None
+    hapi: HapiConfig | None = None
 
     def __post_init__(self) -> None:
         if self.version not in {CONFIG_SCHEMA_V2, CONFIG_SCHEMA_V3}:
@@ -71,6 +73,8 @@ class ProjectConfig:
         sidebar_view = self.sidebar_view if self.sidebar_view is not None else default_sidebar_view_spec()
         maintenance_heartbeat = self.maintenance_heartbeat or MaintenanceHeartbeatConfig()
         loop_capacity = self.loop_capacity or LoopCapacityConfig()
+        hapi = self.hapi if self.hapi is not None else HapiConfig()
+        _validate_hapi_enabled(hapi, normalized_agents=normalized_agents)
         windows = normalize_windows(
             self.windows,
             layout_spec=rendered_layout,
@@ -98,6 +102,7 @@ class ProjectConfig:
         object.__setattr__(self, 'windows_explicit', explicit_windows)
         object.__setattr__(self, 'maintenance_heartbeat', maintenance_heartbeat)
         object.__setattr__(self, 'loop_capacity', loop_capacity)
+        object.__setattr__(self, 'hapi', hapi)
         object.__setattr__(self, 'topology_signature_payload', signature_payload)
         object.__setattr__(self, 'topology_signature', topology_signature(signature_payload))
 
@@ -119,6 +124,7 @@ class ProjectConfig:
             'maintenance': {
                 'heartbeat': self.maintenance_heartbeat.to_record(),
             },
+            'hapi': self.hapi.to_record(),
             'loop': {
                 'capacity': {
                     key: value
@@ -137,6 +143,26 @@ class ProjectConfig:
         if self.workflow is not None:
             payload['workflow'] = self.workflow.to_record()
         return payload
+
+
+_HAPI_SUPPORTED_PROVIDERS = frozenset({'claude', 'codex'})
+
+
+def _validate_hapi_enabled(hapi: HapiConfig, *, normalized_agents: dict[str, object]) -> None:
+    if not hapi.enabled:
+        return
+    for agent_name, spec in normalized_agents.items():
+        provider = str(getattr(spec, 'provider', '') or '').strip().lower()
+        if provider not in _HAPI_SUPPORTED_PROVIDERS:
+            raise AgentValidationError(
+                f'hapi mode supports only claude and codex providers; '
+                f'agent {agent_name!r} uses {provider or "unknown"!r}'
+            )
+        template = getattr(spec, 'provider_command_template', None)
+        if template is not None:
+            raise AgentValidationError(
+                f'agent {agent_name!r} cannot set provider_command_template while hapi mode is enabled'
+            )
 
 
 __all__ = ['ProjectConfig']

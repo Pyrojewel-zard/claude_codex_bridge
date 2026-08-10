@@ -24,9 +24,10 @@ def render_project_config_text(config) -> str:
             raise ValueError('version 3 config rendering requires its original source_path')
         return source_path.read_text(encoding='utf-8')
     loop_payload = loop_capacity_to_config_dict(getattr(config, 'loop_capacity', None))
+    hapi_payload = _hapi_config_payload(config)
     if getattr(config, 'windows_explicit', False):
         return _render_windows_config_text(config)
-    if can_render_compact(config) and not loop_payload:
+    if can_render_compact(config) and not loop_payload and not hapi_payload:
         return f'{config.layout_spec}\n'
     hybrid_layout = _render_hybrid_layout(config)
     overlay_payload = _build_hybrid_overlay_payload(config)
@@ -131,13 +132,16 @@ def _build_hybrid_overlay_payload(config) -> dict[str, object] | None:
         if overlay:
             overlay_agents[name] = overlay
     loop_payload = loop_capacity_to_config_dict(getattr(config, 'loop_capacity', None))
-    if not overlay_agents and not loop_payload:
+    hapi_payload = _hapi_config_payload(config)
+    if not overlay_agents and not loop_payload and not hapi_payload:
         return None
     payload: dict[str, object] = {}
     if overlay_agents:
         payload['agents'] = overlay_agents
     if loop_payload:
         payload['loop'] = loop_payload
+    if hapi_payload:
+        payload['hapi'] = hapi_payload
     return payload
 
 
@@ -170,7 +174,21 @@ def _build_windows_payload(config) -> dict[str, object]:
     loop_payload = loop_capacity_to_config_dict(getattr(config, 'loop_capacity', None))
     if loop_payload:
         payload['loop'] = loop_payload
+    hapi_payload = _hapi_config_payload(config)
+    if hapi_payload:
+        payload['hapi'] = hapi_payload
     return payload
+
+
+def _hapi_config_payload(config) -> dict[str, object] | None:
+    hapi = getattr(config, 'hapi', None)
+    if hapi is None:
+        return None
+    enabled = bool(getattr(hapi, 'enabled', False))
+    command = str(getattr(hapi, 'command', '') or 'hapi')
+    if not enabled and command == 'hapi':
+        return None
+    return {'enabled': enabled, 'command': command}
 
 
 def _tool_window_payload(tool) -> dict[str, object]:

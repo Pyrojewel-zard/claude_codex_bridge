@@ -7,6 +7,9 @@ from agents.models import AgentState
 from agents.store import AgentRuntimeStore
 from cli.services.tmux_cleanup_history import TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import cleanup_project_tmux_orphans_by_socket
+from hapi_integration.command import hapi_enabled
+from hapi_integration.runtime import graceful_stop_wrapper_records, wrapper_identity_path
+from hapi_integration.store import read_preflight_cache
 from provider_backends.codex.runtime_artifacts import cleanup_codex_app_server_shutdown_artifacts
 from provider_runtime.helper_manifest import clear_helper_manifest
 from terminal_runtime.tmux import normalize_socket_name
@@ -15,6 +18,8 @@ from .models import StopAllExecution, StopAllSummary
 from .pid_cleanup import collect_pid_candidates, terminate_runtime_pids
 from .runtime_records import best_effort_runtime, extra_agent_dir_names
 from .tmux_cleanup import cleanup_stop_tmux_orphans
+
+_HAPI_GRACEFUL_STOP_TIMEOUT_S = 3.0
 
 
 def stop_all_project(
@@ -26,8 +31,10 @@ def stop_all_project(
     project_namespace,
     clock,
     force: bool,
+    config=None,
     cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket,
     tmux_cleanup_history_store_cls=TmuxCleanupHistoryStore,
+    graceful_stop_wrappers_fn=graceful_stop_wrapper_records,
 ) -> StopAllExecution:
     tmux_sockets: set[str | None] = set()
     pid_candidates: dict[int, list[Path]] = {}
@@ -38,6 +45,7 @@ def stop_all_project(
     actions_taken: list[str] = []
     deferred_actions = []
     codex_runtime_dirs: list[Path] = []
+    hapi_wrapper_records: list[Path] = []
 
     if project_namespace is not None:
         def _destroy_namespace() -> None:
@@ -55,6 +63,11 @@ def stop_all_project(
         )
         if str(getattr(runtime, 'provider', '') or '').strip().lower() == 'codex':
             codex_runtime_dirs.append(paths.agent_dir(agent_name) / 'provider-runtime' / 'codex')
+        provider = str(getattr(runtime, 'provider', '') or '').strip().lower()
+        if provider in {'claude', 'codex'}:
+            hapi_wrapper_records.append(
+                wrapper_identity_path(paths.agent_dir(agent_name) / 'provider-runtime' / provider)
+            )
         if (
             runtime is not None
             and str(runtime.runtime_ref or '').startswith('tmux:')
@@ -100,6 +113,15 @@ def stop_all_project(
         stopped_agents.append(agent_name)
         actions_taken.append(f'mark_runtime_stopped:{agent_name}')
 
+    hapi_active = _project_hapi_active(config, paths)
+    if hapi_active and hapi_wrapper_records:
+        _graceful_terminate_hapi_wrappers(
+            tuple(hapi_wrapper_records),
+            timeout_s=_HAPI_GRACEFUL_STOP_TIMEOUT_S,
+            graceful_stop_wrappers_fn=graceful_stop_wrappers_fn,
+            actions_taken=actions_taken,
+        )
+
     cleanup_summaries = cleanup_stop_tmux_orphans(
         project_id=project_id,
         paths=paths,
@@ -134,6 +156,35 @@ def stop_all_project(
         cleanup_summaries=cleanup_summaries,
         deferred_actions=tuple(deferred_actions),
     )
+
+
+def _project_hapi_active(config, paths) -> bool:
+    """True when HAPI mode is active for this project.
+
+    Prefers the loaded project config; falls back to the per-project preflight
+    cache so stop still performs graceful HAPI teardown when the caller did not
+    pass a config but HAPI wrappers were launched this generation.
+    """
+    if config is not None:
+        return hapi_enabled(config)
+    try:
+        return read_preflight_cache(paths.shared_cache_dir) is not None
+    except Exception:
+        return False
+
+
+def _graceful_terminate_hapi_wrappers(
+    wrapper_records: tuple[Path, ...],
+    *,
+    timeout_s: float,
+    graceful_stop_wrappers_fn,
+    actions_taken: list[str],
+) -> None:
+    try:
+        signaled, exited = graceful_stop_wrappers_fn(wrapper_records, timeout_s=timeout_s)
+    except Exception:
+        signaled, exited = 0, 0
+    actions_taken.append(f'hapi_graceful_stop:{exited}/{signaled}')
 
 
 __all__ = ['stop_all_project']

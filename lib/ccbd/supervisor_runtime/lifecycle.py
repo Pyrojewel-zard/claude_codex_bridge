@@ -227,6 +227,7 @@ def stop_all_supervisor(
         project_namespace=supervisor._project_namespace,
         clock=supervisor._clock,
         force=force,
+        config=supervisor._config,
         cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket_fn,
         tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
     )

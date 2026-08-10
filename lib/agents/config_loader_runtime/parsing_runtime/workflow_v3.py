@@ -10,6 +10,7 @@ from agents.config_loader_runtime.role_lookup import RoleLookupError, load_insta
 from agents.models import (
     AgentSpec,
     AgentValidationError,
+    HapiConfig,
     LoopCapacityConfig,
     LoopRoleProfileSpec,
     MaintenanceHeartbeatConfig,
@@ -36,7 +37,7 @@ from .provider_profiles import parse_provider_profile
 from .topology import parse_sidebar, parse_sidebar_view, parse_tool_windows
 
 
-_TOP_LEVEL_KEYS = frozenset({'version', 'workflow', 'ui', 'tool_windows', 'maintenance', 'config_ui'})
+_TOP_LEVEL_KEYS = frozenset({'version', 'workflow', 'ui', 'tool_windows', 'maintenance', 'config_ui', 'hapi'})
 _FORBIDDEN_STATIC_KEYS = frozenset({'windows', 'agents', 'default_agents', 'layout', 'cmd_enabled', 'loop'})
 _WORKFLOW_KEYS = frozenset(
     {'mode', 'profile', 'entry_role', 'defaults', 'provider_defaults', 'runtime', 'resident', 'dynamic'}
@@ -115,6 +116,7 @@ def validate_v3_project_config(
     source_path: Path | None,
     project_root: Path | None,
     maintenance_heartbeat: MaintenanceHeartbeatConfig,
+    hapi: HapiConfig,
 ) -> ProjectConfig:
     _validate_top_level(document)
     workflow_raw = _mapping(document.get('workflow'), path='workflow')
@@ -213,6 +215,7 @@ def validate_v3_project_config(
             sidebar_view=sidebar_view,
             maintenance_heartbeat=maintenance_heartbeat,
             loop_capacity=loop_capacity,
+            hapi=hapi,
             workflow=workflow,
             source_path=str(source_path) if source_path else None,
             windows_explicit=True,

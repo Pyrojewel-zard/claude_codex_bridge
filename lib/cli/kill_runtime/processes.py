@@ -66,6 +66,22 @@ def terminate_pid_tree(
     return not is_pid_alive_fn(pid)
 
 
+def terminate_pid_tree_gracefully(
+    pid: int,
+    *,
+    timeout_s: float,
+    is_pid_alive_fn: Callable[[int], bool] = is_pid_alive,
+) -> bool:
+    """Send SIGTERM to a process tree/group and wait without escalating."""
+    if pid <= 0:
+        return False
+    if not is_pid_alive_fn(pid):
+        return True
+    if not _kill_pid_tree_once(pid, force=False):
+        return not is_pid_alive_fn(pid)
+    return _wait_for_pid_exit(pid, timeout_s=timeout_s, is_pid_alive_fn=is_pid_alive_fn)
+
+
 def _kill_pid_tree_once(pid: int, *, force: bool) -> bool:
     if pid <= 0:
         return False
@@ -152,4 +168,4 @@ def _parse_proc_stat_state(text: str) -> str | None:
     return state[:1] or None
 
 
-__all__ = ["is_pid_alive", "kill_pid", "terminate_pid_tree"]
+__all__ = ["is_pid_alive", "kill_pid", "terminate_pid_tree", "terminate_pid_tree_gracefully"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .api import AgentApiSpec
+from .hapi import HapiConfig
 from .loop_capacity import LoopCapacityConfig, LoopRoleProfileSpec
 from .maintenance import MaintenanceHeartbeatConfig
 from .project import ProjectConfig
@@ -16,6 +17,7 @@ from .workflow import (
 __all__ = [
     'AgentApiSpec',
     'AgentSpec',
+    'HapiConfig',
     'LoopCapacityConfig',
     'LoopRoleProfileSpec',
     'MaintenanceHeartbeatConfig',
