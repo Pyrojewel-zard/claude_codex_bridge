@@ -5,7 +5,8 @@ Status: Accepted
 
 ## Baseline And Scope
 
-- CCB source baseline: `origin/main` at `41c880f5`.
+- CCB source baseline: `origin/main` at `bd3353a7` (CCB 8.6.0), with the
+  existing local-main mobile and runtime commits through `368f8df6` retained.
 - Paseo reference: `getpaseo/paseo` at
   `b599d38a772f621e0001abfb90a769de11c8cd8b`.
 - Adaptation provenance and source mapping:
@@ -29,7 +30,7 @@ boundaries. Current Codex and Claude mutations are truthfully declared
   `/home/bfly/yunwei/test_ccb2`, with dedicated `codex_probe` and
   `claude_probe` agents. No prompt was sent to `ccb_mobile`, `ccb_source`, or
   another active user project.
-- App: `8.5.7+8050007`.
+- App: `8.6.0+8060000`.
 
 Accepted behaviors:
 
@@ -60,6 +61,18 @@ Key local evidence is under
 - `logcat-final-window.txt`
 - `logcat-final-window-errors.txt`
 
+The final 8.6.0 integration was reinstalled over the same paired emulator
+profile and captured separately:
+
+- `integrated-launch.png`
+- `integrated-dedicated-open.png`
+- `integrated-codex-provider-sheet.png`
+- `integrated-codex-usage.png`
+- `integrated-claude-provider-sheet.png`
+- `integrated-claude-usage.png`
+- `integrated-logcat-tail.txt`
+- `integrated-logcat-errors.txt`
+
 Pairing secrets, device tokens, raw prompts/replies, and raw Provider session
 identifiers are not included in this plan-tree record.
 
@@ -89,18 +102,20 @@ Machine-readable measurements:
 
 ## Verification
 
-- Provider/source focused suites: 224 passed.
+- Provider/source and final release-integration focused suites: 279 passed.
 - Flutter Provider/session focused suites: 49 passed.
-- Full Flutter suite: 743 passed, 1 skipped.
+- Full Flutter suite: 754 passed, 1 skipped.
 - `flutter analyze`: no issues.
-- Full Python non-blackbox run: 6657 passed, 3 skipped, 21 deselected, with one
-  unrelated two-worker workflow smoke race; that exact smoke passed on the
-  immediate isolated rerun in 42.84 seconds.
+- Full Python non-blackbox run before the final release-metadata merge: 6675
+  passed, 3 skipped, 21 deselected. The final-HEAD run reached the same 6675
+  passes but hit two unrelated process-start races (`lease_missing` and a
+  temporary tmux server exiting); both exact tests passed together on the
+  immediate isolated rerun (2 passed in 13.88 seconds).
 - Python compilation and scoped diff checks: passed.
 - Debug APK SHA-256:
-  `f6253556b7aae0108994330b62ce75e9ca9313626cf6efe9c9392030b4b8f1f7`.
+  `11f83ad7642946b1139e7c25d58080380aeae9b26c2e7d6d428f5bd486e8bbab`.
 - Profile APK SHA-256:
-  `49ba09f53e2b71886f1d768ca22a8ead36acca610baa3b39968228ad4d1543f6`.
+  `1cefbc166eac12ef8c1a9fca416f0bc01c76da6142f77e1923350fe026a58b82`.
 
 ## Residual Limits
 
