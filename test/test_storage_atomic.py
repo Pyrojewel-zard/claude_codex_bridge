@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -317,8 +318,12 @@ def test_windows_atomic_replace_retries_transient_sharing_failure(monkeypatch, t
             raise error
         return real_replace(source, destination)
 
-    monkeypatch.setattr(atomic.os, 'name', 'nt')
-    monkeypatch.setattr(os, 'replace', replace_after_sharing_failure)
+    os_proxy = SimpleNamespace(**vars(atomic.os))
+    os_proxy.name = 'nt'
+    os_proxy.replace = replace_after_sharing_failure
+    if hasattr(os_proxy, 'O_DIRECTORY'):
+        delattr(os_proxy, 'O_DIRECTORY')
+    monkeypatch.setattr(atomic, 'os', os_proxy)
     monkeypatch.setattr(atomic.time, 'sleep', sleeps.append)
 
     atomic.atomic_write_text(target, 'new')

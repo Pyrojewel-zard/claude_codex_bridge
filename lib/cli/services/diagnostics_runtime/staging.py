@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import tarfile
 
 from .models import DiagnosticBundleEntry
@@ -14,6 +14,14 @@ _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
 
 def stage_file(context, stage_root: Path, *, category: str, source: Path) -> DiagnosticBundleEntry:
     archive_path = archive_path_for_source(context, source)
+    if PurePosixPath(archive_path).is_absolute() or PureWindowsPath(archive_path).drive:
+        return DiagnosticBundleEntry(
+            category=category,
+            source_path=str(source),
+            archive_path=archive_path,
+            status='error',
+            error='diagnostic archive path escapes staging root',
+        )
     target = stage_root / archive_path
     stage_root_resolved = stage_root.resolve(strict=False)
     target_resolved = target.resolve(strict=False)

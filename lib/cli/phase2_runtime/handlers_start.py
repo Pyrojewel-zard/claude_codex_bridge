@@ -249,9 +249,17 @@ def handle_herdr_open(context, command, out, services) -> int:
         restore=True,
         auto_permission=True,
     )
+    previous_no_attach = os.environ.get('CCB_NO_ATTACH')
     if command.no_attach:
         os.environ['CCB_NO_ATTACH'] = '1'
-    rc = handle_start(context, start_command, out, services)
+    try:
+        rc = handle_start(context, start_command, out, services)
+    finally:
+        if command.no_attach:
+            if previous_no_attach is None:
+                os.environ.pop('CCB_NO_ATTACH', None)
+            else:
+                os.environ['CCB_NO_ATTACH'] = previous_no_attach
     if rc == 0 and command.wait_ready:
         ready, phase = _wait_for_ccbd_mounted(context)
         if not ready:

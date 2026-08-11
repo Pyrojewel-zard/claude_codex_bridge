@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,7 +132,9 @@ def test_prepend_tool_paths_deduplicates_existing_entries(tmp_path: Path) -> Non
 
 
 def test_background_process_kwargs_detaches_windows_console(monkeypatch) -> None:
-    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    os_proxy = SimpleNamespace(**vars(process_background.os))
+    os_proxy.name = 'nt'
+    monkeypatch.setattr(process_background, 'os', os_proxy)
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200, raising=False)
     monkeypatch.setattr(process_background.subprocess, 'DETACHED_PROCESS', 0x00000008, raising=False)
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)

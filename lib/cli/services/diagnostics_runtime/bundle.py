@@ -158,7 +158,7 @@ def _herdr_surface_projection_sources(doctor_payload: dict[str, Any]) -> list[st
         return []
     projection = ccbd.get('herdr_surface_projection')
     if isinstance(projection, dict) and projection.get('backend_impl') == 'herdr':
-        return ['generated/doctor.json:ccbd.herdr_surface_projection']
+        return ['generated/doctor.json:platforms.windows.herdr.ccbd_surface_projection']
     return []
 
 

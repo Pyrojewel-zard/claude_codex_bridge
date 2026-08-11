@@ -136,11 +136,14 @@ def test_foreground_start_refreshes_sidebar_with_current_cli_when_daemon_is_reus
     )
     monkeypatch.setattr(
         'cli.services.start.build_namespace_topology_plan',
-        lambda config: topology_plan,
+        lambda config, namespace_state=None: topology_plan,
     )
     monkeypatch.setattr(
         'cli.services.start.build_backend',
-        lambda factory, *, socket_path: seen.setdefault('backend_socket', socket_path) and factory(socket_path=socket_path),
+        lambda factory, *, socket_path, namespace_state=None: seen.setdefault(
+            'backend_socket', socket_path
+        )
+        and factory(socket_path=socket_path),
     )
 
     def refresh(

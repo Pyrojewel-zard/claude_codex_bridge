@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import sys
 
 from agents.models import AgentSpec, WorkspaceMode
 from agents.store import AgentSpecStore
@@ -309,7 +310,14 @@ def _remove_agent_state(paths: PathLayout, agent_name: str) -> None:
 
 
 def _rmtree_agent_state(target: Path) -> None:
-    shutil.rmtree(target, onexc=_retry_remove_readonly)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(target, onexc=_retry_remove_readonly)
+        return
+
+    def onerror(function, path, exc_info) -> None:
+        _retry_remove_readonly(function, path, exc_info[1])
+
+    shutil.rmtree(target, onerror=onerror)
 
 
 def _retry_remove_readonly(function, path, excinfo) -> None:

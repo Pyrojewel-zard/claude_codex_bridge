@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 from pathlib import Path
+from types import SimpleNamespace
 
 import cli.kill_runtime.processes as processes
 from project.resolver import bootstrap_project
@@ -14,10 +15,16 @@ from runtime_pid_cleanup import (
 )
 
 
+def _patch_process_os_name(monkeypatch, name: str) -> None:
+    os_proxy = SimpleNamespace(**vars(processes.os))
+    os_proxy.name = name
+    monkeypatch.setattr(processes, 'os', os_proxy)
+
+
 def test_kill_pid_tree_once_uses_taskkill_on_windows(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(processes.os, 'name', 'nt')
+    _patch_process_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(
         processes.subprocess,
         'run',
@@ -32,7 +39,7 @@ def test_kill_pid_tree_once_prefers_process_group_on_posix(monkeypatch) -> None:
     killed: list[tuple[int, signal.Signals]] = []
     kill_pid_calls: list[tuple[int, bool]] = []
 
-    monkeypatch.setattr(processes.os, 'name', 'posix')
+    _patch_process_os_name(monkeypatch, 'posix')
     monkeypatch.setattr(processes, '_safe_getpgid', lambda pid: 900)
     monkeypatch.setattr(processes, '_safe_getpgrp', lambda: 901)
     monkeypatch.setattr(processes.os, 'killpg', lambda pgid, sig: killed.append((pgid, sig)))

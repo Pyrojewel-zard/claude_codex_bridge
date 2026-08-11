@@ -202,6 +202,8 @@ def _control_plane_endpoint_from_record(payload: dict[str, Any]) -> dict[str, An
     value = payload.get('control_plane_endpoint')
     if isinstance(value, dict):
         return endpoint_to_record(endpoint_from_record(value))
+    if 'control_plane_endpoint' in payload:
+        return None
     socket_path = _clean_text(payload.get('socket_path'))
     return _control_plane_endpoint_or_legacy(None, socket_path=socket_path)
 

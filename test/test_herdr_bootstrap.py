@@ -18,6 +18,12 @@ def parser() -> CliParser:
     return CliParser()
 
 
+def _patch_process_background_os_name(monkeypatch, name: str) -> None:
+    os_proxy = SimpleNamespace(**vars(process_background.os))
+    os_proxy.name = name
+    monkeypatch.setattr(process_background, 'os', os_proxy)
+
+
 # --- parse_herdr ---------------------------------------------------------
 
 
@@ -391,6 +397,39 @@ def test_handle_herdr_open_wait_ready_blocks_until_mounted(monkeypatch) -> None:
     assert waited, '--wait-ready must call the ccbd-mounted wait'
 
 
+def test_handle_herdr_open_no_attach_is_scoped_to_start(monkeypatch) -> None:
+    from cli.phase2_runtime.handlers_start import handle_herdr_open
+
+    _stub_bootstrap_ok(monkeypatch)
+    monkeypatch.delenv('CCB_NO_ATTACH', raising=False)
+    monkeypatch.setattr(
+        'cli.phase2_runtime.handlers_start._daemon_running_and_backend',
+        lambda context: (True, 'herdr'),
+    )
+    seen: list[str | None] = []
+
+    def _fake_handle_start(context, command, out, services) -> int:
+        del context, command, out, services
+        seen.append(os.environ.get('CCB_NO_ATTACH'))
+        return 0
+
+    monkeypatch.setattr(
+        'cli.phase2_runtime.handlers_start.handle_start',
+        _fake_handle_start,
+    )
+
+    rc = handle_herdr_open(
+        None,
+        ParsedHerdrOpenCommand(project=None, no_attach=True),
+        sys.stdout,
+        None,
+    )
+
+    assert rc == 0
+    assert seen == ['1']
+    assert 'CCB_NO_ATTACH' not in os.environ
+
+
 def test_handle_herdr_open_wait_ready_reports_timeout(monkeypatch, capsys) -> None:
     """P1: --wait-ready timeout surfaces a diagnostic but keeps the rc."""
     from cli.phase2_runtime.handlers_start import handle_herdr_open
@@ -593,7 +632,7 @@ def test_query_herdr_server_status_hides_windows_console(monkeypatch) -> None:
         captured.update(kwargs)
         return _FakeResult()
 
-    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    _patch_process_background_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, 'run', _fake_run)
 
@@ -644,7 +683,7 @@ def test_discover_running_ccb_sessions_hides_windows_console(monkeypatch) -> Non
         captured.update(kwargs)
         return _FakeResult()
 
-    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    _patch_process_background_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, 'run', _fake_run)
 
@@ -668,7 +707,7 @@ def test_probe_herdr_read_capabilities_hides_windows_console(monkeypatch) -> Non
         captured_flags.append(int(kwargs['creationflags']))
         return _FakeResult()
 
-    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    _patch_process_background_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, 'run', _fake_run)
 
