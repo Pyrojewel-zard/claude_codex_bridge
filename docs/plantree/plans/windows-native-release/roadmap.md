@@ -12,19 +12,18 @@ Date: 2026-08-11
 - Restored project-scoped tmux socket binding after PR #293's backend cache
   reuse broke the Linux/macOS/WSL lifecycle smoke.
 
-## Current gate
+## Published candidate
 
 - `v8.6.0-beta.1` is immutable and superseded: native tests passed, but the
   ZIP builder rejected a stale `commands/` allowlist entry before publication.
 - `v8.6.0-beta.2` is immutable and superseded: native tests and ZIP build
   passed, but archive installation incorrectly prompted for missing Herdr even
   with `-Yes`; no GitHub Release was created.
-- Run the non-interactive installer regression and local release gates for
-  `v8.6.0-beta.3`.
-- Push the follow-up commit, require the main-branch cross-platform checks, and
-  then create the immutable prerelease tag.
-- Require the Windows 2022 GitHub Actions build, PowerShell archive install,
-  and native launcher smoke test to pass before the GitHub prerelease exists.
+- `v8.6.0-beta.3` is published as a GitHub prerelease. Windows 2022 native
+  tests, PE/ZIP build, PowerShell archive install, installed launcher smoke,
+  SHA256 verification, and asset publication passed.
+- Stable npm, Linux/macOS artifact, Sidebar, and Android publication routes
+  remained untouched.
 
 ## Next after publication
 
