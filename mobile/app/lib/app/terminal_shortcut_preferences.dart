@@ -1,0 +1,198 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+enum CcbTerminalShortcut {
+  escape('escape'),
+  tab('tab'),
+  ctrlC('ctrl-c'),
+  ctrlD('ctrl-d'),
+  ctrlU('ctrl-u'),
+  ctrlL('ctrl-l'),
+  delete('delete'),
+  home('home'),
+  pageUp('page-up'),
+  arrowLeft('arrow-left'),
+  arrowUp('arrow-up'),
+  arrowDown('arrow-down'),
+  arrowRight('arrow-right'),
+  pageDown('page-down'),
+  end('end');
+
+  const CcbTerminalShortcut(this.wireName);
+
+  final String wireName;
+}
+
+@immutable
+class CcbTerminalShortcutPreferences {
+  CcbTerminalShortcutPreferences({
+    Iterable<CcbTerminalShortcut>? order,
+    Iterable<CcbTerminalShortcut>? enabled,
+  }) : order = List.unmodifiable(_normalizeOrder(order)),
+       enabled = Set.unmodifiable(enabled ?? CcbTerminalShortcut.values);
+
+  static final defaults = CcbTerminalShortcutPreferences();
+
+  final List<CcbTerminalShortcut> order;
+  final Set<CcbTerminalShortcut> enabled;
+
+  List<CcbTerminalShortcut> get enabledInOrder =>
+      List.unmodifiable(order.where(enabled.contains));
+
+  CcbTerminalShortcutPreferences withEnabled(
+    CcbTerminalShortcut shortcut,
+    bool value,
+  ) {
+    final nextEnabled = enabled.toSet();
+    if (value) {
+      nextEnabled.add(shortcut);
+    } else {
+      nextEnabled.remove(shortcut);
+    }
+    return CcbTerminalShortcutPreferences(order: order, enabled: nextEnabled);
+  }
+
+  CcbTerminalShortcutPreferences reordered(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= order.length) {
+      return this;
+    }
+    final nextOrder = order.toList();
+    final shortcut = nextOrder.removeAt(oldIndex);
+    nextOrder.insert(newIndex.clamp(0, nextOrder.length), shortcut);
+    return CcbTerminalShortcutPreferences(order: nextOrder, enabled: enabled);
+  }
+
+  Map<String, Object> toJson() => <String, Object>{
+    'version': 1,
+    'order': order.map((shortcut) => shortcut.wireName).toList(),
+    'enabled': enabled.map((shortcut) => shortcut.wireName).toList(),
+  };
+
+  String toJsonString() => jsonEncode(toJson());
+
+  static CcbTerminalShortcutPreferences fromJsonString(String? source) {
+    if (source == null || source.trim().isEmpty) {
+      return defaults;
+    }
+    try {
+      final decoded = jsonDecode(source);
+      if (decoded is! Map<String, dynamic>) {
+        return defaults;
+      }
+      return fromJson(decoded);
+    } on FormatException {
+      return defaults;
+    }
+  }
+
+  static CcbTerminalShortcutPreferences fromJson(Map<String, dynamic> json) {
+    final parsedOrder = _parseShortcutList(json['order']);
+    final rawEnabled = json['enabled'];
+    final parsedEnabled =
+        rawEnabled is List<Object?> ? _parseShortcutList(rawEnabled) : null;
+    return CcbTerminalShortcutPreferences(
+      order: parsedOrder,
+      enabled: parsedEnabled,
+    );
+  }
+
+  static List<CcbTerminalShortcut> _normalizeOrder(
+    Iterable<CcbTerminalShortcut>? value,
+  ) {
+    final seen = <CcbTerminalShortcut>{};
+    final result = <CcbTerminalShortcut>[];
+    for (final shortcut in value ?? const <CcbTerminalShortcut>[]) {
+      if (seen.add(shortcut)) {
+        result.add(shortcut);
+      }
+    }
+    for (final shortcut in CcbTerminalShortcut.values) {
+      if (seen.add(shortcut)) {
+        result.add(shortcut);
+      }
+    }
+    return result;
+  }
+
+  static List<CcbTerminalShortcut> _parseShortcutList(Object? value) {
+    if (value is! List<Object?>) {
+      return const [];
+    }
+    final byWireName = <String, CcbTerminalShortcut>{
+      for (final shortcut in CcbTerminalShortcut.values)
+        shortcut.wireName: shortcut,
+    };
+    return value
+        .whereType<String>()
+        .map((wireName) => byWireName[wireName])
+        .whereType<CcbTerminalShortcut>()
+        .toList();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is CcbTerminalShortcutPreferences &&
+        listEquals(order, other.order) &&
+        setEquals(enabled, other.enabled);
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(Object.hashAll(order), Object.hashAllUnordered(enabled));
+}
+
+abstract class CcbTerminalShortcutPreferenceStore {
+  Future<CcbTerminalShortcutPreferences> read();
+
+  Future<void> write(CcbTerminalShortcutPreferences preferences);
+}
+
+class FlutterCcbTerminalShortcutPreferenceStore
+    implements CcbTerminalShortcutPreferenceStore {
+  FlutterCcbTerminalShortcutPreferenceStore({FlutterSecureStorage? storage})
+    : _storage = storage ?? const FlutterSecureStorage();
+
+  static const _key = 'ccb_mobile.terminal.shortcuts';
+
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<CcbTerminalShortcutPreferences> read() async {
+    return CcbTerminalShortcutPreferences.fromJsonString(
+      await _storage.read(key: _key),
+    );
+  }
+
+  @override
+  Future<void> write(CcbTerminalShortcutPreferences preferences) {
+    return _storage.write(key: _key, value: preferences.toJsonString());
+  }
+}
+
+class CcbTerminalShortcutPreferencesScope extends InheritedWidget {
+  const CcbTerminalShortcutPreferencesScope({
+    required this.preferences,
+    required this.onChanged,
+    required super.child,
+    super.key,
+  });
+
+  final CcbTerminalShortcutPreferences preferences;
+  final ValueChanged<CcbTerminalShortcutPreferences>? onChanged;
+
+  static CcbTerminalShortcutPreferencesScope? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<
+          CcbTerminalShortcutPreferencesScope
+        >();
+  }
+
+  @override
+  bool updateShouldNotify(CcbTerminalShortcutPreferencesScope oldWidget) {
+    return preferences != oldWidget.preferences ||
+        onChanged != oldWidget.onChanged;
+  }
+}

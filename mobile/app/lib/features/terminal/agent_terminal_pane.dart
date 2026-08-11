@@ -5,12 +5,14 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
+import '../../app/terminal_shortcut_preferences.dart';
 import '../../models/ccb_project_view.dart';
 import '../../models/ccb_terminal_target.dart';
 import '../../tmux/tmux_command_builder.dart';
 import '../../transport/gateway_terminal_transport.dart';
 import '../../transport/terminal_transport.dart';
 import 'terminal_history_scroll_controller.dart';
+import 'terminal_shortcut_settings.dart';
 
 class AgentTerminalPane extends StatefulWidget {
   const AgentTerminalPane({
@@ -896,6 +898,13 @@ class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final preferences =
+        CcbTerminalShortcutPreferencesScope.maybeOf(context)?.preferences ??
+        CcbTerminalShortcutPreferences.defaults;
+    final shortcutWidgets =
+        preferences.enabledInOrder.map(_configuredKey).toList();
+    final firstRowLength =
+        shortcutWidgets.length > 7 ? 7 : shortcutWidgets.length;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width =
@@ -941,57 +950,16 @@ class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
                                   onPressed: widget.onLatestOutput,
                                   icon: Icons.vertical_align_bottom,
                                 ),
-                                _textKey('escape', 'Esc', widget.onEscape),
-                                _textKey('tab', 'Tab', widget.onTab),
-                                _textKey('ctrl-c', 'C-c', widget.onCtrlC),
-                                _textKey('ctrl-d', 'C-d', widget.onCtrlD),
-                                _textKey('ctrl-u', 'C-u', widget.onCtrlU),
-                                _textKey('ctrl-l', 'C-l', widget.onCtrlL),
-                                _textKey('delete', 'Del', widget.onDelete),
+                                ...shortcutWidgets.take(firstRowLength),
                               ],
                             ),
-                            _TerminalShortcutRow(
-                              children: [
-                                _textKey('home', 'Home', widget.onHome),
-                                _iconKey(
-                                  'page-up',
-                                  'Page up',
-                                  Icons.keyboard_double_arrow_up,
-                                  widget.onPageUp,
-                                ),
-                                _iconKey(
-                                  'arrow-left',
-                                  'Left',
-                                  Icons.keyboard_arrow_left,
-                                  widget.onArrowLeft,
-                                ),
-                                _iconKey(
-                                  'arrow-up',
-                                  'Up',
-                                  Icons.keyboard_arrow_up,
-                                  widget.onArrowUp,
-                                ),
-                                _iconKey(
-                                  'arrow-down',
-                                  'Down',
-                                  Icons.keyboard_arrow_down,
-                                  widget.onArrowDown,
-                                ),
-                                _iconKey(
-                                  'arrow-right',
-                                  'Right',
-                                  Icons.keyboard_arrow_right,
-                                  widget.onArrowRight,
-                                ),
-                                _iconKey(
-                                  'page-down',
-                                  'Page down',
-                                  Icons.keyboard_double_arrow_down,
-                                  widget.onPageDown,
-                                ),
-                                _textKey('end', 'End', widget.onEnd),
-                              ],
-                            ),
+                            if (shortcutWidgets.length > firstRowLength)
+                              _TerminalShortcutRow(
+                                children:
+                                    shortcutWidgets
+                                        .skip(firstRowLength)
+                                        .toList(),
+                              ),
                           ],
                         )
                         : _shortcutToggle(),
@@ -1038,6 +1006,44 @@ class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
       onPressed: callback,
       icon: icon,
     );
+  }
+
+  Widget _configuredKey(CcbTerminalShortcut shortcut) {
+    final icon = terminalShortcutIcon(shortcut);
+    final callback = switch (shortcut) {
+      CcbTerminalShortcut.escape => widget.onEscape,
+      CcbTerminalShortcut.tab => widget.onTab,
+      CcbTerminalShortcut.ctrlC => widget.onCtrlC,
+      CcbTerminalShortcut.ctrlD => widget.onCtrlD,
+      CcbTerminalShortcut.ctrlU => widget.onCtrlU,
+      CcbTerminalShortcut.ctrlL => widget.onCtrlL,
+      CcbTerminalShortcut.delete => widget.onDelete,
+      CcbTerminalShortcut.home => widget.onHome,
+      CcbTerminalShortcut.end => widget.onEnd,
+      CcbTerminalShortcut.pageUp => widget.onPageUp,
+      CcbTerminalShortcut.pageDown => widget.onPageDown,
+      CcbTerminalShortcut.arrowLeft => widget.onArrowLeft,
+      CcbTerminalShortcut.arrowUp => widget.onArrowUp,
+      CcbTerminalShortcut.arrowDown => widget.onArrowDown,
+      CcbTerminalShortcut.arrowRight => widget.onArrowRight,
+    };
+    if (icon != null) {
+      return _iconKey(
+        shortcut.wireName,
+        terminalShortcutLabel(shortcut),
+        icon,
+        callback,
+      );
+    }
+    final compactLabel = switch (shortcut) {
+      CcbTerminalShortcut.ctrlC => 'C-c',
+      CcbTerminalShortcut.ctrlD => 'C-d',
+      CcbTerminalShortcut.ctrlU => 'C-u',
+      CcbTerminalShortcut.ctrlL => 'C-l',
+      CcbTerminalShortcut.delete => 'Del',
+      _ => terminalShortcutLabel(shortcut),
+    };
+    return _textKey(shortcut.wireName, compactLabel, callback);
   }
 }
 

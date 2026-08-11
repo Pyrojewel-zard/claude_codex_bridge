@@ -155,6 +155,12 @@ class CcbMobileLocalizations {
 
   String get themeDark => isChinese ? '深色' : 'Dark';
 
+  String get terminalShortcuts => isChinese ? '终端快捷键' : 'Terminal shortcuts';
+
+  String get restoreDefaults => isChinese ? '恢复默认' : 'Restore defaults';
+
+  String get reorder => isChinese ? '调整顺序' : 'Reorder';
+
   String get backgroundConnection =>
       isChinese ? '保持后台连接' : 'Keep connected in background';
 

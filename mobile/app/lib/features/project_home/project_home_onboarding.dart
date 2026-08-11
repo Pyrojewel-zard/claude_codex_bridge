@@ -5,6 +5,7 @@ import '../../app/background_connection.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
 import 'gateway_pairing_panel.dart';
 import 'project_home_update_panel.dart';
+import '../terminal/terminal_shortcut_settings.dart';
 
 class ProjectHomeOnboardingScaffold extends StatelessWidget {
   const ProjectHomeOnboardingScaffold({
@@ -120,6 +121,8 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
                 themePreference: themePreference,
                 onThemePreferenceChanged: onThemePreferenceChanged,
               ),
+              const SizedBox(height: 16),
+              const TerminalShortcutSettingsSection(),
               const SizedBox(height: 16),
               _BackgroundConnectionSection(
                 enabled: backgroundConnectionEnabled,
