@@ -1,5 +1,10 @@
 from .quota import ProviderAccountQuota, ProviderQuotaService
-from .session_usage import ProviderRuntimeSnapshot, ProviderSessionUsage, read_provider_runtime_snapshot
+from .session_usage import (
+    ProviderRuntimeSnapshot,
+    ProviderSessionUsage,
+    read_provider_runtime_snapshot,
+    resolve_provider_session_path,
+)
 from .settings import (
     ProviderSettingsError,
     ProviderSettingsResult,
@@ -14,6 +19,7 @@ __all__ = [
     'ProviderRuntimeSnapshot',
     'ProviderSessionUsage',
     'read_provider_runtime_snapshot',
+    'resolve_provider_session_path',
     'ProviderSettingsError',
     'ProviderSettingsResult',
     'ProviderSettingsStore',

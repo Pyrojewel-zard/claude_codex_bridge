@@ -9,6 +9,183 @@ import 'package:ccb_mobile/models/readable_terminal_history.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('inserts one visible boundary between provider sessions', () {
+    final chatController = AgentChatController();
+    final view = _view();
+    final agent = _agent();
+    chatController.applyRemoteConversation(
+      agentName: agent.name,
+      shouldScroll: true,
+      conversation: CcbAgentConversation(
+        projectId: view.project.id,
+        agentName: agent.name,
+        namespaceEpoch: view.namespaceEpoch!,
+        items: [
+          const CcbConversationItem(
+            id: 'old-reply',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'old context',
+            source: 'provider_native/codex',
+            sessionId: 'session-old',
+          ),
+          CcbConversationItem(
+            id: 'new-user',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.userMessage,
+            title: 'You',
+            body: 'new context',
+            source: 'provider_native/codex',
+            sessionId: 'session-new',
+          ),
+          CcbConversationItem(
+            id: 'new-reply',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'new answer',
+            source: 'provider_native/codex',
+            sessionId: 'session-new',
+          ),
+        ],
+        generatedAt: DateTime.utc(2026, 8, 12),
+      ),
+    );
+
+    final model = selectedAgentWorkspaceModel(
+      view: view,
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+
+    expect(model.timelineItems.map((item) => item.body), [
+      'old context',
+      'New context',
+      'new context',
+      'new answer',
+    ]);
+    final boundary = model.timelineItems[1];
+    expect(isProviderSessionBoundaryItem(boundary), isTrue);
+    expect(boundary.id, 'provider-session-boundary-new-user');
+    expect(boundary.sessionId, 'session-new');
+  });
+
+  test('does not insert a boundary within one provider session', () {
+    final chatController = AgentChatController();
+    final view = _view();
+    final agent = _agent();
+    chatController.applyRemoteConversation(
+      agentName: agent.name,
+      shouldScroll: true,
+      conversation: CcbAgentConversation(
+        projectId: view.project.id,
+        agentName: agent.name,
+        namespaceEpoch: view.namespaceEpoch!,
+        items: [
+          const CcbConversationItem(
+            id: 'same-user',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.userMessage,
+            title: 'You',
+            body: 'question',
+            source: 'provider_native/claude',
+            sessionId: 'same-session',
+          ),
+          CcbConversationItem(
+            id: 'same-reply',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'answer',
+            source: 'provider_native/claude',
+            sessionId: 'same-session',
+          ),
+        ],
+        generatedAt: DateTime.utc(2026, 8, 12),
+      ),
+    );
+
+    final model = selectedAgentWorkspaceModel(
+      view: view,
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+
+    expect(model.timelineItems.where(isProviderSessionBoundaryItem), isEmpty);
+  });
+
+  test('session boundary never becomes the working reply target', () {
+    final chatController = AgentChatController();
+    final agent = _agent(
+      activityState: 'active',
+      activitySource: 'codex_runtime',
+      activityReason: 'codex_working_status_line',
+    );
+    final view = _view(agent: agent);
+    chatController.applyRemoteConversation(
+      agentName: agent.name,
+      shouldScroll: true,
+      conversation: CcbAgentConversation(
+        projectId: view.project.id,
+        agentName: agent.name,
+        namespaceEpoch: view.namespaceEpoch!,
+        items: [
+          const CcbConversationItem(
+            id: 'prior-reply',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'prior',
+            source: 'provider_native/codex',
+            sessionId: 'prior-session',
+          ),
+          CcbConversationItem(
+            id: 'current-user',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.userMessage,
+            title: 'You',
+            body: 'current',
+            source: 'provider_native/codex',
+            sessionId: 'current-session',
+            sentAt: DateTime.utc(2026, 8, 12, 9),
+          ),
+          CcbConversationItem(
+            id: 'current-reply',
+            agentName: 'mobile',
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'streaming',
+            source: 'provider_native/codex',
+            sessionId: 'current-session',
+            startedAt: DateTime.utc(2026, 8, 12, 9, 0, 1),
+          ),
+        ],
+        generatedAt: DateTime.utc(2026, 8, 12),
+      ),
+    );
+
+    final model = selectedAgentWorkspaceModel(
+      view: view,
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+
+    expect(
+      model.workingReplyItemId,
+      syntheticAgentWorkingConversationItemId(agent.name),
+    );
+    expect(
+      model.timelineItems
+          .singleWhere((item) => isProviderSessionBoundaryItem(item))
+          .id,
+      isNot(model.workingReplyItemId),
+    );
+  });
+
   test('keeps comms updates out of visible conversation timeline', () {
     final chatController = AgentChatController();
     final view = _view();

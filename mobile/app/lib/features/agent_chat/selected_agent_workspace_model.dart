@@ -8,6 +8,8 @@ import 'agent_execution_status.dart';
 
 export 'agent_execution_status.dart';
 
+const providerSessionBoundarySource = 'provider_session_boundary';
+
 class SelectedAgentWorkspaceModel {
   const SelectedAgentWorkspaceModel({
     required this.agent,
@@ -80,6 +82,7 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
   }
   final timelineItems = <CcbConversationItem>[];
   String? workingReplyItemId;
+  String? previousProviderSessionId;
   if (remoteConversation != null) {
     for (final item in remoteConversation.items) {
       if (!_isDefaultChatRemoteItem(item)) {
@@ -91,7 +94,21 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
         preferredPresentationId:
             item.id == rawWorkingReplyItemId ? workingPresentationId : null,
       );
+      final sessionId = _providerNativeSessionId(presented);
+      if (sessionId != null &&
+          previousProviderSessionId != null &&
+          sessionId != previousProviderSessionId) {
+        timelineItems.add(
+          providerSessionBoundaryConversationItem(
+            agent.name,
+            nextItem: presented,
+          ),
+        );
+      }
       timelineItems.add(presented);
+      if (sessionId != null) {
+        previousProviderSessionId = sessionId;
+      }
       if (item.id == rawWorkingReplyItemId) {
         workingReplyItemId = presented.id;
       }
@@ -136,6 +153,34 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
     executionStatus: executionStatus,
     workingReplyItemId: visibleWorkingReplyItemId,
   );
+}
+
+CcbConversationItem providerSessionBoundaryConversationItem(
+  String agentName, {
+  required CcbConversationItem nextItem,
+}) {
+  return CcbConversationItem(
+    id: 'provider-session-boundary-${nextItem.id}',
+    agentName: agentName,
+    kind: CcbConversationItemKind.systemNotice,
+    title: 'New context',
+    body: 'New context',
+    source: providerSessionBoundarySource,
+    sessionId: nextItem.sessionId,
+    sentAt: nextItem.sentAt,
+  );
+}
+
+bool isProviderSessionBoundaryItem(CcbConversationItem item) =>
+    item.kind == CcbConversationItemKind.systemNotice &&
+    item.source == providerSessionBoundarySource;
+
+String? _providerNativeSessionId(CcbConversationItem item) {
+  final sessionId = item.sessionId?.trim();
+  if (sessionId == null || sessionId.isEmpty) {
+    return null;
+  }
+  return (item.source ?? '').startsWith('provider_native/') ? sessionId : null;
 }
 
 String syntheticAgentWorkingConversationItemId(String agentName) =>

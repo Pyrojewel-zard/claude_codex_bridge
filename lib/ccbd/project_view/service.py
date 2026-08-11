@@ -952,6 +952,8 @@ def _agent_view(
             spec=spec,
             runtime=runtime,
             session_status=provider_session_status,
+            project_root=deps.project_root,
+            agent_name=agent_name,
             restart_pending=provider_restart_pending,
         ),
     }
@@ -1154,6 +1156,8 @@ def _provider_control_record(
     spec,
     runtime,
     session_status,
+    project_root: Path,
+    agent_name: str,
     restart_pending: bool = False,
 ) -> dict[str, object]:
     provider = str(getattr(spec, 'provider', '') or '').strip().lower()
@@ -1170,6 +1174,8 @@ def _provider_control_record(
             if runtime is not None
             else None
         ),
+        project_root=project_root,
+        agent=agent_name,
     )
     configured_model = _clean_text(getattr(spec, 'model', None))
     configured_thinking = _clean_text(getattr(spec, 'thinking', None))

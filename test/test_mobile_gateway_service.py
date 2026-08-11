@@ -1165,7 +1165,10 @@ def test_project_view_rejects_unknown_project() -> None:
     assert excinfo.value.status_code == 404
 
 
-def test_agent_provider_control_returns_runtime_and_matching_catalog(tmp_path: Path) -> None:
+def test_agent_provider_control_returns_runtime_and_matching_catalog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _ProviderControlClient(_FakeCcbdClient):
         def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
             payload = super().project_view(schema_version=schema_version)
@@ -1179,6 +1182,18 @@ def test_agent_provider_control_returns_runtime_and_matching_catalog(tmp_path: P
             }
             return payload
 
+    catalog_calls: list[dict[str, list[str]] | None] = []
+    real_capabilities = service_module.config_ui_provider_capabilities
+
+    def capabilities_without_unrelated_cli_probes(**kwargs):
+        catalog_calls.append(kwargs.get('cli_models'))
+        return real_capabilities(**kwargs)
+
+    monkeypatch.setattr(
+        service_module,
+        'config_ui_provider_capabilities',
+        capabilities_without_unrelated_cli_probes,
+    )
     service = _service(
         _ProviderControlClient(),
         project_root=tmp_path / 'project',
@@ -1201,6 +1216,7 @@ def test_agent_provider_control_returns_runtime_and_matching_catalog(tmp_path: P
     assert payload['provider_catalog']['id'] == 'codex'
     assert payload['provider_catalog']['model_shortcut'] is True
     assert 'account_usage' not in payload
+    assert catalog_calls == [{}]
 
 
 def test_agent_provider_quota_is_loaded_on_separate_route(tmp_path: Path) -> None:
@@ -2499,6 +2515,7 @@ def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> 
         ('agent_reply', 'claude native answer'),
         ('user_message', 'clean claude prompt'),
     ]
+    assert {item['session_id'] for item in items} == {'claude-session-native'}
     assert items[0]['sent_at'] == '2026-06-25T12:00:00.000Z'
     assert items[1]['completed_at'] == '2026-06-25T12:00:01.000Z'
     public_json = json.dumps(payload)
@@ -2914,6 +2931,9 @@ def test_agent_conversation_pages_codex_native_by_record_timestamp_across_thread
         'fresh pane question',
         'fresh pane answer',
     ]
+    assert {item['session_id'] for item in latest_items} == {
+        'newer-pane-thread-created-first'
+    }
     assert [item['sent_at'] for item in latest_items] == [
         '2026-06-25T12:02:00.000Z',
         '2026-06-25T12:02:01.000Z',
@@ -2929,6 +2949,9 @@ def test_agent_conversation_pages_codex_native_by_record_timestamp_across_thread
         'older backfill question',
         'older backfill answer',
     ]
+    assert {
+        item['session_id'] for item in older['conversation']['items']
+    } == {'older-backfill-thread-created-second'}
 
 
 def test_agent_conversation_tails_large_codex_rollout_without_parsing_head(

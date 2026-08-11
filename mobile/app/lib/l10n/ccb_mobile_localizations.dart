@@ -121,6 +121,8 @@ class CcbMobileLocalizations {
 
   String get expandMessage => isChinese ? '展开消息' : 'Expand message';
 
+  String get newContext => isChinese ? '新上下文' : 'New context';
+
   String get backToProjects => isChinese ? '返回项目列表' : 'Back to projects';
 
   String get useFakeDemo => isChinese ? '使用演示模式' : 'Use fake demo';

@@ -15,18 +15,21 @@ void main() {
         'started_at': '2026-07-01T11:40:48+08:00',
         'completed_at': '2026-07-01T11:42:00+08:00',
         'duration_ms': '72000',
+        'session_id': 'provider-session-1',
       });
 
       expect(item.sentAt, DateTime.utc(2026, 7, 1, 3, 42));
       expect(item.startedAt, DateTime.utc(2026, 7, 1, 3, 40, 48));
       expect(item.completedAt, DateTime.utc(2026, 7, 1, 3, 42));
       expect(item.durationMs, 72000);
+      expect(item.sessionId, 'provider-session-1');
 
       final json = item.toJson();
       expect(json['sent_at'], '2026-07-01T03:42:00.000Z');
       expect(json['started_at'], '2026-07-01T03:40:48.000Z');
       expect(json['completed_at'], '2026-07-01T03:42:00.000Z');
       expect(json['duration_ms'], 72000);
+      expect(json['session_id'], 'provider-session-1');
     });
 
     test('keeps old or malformed JSON timing fields nullable', () {
@@ -58,6 +61,20 @@ void main() {
 
       expect(sent.sentAt, sentAt);
       expect(sent.state, CcbConversationDeliveryState.sent);
+    });
+
+    test('copyWith preserves provider session identity', () {
+      const item = CcbConversationItem(
+        id: 'reply-session',
+        agentName: 'lead',
+        kind: CcbConversationItemKind.agentReply,
+        title: 'Agent reply',
+        body: 'hello',
+        source: 'provider_native/codex',
+        sessionId: 'provider-session-2',
+      );
+
+      expect(item.copyWith(body: 'updated').sessionId, 'provider-session-2');
     });
 
     test('agent replies carry timing metadata from content items', () {

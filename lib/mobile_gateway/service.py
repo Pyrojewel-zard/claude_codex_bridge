@@ -37,6 +37,7 @@ from provider_control import (
     ProviderSettingsStore,
     project_config_revision,
     provider_restart_pending_agents,
+    resolve_provider_session_path,
 )
 from provider_pane_status.control_messages import (
     clean_provider_local_control_message,
@@ -724,7 +725,10 @@ class MobileGatewayService:
         if agent_record is None:
             raise MobileGatewayError('unknown agent', status_code=404)
         provider = str(agent_record.get('provider') or '').strip().lower()
-        catalog = config_ui_provider_capabilities(project_root=project.project_root)
+        catalog = config_ui_provider_capabilities(
+            project_root=project.project_root,
+            cli_models=None if provider in {'opencode', 'mimo'} else {},
+        )
         provider_entry = next(
             (
                 dict(item)
@@ -897,7 +901,10 @@ class MobileGatewayService:
             current_runtime_revision = _optional_text(provider_control.get('runtime_revision'))
             if expected_runtime_revision != current_runtime_revision:
                 raise MobileGatewayError('stale provider runtime; refresh before saving', status_code=409)
-            catalog = config_ui_provider_capabilities(project_root=project.project_root)
+            catalog = config_ui_provider_capabilities(
+                project_root=project.project_root,
+                cli_models=None if provider in {'opencode', 'mimo'} else {},
+            )
             provider_entry = next(
                 (
                     dict(item)
@@ -3578,6 +3585,7 @@ def _claude_native_conversation_items(
                     item = {
                         'id': item_id,
                         'agent': agent,
+                        'session_id': session_id,
                         'kind': 'user_message',
                         'title': 'You',
                         'body': body,
@@ -3595,6 +3603,7 @@ def _claude_native_conversation_items(
                     item = {
                         'id': item_id,
                         'agent': agent,
+                        'session_id': session_id,
                         'kind': 'agent_reply',
                         'title': 'Agent reply',
                         'body': body,
@@ -3633,58 +3642,12 @@ def _claude_native_conversation_items(
 
 
 def _claude_native_session_path(project_root: Path, *, agent: str) -> Path | None:
-    try:
-        from provider_backends.claude.session_runtime.pathing import (
-            find_project_session_file,
-            read_json,
-        )
-        session_file = find_project_session_file(project_root, agent)
-    except Exception:
-        return None
-    if session_file is None:
-        return None
-    data = read_json(session_file)
-    path_text = _optional_text(_map(data).get('claude_session_path'))
-    if path_text:
-        try:
-            path = Path(path_text).expanduser()
-        except Exception:
-            path = None
-        if path is not None and path.is_file():
-            return path
-    return _discover_claude_native_session_path(project_root, data=_map(data))
-
-
-def _discover_claude_native_session_path(
-    project_root: Path,
-    *,
-    data: dict[str, object],
-) -> Path | None:
-    projects_root_text = _optional_text(data.get('claude_projects_root'))
-    if not projects_root_text:
-        return None
-    work_dir_text = (
-        _optional_text(data.get('work_dir'))
-        or _optional_text(data.get('workspace_path'))
-        or _optional_text(data.get('project_root'))
-        or str(project_root)
+    return resolve_provider_session_path(
+        'claude',
+        None,
+        project_root=project_root,
+        agent=agent,
     )
-    try:
-        projects_root = Path(projects_root_text).expanduser()
-        work_dir = Path(work_dir_text).expanduser()
-    except Exception:
-        return None
-    try:
-        from provider_backends.claude.comm import ClaudeLogReader
-
-        path = ClaudeLogReader(
-            root=projects_root,
-            work_dir=work_dir,
-            use_sessions_index=False,
-        ).current_session_path()
-    except Exception:
-        return None
-    return path if path is not None and path.is_file() else None
 
 
 def _claude_native_conversation_cache_fingerprint(
@@ -4291,6 +4254,7 @@ def _codex_rollout_conversation_items(
                 file_roots=file_roots,
             )
             if event_item is not None:
+                event_item['session_id'] = thread_id
                 _set_native_sort_fields(
                     event_item,
                     record,
@@ -4328,6 +4292,7 @@ def _codex_rollout_conversation_items(
             item = {
                 'id': item_id,
                 'agent': agent,
+                'session_id': thread_id,
                 'kind': 'user_message',
                 'title': 'You',
                 'body': body,
@@ -4345,6 +4310,7 @@ def _codex_rollout_conversation_items(
             item = {
                 'id': item_id,
                 'agent': agent,
+                'session_id': thread_id,
                 'kind': 'agent_reply',
                 'title': 'Agent reply',
                 'body': body,

@@ -7,9 +7,11 @@ import '../../models/ccb_conversation_item.dart';
 import '../../models/ccb_project_view.dart';
 import '../../models/readable_terminal_history.dart';
 import '../../repository/mobile_ccb_repository.dart';
+import '../../l10n/ccb_mobile_localizations.dart';
 import 'content_reader.dart';
 import 'conversation_bubble.dart';
 import 'readable_terminal_history_panel.dart';
+import 'selected_agent_workspace_model.dart';
 
 const double conversationTimelineFollowLatestPadding = 6;
 const double conversationTimelineExpandedComposerRevealPadding = 20;
@@ -205,6 +207,9 @@ class _ConversationTimelineItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (isProviderSessionBoundaryItem(item)) {
+      return _ProviderSessionBoundary(itemId: item.id);
+    }
     if (item.kind == CcbConversationItemKind.terminalHistoryBlock) {
       return ConversationBubble(
         item: item,
@@ -268,6 +273,37 @@ class _ConversationTimelineItem extends StatelessWidget {
       onOpenAttachment: onOpenAttachment,
       downloadingAttachmentIds: downloadingAttachmentIds,
       downloadedAttachmentIds: downloadedAttachmentIds,
+    );
+  }
+}
+
+class _ProviderSessionBoundary extends StatelessWidget {
+  const _ProviderSessionBoundary({required this.itemId});
+
+  final String itemId;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.outlineVariant;
+    final label = CcbMobileLocalizations.of(context).newContext;
+    return Semantics(
+      key: ValueKey('provider-session-boundary-$itemId'),
+      label: label,
+      child: Row(
+        children: [
+          Expanded(child: Divider(color: color)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Expanded(child: Divider(color: color)),
+        ],
+      ),
     );
   }
 }

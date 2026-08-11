@@ -134,6 +134,7 @@ class CcbConversationItem {
     this.state,
     this.contentId,
     this.source,
+    this.sessionId,
     this.sentAt,
     this.startedAt,
     this.completedAt,
@@ -150,6 +151,7 @@ class CcbConversationItem {
   final CcbConversationDeliveryState? state;
   final String? contentId;
   final String? source;
+  final String? sessionId;
   final DateTime? sentAt;
   final DateTime? startedAt;
   final DateTime? completedAt;
@@ -262,6 +264,8 @@ class CcbConversationItem {
       contentId:
           _optionalText(json['content_id']) ?? _optionalText(json['contentId']),
       source: _optionalText(json['source']),
+      sessionId:
+          _optionalText(json['session_id']) ?? _optionalText(json['sessionId']),
       sentAt:
           _optionalDateTime(json['sent_at']) ??
           _optionalDateTime(json['created_at']),
@@ -298,6 +302,7 @@ class CcbConversationItem {
       if (state != null) 'state': state!.wireName,
       if (contentId != null) 'content_id': contentId,
       if (source != null) 'source': source,
+      if (sessionId != null) 'session_id': sessionId,
       if (sentAt != null) 'sent_at': sentAt!.toUtc().toIso8601String(),
       if (startedAt != null) 'started_at': startedAt!.toUtc().toIso8601String(),
       if (completedAt != null)
@@ -311,6 +316,7 @@ class CcbConversationItem {
   CcbConversationItem copyWith({
     String? id,
     String? body,
+    String? sessionId,
     CcbConversationDeliveryState? state,
     List<CcbMessageAttachment>? attachments,
     DateTime? sentAt,
@@ -328,6 +334,7 @@ class CcbConversationItem {
       state: state ?? this.state,
       contentId: contentId,
       source: source,
+      sessionId: sessionId ?? this.sessionId,
       sentAt: sentAt ?? this.sentAt,
       startedAt: startedAt ?? this.startedAt,
       completedAt: completedAt ?? this.completedAt,

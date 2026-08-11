@@ -77,6 +77,70 @@ def test_claude_runtime_snapshot_deduplicates_streamed_message_usage(tmp_path: P
     assert snapshot.usage.total_tokens == 42
 
 
+def test_claude_runtime_snapshot_discovers_current_project_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    projects_root = tmp_path / 'claude-projects'
+    transcript = projects_root / 'current-session.jsonl'
+    _write(
+        transcript,
+        [
+            {
+                'type': 'assistant',
+                'sessionId': 'claude-session-real',
+                'message': {
+                    'id': 'message-real',
+                    'model': 'Kimi-K3',
+                    'usage': {
+                        'input_tokens': 20831,
+                        'cache_read_input_tokens': 0,
+                        'cache_creation_input_tokens': 0,
+                        'output_tokens': 541,
+                    },
+                },
+            }
+        ],
+    )
+    binding = project_root / '.ccb' / '.claude-mobile-session'
+    binding.parent.mkdir(parents=True)
+    binding.write_text(
+        json.dumps(
+            {
+                'claude_projects_root': str(projects_root),
+                'work_dir': str(project_root),
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    import provider_backends.claude.comm as claude_comm
+
+    class _Reader:
+        def __init__(self, *, root, work_dir, use_sessions_index):
+            assert root == projects_root
+            assert work_dir == project_root
+            assert use_sessions_index is False
+
+        def current_session_path(self):
+            return transcript
+
+    monkeypatch.setattr(claude_comm, 'ClaudeLogReader', _Reader)
+
+    snapshot = read_provider_runtime_snapshot(
+        'claude',
+        None,
+        project_root=project_root,
+        agent='mobile',
+    )
+
+    assert snapshot.session_id == 'claude-session-real'
+    assert snapshot.active_model == 'Kimi-K3'
+    assert snapshot.usage is not None
+    assert snapshot.usage.total_tokens == 21372
+
+
 def test_unknown_provider_keeps_unknown_runtime_truthful(tmp_path: Path) -> None:
     snapshot = read_provider_runtime_snapshot('kimi', tmp_path / 'missing.jsonl')
 

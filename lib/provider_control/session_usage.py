@@ -64,6 +64,8 @@ def read_provider_runtime_snapshot(
     session_path: Path | str | None,
     *,
     fallback_session_id: object = None,
+    project_root: Path | str | None = None,
+    agent: object = None,
     max_bytes: int = _TAIL_MAX_BYTES,
     max_lines: int = _TAIL_MAX_LINES,
 ) -> ProviderRuntimeSnapshot:
@@ -71,7 +73,12 @@ def read_provider_runtime_snapshot(
     fallback = _text(fallback_session_id)
     if provider_name not in {'codex', 'claude'}:
         return ProviderRuntimeSnapshot(provider=provider_name, session_id=fallback)
-    path = _regular_file(session_path)
+    path = resolve_provider_session_path(
+        provider_name,
+        session_path,
+        project_root=project_root,
+        agent=agent,
+    )
     if path is None:
         return ProviderRuntimeSnapshot(provider=provider_name, session_id=fallback)
     try:
@@ -87,6 +94,62 @@ def read_provider_runtime_snapshot(
         max(1, int(max_bytes)),
         max(1, int(max_lines)),
     )
+
+
+def resolve_provider_session_path(
+    provider: object,
+    session_path: Path | str | None,
+    *,
+    project_root: Path | str | None = None,
+    agent: object = None,
+) -> Path | None:
+    path = _regular_file(session_path)
+    if path is not None:
+        return path
+    if str(provider or '').strip().lower() != 'claude':
+        return None
+    root = _path(project_root)
+    agent_name = _text(agent)
+    if root is None or agent_name is None:
+        return None
+    try:
+        from provider_backends.claude.session_runtime.pathing import (
+            find_project_session_file,
+            read_json,
+        )
+
+        session_file = find_project_session_file(root, agent_name)
+    except Exception:
+        return None
+    if session_file is None:
+        return None
+    try:
+        data = _mapping(read_json(session_file))
+    except Exception:
+        return None
+    explicit = _regular_file(data.get('claude_session_path'))
+    if explicit is not None:
+        return explicit
+    projects_root = _path(data.get('claude_projects_root'))
+    work_dir = _path(
+        data.get('work_dir')
+        or data.get('workspace_path')
+        or data.get('project_root')
+        or root
+    )
+    if projects_root is None or work_dir is None:
+        return None
+    try:
+        from provider_backends.claude.comm import ClaudeLogReader
+
+        discovered = ClaudeLogReader(
+            root=projects_root,
+            work_dir=work_dir,
+            use_sessions_index=False,
+        ).current_session_path()
+    except Exception:
+        return None
+    return _regular_file(discovered)
 
 
 @lru_cache(maxsize=128)
@@ -179,8 +242,11 @@ def _claude_snapshot(
     latest_usage: dict[str, Any] | None = None
     for index, entry in enumerate(entries):
         entry_type = _text(entry.get('type'))
-        if entry_type == 'system':
-            session_id = _text(entry.get('sessionId')) or _text(entry.get('session_id')) or session_id
+        session_id = (
+            _text(entry.get('sessionId'))
+            or _text(entry.get('session_id'))
+            or session_id
+        )
         if entry_type != 'assistant':
             continue
         message = _mapping(entry.get('message'))
@@ -272,6 +338,16 @@ def _regular_file(value: Path | str | None) -> Path | None:
         return None
 
 
+def _path(value: object) -> Path | None:
+    text = _text(value)
+    if text is None:
+        return None
+    try:
+        return Path(text).expanduser()
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def _mapping(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -293,4 +369,5 @@ __all__ = [
     'ProviderRuntimeSnapshot',
     'ProviderSessionUsage',
     'read_provider_runtime_snapshot',
+    'resolve_provider_session_path',
 ]
