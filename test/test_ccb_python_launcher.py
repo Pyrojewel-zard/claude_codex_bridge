@@ -137,9 +137,9 @@ def test_launcher_falls_back_to_python_when_python3_is_store_stub(
     # and pick `python`.
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    stub = fake_bin / "python3"
+    for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3"):
+        _write_probe(fake_bin / name, compatible=False)
     real = fake_bin / "python"
-    _write_probe(stub, compatible=False)
     _write_probe(real, compatible=True)
 
     probe_log = tmp_path / "probe.log"
@@ -174,6 +174,8 @@ def test_launcher_resolves_py_launcher_candidate(tmp_path: Path) -> None:
     # launcher is real; it must be probed after the python3.* family and win.
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3"):
+        _write_probe(fake_bin / name, compatible=False)
     py_launcher = fake_bin / "py"
     _write_probe(py_launcher, compatible=True)
     _write_probe(fake_bin / "python", compatible=False)

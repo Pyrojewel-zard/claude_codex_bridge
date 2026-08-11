@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import importlib
 import json
 import re
 import socket
@@ -28,6 +29,13 @@ from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.socket_client_runtime import decode_response, recv_response_line, send_request
 from ccbd.socket_server import CcbdSocketServer
 from ccbd.socket_server_runtime.loop import enqueue_connection, start_worker, stop_worker
+
+
+def _patch_module_os_name(monkeypatch, module_name: str, name: str) -> None:
+    module = importlib.import_module(module_name)
+    os_proxy = SimpleNamespace(**vars(module.os))
+    os_proxy.name = name
+    monkeypatch.setattr(module, 'os', os_proxy)
 
 
 def _ok_runner(command, **kwargs):
@@ -148,7 +156,7 @@ def test_socket_server_prefers_windows_tcp_without_endpoint_descriptor(monkeypat
 
 
 def test_windows_lifecycle_does_not_synthesize_legacy_endpoint_from_socket_path(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.services.lifecycle.os.name', 'nt')
+    _patch_module_os_name(monkeypatch, 'ccbd.services.lifecycle', 'nt')
 
     lifecycle = build_lifecycle(
         project_id='proj-1',
@@ -163,7 +171,7 @@ def test_windows_lifecycle_does_not_synthesize_legacy_endpoint_from_socket_path(
 
 
 def test_windows_project_inspection_does_not_fall_back_to_legacy_endpoint(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.services.project_inspection.os.name', 'nt')
+    _patch_module_os_name(monkeypatch, 'ccbd.services.project_inspection', 'nt')
 
     inspection = ProjectDaemonInspection(
         lease=None,

@@ -750,7 +750,6 @@ def test_herdr_gate_raises_on_unverified_provider_via_ensure(monkeypatch) -> Non
 
 def test_herdr_gate_allows_verified_claude_via_ensure(monkeypatch) -> None:
     """ensure_agent_runtime 对已验证 claude + 显式 herdr → 放行到 launch（不 raise gate）。"""
-    import os
     import sys
     from types import SimpleNamespace
 
@@ -775,7 +774,7 @@ def test_herdr_gate_allows_verified_claude_via_ensure(monkeypatch) -> None:
             binding=None,
             runtime_launch_result_cls=SimpleNamespace,
             binding_runtime_alive_fn=lambda binding: False,
-            provider_executable_fn=lambda provider: os.path.basename(sys.executable),
+            provider_executable_fn=lambda provider: sys.executable,
             cleanup_stale_tmux_binding_fn=lambda binding: None,
             launch_runtime_fn=_launch_fn,
             resolve_agent_binding_fn=lambda **kwargs: SimpleNamespace(),

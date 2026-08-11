@@ -800,7 +800,7 @@ def test_config_ui_crlf_noop_save_preserves_file_and_reports_unchanged(tmp_path:
         assert applied['backup_path'] is None
         assert applied['restart_required'] is False
         assert applied['restart_intent'] is None
-        assert config_path.read_text(encoding='utf-8', newline='') == original_crlf
+        assert config_path.read_bytes().decode('utf-8') == original_crlf
     finally:
         handle.close()
         thread.join(timeout=2)
