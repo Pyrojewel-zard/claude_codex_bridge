@@ -1,5 +1,13 @@
 # Changelog
 
+## v8.6.0-beta.1 (2026-08-11)
+
+- Added an isolated native Windows x64 prerelease lane under `platforms/windows/` and `lib/platforms/windows/`.
+- Added native PE launchers for `ccb`, `ask`, `autonew`, and `ctx-transfer`, packaged as `ccb-windows-x86_64.zip` with a SHA256 sidecar.
+- Updated `install.ps1` to install from a validated Windows ZIP while retaining source-checkout installation.
+- Restored Linux/macOS workflows, executable modes, docs, and reconnect tests removed or rewritten by PR #293; prerelease tags do not trigger stable npm, sidebar, mobile, Linux, or macOS publication.
+- Marked this release as a Windows beta: Python 3.10+, WezTerm, Git Bash, and Herdr remain prerequisites, and the binaries are unsigned.
+
 ## v8.5.7 (2026-08-08)
 
 - Keep the required `ccb-clear` control Skill and add `ccb-diagnose` for every

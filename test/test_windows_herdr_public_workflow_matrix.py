@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from provider_core.registry import TEST_DOUBLE_PROVIDER_NAMES, build_default_provider_manifests
-from terminal_runtime.windows_herdr_public_workflow_matrix import (
+from platforms.windows.release.workflow_matrix import (
     MATRIX_RELATIVE_PATH,
     PROVIDER_WORKFLOWS,
     REQUIRED_WORKFLOWS,
@@ -60,8 +60,8 @@ def _supported_matrix() -> dict[str, object]:
         "backend_impl": "herdr",
         "os_platform": "win32",
         "cpu_arch": "x64",
-        "ccb_version": "8.5.2",
-        "ccb_source_status": "strict-v8.5.2",
+        "ccb_version": "8.6.0-beta.1",
+        "ccb_source_status": "matching-release",
         "herdr_version": "0.1.0",
         "herdr_auto_restore_mode": "disabled",
         "baseline_ref": ".codestable/features/baseline/acceptance.md",

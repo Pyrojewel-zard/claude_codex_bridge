@@ -9,8 +9,8 @@ import pytest
 import process_background
 from cli.models import ParsedHerdrOpenCommand
 from cli.parser import CliParser, CliUsageError
-from cli.services.herdr_bootstrap import ensure_herdr_bootstrap_env
-from cli.services.herdr_common import query_herdr_server_status, resolve_herdr_executable
+from platforms.windows.herdr.bootstrap import ensure_herdr_bootstrap_env
+from platforms.windows.herdr.common import query_herdr_server_status, resolve_herdr_executable
 
 
 @pytest.fixture()
@@ -65,7 +65,7 @@ def test_parse_herdr_rejects_unknown_subcommand(parser: CliParser) -> None:
 
 def test_bootstrap_rejects_missing_executable(monkeypatch) -> None:
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: None,
     )
     result = ensure_herdr_bootstrap_env()
@@ -75,19 +75,19 @@ def test_bootstrap_rejects_missing_executable(monkeypatch) -> None:
 
 def _patch_discovery_empty(monkeypatch) -> None:
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._discover_running_ccb_sessions',
+        'platforms.windows.herdr.bootstrap._discover_running_ccb_sessions',
         lambda exe: [],
     )
 
 
 def test_bootstrap_rejects_unqueryable_server(monkeypatch) -> None:
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: None,
     )
     result = ensure_herdr_bootstrap_env()
@@ -97,12 +97,12 @@ def test_bootstrap_rejects_unqueryable_server(monkeypatch) -> None:
 
 def test_bootstrap_rejects_stopped_server(monkeypatch) -> None:
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: {'status': 'stopped', 'running': False, 'compatible': True},
     )
     result = ensure_herdr_bootstrap_env()
@@ -112,12 +112,12 @@ def test_bootstrap_rejects_stopped_server(monkeypatch) -> None:
 
 def test_bootstrap_rejects_incompatible_protocol(monkeypatch) -> None:
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: {'status': 'running', 'running': True, 'compatible': False, 'protocol': 3},
     )
     result = ensure_herdr_bootstrap_env()
@@ -130,12 +130,12 @@ def _bootstrap_success_mocks(monkeypatch, *, status=None):
     monkeypatch.delenv('CCB_HERDR_SESSION', raising=False)
     monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: status
         or {
             'status': 'running',
@@ -146,7 +146,7 @@ def _bootstrap_success_mocks(monkeypatch, *, status=None):
         },
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._probe_herdr_read_capabilities',
+        'platforms.windows.herdr.bootstrap._probe_herdr_read_capabilities',
         lambda exe, session=None: {
             'session_attach': True,
             'workspace_list': True,
@@ -154,7 +154,7 @@ def _bootstrap_success_mocks(monkeypatch, *, status=None):
         },
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._write_capability_report',
+        'platforms.windows.herdr.bootstrap._write_capability_report',
         lambda report: 'C:/tmp/ccb-herdr-capability-test.json',
     )
 
@@ -181,7 +181,7 @@ def test_bootstrap_prefers_explicit_session(monkeypatch) -> None:
 def test_bootstrap_rejects_failed_read_probes(monkeypatch) -> None:
     _bootstrap_success_mocks(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._probe_herdr_read_capabilities',
+        'platforms.windows.herdr.bootstrap._probe_herdr_read_capabilities',
         lambda exe, session=None: {
             'session_attach': True,
             'workspace_list': False,
@@ -218,8 +218,8 @@ def _auto_start_resolve(monkeypatch) -> list[str]:
         started.append(session)
         return {'ok': True, 'herdr_session': session}
 
-    monkeypatch.setattr('cli.services.herdr_bootstrap._resolve_running_server', _resolve)
-    monkeypatch.setattr('cli.services.herdr_bootstrap._start_herdr_server', _start)
+    monkeypatch.setattr('platforms.windows.herdr.bootstrap._resolve_running_server', _resolve)
+    monkeypatch.setattr('platforms.windows.herdr.bootstrap._start_herdr_server', _start)
     return started
 
 
@@ -248,11 +248,11 @@ def test_bootstrap_auto_start_propagates_start_failure(monkeypatch) -> None:
     """P0: a failed auto-start surfaces the start error instead of proceeding."""
     _bootstrap_success_mocks(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._resolve_running_server',
+        'platforms.windows.herdr.bootstrap._resolve_running_server',
         lambda exe, preferred_session: (None, None, None),
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._start_herdr_server',
+        'platforms.windows.herdr.bootstrap._start_herdr_server',
         lambda exe, session: {'ok': False, 'reason': 'boom'},
     )
     result = ensure_herdr_bootstrap_env(auto_start_server=True)
@@ -264,11 +264,11 @@ def test_bootstrap_auto_start_still_fails_when_not_reachable(monkeypatch) -> Non
     """P0: if auto-start does not make the server reachable, fail with guidance."""
     _bootstrap_success_mocks(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._resolve_running_server',
+        'platforms.windows.herdr.bootstrap._resolve_running_server',
         lambda exe, preferred_session: (None, None, None),
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._start_herdr_server',
+        'platforms.windows.herdr.bootstrap._start_herdr_server',
         lambda exe, session: {'ok': True, 'herdr_session': session},
     )
     result = ensure_herdr_bootstrap_env(auto_start_server=True)
@@ -277,7 +277,7 @@ def test_bootstrap_auto_start_still_fails_when_not_reachable(monkeypatch) -> Non
 
 
 def test_build_capability_report_covers_known_capabilities() -> None:
-    from cli.services.herdr_bootstrap import _build_capability_report
+    from platforms.windows.herdr.bootstrap import _build_capability_report
 
     report = _build_capability_report(
         {'session_attach': True, 'workspace_list': True, 'pane_list': True}
@@ -295,7 +295,7 @@ def test_build_capability_report_covers_known_capabilities() -> None:
 
 def _stub_bootstrap_ok(monkeypatch) -> None:
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.ensure_herdr_bootstrap_env',
+        'platforms.windows.herdr.bootstrap.ensure_herdr_bootstrap_env',
         lambda **kwargs: {'ok': True, 'warnings': []},
     )
 
@@ -485,9 +485,9 @@ def test_resolve_herdr_via_env(monkeypatch, tmp_path) -> None:
 
 def test_resolve_herdr_nonexistent_explicit_falls_back(monkeypatch) -> None:
     monkeypatch.delenv('CCB_HERDR_EXE', raising=False)
-    monkeypatch.setattr('cli.services.herdr_common.shutil.which', lambda name: None)
+    monkeypatch.setattr('platforms.windows.herdr.common.shutil.which', lambda name: None)
     monkeypatch.setattr(
-        'cli.services.herdr_common.os.path.isfile',
+        'platforms.windows.herdr.common.os.path.isfile',
         lambda path: False,
     )
     assert resolve_herdr_executable(explicit='C:/nonexistent/herdr.exe') is None
@@ -606,7 +606,7 @@ def test_discover_running_ccb_sessions_parses_running(monkeypatch) -> None:
     import json as _json
     import subprocess
 
-    from cli.services.herdr_bootstrap import _discover_running_ccb_sessions
+    from platforms.windows.herdr.bootstrap import _discover_running_ccb_sessions
 
     payload = {
         'sessions': [
@@ -631,7 +631,7 @@ def test_discover_running_ccb_sessions_hides_windows_console(monkeypatch) -> Non
     import json as _json
     import subprocess
 
-    from cli.services.herdr_bootstrap import _discover_running_ccb_sessions
+    from platforms.windows.herdr.bootstrap import _discover_running_ccb_sessions
 
     captured: dict[str, object] = {}
 
@@ -655,7 +655,7 @@ def test_discover_running_ccb_sessions_hides_windows_console(monkeypatch) -> Non
 def test_probe_herdr_read_capabilities_hides_windows_console(monkeypatch) -> None:
     import subprocess
 
-    from cli.services.herdr_bootstrap import _probe_herdr_read_capabilities
+    from platforms.windows.herdr.bootstrap import _probe_herdr_read_capabilities
 
     captured_flags: list[int] = []
 
@@ -688,12 +688,12 @@ def test_bootstrap_uses_running_session_when_global_stopped(monkeypatch) -> None
     monkeypatch.delenv('CCB_HERDR_SESSION', raising=False)
     monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     # Discovery surfaces the live CCB session.
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._discover_running_ccb_sessions',
+        'platforms.windows.herdr.bootstrap._discover_running_ccb_sessions',
         lambda exe: ['ccb-avaprintdesigner-575a971f'],
     )
     queried: list[str | None] = []
@@ -711,11 +711,11 @@ def test_bootstrap_uses_running_session_when_global_stopped(monkeypatch) -> None
         }
 
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         _fake_status,
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._probe_herdr_read_capabilities',
+        'platforms.windows.herdr.bootstrap._probe_herdr_read_capabilities',
         lambda exe, session=None: {
             'session_attach': True,
             'workspace_list': True,
@@ -723,7 +723,7 @@ def test_bootstrap_uses_running_session_when_global_stopped(monkeypatch) -> None
         },
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._write_capability_report',
+        'platforms.windows.herdr.bootstrap._write_capability_report',
         lambda report: '/tmp/cap.json',
     )
     result = ensure_herdr_bootstrap_env()
@@ -741,12 +741,12 @@ def test_bootstrap_still_rejects_when_only_global_stopped(monkeypatch) -> None:
     monkeypatch.delenv('CCB_HERDR_SESSION', raising=False)
     monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: {'status': 'not_running', 'running': False},
     )
     result = ensure_herdr_bootstrap_env()
@@ -764,12 +764,12 @@ def test_bootstrap_handles_nested_result_server_shape(monkeypatch) -> None:
     monkeypatch.delenv('CCB_HERDR_SESSION', raising=False)
     monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: {
             'result': {
                 'server': {
@@ -782,11 +782,11 @@ def test_bootstrap_handles_nested_result_server_shape(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._probe_herdr_read_capabilities',
+        'platforms.windows.herdr.bootstrap._probe_herdr_read_capabilities',
         lambda exe, session=None: {'session_attach': True, 'workspace_list': True, 'pane_list': True},
     )
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap._write_capability_report',
+        'platforms.windows.herdr.bootstrap._write_capability_report',
         lambda report: '/tmp/cap.json',
     )
     result = ensure_herdr_bootstrap_env()
@@ -800,12 +800,12 @@ def test_bootstrap_nested_shape_rejects_stopped(monkeypatch) -> None:
     monkeypatch.delenv('CCB_HERDR_SESSION', raising=False)
     monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: {
             'result': {
                 'server': {
@@ -826,12 +826,12 @@ def test_bootstrap_nested_shape_rejects_incompatible(monkeypatch) -> None:
     monkeypatch.delenv('CCB_HERDR_SESSION', raising=False)
     monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.resolve_herdr_executable',
+        'platforms.windows.herdr.bootstrap.resolve_herdr_executable',
         lambda explicit=None: '/x/herdr.exe',
     )
     _patch_discovery_empty(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.query_herdr_server_status',
+        'platforms.windows.herdr.bootstrap.query_herdr_server_status',
         lambda exe, session=None: {
             'result': {
                 'server': {
@@ -854,7 +854,7 @@ def test_bootstrap_nested_shape_rejects_incompatible(monkeypatch) -> None:
 def test_herdr_command_env_clears_xdg_on_windows(monkeypatch) -> None:
     """XDG_* is cleared on Windows, HERDR_CONFIG_PATH is set."""
     import sys as _sys
-    from lib.cli.services.herdr_common import herdr_command_env
+    from platforms.windows.herdr.common import herdr_command_env
 
     if _sys.platform != 'win32':
         import pytest
@@ -874,7 +874,7 @@ def test_herdr_command_env_clears_xdg_on_windows(monkeypatch) -> None:
 
 def test_herdr_command_env_preserves_xdg_on_non_windows(monkeypatch) -> None:
     """XDG_* is preserved on non-Windows platforms."""
-    from lib.cli.services.herdr_common import herdr_command_env
+    from platforms.windows.herdr.common import herdr_command_env
 
     monkeypatch.setattr('sys.platform', 'linux')
     monkeypatch.setenv('XDG_CONFIG_HOME', '/fake/xdg/config')
@@ -904,12 +904,16 @@ def test_start_auto_probes_herdr_evidence_when_backend_herdr_and_report_missing(
     _clear_herdr_report_env(monkeypatch)
     called: dict[str, object] = {}
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.ensure_herdr_bootstrap_env',
+        'platforms.windows.herdr.bootstrap.ensure_herdr_bootstrap_env',
         lambda **kwargs: called.update(kwargs) or {'ok': True, 'warnings': []},
     )
     monkeypatch.setattr(
         'cli.phase2_runtime.handlers_start._herdr_capability_evidence_usable',
         lambda: False,
+    )
+    monkeypatch.setattr(
+        'cli.phase2_runtime.handlers_start._is_herdr_relevant_platform',
+        lambda: True,
     )
     _ensure_herdr_runtime_evidence(SimpleNamespace(paths=SimpleNamespace()))
     assert called.get('auto_start_server') is True
@@ -921,7 +925,7 @@ def test_start_skips_probe_when_backend_not_herdr(monkeypatch) -> None:
     monkeypatch.setenv('CCB_RUNTIME_MUX_BACKEND', 'tmux')
     called: dict[str, object] = {}
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.ensure_herdr_bootstrap_env',
+        'platforms.windows.herdr.bootstrap.ensure_herdr_bootstrap_env',
         lambda **kwargs: called.update(kwargs) or {'ok': True},
     )
     _ensure_herdr_runtime_evidence(SimpleNamespace(paths=SimpleNamespace()))
@@ -935,7 +939,7 @@ def test_start_skips_probe_when_evidence_already_usable(monkeypatch) -> None:
     monkeypatch.setenv('CCB_HERDR_CAPABILITY_REPORT', 'C:/tmp/report.json')
     called: dict[str, object] = {}
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.ensure_herdr_bootstrap_env',
+        'platforms.windows.herdr.bootstrap.ensure_herdr_bootstrap_env',
         lambda **kwargs: called.update(kwargs) or {'ok': True},
     )
     monkeypatch.setattr(
@@ -963,7 +967,7 @@ def test_start_probe_failure_is_non_fatal(monkeypatch) -> None:
     monkeypatch.setenv('CCB_RUNTIME_MUX_BACKEND', 'herdr')
     _clear_herdr_report_env(monkeypatch)
     monkeypatch.setattr(
-        'cli.services.herdr_bootstrap.ensure_herdr_bootstrap_env',
+        'platforms.windows.herdr.bootstrap.ensure_herdr_bootstrap_env',
         lambda **kwargs: {'ok': False, 'reason': 'boom'},
     )
     monkeypatch.setattr(

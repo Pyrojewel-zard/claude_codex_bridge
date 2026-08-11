@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from terminal_runtime.herdr_supportability_projection import (
+from platforms.windows.herdr.supportability_projection import (
     HerdrSupportabilityProjection,
     compute_projection,
     load_matrix,
@@ -21,8 +21,8 @@ def _fixture_matrix(overrides: Mapping[str, object] | None = None) -> dict[str, 
         "backend_impl": "herdr",
         "os_platform": "win32",
         "cpu_arch": "x64",
-        "ccb_version": "8.5.2",
-        "ccb_source_status": "strict-v8.5.2",
+        "ccb_version": "8.6.0-beta.1",
+        "ccb_source_status": "matching-release",
         "herdr_version": "0.8.0",
         "herdr_auto_restore_mode": "disabled",
         "support_projection_allowed": True,
@@ -224,7 +224,7 @@ def test_projection_is_deterministic() -> None:
 
 def test_blocked_projection_has_valid_structure() -> None:
     """The blocked skeleton projection includes all required TypedDict keys."""
-    from terminal_runtime.herdr_supportability_projection import _blocked_projection
+    from platforms.windows.herdr.supportability_projection import _blocked_projection
     proj = _blocked_projection("test diagnostic")
     assert proj["support_tier"] == "experimental"
     assert proj["support_tier_source"] == "missing"

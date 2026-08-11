@@ -1,10 +1,11 @@
 """Windows-safe shell command construction for herdr pane respawn.
 
 Herdr panes run PowerShell on Windows; bash-style ``export VAR=...; cmd``
-payloads cannot be injected directly.  When Git Bash is installed, the payload
-is written to a ``.sh`` script and respawned as ``& <sh.exe> <script>`` so the
-PowerShell pane calls the full sh.exe path (bare ``sh`` is not a PowerShell
-command).  Shared by the runtime-launch path
+payloads cannot be injected directly. When Git Bash is installed, the payload
+is written to a ``.sh`` script and invoked by a generated PowerShell wrapper.
+The pane receives a structured ``powershell -File`` argv rather than a shell
+fragment, so paths containing spaces remain unambiguous and ``cmd.exe`` is not
+spawned. Shared by the runtime-launch path
 (``cli/services/runtime_launch_runtime/pane_runtime.py``) and the ccbd
 namespace materialization path
 (``ccbd/services/project_namespace_runtime/backend.py``) so both respawn

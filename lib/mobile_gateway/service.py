@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import url2pathname
 
 from ccbd.api_models import DeliveryScope, MessageEnvelope
-from ccbd.herdr_surface_projection import herdr_surface_projection_passes_gate
+from platforms.windows.herdr.ccbd_surface_projection import herdr_surface_projection_passes_gate
 from ccbd.socket_client import CcbdClientError
 from provider_pane_status.control_messages import (
     clean_provider_local_control_message,

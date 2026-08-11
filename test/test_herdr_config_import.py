@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from lib.cli.services.herdr_config_import import (
+from platforms.windows.herdr.config_import import (
     _build_ccb_config,
     _dump_toml,
     _herdr_snapshot,

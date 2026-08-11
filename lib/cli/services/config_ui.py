@@ -37,9 +37,9 @@ from cli.services.config_restart_intent import (
     record_config_restart_intent,
 )
 from cli.services.config_ui_settings import resolve_config_ui_settings
-from cli.services.herdr_surface import herdr_surface_projection_from_namespace_state
+from platforms.windows.herdr.surface import herdr_surface_projection_from_namespace_state
 from cli.services.theme import set_theme_preference, theme_preference_payload
-from ccbd.herdr_surface_projection import herdr_surface_projection_passes_gate
+from platforms.windows.herdr.ccbd_surface_projection import herdr_surface_projection_passes_gate
 from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_model_shortcuts import supported_provider_model_shortcuts

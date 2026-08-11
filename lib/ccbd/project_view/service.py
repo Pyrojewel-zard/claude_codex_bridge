@@ -12,7 +12,7 @@ import threading
 from agents.config_loader import load_project_config
 from agents.models import AgentState
 from ccbd.api_models import JobStatus, TargetKind
-from ccbd.herdr_surface_projection import (
+from platforms.windows.herdr.ccbd_surface_projection import (
     build_herdr_runtime_surface_projection,
     build_herdr_surface_projection,
 )

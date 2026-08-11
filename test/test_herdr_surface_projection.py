@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ccbd.herdr_surface_projection import build_herdr_surface_projection
+from platforms.windows.herdr.ccbd_surface_projection import build_herdr_surface_projection
 
 
 def test_herdr_surface_projection_returns_redacted_contract() -> None:

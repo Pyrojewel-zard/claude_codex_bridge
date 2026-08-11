@@ -29,12 +29,7 @@ def _fake_resolve_sh_exe(path: str | None):
     return resolve
 
 
-def test_herdr_launch_command_returns_argv_so_list2cmdline_does_not_quote_whole(monkeypatch, tmp_path) -> None:
-    """respawn_pane 经 list2cmdline 把 command 当 argv 拼 pane run 命令行（cli.py:1363）。
-
-    `& <sh.exe> <script>` 必须作为三个 argv 片段返回；若返回整条 PowerShell 字符串，
-    会被整体加引号而在 pane 里被当作字符串字面量回显而不执行（2026-08-06 实测）。
-    """
+def test_herdr_launch_command_returns_structured_powershell_argv(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         shell_launch,
         'resolve_sh_executable',
@@ -42,13 +37,11 @@ def test_herdr_launch_command_returns_argv_so_list2cmdline_does_not_quote_whole(
     )
     monkeypatch.setattr(shell_launch.tempfile, 'gettempdir', lambda: str(tmp_path))
     command = pane_runtime._herdr_launch_command('export A=1 && codex', Path(r'D:\proj'), 'agent_1')
-    assert command[0] == '&'
-    assert command[1] == r'C:\Program Files\Git\bin\sh.exe'
-    script_path = command[2]
-    assert Path(script_path).suffix == '.sh'
+    assert command[:5] == ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File']
+    assert Path(command[5]).suffix == '.ps1'
     cmdline = subprocess.list2cmdline(command)
-    assert cmdline.startswith('& "C:\\Program Files\\Git\\bin\\sh.exe"')
-    assert not cmdline.startswith('"&')  # 整体被引号化 = 字符串字面量 = 不执行
+    assert cmdline.startswith('powershell -NoProfile -ExecutionPolicy Bypass -File')
+    assert 'cmd /d /c' not in cmdline.lower()
 
 
 def test_herdr_launch_command_writes_bash_script_with_cd_and_start_cmd(monkeypatch, tmp_path) -> None:
@@ -59,9 +52,12 @@ def test_herdr_launch_command_writes_bash_script_with_cd_and_start_cmd(monkeypat
     )
     monkeypatch.setattr(shell_launch.tempfile, 'gettempdir', lambda: str(tmp_path))
     command = pane_runtime._herdr_launch_command('exec codex --remote', Path(r'D:\proj'), 'agent_1')
-    script = Path(command[2]).read_text(encoding='utf-8')
+    ps1_path = Path(command[5])
+    script = ps1_path.with_suffix('.sh').read_text(encoding='utf-8')
     assert script.startswith("cd 'D:\\proj' && ")
     assert 'exec codex --remote' in script
+    ps1 = ps1_path.read_text(encoding='utf-8-sig')
+    assert '& "C:\\Program Files\\Git\\bin\\sh.exe" $shScript' in ps1
 
 
 def test_herdr_launch_command_falls_back_to_sh_lc_when_sh_missing(monkeypatch) -> None:
@@ -93,9 +89,8 @@ def test_launch_runtime_pane_respawns_herdr_pane_ref_with_argv_command(monkeypat
     pane, opts = backend.respawn_calls[0]
     assert pane['pane_id'] == 'w2:p2'
     command = opts['command']
-    assert command[0] == '&'
-    assert command[1].lower().endswith('sh.exe')
-    assert command[2].endswith('.sh')
+    assert command[:5] == ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File']
+    assert command[5].endswith('.ps1')
     assert opts['cwd'] == r'D:\proj'
     assert backend.capture_calls  # 成功后 best-effort 捕获 pane
 

@@ -1,0 +1,144 @@
+name: Publish npm Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish"
+        required: true
+        default: "v8.5.7"
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    name: Publish @seemseam/ccb to npm
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@11.5.1
+          npm --version
+
+      - name: Verify tag and package version
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          test "$TAG_NAME" = "v$version"
+          test "$(tr -d '[:space:]' < VERSION)" = "$version"
+
+      - name: Wait for GitHub release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          required="$(node - <<'NODE'
+          const tag = process.env.TAG_NAME;
+          console.log(JSON.stringify([
+            "SHA256SUMS",
+            "ccb-linux-x86_64.tar.gz",
+            "ccb-macos-universal.tar.gz",
+            `ccb-mobile-${tag}.apk`,
+            `ccb-mobile-${tag}.json`,
+          ]));
+          NODE
+          )"
+          for attempt in $(seq 1 80); do
+            if assets="$(gh release view "$TAG_NAME" --json assets --jq '[.assets[].name] | sort' 2>/dev/null)"; then
+              if ASSETS="$assets" REQUIRED="$required" node - <<'NODE'
+          const assets = JSON.parse(process.env.ASSETS);
+          const required = JSON.parse(process.env.REQUIRED);
+          process.exit(required.every((name) => assets.includes(name)) ? 0 : 1);
+          NODE
+              then
+                echo "release assets ready for $TAG_NAME"
+                exit 0
+              fi
+            fi
+            echo "waiting for release assets for $TAG_NAME ($attempt/80)"
+            sleep 15
+          done
+          echo "Timed out waiting for release assets for $TAG_NAME" >&2
+          exit 1
+
+      - name: Verify npm package contents
+        run: npm pack --dry-run
+
+      - name: Smoke npm-managed Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_file="$(npm pack --silent)"
+          smoke_root="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$smoke_root" "$package_file"
+          }
+          trap cleanup EXIT
+
+          npm install --prefix "$smoke_root" "$GITHUB_WORKSPACE/$package_file"
+          package_root="$smoke_root/node_modules/@seemseam/ccb"
+          release_root="$package_root/.ccb-release/ccb-linux-x86_64"
+          managed_python="$release_root/.venv/bin/python"
+
+          test -x "$managed_python"
+          "$managed_python" - <<'PY'
+          import sys
+          assert sys.version_info >= (3, 10)
+          try:
+              import tomllib
+          except ModuleNotFoundError:
+              import tomli
+          import aiohttp
+          from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
+          from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+          PY
+          "$smoke_root/node_modules/.bin/ccb" --print-version
+
+          before="$(stat -c '%Y' "$managed_python")"
+          "$smoke_root/node_modules/.bin/ccb" --print-version
+          after="$(stat -c '%Y' "$managed_python")"
+          test "$before" = "$after"
+
+      - name: Check npm package availability
+        id: npm_status
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if npm view "@seemseam/ccb@$version" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "@seemseam/ccb@$version is already published; skipping publish."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish npm package
+        if: steps.npm_status.outputs.published != 'true'
+        run: npm publish --access public --provenance

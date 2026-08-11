@@ -518,8 +518,8 @@ def test_socket_server_uses_larger_listen_backlog(tmp_path: Path, monkeypatch) -
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle.socket.socket', lambda *args, **kwargs: _FakeSocket())
-    monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle._bound_socket_stat', lambda path: (1, 2))
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.socket', lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.bound_socket_identity', lambda path: (1, 2))
 
     server = CcbdSocketServer(socket_path)
     server.listen()

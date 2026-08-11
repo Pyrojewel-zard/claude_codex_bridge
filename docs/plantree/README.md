@@ -34,6 +34,7 @@ to resume across agents and sessions.
 | [ccbd-agent-hot-reload](plans/ccbd-agent-hot-reload/README.md) | In progress | Dynamically load, unload, and later replace agents in a running daemon without breaking unrelated panes. |
 | [managed-tool-windows](plans/managed-tool-windows/README.md) | In progress | Add first-class non-agent tool windows and optional rich workbench surfaces that appear in sidebar without provider/agent rows. |
 | [windows-wezterm-native](plans/windows-wezterm-native/README.md) | Planning | Evaluate and stage a Windows-native WezTerm mux backend for current CCB without tmux-based communication. |
+| [windows-native-release](plans/windows-native-release/README.md) | In progress | Isolate PR #293, build a native Windows x64 CCB prerelease, and qualify its ZIP/install/Herdr path without changing stable Linux/macOS release lanes. |
 | [python-rust-hybrid-performance](plans/python-rust-hybrid-performance/README.md) | In progress | Stage performance-oriented Rust helpers around the current Python control plane without a full rewrite. |
 | [ccb-runtime-performance](plans/ccb-runtime-performance/README.md) | In progress | Attribute startup, high-load, and pane-interaction CPU/latency across CCB core, shell/tmux, provider processes, and UI paths before selecting optimization work. |
 | [ccb-idle-resource-pressure](plans/ccb-idle-resource-pressure/README.md) | In progress | Reduce SSD writes, memory use, and idle CPU when many CCB providers remain mounted but unused. |

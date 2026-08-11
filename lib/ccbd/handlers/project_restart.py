@@ -303,7 +303,6 @@ def restart_project_agent_panes_in_place(app, *, agent_names: tuple[str, ...]) -
         raise RuntimeError('project namespace is not mounted')
     if _namespace_is_herdr(namespace):
         return _herdr_restart_deferred_results(agent_names, namespace=namespace)
-    backend = TmuxBackend(socket_path=namespace.tmux_socket_path)
     results: list[dict[str, object]] = []
     for agent_name in agent_names:
         results.append(_restart_agent_pane(app, agent_name=str(agent_name)))
@@ -366,8 +365,7 @@ def _herdr_restart_deferred_evidence(
     return evidence
 
 
-def _restart_agent_pane(app, *, backend, agent_name: str) -> dict[str, object]:
-
+def _restart_agent_pane(app, *, agent_name: str) -> dict[str, object]:
     runtime = app.registry.get(agent_name)
     session = _load_agent_provider_session(app, agent_name=agent_name, runtime=runtime)
     pane_id = _restart_pane_id(runtime=runtime, session=session)

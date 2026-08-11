@@ -25,11 +25,11 @@ from terminal_runtime.pane_logs import maybe_trim_log as _maybe_trim_log_impl
 from terminal_runtime.pane_logs import pane_log_dir as _pane_log_dir_impl
 from terminal_runtime.pane_logs import pane_log_path_for as _pane_log_path_for_impl
 from terminal_runtime.pane_logs import pane_log_root as _pane_log_root_impl
-from terminal_runtime.herdr_backend import HerdrBackend
-from terminal_runtime.herdr_backend_runtime.capabilities import HerdrCapabilityGate
-from terminal_runtime.herdr_backend_runtime.capabilities import herdr_capability_report_supported
-from terminal_runtime.herdr_backend_runtime.cli import HerdrCliRequestAdapter
-from terminal_runtime.herdr_backend_runtime.client import HerdrSocketClient
+from platforms.windows.herdr.backend import HerdrBackend
+from platforms.windows.herdr.runtime.capabilities import HerdrCapabilityGate
+from platforms.windows.herdr.runtime.capabilities import herdr_capability_report_supported
+from platforms.windows.herdr.runtime.cli import HerdrCliRequestAdapter
+from platforms.windows.herdr.runtime.client import HerdrSocketClient
 from terminal_runtime.mux_backend_contract import MuxCapabilitiesV2
 from terminal_runtime.tmux import default_detached_session_name as _default_detached_session_name_impl
 from terminal_runtime.tmux_backend import TmuxBackend

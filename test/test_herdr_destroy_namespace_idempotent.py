@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
-from terminal_runtime.herdr_backend_runtime.cli import HerdrCliRequestAdapter
+from platforms.windows.herdr.runtime.cli import HerdrCliRequestAdapter
 
 
 def _adapter_with(monkeypatch, close_error: str):

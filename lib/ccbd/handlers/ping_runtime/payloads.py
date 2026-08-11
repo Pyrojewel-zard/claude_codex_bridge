@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agents.models import AgentState
-from ccbd.herdr_surface_projection import (
+from platforms.windows.herdr.ccbd_surface_projection import (
     build_herdr_runtime_surface_projection,
     build_herdr_surface_projection,
 )

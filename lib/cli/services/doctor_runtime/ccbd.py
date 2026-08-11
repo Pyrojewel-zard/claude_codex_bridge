@@ -7,7 +7,7 @@ import shlex
 import tempfile
 
 from terminal_runtime.tmux import tmux_base
-from ..herdr_surface import (
+from platforms.windows.herdr.surface import (
     herdr_surface_projection_from_namespace_state,
     herdr_surface_projection_from_remote,
 )

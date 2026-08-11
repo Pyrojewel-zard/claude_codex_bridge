@@ -8,14 +8,14 @@ import sys
 import pytest
 
 import terminal_runtime.api as terminal_api
-import terminal_runtime.herdr_backend_runtime.cli as herdr_cli
+import platforms.windows.herdr.runtime.cli as herdr_cli
 from ccbd.services.project_namespace_pane import inspect_project_namespace_pane
 from ccbd.services.project_namespace_runtime import controller as namespace_controller
 from terminal_runtime.backend_selection import TerminalBackendSelection
-from terminal_runtime.herdr_backend import HerdrBackend
-from terminal_runtime.herdr_backend_runtime.capabilities import HerdrCapabilityGate
-from terminal_runtime.herdr_backend_runtime.cli import HerdrCliRequestAdapter
-from terminal_runtime.herdr_backend_runtime.client import HerdrSocketClient
+from platforms.windows.herdr.backend import HerdrBackend
+from platforms.windows.herdr.runtime.capabilities import HerdrCapabilityGate
+from platforms.windows.herdr.runtime.cli import HerdrCliRequestAdapter
+from platforms.windows.herdr.runtime.client import HerdrSocketClient
 from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
 
 
@@ -1695,8 +1695,10 @@ def test_terminal_api_get_backend_auto_preserves_non_windows_tmux(monkeypatch) -
 
 def test_terminal_api_get_backend_rechecks_auto_after_tmux_cache(monkeypatch) -> None:
     detected = ["tmux", None]
+    monkeypatch.delenv("CCB_RUNTIME_MUX_BACKEND", raising=False)
     monkeypatch.setattr(terminal_api, "_backend_cache", None)
     monkeypatch.setattr(terminal_api, "_backend_cache_key", None)
+    monkeypatch.setattr(terminal_api, "_backend_config_preference", None)
     monkeypatch.setattr(terminal_api, "detect_terminal", lambda: detected.pop(0))
     monkeypatch.setattr(terminal_api, "TmuxBackend", lambda: "tmux")
     monkeypatch.setattr(terminal_api, "_herdr_platform_gate", _windows_x64_platform_gate)
@@ -1724,8 +1726,10 @@ def test_terminal_api_explicit_backend_request_bypasses_module_cache(monkeypatch
 
 
 def test_terminal_api_herdr_runtime_env_bypasses_implicit_cache(monkeypatch) -> None:
+    monkeypatch.delenv("CCB_RUNTIME_MUX_BACKEND", raising=False)
     monkeypatch.setattr(terminal_api, "_backend_cache", "stale")
     monkeypatch.setattr(terminal_api, "_backend_cache_key", "tmux")
+    monkeypatch.setattr(terminal_api, "_backend_config_preference", None)
     monkeypatch.setattr(terminal_api, "detect_terminal", lambda: "tmux")
     monkeypatch.setattr(terminal_api, "TmuxBackend", lambda: "fresh")
     monkeypatch.setenv("CCB_HERDR_SESSION", "runtime-session")
@@ -2192,8 +2196,7 @@ def test_herdr_cli_request_adapter_accepts_nested_server_status() -> None:
     )
 
     assert adapter._server_status_running("herdr", session_name="ccb-demo") is True
-    # v0.8.0: _server_status_running places --session after the status subcommand
-    assert commands == [["herdr", "status", "server", "--json", "--session", "ccb-demo"]]
+    assert commands == [["herdr", "--session", "ccb-demo", "status", "server", "--json"]]
 
 
 def test_herdr_cli_request_adapter_fails_when_created_workspace_is_not_listed() -> None:
@@ -2258,7 +2261,8 @@ def test_herdr_cli_request_adapter_does_not_start_server_for_server_info() -> No
     assert popen_commands == []
 
 
-def test_herdr_backend_uses_cli_adapter_envelope_contract_for_core_operations() -> None:
+def test_herdr_backend_uses_cli_adapter_envelope_contract_for_core_operations(monkeypatch) -> None:
+    monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_platform", lambda: "windows")
     commands: list[list[str]] = []
 
     def run_fn(command, **kwargs):
@@ -2323,7 +2327,8 @@ def test_herdr_backend_uses_cli_adapter_envelope_contract_for_core_operations() 
     assert any("pane run" in " ".join(command) for command in commands)
 
 
-def test_herdr_backend_logical_window_facade_restores_from_root_pane_metadata() -> None:
+def test_herdr_backend_logical_window_facade_restores_from_root_pane_metadata(monkeypatch) -> None:
+    monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_platform", lambda: "windows")
     state: dict[str, object] = {
         "workspaces": {},
         "panes": {},
@@ -3005,7 +3010,8 @@ def test_herdr_backend_kill_window_drops_only_current_namespace_cache() -> None:
     assert "w2:p1" in backend._panes  # type: ignore[attr-defined]
 
 
-def test_herdr_backend_identity_update_clears_removed_tokens_and_preserves_root_group() -> None:
+def test_herdr_backend_identity_update_clears_removed_tokens_and_preserves_root_group(monkeypatch) -> None:
+    monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_platform", lambda: "windows")
     state: dict[str, object] = {
         "workspaces": [{"workspace_id": "w1", "focused": False}],
         "panes": {
@@ -3384,8 +3390,8 @@ def test_herdr_cli_request_adapter_runs_command_after_create_pane_split() -> Non
                 if sys.platform.startswith("win")
                 else shlex.join(["python", "-c", "print('a b')"])
             )
-            assert command[-4] == "w1:p2"
-            assert command[-3] == expected_command
+            assert command[-2] == "w1:p2"
+            assert command[-1] == expected_command
             assert command[1:3] == ["--session", "ccb-demo"]
             return _completed("")
         raise AssertionError(joined)
@@ -3747,7 +3753,7 @@ def test_herdr_cli_request_adapter_create_session_uses_project_namespace_title_a
     assert namespace["session_name"] == "ccb-project-12345678"
     assert namespace["restore_token"] == "ccb-project-12345678::w1"
     assert namespace["ipc_ref"] == "herdr://ccb-project-12345678"
-    assert len(commands) == 5
+    assert len(commands) == 6
 
 
 def test_herdr_cli_request_adapter_restore_uses_restored_session_ipc_ref() -> None:

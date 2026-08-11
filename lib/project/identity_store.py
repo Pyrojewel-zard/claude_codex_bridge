@@ -402,10 +402,14 @@ def _process_exists(pid: int | None) -> bool:
     return _platform_process_exists(pid)
 
 
+def _is_windows() -> bool:
+    return os.name == 'nt'
+
+
 def _socket_connectable(path: str | Path, *, timeout_s: float = 0.1) -> bool:
     # Legacy runtime evidence uses AF_UNIX sockets; Windows control-plane endpoints
     # are represented separately and should not be probed through this path.
-    if os.name == 'nt':
+    if _is_windows():
         return False
     target = Path(path)
     if not target.exists() or not hasattr(socket, 'AF_UNIX'):

@@ -21,7 +21,7 @@ capture_source_wrapper_trace(_CCB_PROCESS_ENTRY_NS)
 
 from stdio_runtime import setup_windows_encoding
 from terminal_runtime.backend_env import get_backend_env
-from terminal_runtime.os_platform import (
+from platforms.windows.os_platform import (
     detect_os_platform,
     detect_os_platform_string,
     platform_needs_herdr,
@@ -63,9 +63,9 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "8.5.7"
+VERSION = "8.6.0-beta.1"
 GIT_COMMIT = "release"
-GIT_DATE = "2026-06-27"
+GIT_DATE = "2026-08-11"
 
 
 def _is_source_checkout(root: Path) -> bool:

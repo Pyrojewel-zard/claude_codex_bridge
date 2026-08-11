@@ -18,7 +18,7 @@ from .agent_status_diagnostics import (
     pane_identity_source,
 )
 from .daemon import ping_local_state
-from .herdr_surface import herdr_surface_projection_from_namespace_state
+from platforms.windows.herdr.surface import herdr_surface_projection_from_namespace_state
 
 
 def layout_status(context) -> dict[str, object]:

@@ -135,7 +135,7 @@ def test_herdr_config_accepted_on_windows_with_capability() -> None:
     此处仅验证 selection flow 可达到非 blocked 分支。
     """
     from terminal_runtime.backend_resolver import resolve_mux_backend_v2
-    from terminal_runtime.herdr_backend_runtime.capabilities import (
+    from platforms.windows.herdr.runtime.capabilities import (
         _CORE_REQUIRED_CAPABILITIES,
         _KNOWN_CAPABILITIES,
     )
@@ -462,6 +462,7 @@ def test_va2_dynamic_agent_overlay_preserves_runtime_mux_backend(tmp_path) -> No
 
 def test_va2_load_project_config_preserves_runtime_mux_backend_through_overlays(
     tmp_path,
+    monkeypatch,
 ) -> None:
     """VA-2: e2e — load_project_config 经过两个 overlay 后仍保留 runtime_mux_backend。
 
@@ -490,7 +491,10 @@ backend = "herdr"
         encoding='utf-8',
     )
 
-    os.environ.pop('CCB_RUNTIME_MUX_BACKEND', None)
+    import terminal_runtime.api as terminal_api
+
+    monkeypatch.delenv('CCB_RUNTIME_MUX_BACKEND', raising=False)
+    monkeypatch.setattr(terminal_api, '_backend_config_preference', None)
     result = load_project_config(project_root, include_loop_overlays=True)
 
     # 断言 1: config 保留

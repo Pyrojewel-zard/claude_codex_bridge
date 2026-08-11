@@ -141,7 +141,9 @@ def test_inherited_skill_set_is_minimal() -> None:
 def test_install_scripts_current_skill_lists_are_minimal() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     install_sh = (repo_root / "install.sh").read_text(encoding="utf-8")
-    install_ps1 = (repo_root / "install.ps1").read_text(encoding="utf-8")
+    install_ps1 = (repo_root / "platforms" / "windows" / "installer" / "install.ps1").read_text(
+        encoding="utf-8-sig"
+    )
 
     assert 'local ccb_skills="ask ccb-config ccb-clear ccb-diagnose reconnect"' in install_sh
     assert 'local legacy_skills="ccb-config ' in install_sh

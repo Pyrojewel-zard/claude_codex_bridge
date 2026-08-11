@@ -713,17 +713,15 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     text = Path('.github/workflows/release-artifacts.yml').read_text(encoding='utf-8')
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
-    assert f'default: "v{version}"' in text
+    if '-' in version:
+        assert 'default: "v8.5.7"' in text
+        assert "!contains(github.ref_name, '-')" in text
+    else:
+        assert f'default: "v{version}"' in text
     assert 'test "$TAG_NAME" = "v$version"' in text
     assert 'os: ubuntu-22.04' in text
-    assert 'os: windows-2022' in text
-    assert 'scripts/build_windows_release.py' in text
-    assert 'ccb-windows-x86_64.zip' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
     assert 'rustup target add x86_64-apple-darwin aarch64-apple-darwin' in text
-    assert 'python -m zipfile -l "dist-release/${{ matrix.artifact }}"' in text
-    assert 'Expand-Archive -LiteralPath "dist-release/${{ matrix.artifact }}"' in text
-    assert 'ccb-agent-sidebar.exe' in text
     assert "grep -F 'universal binary'" in text
     assert '"$helper" --help' in text
     assert '"$rs_helper" --capabilities' in text
@@ -733,15 +731,13 @@ def test_npm_publish_workflow_skips_already_published_version() -> None:
     text = Path('.github/workflows/npm-publish.yml').read_text(encoding='utf-8')
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
-    assert f'default: "v{version}"' in text
+    if '-' in version:
+        assert 'default: "v8.5.7"' in text
+        assert "!contains(github.ref_name, '-')" in text
+    else:
+        assert f'default: "v{version}"' in text
     assert 'npm view "@seemseam/ccb@$version" version' in text
     assert "steps.npm_status.outputs.published != 'true'" in text
-
-
-def test_npm_publish_workflow_waits_for_windows_release_artifact() -> None:
-    text = Path('.github/workflows/npm-publish.yml').read_text(encoding='utf-8')
-
-    assert '"ccb-windows-x86_64.zip"' in text
 
 
 def test_release_artifacts_workflow_accepts_runtime_accelerator_socket_fallback() -> None:

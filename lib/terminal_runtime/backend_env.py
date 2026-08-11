@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from terminal_runtime.env import subprocess_kwargs as _subprocess_kwargs
-from terminal_runtime.os_platform import is_native_windows, is_wsl
+from platforms.windows.os_platform import is_native_windows, is_wsl
 
 
 def get_backend_env() -> str | None:

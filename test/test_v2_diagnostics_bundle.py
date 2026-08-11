@@ -206,7 +206,7 @@ def test_export_diagnostic_bundle_traces_redacted_herdr_projection_source(tmp_pa
     manifest = _read_tar_json(Path(summary.bundle_path), f'{summary.bundle_id}/manifest.json')
 
     assert doctor_payload['ccbd']['herdr_surface_projection'] == projection
-    assert manifest['herdr_surface_projection_sources'] == ['generated/doctor.json:ccbd.herdr_surface_projection']
+    assert manifest['herdr_surface_projection_sources'] == ['generated/doctor.json:platforms.windows.herdr.ccbd_surface_projection']
     assert 'raw-secret-token' not in str(doctor_payload)
     assert 'raw-secret-token' not in str(manifest)
 

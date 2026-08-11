@@ -7,7 +7,7 @@ from cli.models import ParsedPsCommand
 from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 
 from .daemon import ping_local_state
-from .herdr_surface import herdr_surface_projection_from_namespace_state
+from platforms.windows.herdr.surface import herdr_surface_projection_from_namespace_state
 from .provider_binding import binding_status
 
 

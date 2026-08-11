@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 
 
+def _is_windows() -> bool:
+    return os.name == 'nt'
+
+
 def process_exists(pid: int | None) -> bool:
     if pid is None or pid <= 0:
         return False
-    if os.name == 'nt':
+    if _is_windows():
         return _windows_process_exists(int(pid))
     try:
         os.kill(pid, 0)

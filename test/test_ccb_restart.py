@@ -299,10 +299,6 @@ def test_project_restart_agent_handler_restarts_one_agent(monkeypatch) -> None:
 
 
 def test_project_restart_agent_handler_defers_herdr_namespace_without_tmux_backend(monkeypatch) -> None:
-    def _tmux_backend(*_args, **_kwargs):
-        raise AssertionError('Herdr restart must not create TmuxBackend')
-
-    monkeypatch.setattr(project_restart, 'TmuxBackend', _tmux_backend)
     app = _app(runtimes={'agent1': _runtime(pane_id='herdr-pane-1')})
     app.project_namespace = SimpleNamespace(
         load=lambda: SimpleNamespace(

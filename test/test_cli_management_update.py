@@ -219,7 +219,7 @@ def test_cmd_update_windows_uses_release_surface_diagnostic(monkeypatch, tmp_pat
     assert code == 1
     output = capsys.readouterr().out
     assert "Windows x64 release route is blocked" in output
-    assert "Use install.ps1 for source/dev checkout installs" in output
+    assert "Use install.ps1 from a validated Windows release ZIP or source checkout" in output
 
 
 def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -291,11 +291,11 @@ def test_release_artifact_name_uses_macos_universal_bundle(monkeypatch) -> None:
     assert update_runtime._release_artifact_name() == "ccb-macos-universal.tar.gz"
 
 
-def test_release_artifact_name_uses_windows_x64_zip(monkeypatch) -> None:
+def test_release_artifact_name_keeps_windows_beta_out_of_stable_update_route(monkeypatch) -> None:
     monkeypatch.setattr(update_runtime.platform, "system", lambda: "Windows")
     monkeypatch.setattr(update_runtime.platform, "machine", lambda: "AMD64")
 
-    assert update_runtime._release_artifact_name() == "ccb-windows-x86_64.zip"
+    assert update_runtime._release_artifact_name() is None
 
 
 def test_release_artifact_url_points_to_release_download() -> None:

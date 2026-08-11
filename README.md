@@ -69,6 +69,25 @@ ccb update
 On an npm-managed install, `ccb update` prints the equivalent npm command and
 does not modify npm's vendored payload in place.
 
+<details>
+<summary><b>Native Windows x64 beta</b></summary>
+
+The Windows beta is published separately from the stable npm/Linux/macOS
+release. Download `ccb-windows-x86_64.zip` and its `.sha256` sidecar from the
+matching GitHub prerelease, verify the digest, extract the ZIP, then run:
+
+```powershell
+.\install.ps1 install -Yes
+ccb --print-version
+```
+
+It requires native Windows x64, Python 3.10+, WezTerm, Git Bash, and Herdr
+0.8.0 or newer. The installer creates an install-local managed Python runtime.
+The binaries are unsigned, and `ccb update` remains diagnostic-only in the
+first beta; install a later beta by rerunning its validated `install.ps1`.
+
+</details>
+
 CCB-managed provider panes suppress known provider-native startup update prompts.
 After updating CCB—or immediately when CCB is already current—`ccb update`
 checks installed provider CLIs and offers supported updates once. Use
@@ -77,12 +96,6 @@ report-only, non-interactive update, or skip behavior. Declining prompts again
 on the next `ccb update`; skipping a version hides only that exact version.
 CCB never restarts active provider panes during this flow, so an accepted
 provider update applies when that pane next starts or is explicitly restarted.
-
-On Windows x64, `ccb doctor` and `ccb doctor --output` expose the
-`windows_x64_release_surface` diagnostics rows. Use `release_install_entry`,
-`source_install_allowed`, `source_install_entry`, `update_entry`,
-`managed_python_status`, `native_helper_status`, and `next_action` to distinguish
-source/dev `install.ps1` fallback from blocked npm or release update routes.
 
 After a release change, the newly installed CCB also retires old
 project-scoped Claude/Gemini caches. Manifest-valid caches for deleted projects

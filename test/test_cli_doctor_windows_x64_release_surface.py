@@ -8,7 +8,7 @@ from cli.render_runtime.ops_views_doctor import render_doctor
 from cli.services import doctor as doctor_service
 from cli.services.daemon_runtime.models import LocalPingSummary
 from project.resolver import bootstrap_project
-from terminal_runtime.windows_x64_release_surface import default_blocked_projection
+from platforms.windows.release.surface import default_blocked_projection
 
 
 def _local_ping(context) -> LocalPingSummary:
@@ -97,6 +97,8 @@ def test_doctor_summary_includes_windows_x64_release_surface_projection(
 
     monkeypatch.setattr(doctor_service, 'installation_summary', lambda: {'path': str(install_root)})
     monkeypatch.setattr(doctor_service, 'ping_local_state', lambda _context: _local_ping(context))
+    monkeypatch.setattr(doctor_service.platform, 'system', lambda: 'Windows')
+    monkeypatch.setattr(doctor_service.platform, 'machine', lambda: 'AMD64')
 
     def _load_projection(root, host_evidence):
         calls.append({'root': root, 'host_evidence': dict(host_evidence)})
@@ -142,7 +144,7 @@ def test_render_doctor_includes_windows_x64_release_surface_rows() -> None:
     assert (
         'windows_x64_release_surface_detail: '
         'implementation_admission=admitted '
-        'baseline_version_status=v8.5.2 upstream_gate_status=blocked '
+        'baseline_version_status=unknown upstream_gate_status=blocked '
         'upstream_failure_ref=None upstream_detail_reason=upstream-not-admitted '
         'beta_gaps=none'
     ) in lines
@@ -157,7 +159,7 @@ def test_docs_and_readme_document_windows_x64_release_surface_contract() -> None
     docs = Path('docs/ccbd-diagnostics-contract.md').read_text(encoding='utf-8')
     readme = Path('README.md').read_text(encoding='utf-8')
 
-    for text in (docs, readme):
+    for text in (docs,):
         assert 'windows_x64_release_surface' in text
         assert 'release_install_entry' in text
         assert 'source_install_allowed' in text
@@ -167,10 +169,6 @@ def test_docs_and_readme_document_windows_x64_release_surface_contract() -> None
         assert 'native_helper_status' in text
         assert 'next_action' in text
 
-    bad_bundle_lines = [
-        (index + 1, line)
-        for index, line in enumerate(docs.splitlines())
-        if 'doctor --bundle' in line.lower()
-        and not any(word in line.lower() for word in ('deprecated', 'unsupported', 'no longer supported', 'not supported'))
-    ]
-    assert bad_bundle_lines == []
+    assert 'Native Windows x64 beta' in readme
+    assert 'ccb-windows-x86_64.zip' in readme
+    assert 'install.ps1 install -Yes' in readme

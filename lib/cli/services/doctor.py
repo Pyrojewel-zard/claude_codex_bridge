@@ -8,9 +8,9 @@ from agents.config_loader import load_project_config
 from ccbd.socket_client import CcbdClient
 from provider_core.catalog import build_default_provider_catalog
 from provider_execution.registry import build_default_execution_registry
-from terminal_runtime.herdr_supportability_projection import load_matrix as load_herdr_support_matrix
-from terminal_runtime.windows_herdr_public_workflow_matrix import MATRIX_RELATIVE_PATH as HERDR_MATRIX_PATH
-from terminal_runtime.windows_x64_release_surface import load_windows_x64_release_surface_projection
+from platforms.windows.herdr.supportability_projection import load_matrix as load_herdr_support_matrix
+from platforms.windows.release.workflow_matrix import MATRIX_RELATIVE_PATH as HERDR_MATRIX_PATH
+from platforms.windows.release.surface import load_windows_x64_release_surface_projection
 
 from .daemon import ping_local_state
 from .daemon_runtime.policy import CONTROL_PLANE_RPC_TIMEOUT_S

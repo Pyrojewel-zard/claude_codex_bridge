@@ -13,7 +13,7 @@ import tempfile
 import zipfile
 
 from release_artifacts import release_artifact_name
-from terminal_runtime.windows_x64_release_surface import load_windows_x64_release_surface_projection
+from platforms.windows.release.surface import load_windows_x64_release_surface_projection
 from cli.roles_runtime.commands import cmd_roles
 from cli.services.mobile_host import start_or_replace_mobile_host_service
 from cli.services.mobile_update import (

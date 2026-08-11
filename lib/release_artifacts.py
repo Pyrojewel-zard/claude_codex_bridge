@@ -6,7 +6,6 @@ def normalize_arch(raw_arch: str) -> str:
     mapping = {
         "x86_64": "x86_64",
         "amd64": "x86_64",
-        "x64": "x86_64",
         "aarch64": "aarch64",
         "arm64": "aarch64",
     }
@@ -18,11 +17,8 @@ def normalize_release_platform(raw_system: str) -> str | None:
     mapping = {
         "Linux": "linux",
         "Darwin": "macos",
-        "Windows": "windows",
         "linux": "linux",
         "macos": "macos",
-        "win32": "windows",
-        "windows": "windows",
     }
     return mapping.get(text)
 
@@ -33,9 +29,6 @@ def release_build_arch(platform_name: str, *, machine: str) -> str | None:
         return normalize_arch(machine)
     if platform_name == "macos":
         return "universal"
-    if platform_name == "windows":
-        arch = normalize_arch(machine)
-        return arch if arch == "x86_64" else None
     return None
 
 
@@ -46,9 +39,6 @@ def release_artifact_basename(platform_name: str, *, machine: str) -> str | None
         return f"ccb-linux-{arch}" if arch else None
     if platform_name == "macos":
         return "ccb-macos-universal"
-    if platform_name == "windows":
-        arch = normalize_arch(machine)
-        return f"ccb-windows-{arch}" if arch == "x86_64" else None
     return None
 
 
@@ -56,6 +46,4 @@ def release_artifact_name(platform_name: str, *, machine: str) -> str | None:
     basename = release_artifact_basename(platform_name, machine=machine)
     if not basename:
         return None
-    if normalize_release_platform(platform_name) == "windows":
-        return f"{basename}.zip"
     return f"{basename}.tar.gz"

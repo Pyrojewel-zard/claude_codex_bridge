@@ -127,7 +127,7 @@ def _ensure_herdr_runtime_evidence(context) -> None:
         return
     if not _is_herdr_relevant_platform():
         return
-    from cli.services.herdr_bootstrap import ensure_herdr_bootstrap_env
+    from platforms.windows.herdr.bootstrap import ensure_herdr_bootstrap_env
 
     result = ensure_herdr_bootstrap_env(
         auto_start_server=True,
@@ -178,7 +178,7 @@ def _herdr_capability_evidence_usable() -> bool:
     try:
         import json as _json
 
-        from terminal_runtime.herdr_backend_runtime.capabilities import (
+        from platforms.windows.herdr.runtime.capabilities import (
             herdr_capability_report_supported,
         )
 
@@ -224,7 +224,7 @@ def handle_herdr_open(context, command, out, services) -> int:
     until ccbd is mounted (replacing the ``ccb8.ps1`` lifecycle.json poll).
     """
     from cli.models_start import ParsedStartCommand
-    from cli.services.herdr_bootstrap import ensure_herdr_bootstrap_env
+    from platforms.windows.herdr.bootstrap import ensure_herdr_bootstrap_env
 
     # P0: let Python own the Herdr server lifecycle.  When nothing is running,
     # start the ccbd-derived session server here instead of in ccb8.ps1.
@@ -358,7 +358,7 @@ def _print_herdr_daemon_conflict(backend: str | None) -> None:
 
 def handle_config_import_herdr(context, command, out, services) -> int:
     """A-lite: import Herdr workspace/pane topology as a CCB config draft."""
-    from cli.services.herdr_config_import import import_herdr_config
+    from platforms.windows.herdr.config_import import import_herdr_config
 
     project_dir = str(getattr(context, 'project_dir', '') or os.getcwd())
     result = import_herdr_config(

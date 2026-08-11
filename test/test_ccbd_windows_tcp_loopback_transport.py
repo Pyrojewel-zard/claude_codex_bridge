@@ -21,7 +21,7 @@ from ccbd.control_plane_transport.endpoint_store import (
 )
 from ccbd.control_plane_transport.factory import connect_endpoint, transport_for_legacy_socket_path
 from ccbd.control_plane_transport.token_auth import RpcTransportAuthError, create_token_file, load_token_file, _current_windows_user
-from ccbd.control_plane_transport.windows_tcp import WindowsTcpControlPlaneTransport
+from platforms.windows.control_plane.tcp import WindowsTcpControlPlaneTransport
 from ccbd.services.lifecycle import build_lifecycle
 from ccbd.services.project_inspection import ProjectDaemonInspection
 from ccbd.socket_client import CcbdClient, CcbdClientError
@@ -104,7 +104,7 @@ def _ps_literal_value(script: str, name: str) -> str:
 
 
 def test_factory_selects_windows_tcp_for_legacy_socket_path(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'nt')
+    monkeypatch.setattr('ccbd.control_plane_transport.factory._is_windows', lambda: True)
     write_endpoint(
         endpoint_from_record(
             {
@@ -126,7 +126,7 @@ def test_factory_selects_windows_tcp_for_legacy_socket_path(monkeypatch, tmp_pat
 
 
 def test_windows_client_without_endpoint_fails_with_endpoint_error_not_af_unix(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'nt')
+    monkeypatch.setattr('ccbd.control_plane_transport.factory._is_windows', lambda: True)
     client = CcbdClient(tmp_path / 'ccbd.sock', timeout_s=0.1)
 
     with pytest.raises(CcbdClientError) as error:
@@ -138,8 +138,8 @@ def test_windows_client_without_endpoint_fails_with_endpoint_error_not_af_unix(m
 
 
 def test_socket_server_prefers_windows_tcp_without_endpoint_descriptor(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'nt')
-    monkeypatch.setattr('ccbd.socket_server_runtime.server.os.name', 'nt')
+    monkeypatch.setattr('ccbd.control_plane_transport.factory._is_windows', lambda: True)
+    monkeypatch.setattr('ccbd.socket_server_runtime.server._is_windows', lambda: True)
 
     server = CcbdSocketServer(tmp_path / 'ccbd.sock')
 
@@ -403,7 +403,7 @@ def test_bad_tcp_token_is_not_accepted_by_listener(tmp_path: Path) -> None:
 
 
 def test_windows_legacy_socket_path_rejects_invalid_tcp_endpoint_descriptor(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'nt')
+    monkeypatch.setattr('ccbd.control_plane_transport.factory._is_windows', lambda: True)
     endpoint_store_path(tmp_path / 'ccbd.sock').write_text(
         json.dumps({'kind': 'tcp_loopback', 'host': '127.0.0.2', 'port': 32123, 'token_ref': 'token.json'}) + '\n',
         encoding='utf-8',
@@ -418,7 +418,7 @@ def test_windows_legacy_socket_path_rejects_invalid_tcp_endpoint_descriptor(monk
 
 
 def test_direct_windows_endpoint_rejects_non_tcp_descriptor(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'nt')
+    monkeypatch.setattr('ccbd.control_plane_transport.factory._is_windows', lambda: True)
 
     with pytest.raises(RpcTransportAuthError) as error:
         connect_endpoint({'socket_path': str(tmp_path / 'ccbd.sock')}, timeout_s=0.1)

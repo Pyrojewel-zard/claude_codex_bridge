@@ -7,7 +7,7 @@ import threading
 
 from ccbd.control_plane_transport import endpoint_from_legacy_socket_path
 from ccbd.control_plane_transport.factory import transport_for_legacy_socket_path
-from ccbd.control_plane_transport.windows_tcp import WindowsTcpControlPlaneTransport
+from platforms.windows.control_plane.tcp import WindowsTcpControlPlaneTransport
 
 from .bootstrap_probe import bootstrap_readiness_probe
 from .lifecycle import listen_server, shutdown_server
@@ -16,6 +16,10 @@ from .protocol import handle_connection
 
 
 _CONNECTION_QUEUE_MAXSIZE = 128
+
+
+def _is_windows() -> bool:
+    return os.name == 'nt'
 
 
 class CcbdSocketServer:
@@ -41,9 +45,9 @@ class CcbdSocketServer:
         if control_plane_transport is None:
             transport = transport_for_legacy_socket_path(
                 self._socket_path,
-                prefer_windows=os.name == 'nt',
+                prefer_windows=_is_windows(),
             )
-            if os.name == 'nt' and not isinstance(transport, WindowsTcpControlPlaneTransport):
+            if _is_windows() and not isinstance(transport, WindowsTcpControlPlaneTransport):
                 transport = WindowsTcpControlPlaneTransport(None, legacy_socket_path=self._socket_path)
             self._control_plane_transport = transport
         else:

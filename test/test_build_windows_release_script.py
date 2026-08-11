@@ -1,117 +1,129 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
-from types import SimpleNamespace
 import zipfile
+
+import pytest
 
 
 def _load_module():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "build_windows_release.py"
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "platforms"
+        / "windows"
+        / "packaging"
+        / "build_release.py"
+    )
     spec = importlib.util.spec_from_file_location("build_windows_release", script_path)
-    module = importlib.util.module_from_spec(spec)
     assert spec is not None
     assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_windows_release_artifact_is_x64_zip() -> None:
+def test_windows_release_identity_is_isolated_x64_zip() -> None:
     module = _load_module()
 
-    assert module.release_artifact_basename("Windows", machine="AMD64") == "ccb-windows-x86_64"
-    assert module.release_artifact_basename("win32", machine="x64") == "ccb-windows-x86_64"
-    assert module.release_artifact_name("windows", machine="x86_64") == "ccb-windows-x86_64.zip"
-    assert module.release_build_arch("windows", machine="arm64") is None
+    assert module.ARTIFACT_NAME == "ccb-windows-x86_64.zip"
+    assert module.normalize_arch("AMD64") == "x86_64"
+    assert module.normalize_arch("x64") == "x86_64"
+    assert module.WINDOWS_PLATFORM_DIR.as_posix() == "platforms/windows"
+    assert module.WINDOWS_RUNTIME_DIR.as_posix() == "lib/platforms/windows"
 
 
-def test_windows_create_zip_archive_contains_release_tree_without_tar_alias(tmp_path: Path) -> None:
+def test_builder_rejects_non_windows_or_non_x64_host(monkeypatch) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(module.platform, "machine", lambda: "x86_64")
+
+    with pytest.raises(RuntimeError, match="native Windows x64"):
+        module.require_windows_x64_host()
+
+
+def test_copy_payload_uses_allowlist_and_keeps_unix_builders_out(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module()
+    export_root = tmp_path / "export"
+    artifact_root = tmp_path / "artifact"
+    (export_root / "shared").mkdir(parents=True)
+    (export_root / "shared" / "runtime.py").write_text("shared\n", encoding="utf-8")
+    (export_root / "VERSION").write_text("8.6.0-beta.1\n", encoding="utf-8")
+    windows_root = export_root / "platforms" / "windows"
+    for name in ("docs", "installer"):
+        (windows_root / name).mkdir(parents=True)
+        (windows_root / name / "marker.txt").write_text(name, encoding="utf-8")
+    (export_root / "install.sh").write_text("unix\n", encoding="utf-8")
+    (export_root / "scripts").mkdir()
+    (export_root / "scripts" / "build_linux_release.py").write_text("unix\n", encoding="utf-8")
+
+    monkeypatch.setattr(module, "PAYLOAD_FILES", ("VERSION",))
+    monkeypatch.setattr(module, "PAYLOAD_DIRS", ("shared",))
+    module.copy_payload(export_root, artifact_root)
+
+    assert (artifact_root / "VERSION").is_file()
+    assert (artifact_root / "shared" / "runtime.py").is_file()
+    assert (artifact_root / "platforms/windows/installer/marker.txt").is_file()
+    assert not (artifact_root / "install.sh").exists()
+    assert not (artifact_root / "scripts").exists()
+
+
+def test_native_launcher_is_projected_to_all_public_windows_commands(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module()
+    artifact_root = tmp_path / "artifact"
+    build_root = tmp_path / "build"
+
+    def fake_cargo_build(_manifest: Path, target_dir: Path, binary_name: str) -> Path:
+        binary = target_dir / "release" / f"{binary_name}.exe"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"MZfake")
+        return binary
+
+    monkeypatch.setattr(module, "_cargo_build", fake_cargo_build)
+    entries = module.build_native_binaries(artifact_root, build_root)
+
+    for name in ("ccb", "ask", "autonew", "ctx-transfer"):
+        assert entries[name] == f"bin/{name}.exe"
+        assert (artifact_root / entries[name]).read_bytes().startswith(b"MZ")
+    assert entries["ccb-agent-sidebar"] == "bin/ccb-agent-sidebar.exe"
+    assert entries["ccb-rs-helper"] == "bin/ccb-rs-helper.exe"
+
+
+def test_metadata_archive_and_checksum_are_self_consistent(tmp_path: Path) -> None:
     module = _load_module()
     stage_root = tmp_path / "stage"
-    artifact_root = stage_root / "ccb-windows-x86_64"
-    artifact_root.mkdir(parents=True)
+    artifact_root = stage_root / module.ARTIFACT_BASENAME
+    bin_dir = artifact_root / "bin"
+    bin_dir.mkdir(parents=True)
+    (artifact_root / "VERSION").write_text("8.6.0-beta.1\n", encoding="utf-8")
     (artifact_root / "install.ps1").write_text("Write-Host install\n", encoding="utf-8")
-    (artifact_root / "BUILD_INFO.json").write_text("{}\n", encoding="utf-8")
-    (artifact_root / "bin").mkdir()
-    (artifact_root / "bin" / "ccb-agent-sidebar.exe").write_bytes(b"MZfake")
-    artifact_path = tmp_path / "ccb-windows-x86_64.zip"
+    entries = {
+        "ccb": "bin/ccb.exe",
+        "ask": "bin/ask.exe",
+        "autonew": "bin/autonew.exe",
+        "ctx-transfer": "bin/ctx-transfer.exe",
+    }
+    for relative in entries.values():
+        (artifact_root / relative).write_bytes(b"MZfake")
 
-    module.create_release_archive(stage_root=stage_root, artifact_root=artifact_root, artifact_path=artifact_path)
-
-    with zipfile.ZipFile(artifact_path) as archive:
-        names = set(archive.namelist())
-
-    assert "ccb-windows-x86_64/install.ps1" in names
-    assert "ccb-windows-x86_64/BUILD_INFO.json" in names
-    assert "ccb-windows-x86_64/bin/ccb-agent-sidebar.exe" in names
-    assert "ccb-windows-x86_64.zip" not in names
-    assert not stage_root.exists()
-
-
-def test_build_sidebar_helper_for_windows_copies_exe(monkeypatch, tmp_path: Path) -> None:
-    module = _load_module()
-    artifact_root = tmp_path / "artifact"
-    crate_dir = artifact_root / "tools" / "ccb-agent-sidebar"
-    output_bin = artifact_root / "bin" / "ccb-agent-sidebar.exe"
-    crate_dir.mkdir(parents=True)
-    (crate_dir / "Cargo.toml").write_text('[package]\nname = "ccb-agent-sidebar"\n', encoding="utf-8")
-
-    def _fake_run(cmd, **kwargs):
-        assert cmd[:3] == ["cargo", "build", "--release"]
-        built = crate_dir / "target" / "release" / "ccb-agent-sidebar.exe"
-        built.parent.mkdir(parents=True)
-        built.write_bytes(b"MZsidebar")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(module.build_sidebar_helper_for_release.__globals__["subprocess"], "run", _fake_run)
-
-    module.build_sidebar_helper_for_release(artifact_root, target_platform="windows")
-
-    assert output_bin.read_bytes() == b"MZsidebar"
-    assert not (crate_dir / "target").exists()
-
-
-def test_build_rs_helper_for_windows_copies_exe(monkeypatch, tmp_path: Path) -> None:
-    module = _load_module()
-    artifact_root = tmp_path / "artifact"
-    crate_dir = artifact_root / "tools" / "ccb-rs-helper"
-    output_bin = artifact_root / "bin" / "ccb-rs-helper.exe"
-    crate_dir.mkdir(parents=True)
-    (crate_dir / "Cargo.toml").write_text('[package]\nname = "ccb-rs-helper"\n', encoding="utf-8")
-
-    def _fake_run(cmd, **kwargs):
-        assert cmd[:3] == ["cargo", "build", "--release"]
-        built = crate_dir / "target" / "release" / "ccb-rs-helper.exe"
-        built.parent.mkdir(parents=True)
-        built.write_bytes(b"MZrshelper")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(module.build_rs_helper_for_release.__globals__["subprocess"], "run", _fake_run)
-
-    module.build_rs_helper_for_release(artifact_root, target_platform="windows")
-
-    assert output_bin.read_bytes() == b"MZrshelper"
-    assert not (crate_dir / "target").exists()
-
-
-def test_build_runtime_accelerator_for_windows_skips_unix_socket_crate(monkeypatch, tmp_path: Path) -> None:
-    module = _load_module()
-    artifact_root = tmp_path / "artifact"
-    workspace_dir = artifact_root / "rust"
-    crate_dir = workspace_dir / "crates" / "ccb-runtime-accelerator"
-    output_bin = artifact_root / "bin" / "ccb-runtime-accelerator.exe"
-    crate_dir.mkdir(parents=True)
-    (workspace_dir / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/ccb-runtime-accelerator"]\n', encoding="utf-8")
-    (crate_dir / "Cargo.toml").write_text('[package]\nname = "ccb-runtime-accelerator"\n', encoding="utf-8")
-
-    monkeypatch.setattr(
-        module.build_runtime_accelerator_for_release.__globals__["subprocess"],
-        "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Windows release must not build the Unix-socket accelerator")
-        ),
+    module.write_metadata(
+        artifact_root,
+        version="8.6.0-beta.1",
+        commit="a" * 40,
+        commit_date="2026-08-11",
+        channel="beta",
+        bin_entries=entries,
     )
+    archive_path = tmp_path / module.ARTIFACT_NAME
+    checksum_path = tmp_path / module.CHECKSUM_NAME
+    module.create_zip(stage_root, artifact_root, archive_path)
+    digest = module.write_checksum(archive_path, checksum_path)
+    module.verify_archive(archive_path, version="8.6.0-beta.1")
 
-    module.build_runtime_accelerator_for_release(artifact_root, target_platform="windows")
-
-    assert not output_bin.exists()
+    assert checksum_path.read_text(encoding="utf-8") == f"{digest}  {archive_path.name}\n"
+    with zipfile.ZipFile(archive_path) as archive:
+        manifest = json.loads(archive.read(f"{module.ARTIFACT_BASENAME}/WINDOWS_MANIFEST.json"))
+    assert manifest["support_tier"] == "beta"
+    assert manifest["executable_entry"] == "bin/ccb.exe"
+    assert manifest["prerequisites"]["python"] == ">=3.10"

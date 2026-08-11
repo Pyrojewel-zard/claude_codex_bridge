@@ -246,7 +246,7 @@ def test_windows_process_exists_uses_open_process_when_os_kill_signal_zero_is_un
         windll=SimpleNamespace(kernel32=_Kernel32()),
         wintypes=SimpleNamespace(DWORD=int, BOOL=bool, HANDLE=int),
     )
-    monkeypatch.setattr(process_liveness.os, 'name', 'nt')
+    monkeypatch.setattr(process_liveness, '_is_windows', lambda: True)
     monkeypatch.setitem(sys.modules, 'ctypes', fake_ctypes)
 
     assert process_liveness.process_exists(1234) is True
@@ -274,7 +274,7 @@ def test_existing_identity_refuses_rebind_when_windows_legacy_runtime_is_active(
     moved = tmp_path / 'moved-root'
     original.rename(moved)
 
-    monkeypatch.setattr(process_liveness.os, 'name', 'nt')
+    monkeypatch.setattr(process_liveness, '_is_windows', lambda: True)
     monkeypatch.setattr(process_liveness, '_windows_process_exists', lambda pid: pid == 999999)
 
     with pytest.raises(ProjectIdentityConflictError, match='still active'):
@@ -287,7 +287,7 @@ def test_windows_socket_connectable_skips_legacy_unix_socket_probe(
     def _unexpected_exists(_path: Path) -> bool:
         raise AssertionError('Windows legacy socket probe should not touch the filesystem')
 
-    monkeypatch.setattr(identity_store.os, 'name', 'nt')
+    monkeypatch.setattr(identity_store, '_is_windows', lambda: True)
     monkeypatch.setattr(identity_store.Path, 'exists', _unexpected_exists)
 
     assert identity_store._socket_connectable('D:/repo/.ccb/ccbd/ccbd.sock') is False
@@ -319,7 +319,7 @@ def test_existing_identity_rebind_on_windows_ignores_dead_legacy_socket_evidence
             raise AssertionError('Windows legacy socket evidence should not be probed')
         return original_exists(path)
 
-    monkeypatch.setattr(identity_store.os, 'name', 'nt')
+    monkeypatch.setattr(identity_store, '_is_windows', lambda: True)
     monkeypatch.setattr(process_liveness, '_windows_process_exists', lambda _pid: False)
     monkeypatch.setattr(identity_store.Path, 'exists', _exists)
 

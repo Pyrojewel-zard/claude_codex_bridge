@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Mapping, cast
 
-from terminal_runtime.herdr_backend_runtime.capabilities import (
+from platforms.windows.herdr.runtime.capabilities import (
     herdr_capability_report_supported,
     unsupported_capability_names,
 )
