@@ -4865,3 +4865,89 @@ def test_materialize_codex_home_config_with_skills_config_array(tmp_path: Path) 
         {'path': '/a/skill.md', 'enabled': False},
         {'name': 'plugin:other', 'enabled': True},
     ]
+
+
+def test_materialize_claude_home_config_refreshes_source_plugins_keeps_ccb_hooks_and_permissions(
+    tmp_path: Path,
+) -> None:
+    """Refreshing enabledPlugins/extraKnownMarketplaces from source must not
+    drop CCB-injected hooks, permissions, or managed auth env that live in the
+    target settings. This is the requirement that plugin refresh happens
+    *alongside* CCB state preservation, not instead of it."""
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'theme': 'dark',
+                'enabledPlugins': {
+                    'alpha@marketplace': True,
+                    'beta@claude-plugins-official': False,
+                },
+                'extraKnownMarketplaces': {
+                    'https://example.com/mp/index.json': True,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    # First materialize: source plugins projected into managed home.
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    # CCB then injects its own hooks + permission into the managed settings.
+    target_settings = target_home / '.claude' / 'settings.json'
+    payload = json.loads(target_settings.read_text(encoding='utf-8'))
+    payload['hooks'] = {
+        'Stop': [
+            {'hooks': [{'type': 'command', 'command': 'ccb-finish-hook'}]},
+        ]
+    }
+    payload['permissions'] = {'allow': ['Bash(ccb session)'], 'deny': []}
+    payload['env'] = {'ANTHROPIC_AUTH_TOKEN': 'managed-auth-token'}
+    target_settings.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    # Source changes: add plugin, drop plugin, flip a bool, change theme,
+    # drop marketplace.
+    source_settings.write_text(
+        json.dumps(
+            {
+                'theme': 'light',
+                'enabledPlugins': {
+                    'alpha@marketplace': False,
+                    'gamma@new-marketplace': True,
+                },
+                'extraKnownMarketplaces': {
+                    'https://new-example.com/mp/index.json': True,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    # Second materialize: plugins follow source exactly, CCB state preserved.
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    final = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+
+    assert final['theme'] == 'light'
+    # beta dropped, alpha flipped to False, gamma added — pure source mirror.
+    assert final['enabledPlugins'] == {
+        'alpha@marketplace': False,
+        'gamma@new-marketplace': True,
+    }
+    # extraKnownMarketplaces follows source too.
+    assert final['extraKnownMarketplaces'] == {
+        'https://new-example.com/mp/index.json': True,
+    }
+    # CCB hooks preserved.
+    assert final['hooks']['Stop'][0]['hooks'][0]['command'] == 'ccb-finish-hook'
+    # CCB permissions preserved.
+    assert final['permissions'] == {'allow': ['Bash(ccb session)'], 'deny': []}
+    # Managed auth env preserved.
+    assert final['env']['ANTHROPIC_AUTH_TOKEN'] == 'managed-auth-token'
