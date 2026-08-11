@@ -1,5 +1,20 @@
 # Changelog
 
+## v8.6.0 (2026-08-12)
+
+- Added the first native Windows x64 distribution to the stable CCB release:
+  native PE launchers, a checksum-validated PowerShell installer, and a
+  Windows-owned Herdr runtime and packaging lane. Windows support remains beta
+  and requires Python 3.10+, WezTerm, Git Bash, and Herdr 0.8.0+.
+- Restored Pi's validated native JSONL session after CCB restart, while keeping
+  fresh-context and explicit session controls unchanged.
+- Preserved Linux, macOS, WSL, npm, Sidebar, and Android stable publication
+  paths while isolating Windows code under platform-owned directories.
+- Fixed project-scoped tmux socket rebinding after backend cache reuse and made
+  non-interactive Windows installation honor `-Yes` when Herdr is absent.
+  Removed the backend import cycle that could block mobile/ccbd service imports.
+- No configuration or conversation migration is required.
+
 ## v8.6.0-beta.3 (2026-08-11)
 
 - Made the Windows installer's `-Yes` and `CCB_INSTALL_ASSUME_YES=1` modes acknowledge the guarded missing-Herdr continuation without reading interactive input.

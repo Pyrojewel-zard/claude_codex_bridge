@@ -6,8 +6,8 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
+  <img src="https://img.shields.io/badge/version-8.6.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
@@ -72,9 +72,9 @@ does not modify npm's vendored payload in place.
 <details>
 <summary><b>Native Windows x64 beta</b></summary>
 
-The Windows beta is published separately from the stable npm/Linux/macOS
-release. Download `ccb-windows-x86_64.zip` and its `.sha256` sidecar from the
-matching GitHub prerelease, verify the digest, extract the ZIP, then run:
+The Windows beta artifact is attached to the matching stable CCB GitHub
+release. Download `ccb-windows-x86_64.zip` and its `.sha256` sidecar, verify
+the digest, extract the ZIP, then run:
 
 ```powershell
 .\install.ps1 install -Yes
@@ -83,8 +83,9 @@ ccb --print-version
 
 It requires native Windows x64, Python 3.10+, WezTerm, Git Bash, and Herdr
 0.8.0 or newer. The installer creates an install-local managed Python runtime.
-The binaries are unsigned, and `ccb update` remains diagnostic-only in the
-first beta; install a later beta by rerunning its validated `install.ps1`.
+The binaries are unsigned, and `ccb update` remains diagnostic-only for this
+beta support tier; install a later Windows build by rerunning its validated
+`install.ps1`.
 
 </details>
 
@@ -239,9 +240,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.7 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.6.0 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
+- [Download CCB Mobile v8.6.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.0/ccb-mobile-v8.6.0.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 

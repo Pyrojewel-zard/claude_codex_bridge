@@ -8,7 +8,9 @@ this directory. Shared runtime contracts may call implementations under
 `lib/platforms/windows/`, but concrete Windows code must not be added to the
 Unix installers or Unix release workflows.
 
-The beta artifact is `ccb-windows-x86_64.zip`. It contains native PE launchers
+The Windows beta artifact is `ccb-windows-x86_64.zip`, attached to the stable
+CCB GitHub Release. It contains native PE launchers
 for `ccb`, `ask`, `autonew`, and `ctx-transfer`, plus the Python runtime source
 tree. Python 3.10+, WezTerm, Git Bash, and Herdr remain explicit prerequisites
-for this beta; it is not presented as a fully self-contained installer.
+for this support tier; it is not presented as a fully self-contained installer
+or as stable Windows support.

@@ -1,6 +1,28 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import sys
+
+
+def test_mobile_update_imports_in_a_fresh_interpreter_without_backend_cycle() -> None:
+    root = Path.cwd()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(root / "lib"), env.get("PYTHONPATH", "")) if part
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", "from cli.services import mobile_update"],
+        cwd=root,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_windows_tcp_transport_does_not_add_named_pipe_or_af_unix_branches() -> None:

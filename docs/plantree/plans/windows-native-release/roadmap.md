@@ -1,6 +1,6 @@
 # Native Windows Release Roadmap
 
-Date: 2026-08-11
+Date: 2026-08-12
 
 ## Completed locally
 
@@ -8,7 +8,7 @@ Date: 2026-08-11
   Unix release code removed or rewritten by PR #293.
 - Moved Windows-owned runtime and release code into dedicated folders.
 - Added a native Rust launcher and Windows-only packaging workflow.
-- Kept Windows out of npm package metadata and stable tag workflows.
+- Kept Windows out of npm package metadata and Unix release builders.
 - Restored project-scoped tmux socket binding after PR #293's backend cache
   reuse broke the Linux/macOS/WSL lifecycle smoke.
 
@@ -25,10 +25,23 @@ Date: 2026-08-11
 - Stable npm, Linux/macOS artifact, Sidebar, and Android publication routes
   remained untouched.
 
-## Next after publication
+## Stable v8.6.0 candidate
+
+- Promote the repository version to stable `8.6.0` across Python, npm, mobile,
+  and Windows launcher identity.
+- Keep the Windows projection and archive manifest at beta support tier.
+- Allow the isolated Windows workflow to build both immutable beta tags and
+  stable CCB tags, attaching its ZIP to the same GitHub Release.
+- Require the stable Linux, macOS, Android, Sidebar, and npm workflows to
+  publish normally; the Windows workflow does not replace or gate their
+  platform-specific assets.
+- Preserve `v8.6.0-beta.3` as immutable evidence rather than moving its tag.
+
+## Next after stable publication
 
 1. Install the ZIP on a real user Windows x64 machine.
 2. Validate WezTerm + Herdr startup, pane creation, capture, restart, kill, and
    Codex/Claude provider workflows.
 3. Record failures without upgrading the support tier prematurely.
-4. Cut another beta for fixes; do not move an already published tag.
+4. Cut a new immutable release for fixes; do not move an already published
+   stable or beta tag.
