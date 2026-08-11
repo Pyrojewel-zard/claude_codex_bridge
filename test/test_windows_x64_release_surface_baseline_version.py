@@ -11,7 +11,7 @@ def test_current_workspace_versions_match() -> None:
 
     assert admission["status"] == "ready"
     assert admission["baseline_version_status"] == "matching"
-    assert admission["version"] == "8.6.0-beta.1"
+    assert admission["version"] == "8.6.0-beta.2"
 
 
 def test_mismatched_version_blocks_release_route(tmp_path: Path) -> None:

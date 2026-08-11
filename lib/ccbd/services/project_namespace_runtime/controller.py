@@ -46,6 +46,13 @@ def default_project_namespace_backend(*, socket_path: str | None = None, namespa
         return _select_herdr_backend()
     if backend is None and namespace_state is None:
         return _select_herdr_backend()
+    # ``terminal_runtime.get_backend()`` may return its process-global cached
+    # TmuxBackend.  Project namespaces must never reuse that backend because
+    # its socket is either the ambient tmux server or another project's
+    # socket.  Keep backend auto-selection for Herdr and test doubles, but
+    # always bind the real tmux implementation to this project's socket.
+    if isinstance(backend, TmuxBackend):
+        return TmuxBackend(socket_path=socket_path)
     if backend is not None:
         return backend
     return TmuxBackend(socket_path=socket_path)

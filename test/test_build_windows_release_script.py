@@ -34,6 +34,15 @@ def test_windows_release_identity_is_isolated_x64_zip() -> None:
     assert module.WINDOWS_RUNTIME_DIR.as_posix() == "lib/platforms/windows"
 
 
+def test_default_payload_allowlist_only_names_tracked_source_directories() -> None:
+    module = _load_module()
+    repo_root = Path(__file__).resolve().parents[1]
+
+    assert "commands" not in module.PAYLOAD_DIRS
+    missing = [name for name in module.PAYLOAD_DIRS if not (repo_root / name).is_dir()]
+    assert missing == []
+
+
 def test_builder_rejects_non_windows_or_non_x64_host(monkeypatch) -> None:
     module = _load_module()
     monkeypatch.setattr(module.platform, "system", lambda: "Linux")
@@ -49,7 +58,7 @@ def test_copy_payload_uses_allowlist_and_keeps_unix_builders_out(monkeypatch, tm
     artifact_root = tmp_path / "artifact"
     (export_root / "shared").mkdir(parents=True)
     (export_root / "shared" / "runtime.py").write_text("shared\n", encoding="utf-8")
-    (export_root / "VERSION").write_text("8.6.0-beta.1\n", encoding="utf-8")
+    (export_root / "VERSION").write_text("8.6.0-beta.2\n", encoding="utf-8")
     windows_root = export_root / "platforms" / "windows"
     for name in ("docs", "installer"):
         (windows_root / name).mkdir(parents=True)
@@ -96,7 +105,7 @@ def test_metadata_archive_and_checksum_are_self_consistent(tmp_path: Path) -> No
     artifact_root = stage_root / module.ARTIFACT_BASENAME
     bin_dir = artifact_root / "bin"
     bin_dir.mkdir(parents=True)
-    (artifact_root / "VERSION").write_text("8.6.0-beta.1\n", encoding="utf-8")
+    (artifact_root / "VERSION").write_text("8.6.0-beta.2\n", encoding="utf-8")
     (artifact_root / "install.ps1").write_text("Write-Host install\n", encoding="utf-8")
     entries = {
         "ccb": "bin/ccb.exe",
@@ -109,7 +118,7 @@ def test_metadata_archive_and_checksum_are_self_consistent(tmp_path: Path) -> No
 
     module.write_metadata(
         artifact_root,
-        version="8.6.0-beta.1",
+        version="8.6.0-beta.2",
         commit="a" * 40,
         commit_date="2026-08-11",
         channel="beta",
@@ -119,7 +128,7 @@ def test_metadata_archive_and_checksum_are_self_consistent(tmp_path: Path) -> No
     checksum_path = tmp_path / module.CHECKSUM_NAME
     module.create_zip(stage_root, artifact_root, archive_path)
     digest = module.write_checksum(archive_path, checksum_path)
-    module.verify_archive(archive_path, version="8.6.0-beta.1")
+    module.verify_archive(archive_path, version="8.6.0-beta.2")
 
     assert checksum_path.read_text(encoding="utf-8") == f"{digest}  {archive_path.name}\n"
     with zipfile.ZipFile(archive_path) as archive:

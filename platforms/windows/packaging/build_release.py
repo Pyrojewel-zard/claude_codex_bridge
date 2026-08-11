@@ -29,7 +29,6 @@ WINDOWS_RUNTIME_DIR = Path("lib/platforms/windows")
 PAYLOAD_DIRS = (
     "assets",
     "bin",
-    "commands",
     "config",
     "inherit_skills",
     "lib",

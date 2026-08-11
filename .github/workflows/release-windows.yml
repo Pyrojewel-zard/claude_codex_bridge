@@ -6,7 +6,7 @@ on:
       tag:
         description: "Windows prerelease tag to build and publish"
         required: true
-        default: "v8.6.0-beta.1"
+        default: "v8.6.0-beta.2"
   push:
     tags:
       - "v*-beta.*"

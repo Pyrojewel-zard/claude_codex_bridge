@@ -259,6 +259,7 @@ class _FakeHerdrNamespaceBackend:
         session_id: str | None,
         namespace_epoch: int | None,
         managed_by: str | None,
+        provider_kind: str | None,
     ) -> None:
         self.calls.append(
             (
@@ -277,6 +278,7 @@ class _FakeHerdrNamespaceBackend:
                     'session_id': session_id,
                     'namespace_epoch': namespace_epoch,
                     'managed_by': managed_by,
+                    'provider_kind': provider_kind,
                 },
             )
         )

@@ -9,11 +9,17 @@ Date: 2026-08-11
 - Moved Windows-owned runtime and release code into dedicated folders.
 - Added a native Rust launcher and Windows-only packaging workflow.
 - Kept Windows out of npm package metadata and stable tag workflows.
+- Restored project-scoped tmux socket binding after PR #293's backend cache
+  reuse broke the Linux/macOS/WSL lifecycle smoke.
 
 ## Current gate
 
-- Run focused Python/static regression tests in the isolated release worktree.
-- Push the release commit and immutable prerelease tag.
+- `v8.6.0-beta.1` is immutable and superseded: native tests passed, but the
+  ZIP builder rejected a stale `commands/` allowlist entry before publication.
+- Local payload, namespace, reconnect, Windows/Herdr, and cross-platform
+  lifecycle gates for `v8.6.0-beta.2` pass.
+- Push the follow-up commit, require the main-branch cross-platform checks, and
+  then create the immutable prerelease tag.
 - Require the Windows 2022 GitHub Actions build, PowerShell archive install,
   and native launcher smoke test to pass before the GitHub prerelease exists.
 

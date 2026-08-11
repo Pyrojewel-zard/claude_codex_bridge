@@ -1,5 +1,13 @@
 # Changelog
 
+## v8.6.0-beta.2 (2026-08-11)
+
+- Fixed the Windows release builder allowlist so it no longer requires the nonexistent `commands/` directory.
+- Added a regression check that every default payload directory exists before another immutable prerelease is tagged.
+- Rebound auto-selected tmux backends to each project's authoritative socket,
+  fixing the Linux, macOS, and WSL lifecycle regression introduced by PR #293.
+- Supersedes `v8.6.0-beta.1`, whose native tests passed but whose ZIP build was correctly blocked before a GitHub Release was created.
+
 ## v8.6.0-beta.1 (2026-08-11)
 
 - Added an isolated native Windows x64 prerelease lane under `platforms/windows/` and `lib/platforms/windows/`.

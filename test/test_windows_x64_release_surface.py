@@ -33,7 +33,7 @@ def test_missing_projection_fails_closed(tmp_path: Path) -> None:
 
 
 def test_beta_projection_admits_native_windows_x64_as_degraded(tmp_path: Path) -> None:
-    _write_projection(tmp_path, windows_beta_projection("8.6.0-beta.1"))
+    _write_projection(tmp_path, windows_beta_projection("8.6.0-beta.2"))
 
     projection = load_windows_x64_release_surface_projection(tmp_path, WINDOWS_X64)
 
@@ -47,7 +47,7 @@ def test_beta_projection_admits_native_windows_x64_as_degraded(tmp_path: Path) -
 
 
 def test_host_gate_blocks_non_x64_projection(tmp_path: Path) -> None:
-    _write_projection(tmp_path, windows_beta_projection("8.6.0-beta.1"))
+    _write_projection(tmp_path, windows_beta_projection("8.6.0-beta.2"))
 
     projection = load_windows_x64_release_surface_projection(
         tmp_path,
@@ -71,7 +71,7 @@ def test_malformed_projection_fails_closed(tmp_path: Path) -> None:
 
 
 def test_projection_with_missing_required_field_fails_closed(tmp_path: Path) -> None:
-    projection = windows_beta_projection("8.6.0-beta.1")
+    projection = windows_beta_projection("8.6.0-beta.2")
     del projection["archive_name"]
     _write_projection(tmp_path, projection)
 

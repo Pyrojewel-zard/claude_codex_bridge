@@ -825,6 +825,25 @@ def test_project_namespace_default_backend_factory_ignores_weak_herdr_env_hints(
     assert calls == [None]
 
 
+def test_project_namespace_default_backend_factory_rebinds_cached_tmux_to_project_socket(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+    from terminal_runtime import TmuxBackend
+
+    cached_backend = TmuxBackend()
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        lambda backend_name=None: cached_backend,
+    )
+
+    backend = default_project_namespace_backend(socket_path='project-tmux.sock')
+
+    assert isinstance(backend, TmuxBackend)
+    assert backend is not cached_backend
+    assert backend._socket_path == 'project-tmux.sock'
+
+
 def test_project_namespace_controller_reflows_herdr_workspace_with_v2_helpers(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo-herdr-reflow')
     backend = _FakeHerdrProjectNamespaceBackend()
