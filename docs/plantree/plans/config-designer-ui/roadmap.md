@@ -95,6 +95,10 @@ Date: 2026-07-13
   from every Window rather than only the entry Window. Model, thinking, Role,
   API, and other `[agents.<name>]` overrides now survive the visual editor's
   asynchronous render round trip for non-entry-window Agents.
+- Connected the RolePack field to the authoritative Role Catalog exposed by
+  `role_catalog_status()`, preserving currently configured ids and exposing
+  installed, available, updateable, and source-missing roles without leaking
+  local source paths or digests to the browser.
 
 ## Validation Evidence
 
@@ -173,6 +177,9 @@ Date: 2026-07-13
   vertical stack matching `claude1:claude, grok1:grok`. Follow-up dry-run was
   `no_change`.
 - Final Config UI/config-loader/reload/remove/reflow suite: `196 passed`.
+- Role Catalog payload and dynamic RolePack option regression passed in the
+  focused run; the broader run was environment-blocked by the pre-existing
+  missing `cryptography` dependency in the qualification Python.
 - 2026-07-15 multi-window overlay regression: reproduced the reset with the
   live five-Window project shape, then verified model/thinking retention for
   eight Codex Agents across the first three Windows in real headless Chrome.

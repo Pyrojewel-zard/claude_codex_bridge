@@ -5,6 +5,7 @@ SUBCOMMANDS = {
     'cancel',
     'followup',
     'clear',
+    'compact',
     'cleanup',
     'kill',
     'ps',

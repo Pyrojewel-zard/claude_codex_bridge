@@ -31,6 +31,12 @@ def handle_clear(context, command, out, services) -> int:
     return 0
 
 
+def handle_compact(context, command, out, services) -> int:
+    summary = services.compact_agent_context(context, command)
+    services.write_lines(out, services.render_compact(summary))
+    return 0 if str(summary.get('status') or '') == 'ok' else 1
+
+
 def handle_logs(context, command, out, services) -> int:
     summary = services.agent_logs(context, command)
     services.write_lines(out, services.render_logs(summary))
@@ -230,6 +236,7 @@ __all__ = [
     'handle_agent',
     'handle_cleanup',
     'handle_clear',
+    'handle_compact',
     'handle_doctor',
     'handle_fault_arm',
     'handle_fault_clear',

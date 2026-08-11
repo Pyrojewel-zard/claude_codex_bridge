@@ -5,6 +5,7 @@ export 'app/background_connection.dart';
 export 'app/mobile_network_status.dart';
 export 'app/app_factories.dart';
 export 'app/runtime_mode.dart';
+export 'app/terminal_shortcut_preferences.dart';
 export 'features/agent_chat/pane_chat_controller.dart';
 export 'features/project_home/project_home_screen.dart';
 export 'features/terminal/agent_terminal_pane.dart';

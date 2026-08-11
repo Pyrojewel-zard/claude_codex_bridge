@@ -28,6 +28,13 @@ class ParsedClearCommand:
 
 
 @dataclass(frozen=True)
+class ParsedCompactCommand:
+    project: str | None
+    agent_names: tuple[str, ...] = ()
+    kind: str = 'compact'
+
+
+@dataclass(frozen=True)
 class ParsedRestartCommand:
     project: str | None
     agent_name: str
@@ -308,6 +315,7 @@ class ParsedPingCommand:
 __all__ = [
     'ParsedAgentCommand',
     'ParsedClearCommand',
+    'ParsedCompactCommand',
     'ParsedCleanupCommand',
     'ParsedConfigUiCommand',
     'ParsedConfigValidateCommand',

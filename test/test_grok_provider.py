@@ -73,7 +73,7 @@ def test_grok_skills_project_per_home_even_when_optional_inheritance_is_disabled
     active = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
     repeated = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
 
-    assert active == ('ask', 'ccb-clear', 'ccb-diagnose')
+    assert active == ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose')
     assert repeated == active
     assert grok_ccb_skills_ready(home) is True
     for skill_name in active:
@@ -83,7 +83,7 @@ def test_grok_skills_project_per_home_even_when_optional_inheritance_is_disabled
 
     disabled = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=False))
 
-    assert disabled == ('ask', 'ccb-clear', 'ccb-diagnose')
+    assert disabled == ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose')
     assert grok_ccb_skills_ready(home) is True
     assert (home / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (home / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
@@ -98,7 +98,7 @@ def test_grok_skill_projection_repairs_unmarked_control_skill_conflict(tmp_path:
 
     active = materialize_grok_skills(home, profile=ProviderProfileSpec(inherit_skills=True))
 
-    assert active == ('ask', 'ccb-clear', 'ccb-diagnose')
+    assert active == ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose')
     assert 'name: ask' in conflict.read_text(encoding='utf-8')
     assert (home / '.grok' / 'skills' / 'ask.ccb-projection.json').is_file()
     assert grok_ccb_skills_ready(home) is True

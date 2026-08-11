@@ -728,6 +728,7 @@ class MobileGatewayService:
         catalog = config_ui_provider_capabilities(
             project_root=project.project_root,
             cli_models=None if provider in {'opencode', 'mimo'} else {},
+            roles=(),
         )
         provider_entry = next(
             (
@@ -904,6 +905,7 @@ class MobileGatewayService:
             catalog = config_ui_provider_capabilities(
                 project_root=project.project_root,
                 cli_models=None if provider in {'opencode', 'mimo'} else {},
+                roles=(),
             )
             provider_entry = next(
                 (

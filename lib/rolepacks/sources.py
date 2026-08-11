@@ -64,7 +64,11 @@ def _migrate_legacy_source_registry(target: Path) -> None:
         return
 
 
-def default_agent_roles_source(*, refresh: bool = False) -> Path | None:
+def default_agent_roles_source(
+    *,
+    refresh: bool = False,
+    download_if_missing: bool = True,
+) -> Path | None:
     env_path = os.environ.get('AGENT_ROLES_SPEC_HOME') or os.environ.get('CCB_AGENT_ROLES_SPEC_HOME')
     candidates: list[Path] = []
     if env_path:
@@ -75,7 +79,10 @@ def default_agent_roles_source(*, refresh: bool = False) -> Path | None:
             if refresh:
                 _refresh_git_agent_roles_source(candidate)
             return candidate.resolve()
-    remote = _ensure_remote_agent_roles_source(refresh=refresh)
+    remote = _ensure_remote_agent_roles_source(
+        refresh=refresh,
+        download_if_missing=download_if_missing,
+    )
     if remote is not None:
         return remote
     return None
@@ -109,7 +116,12 @@ def system_role_sources() -> tuple[RoleSource, ...]:
     return tuple(sources)
 
 
-def load_role_sources(*, include_default: bool = True, refresh_default: bool = False) -> tuple[RoleSource, ...]:
+def load_role_sources(
+    *,
+    include_default: bool = True,
+    refresh_default: bool = False,
+    download_missing_default: bool = True,
+) -> tuple[RoleSource, ...]:
     sources: list[RoleSource] = []
     seen: set[str] = set()
     if include_default:
@@ -122,7 +134,10 @@ def load_role_sources(*, include_default: bool = True, refresh_default: bool = F
                 continue
             sources.append(source)
             seen.add(source.name)
-        default = default_agent_roles_source(refresh=refresh_default)
+        default = default_agent_roles_source(
+            refresh=refresh_default,
+            download_if_missing=download_missing_default,
+        )
         if default is not None:
             sources.append(RoleSource(name='agentroles', path=default))
             seen.add('agentroles')
@@ -187,9 +202,14 @@ def discover_source_roles(
     include_default: bool = True,
     include_reference: bool | None = None,
     refresh_default: bool = False,
+    download_missing_default: bool = True,
 ) -> tuple[SourceRole, ...]:
     return _discover_roles_from_sources(
-        load_role_sources(include_default=include_default, refresh_default=refresh_default),
+        load_role_sources(
+            include_default=include_default,
+            refresh_default=refresh_default,
+            download_missing_default=download_missing_default,
+        ),
         include_reference=include_reference,
     )
 
@@ -495,8 +515,18 @@ def _repair_current_pointer(role_dir: Path, metadata: dict[str, Any]) -> None:
         shutil.copytree(target, current)
 
 
-def role_catalog_status(*, refresh_default: bool = False) -> tuple[dict[str, object], ...]:
-    source_roles = {role.role_id: role for role in discover_source_roles(refresh_default=refresh_default)}
+def role_catalog_status(
+    *,
+    refresh_default: bool = False,
+    download_missing_default: bool = True,
+) -> tuple[dict[str, object], ...]:
+    source_roles = {
+        role.role_id: role
+        for role in discover_source_roles(
+            refresh_default=refresh_default,
+            download_missing_default=download_missing_default,
+        )
+    }
     migrate_legacy_installed_roles()
     installed = set(installed_role_ids())
     rows: list[dict[str, object]] = []
@@ -626,7 +656,11 @@ def _looks_like_role_source(path: Path) -> bool:
         return False
 
 
-def _ensure_remote_agent_roles_source(*, refresh: bool = False) -> Path | None:
+def _ensure_remote_agent_roles_source(
+    *,
+    refresh: bool = False,
+    download_if_missing: bool = True,
+) -> Path | None:
     if _remote_agent_roles_disabled():
         return None
     target = _remote_agent_roles_cache_path()
@@ -637,6 +671,8 @@ def _ensure_remote_agent_roles_source(*, refresh: bool = False) -> Path | None:
                 return refreshed.resolve()
         return target.resolve()
     if target.exists():
+        return None
+    if not download_if_missing:
         return None
     return _clone_or_download_remote_agent_roles_source(target)
 

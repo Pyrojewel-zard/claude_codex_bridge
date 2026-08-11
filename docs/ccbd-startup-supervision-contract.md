@@ -476,7 +476,7 @@ Managed provider startup mutation rules:
   `incomplete` rather than completed. Older event shapes fail closed.
 - managed Qoder and Qoder CLI CN startup must resolve the final explicit or
   managed `--config-dir` before projecting skills; optional system skills, Role
-  skills, and packaged `ask`/`ccb-clear`/`ccb-diagnose` controls
+  skills, and packaged `ask`/`ccb-clear`/`ccb-compact`/`ccb-diagnose` controls
   target that same effective root for both visible and headless execution. The
   released provider key
   `qoderclicn` remains stable. An explicit config root equal to the source

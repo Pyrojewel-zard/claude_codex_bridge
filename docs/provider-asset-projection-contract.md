@@ -55,7 +55,7 @@ Examples include system skills, commands, and immutable Role skill snapshots.
 
 ### 3.2 Mandatory CCB control assets
 
-Examples are `ask`, `ccb-clear`, `ccb-diagnose`, and
+Examples are `ask`, `ccb-clear`, `ccb-compact`, `ccb-diagnose`, and
 provider-specific controls such as Codex `reconnect`.
 
 - Project them independently of `inherit_skills`.

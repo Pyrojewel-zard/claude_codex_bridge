@@ -117,6 +117,7 @@ def prepare_config_ui(
     capabilities_last_partial: list[bytes | None] = [None]
     capabilities_probe: list[dict[str, object] | None] = [None]
     capabilities_cache_lock = threading.Lock()
+    role_catalog = _config_ui_role_catalog()
 
     def capabilities_payload() -> bytes:
         with capabilities_cache_lock:
@@ -132,7 +133,11 @@ def prepare_config_ui(
                 budget_s=_CAPABILITIES_CLI_MODELS_BUDGET_S,
             )
             payload = json.dumps(
-                config_ui_provider_capabilities(project_root=project_root, cli_models=cli_models),
+                config_ui_provider_capabilities(
+                    project_root=project_root,
+                    cli_models=cli_models,
+                    roles=role_catalog,
+                ),
                 ensure_ascii=False,
             ).encode('utf-8')
             if probe_complete:
@@ -360,6 +365,7 @@ def config_ui_provider_capabilities(
     project_root: Path | None = None,
     codex_models_path: Path | None = None,
     cli_models: dict[str, list[str]] | None = None,
+    roles: tuple[dict[str, object], ...] | list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     env = dict(os.environ if environ is None else environ)
     supported = set(supported_provider_model_shortcuts())
@@ -474,10 +480,46 @@ def config_ui_provider_capabilities(
                 'static_thinking': bool(provider_thinking_levels(provider)),
             }
         )
+    role_rows = _config_ui_role_catalog() if roles is None else tuple(roles)
     return {
         'schema_version': 1,
         'providers': providers,
+        'roles': list(role_rows),
     }
+
+
+def _config_ui_role_catalog() -> tuple[dict[str, object], ...]:
+    # Role bindings are part of the same editor surface as provider/model
+    # overlays. Keep the local catalog authoritative without allowing an HTTP
+    # request to clone/download a missing default source.
+    try:
+        from rolepacks.sources import role_catalog_status
+
+        return tuple(
+            {
+                key: row.get(key)
+                for key in (
+                    'role_id',
+                    'name',
+                    'description',
+                    'version',
+                    'installed_version',
+                    'status',
+                    'source',
+                    'warning',
+                )
+                if key in row
+            }
+            for row in role_catalog_status(
+                refresh_default=False,
+                download_missing_default=False,
+            )
+        )
+    except Exception:
+        # A missing/unavailable role source must not make the config editor
+        # unusable.  The editor still preserves a currently configured role
+        # and the full TOML editor remains available.
+        return ()
 
 
 def _codex_models(

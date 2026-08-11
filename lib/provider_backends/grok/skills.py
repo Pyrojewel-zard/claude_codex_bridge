@@ -8,7 +8,7 @@ from provider_core.inherited_skills import (
 )
 
 
-GROK_CCB_SKILL_NAMES = ('ask', 'ccb-clear', 'ccb-diagnose')
+GROK_CCB_SKILL_NAMES = ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose')
 
 
 def materialize_grok_skills(target_home: Path, *, profile=None) -> tuple[str, ...]:

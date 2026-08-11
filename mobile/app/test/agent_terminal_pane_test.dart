@@ -46,8 +46,18 @@ void main() {
               onEscape: () => calls.add('esc'),
               onTab: () => calls.add('tab'),
               onCtrlC: () => calls.add('ctrl-c'),
+              onCtrlD: () => calls.add('ctrl-d'),
+              onCtrlU: () => calls.add('ctrl-u'),
+              onCtrlL: () => calls.add('ctrl-l'),
+              onDelete: () => calls.add('delete'),
+              onHome: () => calls.add('home'),
+              onEnd: () => calls.add('end'),
+              onPageUp: () => calls.add('page-up'),
+              onPageDown: () => calls.add('page-down'),
+              onArrowLeft: () => calls.add('left'),
               onArrowUp: () => calls.add('up'),
               onArrowDown: () => calls.add('down'),
+              onArrowRight: () => calls.add('right'),
             ),
           ),
         ),
@@ -64,6 +74,17 @@ void main() {
     expect(find.byKey(const ValueKey('terminal-key-keyboard')), findsNothing);
     expect(find.byKey(const ValueKey('terminal-key-tab')), findsOneWidget);
     expect(find.byKey(const ValueKey('terminal-key-ctrl-c')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-ctrl-d')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-ctrl-u')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-ctrl-l')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-delete')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-home')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-end')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-page-up')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('terminal-key-page-down')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('terminal-key-latest-output')),
       findsOneWidget,
@@ -73,10 +94,13 @@ void main() {
       find.byKey(const ValueKey('terminal-key-arrow-down')),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('terminal-key-arrow-left')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('terminal-key-arrow-left')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('terminal-key-arrow-right')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(find.byKey(const ValueKey('terminal-paste-button')), findsNothing);
     expect(find.byKey(const ValueKey('terminal-resize-button')), findsNothing);
@@ -113,8 +137,18 @@ void main() {
             onEscape: () => called = true,
             onTab: () => called = true,
             onCtrlC: () => called = true,
+            onCtrlD: () => called = true,
+            onCtrlU: () => called = true,
+            onCtrlL: () => called = true,
+            onDelete: () => called = true,
+            onHome: () => called = true,
+            onEnd: () => called = true,
+            onPageUp: () => called = true,
+            onPageDown: () => called = true,
+            onArrowLeft: () => called = true,
             onArrowUp: () => called = true,
             onArrowDown: () => called = true,
+            onArrowRight: () => called = true,
           ),
         ),
       ),
@@ -246,13 +280,39 @@ void main() {
 
     final session = transport.sessions.single;
     await _expandTerminalShortcuts(tester);
-    await tester.tap(find.byKey(const ValueKey('terminal-key-tab')));
-    await tester.tap(find.byKey(const ValueKey('terminal-key-escape')));
+    for (final id in [
+      'tab',
+      'escape',
+      'ctrl-d',
+      'ctrl-u',
+      'ctrl-l',
+      'delete',
+      'home',
+      'page-up',
+      'arrow-left',
+      'arrow-right',
+      'page-down',
+      'end',
+    ]) {
+      final shortcut = find.byKey(ValueKey('terminal-key-$id'));
+      await tester.ensureVisible(shortcut);
+      await tester.tap(shortcut);
+    }
     await tester.pump();
 
     expect(session.written, [
       [9],
       [27],
+      [4],
+      [21],
+      [12],
+      [27, 91, 51, 126],
+      [27, 91, 72],
+      [27, 91, 53, 126],
+      [27, 91, 68],
+      [27, 91, 67],
+      [27, 91, 54, 126],
+      [27, 91, 70],
     ]);
   });
 

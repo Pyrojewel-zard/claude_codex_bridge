@@ -984,7 +984,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_optional_tree_
     )
 
     assert not (target_home / 'skills.ccb-projection.json').exists()
-    for skill_name in ('ask', 'ccb-clear', 'ccb-diagnose', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
         assert (target_home / 'skills' / f'{skill_name}.ccb-projection.json').is_file()
     assert (source_skills / 'broken-role-skill').is_symlink()
@@ -1009,7 +1009,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is
     )
 
     assert not (target_home / 'skills' / 'optional').exists()
-    for skill_name in ('ask', 'ccb-clear', 'ccb-diagnose', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
 
 
@@ -3461,6 +3461,7 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
 
     assert 'name: ask' in (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'commands' / 'ask.md').read_text(encoding='utf-8') == 'ask command\n'
     assert (layout.claude_dir / 'skills' / 'ask.ccb-projection.json').is_file()
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
@@ -3623,6 +3624,7 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     assert (target_home / 'sessions').is_dir()
     assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
 
 
@@ -4137,6 +4139,7 @@ def test_materialize_claude_home_config_respects_inherit_skills_without_disablin
     assert not (layout.claude_dir / 'skills' / 'review').exists()
     assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     memory_text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
     assert '# CCB Managed Agent Memory' in memory_text
     assert 'claude-md' in memory_text

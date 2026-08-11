@@ -310,7 +310,7 @@ When `ccb` starts a managed Claude agent:
   managed launch; an invalid optional source entry must not suppress other
   valid entries, while ordinary unmarked entries are preserved
 - independently of optional skill inheritance and restricted-role asset
-  policy, startup must project the packaged `ask`, `ccb-clear`,
+  policy, startup must project the packaged `ask`, `ccb-clear`, `ccb-compact`,
   and `ccb-diagnose` control skills; those names are CCB-owned and are repaired
   without replacing unrelated skills
 - when command inheritance is enabled, startup must route inherited Claude

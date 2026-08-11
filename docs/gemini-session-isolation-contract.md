@@ -169,7 +169,7 @@ When `ccb` starts a managed Gemini agent:
   this authority check rather than replaying the persisted `start_cmd`
 - managed Gemini home materialization is part of startup preparation, before
   hook/trust installation and before launcher command assembly
-- startup must project the packaged `ask`, `ccb-clear`, and
+- startup must project the packaged `ask`, `ccb-clear`, `ccb-compact`, and
   `ccb-diagnose` control skills into the managed `.gemini/skills/` directory
   independently of optional inherited assets
 - managed `settings.json` projection must treat inherited system settings as the

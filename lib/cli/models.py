@@ -20,6 +20,7 @@ from .models_mailbox import (
 from .models_start import (
     ParsedAgentCommand,
     ParsedClearCommand,
+    ParsedCompactCommand,
     ParsedCleanupCommand,
     ParsedConfigImportHerdrCommand,
     ParsedConfigUiCommand,
@@ -54,6 +55,7 @@ ParsedCommand = Union[
     ParsedCancelCommand,
     ParsedFollowupCommand,
     ParsedClearCommand,
+    ParsedCompactCommand,
     ParsedCleanupCommand,
     ParsedConfigImportHerdrCommand,
     ParsedConfigUiCommand,

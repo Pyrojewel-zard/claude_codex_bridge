@@ -10,6 +10,7 @@ from cli.models import (
     ParsedAskCommand,
     ParsedCancelCommand,
     ParsedClearCommand,
+    ParsedCompactCommand,
     ParsedCleanupCommand,
     ParsedConfigUiCommand,
     ParsedConfigValidateCommand,
@@ -303,6 +304,20 @@ def test_parse_clear_command(parser: CliParser) -> None:
 def test_parse_clear_rejects_all_with_agent_names(parser: CliParser) -> None:
     with pytest.raises(CliUsageError, match='cannot be combined'):
         parser.parse(['clear', 'all', 'agent1'])
+
+
+def test_parse_compact_command(parser: CliParser) -> None:
+    assert parser.parse(['compact']) == ParsedCompactCommand(project=None, agent_names=())
+    assert parser.parse(['compact', 'all']) == ParsedCompactCommand(project=None, agent_names=())
+    assert parser.parse(['compact', 'agent1', 'agent2']) == ParsedCompactCommand(
+        project=None,
+        agent_names=('agent1', 'agent2'),
+    )
+
+
+def test_parse_compact_rejects_all_with_agent_names(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='cannot be combined'):
+        parser.parse(['compact', 'all', 'agent1'])
 
 
 def test_parse_cleanup(parser: CliParser) -> None:
