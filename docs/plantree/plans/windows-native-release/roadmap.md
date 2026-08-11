@@ -25,17 +25,19 @@ Date: 2026-08-12
 - Stable npm, Linux/macOS artifact, Sidebar, and Android publication routes
   remained untouched.
 
-## Stable v8.6.0 candidate
+## Published stable v8.6.0
 
-- Promote the repository version to stable `8.6.0` across Python, npm, mobile,
+- Promoted the repository version to stable `8.6.0` across Python, npm, mobile,
   and Windows launcher identity.
-- Keep the Windows projection and archive manifest at beta support tier.
-- Allow the isolated Windows workflow to build both immutable beta tags and
+- Kept the Windows projection and archive manifest at beta support tier.
+- The isolated Windows workflow now builds both immutable beta tags and
   stable CCB tags, attaching its ZIP to the same GitHub Release.
-- Require the stable Linux, macOS, Android, Sidebar, and npm workflows to
-  publish normally; the Windows workflow does not replace or gate their
+- Stable Linux, macOS, Android, Sidebar, and npm workflows published normally;
+  the Windows workflow does not replace or gate their
   platform-specific assets.
-- Preserve `v8.6.0-beta.3` as immutable evidence rather than moving its tag.
+- Preserved `v8.6.0-beta.3` as immutable evidence rather than moving its tag.
+- GitHub Latest, all ten published assets, their downloaded checksums, npm
+  `latest`, and a clean npm-installed CLI smoke were verified after publication.
 
 ## Next after stable publication
 

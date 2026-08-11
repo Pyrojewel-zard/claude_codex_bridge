@@ -11,8 +11,8 @@ support or mixing Windows code into Unix/npm ownership.
 ## Current target
 
 - Version/tag: `v8.6.0`
-- Status: release candidate; stable version surfaces and Windows stable-tag
-  workflow are prepared, with publication pending final gates.
+- Status: published stable CCB release; Windows artifact remains beta. All
+  platform publication workflows and downloaded-asset verification passed.
 - Artifact: `ccb-windows-x86_64.zip`
 - Installer: root `install.ps1`, implemented by
   `platforms/windows/installer/install.ps1`
