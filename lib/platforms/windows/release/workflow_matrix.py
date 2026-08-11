@@ -20,7 +20,7 @@ ROADMAP_ITEMS_RELATIVE_PATH = Path(
     ".codestable/roadmap/windows-native-herdr-ccb/windows-native-herdr-ccb-items.yaml"
 )
 SCHEMA_VERSION = 1
-WINDOWS_VALIDATED_CCB_VERSION = "8.6.0-beta.2"
+WINDOWS_VALIDATED_CCB_VERSION = "8.6.0-beta.3"
 WINDOWS_VALIDATED_SOURCE_STATUS = "matching-release"
 
 REQUIRED_WORKFLOWS = (

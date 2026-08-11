@@ -16,8 +16,11 @@ Date: 2026-08-11
 
 - `v8.6.0-beta.1` is immutable and superseded: native tests passed, but the
   ZIP builder rejected a stale `commands/` allowlist entry before publication.
-- Local payload, namespace, reconnect, Windows/Herdr, and cross-platform
-  lifecycle gates for `v8.6.0-beta.2` pass.
+- `v8.6.0-beta.2` is immutable and superseded: native tests and ZIP build
+  passed, but archive installation incorrectly prompted for missing Herdr even
+  with `-Yes`; no GitHub Release was created.
+- Run the non-interactive installer regression and local release gates for
+  `v8.6.0-beta.3`.
 - Push the follow-up commit, require the main-branch cross-platform checks, and
   then create the immutable prerelease tag.
 - Require the Windows 2022 GitHub Actions build, PowerShell archive install,

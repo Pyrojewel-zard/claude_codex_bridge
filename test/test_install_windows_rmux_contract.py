@@ -42,3 +42,15 @@ def test_windows_installer_creates_and_smokes_managed_python_runtime() -> None:
     assert 'aiohttp==' in requirements
     assert 'cryptography==' in requirements
     assert 'watchdog>=' in requirements
+
+
+def test_windows_installer_yes_mode_never_prompts_for_missing_herdr() -> None:
+    installer = Path('platforms/windows/installer/install.ps1').read_text(encoding='utf-8-sig')
+    herdr_block = installer.split('function Confirm-HerdrReady', 1)[1].split(
+        'function Install-Native', 1
+    )[0]
+
+    acknowledgement = 'if ($Yes -or $env:CCB_INSTALL_ASSUME_YES -eq "1")'
+    assert acknowledgement in herdr_block
+    assert herdr_block.index(acknowledgement) < herdr_block.index('Read-Host "继续安装? (y/N)"')
+    assert '$reply = [string](Read-Host "继续安装? (y/N)")' in herdr_block

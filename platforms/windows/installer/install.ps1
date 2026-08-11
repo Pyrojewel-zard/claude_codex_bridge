@@ -845,6 +845,15 @@ function Confirm-HerdrReady {
   }
   Write-Host ""
 
+  # -Yes / CCB_INSTALL_ASSUME_YES acknowledges the same guarded continuation
+  # offered by the prompt below. This is required for archive installation in
+  # CI, where only the safe --help/--version launcher surface is exercised and
+  # Herdr is intentionally not provisioned.
+  if ($Yes -or $env:CCB_INSTALL_ASSUME_YES -eq "1") {
+    Write-Host "[INFO] Herdr requirement acknowledged by non-interactive install; continuing."
+    return
+  }
+
   # In non-interactive mode, just warn
   if (-not [Environment]::UserInteractive) {
     Write-Host "[INFO] 非交互模式: 请先手动安装/升级 Herdr 后重试。"
@@ -854,7 +863,7 @@ function Confirm-HerdrReady {
 
   Write-Host "Herdr 未满足最低版本要求。是否继续安装 CCB？"
   Write-Host "  注意: 没有 Herdr 时 CCB 启动将失败（除非使用 --help/--version）。"
-  $reply = Read-Host "继续安装? (y/N)"
+  $reply = [string](Read-Host "继续安装? (y/N)")
   if ($reply.Trim().ToLower() -notin @("y", "yes")) {
     Write-Host "安装已取消"
     Write-Host ""

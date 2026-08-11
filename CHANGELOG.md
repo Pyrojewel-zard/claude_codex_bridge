@@ -1,5 +1,11 @@
 # Changelog
 
+## v8.6.0-beta.3 (2026-08-11)
+
+- Made the Windows installer's `-Yes` and `CCB_INSTALL_ASSUME_YES=1` modes acknowledge the guarded missing-Herdr continuation without reading interactive input.
+- Hardened the remaining Herdr prompt against a null `Read-Host` result.
+- Supersedes `v8.6.0-beta.2`, whose native tests and ZIP build passed but whose archive installation stopped at the missing-Herdr prompt before a GitHub Release was created.
+
 ## v8.6.0-beta.2 (2026-08-11)
 
 - Fixed the Windows release builder allowlist so it no longer requires the nonexistent `commands/` directory.

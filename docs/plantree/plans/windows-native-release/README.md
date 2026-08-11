@@ -9,7 +9,7 @@ changing the stable Linux, macOS, npm, sidebar, or Android release products.
 
 ## Current target
 
-- Version/tag: `v8.6.0-beta.2`
+- Version/tag: `v8.6.0-beta.3`
 - Artifact: `ccb-windows-x86_64.zip`
 - Installer: root `install.ps1`, implemented by
   `platforms/windows/installer/install.ps1`
@@ -19,8 +19,10 @@ changing the stable Linux, macOS, npm, sidebar, or Android release products.
 ## File map
 
 - [roadmap.md](roadmap.md): gates and current status.
-- [topics/v8.6.0-beta.2.md](topics/v8.6.0-beta.2.md): current implementation
+- [topics/v8.6.0-beta.3.md](topics/v8.6.0-beta.3.md): current implementation
   and verification record.
+- [topics/v8.6.0-beta.2.md](topics/v8.6.0-beta.2.md): immutable failed-candidate
+  record.
 - [topics/v8.6.0-beta.1.md](topics/v8.6.0-beta.1.md): immutable failed-candidate
   record.
 - [decisions/001-isolated-windows-prerelease.md](decisions/001-isolated-windows-prerelease.md):
