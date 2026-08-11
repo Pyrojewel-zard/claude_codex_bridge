@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 import time
 
 from ccbd.models import CcbdStartupAgentResult
@@ -37,7 +38,11 @@ def start_supervisor(
         namespace_layout_signature = None
         if (
             supervisor._project_namespace is not None
-            and _uses_explicit_windows_topology(supervisor._config, interactive_tmux_layout=interactive_tmux_layout)
+            and _uses_namespace_topology(
+                supervisor._config,
+                interactive_tmux_layout=interactive_tmux_layout,
+                project_namespace=supervisor._project_namespace,
+            )
         ):
             topology_plan = build_namespace_topology_plan(
                 supervisor._config,
@@ -61,6 +66,32 @@ def start_supervisor(
             if supervisor._project_namespace is not None
             else None
         )
+        if (
+            topology_plan is None
+            and supervisor._project_namespace is not None
+            and namespace is not None
+            and _namespace_is_herdr(namespace)
+            and _config_wants_namespace_topology(
+                supervisor._config,
+                interactive_tmux_layout=interactive_tmux_layout,
+            )
+        ):
+            topology_plan = build_namespace_topology_plan(
+                supervisor._config,
+                ccbd_socket_path=str(supervisor._paths.ccbd_socket_path),
+                project_root=str(supervisor._project_root),
+            )
+            namespace_layout_signature = topology_plan.signature
+            namespace = ensure_project_namespace(
+                supervisor._project_namespace,
+                layout_signature=namespace_layout_signature,
+                topology_plan=topology_plan,
+                recreate_namespace=False,
+                reflow_workspace=False,
+                recreate_reason=None,
+                background_maintenance=background_maintenance,
+                terminal_size=terminal_size,
+            )
         namespace_ms = (time.monotonic_ns() - namespace_started_ns) / 1_000_000
         if readiness_recorder is not None:
             if (
@@ -93,7 +124,12 @@ def start_supervisor(
             interactive_tmux_layout=interactive_tmux_layout,
             tmux_socket_path=namespace.tmux_socket_path if namespace is not None else None,
             tmux_session_name=namespace.tmux_session_name if namespace is not None else None,
+            namespace_session_name=getattr(namespace, 'namespace_session_name', None) if namespace is not None else None,
             tmux_workspace_window_name=getattr(namespace, 'workspace_window_name', None) if namespace is not None else None,
+            namespace_id=getattr(namespace, 'namespace_id', None) if namespace is not None else None,
+            namespace_ipc_kind=getattr(namespace, 'namespace_ipc_kind', None) if namespace is not None else None,
+            namespace_ipc_ref=getattr(namespace, 'namespace_ipc_ref', None) if namespace is not None else None,
+            namespace_restore_token=getattr(namespace, 'namespace_restore_token', None) if namespace is not None else None,
             namespace_epoch=namespace.namespace_epoch if namespace is not None else None,
             workspace_window_id=getattr(namespace, 'workspace_window_id', None) if namespace is not None else None,
             workspace_epoch=getattr(namespace, 'workspace_epoch', None) if namespace is not None else None,
@@ -105,6 +141,10 @@ def start_supervisor(
                 topology_plan is not None
                 and hasattr(supervisor._project_namespace, '_last_materialized_cmd_pane')
             ),
+            namespace_backend_family=(
+                getattr(namespace, 'namespace_backend_family', None) if namespace is not None else None
+            ),
+            namespace_backend_impl=getattr(namespace, 'backend_impl', None) if namespace is not None else None,
             fresh_namespace=bool(getattr(namespace, 'created_this_call', False)),
             fresh_workspace=bool(getattr(namespace, 'workspace_recreated_this_call', False)),
             restart_agent_panes=restart_agent_panes,
@@ -211,6 +251,56 @@ def _uses_explicit_windows_topology(config, *, interactive_tmux_layout: bool) ->
     if str(getattr(sidebar, 'mode', '') or '').strip() == 'every_window':
         return True
     return bool(tuple(getattr(config, 'tool_windows', ()) or ()))
+
+
+def _uses_namespace_topology(config, *, interactive_tmux_layout: bool, project_namespace) -> bool:
+    if not _config_wants_namespace_topology(config, interactive_tmux_layout=interactive_tmux_layout):
+        return False
+    if _uses_explicit_windows_topology(config, interactive_tmux_layout=interactive_tmux_layout):
+        return True
+    if not _project_namespace_prefers_herdr(project_namespace):
+        return False
+    return True
+
+
+def _config_wants_namespace_topology(config, *, interactive_tmux_layout: bool) -> bool:
+    if not interactive_tmux_layout:
+        return False
+    if _uses_explicit_windows_topology(config, interactive_tmux_layout=interactive_tmux_layout):
+        return True
+    return bool(
+        str(getattr(config, 'layout_spec', '') or '').strip()
+        or bool(getattr(config, 'cmd_enabled', False))
+        or tuple(getattr(config, 'windows', ()) or ())
+    )
+
+
+def _project_namespace_prefers_herdr(project_namespace) -> bool:
+    load = getattr(project_namespace, 'load', None)
+    if callable(load):
+        try:
+            current = load()
+        except Exception:
+            current = None
+        if (
+            str(getattr(current, 'backend_impl', '') or '').strip() == 'herdr'
+            or str(getattr(current, 'namespace_backend_family', '') or '').strip() == 'herdr-native'
+        ):
+            return True
+    return any(
+        str(os.environ.get(name) or '').strip()
+        for name in (
+            'CCB_HERDR_CAPABILITY_REPORT',
+            'CCB_HERDR_SOCKET_REF',
+        )
+    )
+
+
+def _namespace_is_herdr(namespace) -> bool:
+    return (
+        str(getattr(namespace, 'backend_impl', '') or '').strip() == 'herdr'
+        or str(getattr(namespace, 'namespace_backend_family', '') or '').strip() == 'herdr-native'
+    )
 
 
 def stop_all_supervisor(

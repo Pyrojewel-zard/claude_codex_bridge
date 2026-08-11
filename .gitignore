@@ -12,10 +12,14 @@ tests/
 test/dir1/.ccb/
 .ccb_config/
 .ccb/*
+# source-dev 运行时产物（home/state 由 ccb8.ps1 初始化产生，不提交；bin/ccb.cmd 已 tracked 保留）
+/.ccb-source-dev/
 .ccb/ccb.config
 .codex
 .codex-session
 .gemini-session
+# Herdr UI spike evidence: doctor output extracted bundle paths exceed Windows MAX_PATH
+**/doctor-output-extracted/
 .claude-session
 .opencode-session
 .ccb-requests/

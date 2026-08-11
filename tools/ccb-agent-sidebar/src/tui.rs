@@ -1504,6 +1504,16 @@ pub(crate) fn agent_row_spans(agent: &AgentView, theme: SidebarTheme) -> Vec<Spa
         agent.activity_color.as_deref()
     };
     let active = if agent.active { "*" } else { " " };
+    let display_name = if agent.display_name.trim().is_empty() {
+        agent.name.clone()
+    } else {
+        agent.display_name.clone()
+    };
+    let provider_display_name = if agent.provider_display_name.trim().is_empty() {
+        agent.provider.clone()
+    } else {
+        agent.provider_display_name.clone()
+    };
     let mut spans = vec![
         Span::raw("  "),
         Span::styled(
@@ -1511,12 +1521,12 @@ pub(crate) fn agent_row_spans(agent: &AgentView, theme: SidebarTheme) -> Vec<Spa
             Style::default().fg(activity_color_with_theme(state, explicit_color, theme)),
         ),
         Span::raw(format!("{active} ")),
-        Span::raw(agent.name.clone()),
+        Span::raw(display_name),
     ];
     if auth_blocked {
         spans.push(Span::styled(" [login]", Style::default().fg(theme.danger)));
     } else {
-        spans.push(Span::raw(format!(" [{}]", agent.provider)));
+        spans.push(Span::raw(format!(" [{}]", provider_display_name)));
     }
     if agent.queue_depth > 0 {
         spans.push(Span::styled(
@@ -2326,6 +2336,26 @@ mod tests {
             .find(|cell| cell.symbol() == "⌫")
             .expect("clear action should render");
         assert_eq!(clear_cell.fg, Color::Cyan);
+    }
+
+    #[test]
+    fn renders_display_names_while_focus_keeps_canonical_agent_name() {
+        let mut response = sample_response();
+        response.view.agents[0].display_name = "Main Claude".into();
+        response.view.agents[0].provider_display_name = "Claude".into();
+        let mut app = SidebarApp::new("main".into());
+        app.apply_response(response);
+
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("◐* Main Claude [Claude]"));
+        assert_eq!(
+            app.selected_target(),
+            Some(RowTarget::Agent("agent1".into()))
+        );
     }
 
     #[test]

@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from .backend import build_backend, session_alive
+from ccbd.reload_sensitive_diagnostics import (
+    redact_sensitive_diagnostic_value,
+    redact_sensitive_diagnostics,
+)
+
+from .backend import build_backend, remember_namespace_state_ref, session_alive
 from .additive_patch_agents import append_agent_panes
 from .additive_patch_namespace import ready_namespace_or_blocked
 from .additive_patch_preservation import assert_preserved_agent_panes, snapshot_preserved_agent_panes
@@ -57,7 +62,7 @@ class NamespacePatchApplyResult:
             'preserved_after': dict(self.preserved_after),
             'partial': bool(self.partial),
             'rollback_actions': list(self.rollback_actions),
-            'diagnostics': dict(self.diagnostics),
+            'diagnostics': redact_sensitive_diagnostics(self.diagnostics),
         }
 
 
@@ -94,7 +99,12 @@ def apply_reload_patch(
     if unsupported is not None:
         return _blocked(*unsupported)
 
-    backend = build_backend(controller._backend_factory, socket_path=current.tmux_socket_path)
+    backend = build_backend(
+        controller._backend_factory,
+        socket_path=current.tmux_socket_path,
+        namespace_state=current,
+    )
+    remember_namespace_state_ref(backend, current)
     if not session_alive(backend, current.tmux_session_name, timeout_s=timeout_s):
         return _blocked('session_unavailable', 'project namespace tmux session is not alive')
 
@@ -219,6 +229,18 @@ def _failure_result(
     preserved_before: dict[str, str],
     preserved_after: dict[str, str],
 ) -> NamespacePatchApplyResult:
+    diagnostics = {
+        'reason': reason,
+        'error_type': type(exc).__name__,
+        'error': str(exc),
+        'graph_published': False,
+        'runtime_authority_written': False,
+        'lease_or_lifecycle_written': False,
+    }
+    for attr in ('category', 'operation', 'backend_impl', 'ipc_ref', 'evidence'):
+        value = getattr(exc, attr, None)
+        if value:
+            diagnostics[f'error_{attr}'] = redact_sensitive_diagnostic_value(value)
     return NamespacePatchApplyResult(
         status='failed',
         created_windows=tuple(state.created_windows),
@@ -248,14 +270,7 @@ def _failure_result(
             + tuple(f'removed_window:{window}' for window in state.removed_windows)
             + tuple(f'moved_agent:{agent}' for agent in state.moved_agents)
         ),
-        diagnostics={
-            'reason': reason,
-            'error_type': type(exc).__name__,
-            'error': str(exc),
-            'graph_published': False,
-            'runtime_authority_written': False,
-            'lease_or_lifecycle_written': False,
-        },
+        diagnostics=diagnostics,
     )
 
 

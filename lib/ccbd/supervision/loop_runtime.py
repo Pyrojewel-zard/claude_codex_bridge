@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agents.models import AgentState, RuntimeBindingSource, RuntimeMode, normalize_runtime_binding_source
-from ccbd.services.runtime_recovery_policy import normalized_runtime_health, should_attempt_background_recovery
+from ccbd.services.runtime_recovery_policy import (
+    normalized_runtime_health,
+    should_attempt_background_recovery,
+    should_record_recovery_capability_block,
+)
 from ccbd.system import parse_utc_timestamp
 from ccbd.supervision.backoff import backoff_delay_seconds as backoff_delay_seconds_impl
 from ccbd.supervision.backoff import is_in_backoff_window as is_in_backoff_window_impl
@@ -122,6 +126,7 @@ def runtime_requires_recovery(ctx: RuntimeSupervisionContext, runtime) -> bool:
         str(getattr(runtime, 'reconcile_state', '') or '').strip() == 'probing'
         or should_reflow_project_namespace(ctx, runtime)
         or explicit_topology_project_socket_foreign_pane(ctx, runtime)
+        or should_record_recovery_capability_block(runtime)
         or should_attempt_background_recovery(runtime)
     )
 

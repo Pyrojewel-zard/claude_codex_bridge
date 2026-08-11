@@ -24,7 +24,7 @@ _SUPPORTED_OPS = {
 _MUTATING_OPS = {'add_agent', 'add_window', 'remove_agent', 'replace_agent', 'move_agent', 'add_tool_window', 'remove_tool_window'}
 _REQUIRED_PROOFS = (
     'project_id',
-    'tmux_socket_path',
+    'namespace_transport_ref',
     'tmux_session_name',
     'namespace_epoch',
     'window',
@@ -163,14 +163,24 @@ def _scope_payload(*, project_id: str | None, current_namespace) -> dict[str, ob
             'reason': 'namespace unavailable',
         }
     namespace_project_id = _clean_text(getattr(current_namespace, 'project_id', None))
+    backend_family = _clean_text(getattr(current_namespace, 'namespace_backend_family', None)) or 'tmux-family'
+    backend_impl = _clean_text(getattr(current_namespace, 'backend_impl', None))
     socket_path = _clean_text(getattr(current_namespace, 'tmux_socket_path', None))
     session_name = _clean_text(getattr(current_namespace, 'tmux_session_name', None))
+    namespace_id = _clean_text(getattr(current_namespace, 'namespace_id', None))
+    namespace_ipc_kind = _clean_text(getattr(current_namespace, 'namespace_ipc_kind', None))
+    namespace_ipc_ref = _clean_text(getattr(current_namespace, 'namespace_ipc_ref', None))
     namespace_epoch = getattr(current_namespace, 'namespace_epoch', None)
     has_namespace_epoch = namespace_epoch is not None
     ui_attachable = bool(getattr(current_namespace, 'ui_attachable', True))
+    has_transport_ref = bool(
+        namespace_id and namespace_ipc_kind and namespace_ipc_ref
+        if backend_family == 'herdr-native' or backend_impl == 'herdr'
+        else socket_path
+    )
     verified = bool(
         namespace_project_id
-        and socket_path
+        and has_transport_ref
         and session_name
         and has_namespace_epoch
         and ui_attachable
@@ -181,11 +191,16 @@ def _scope_payload(*, project_id: str | None, current_namespace) -> dict[str, ob
         'project_id': namespace_project_id or expected_project_id,
         'tmux_socket_path': socket_path,
         'tmux_session_name': session_name,
+        'namespace_backend_family': backend_family,
+        'namespace_backend_impl': backend_impl,
+        'namespace_id': namespace_id,
+        'namespace_ipc_kind': namespace_ipc_kind,
+        'namespace_ipc_ref': namespace_ipc_ref,
         'namespace_epoch': namespace_epoch,
         'ui_attachable': ui_attachable,
     }
     if not verified:
-        payload['reason'] = 'namespace project/socket/session scope is incomplete or mismatched'
+        payload['reason'] = 'namespace project/transport/session scope is incomplete or mismatched'
     return payload
 
 

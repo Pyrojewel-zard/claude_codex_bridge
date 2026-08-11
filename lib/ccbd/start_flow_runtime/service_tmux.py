@@ -17,20 +17,29 @@ def tmux_namespace_runtime(
     namespace_topology_managed: bool = False,
     cmd_enabled: bool = False,
 ):
-    tmux_backend = deps.tmux_backend_cls(socket_path=tmux_socket_path) if tmux_socket_path is not None else None
-    if tmux_backend is None or not tmux_session_name:
-        return tmux_backend, None
+    clean_tmux_socket_path = str(tmux_socket_path or '').strip() or None
+    tmux_backend = deps.tmux_backend_cls(socket_path=clean_tmux_socket_path) if clean_tmux_socket_path is not None else None
     if namespace_topology_managed:
         cmd_pane = str(namespace_cmd_pane or '').strip()
-        if cmd_enabled and not cmd_pane.startswith('%'):
+        if cmd_enabled and not _authoritative_cmd_pane_available(cmd_pane, tmux_socket_path=clean_tmux_socket_path):
             raise RuntimeError('authoritative topology cmd pane is missing')
-        return tmux_backend, cmd_pane if cmd_pane.startswith('%') else None
+        return tmux_backend, cmd_pane or None
+    if tmux_backend is None or not tmux_session_name:
+        return tmux_backend, None
     return tmux_backend, session_root_pane(
         deps,
         tmux_backend,
         tmux_session_name,
         workspace_window_name=tmux_workspace_window_name,
     )
+
+
+def _authoritative_cmd_pane_available(cmd_pane: str, *, tmux_socket_path: str | None) -> bool:
+    if not cmd_pane:
+        return False
+    if tmux_socket_path is not None:
+        return cmd_pane.startswith('%')
+    return True
 
 
 def tmux_layout_for_start(
@@ -44,16 +53,26 @@ def tmux_layout_for_start(
     root_pane_id: str | None,
     namespace_agent_panes: dict[str, str] | None,
     actions_taken: list[str],
+    namespace_backend_family: str | None = None,
+    namespace_backend_impl: str | None = None,
 ) -> TmuxStartLayout:
     if not interactive_tmux_layout:
         return TmuxStartLayout(cmd_pane_id=None, agent_panes={})
     deps.set_tmux_ui_active_fn(True)
     launch_targets = tuple(item.agent_name for item in prepared_agents if item.binding is None)
+    pane_targets = (
+        tuple(item.agent_name for item in prepared_agents)
+        if _namespace_panes_are_authoritative(
+            namespace_backend_family=namespace_backend_family,
+            namespace_backend_impl=namespace_backend_impl,
+        )
+        else launch_targets
+    )
     if namespace_agent_panes:
         assigned = {
             name: pane
             for name, pane in dict(namespace_agent_panes).items()
-            if name in set(launch_targets)
+            if name in set(pane_targets)
         }
         if assigned:
             actions_taken.append(f'use_namespace_topology:{",".join(sorted(assigned))}')
@@ -85,6 +104,17 @@ def _legacy_layout_window_name(config) -> str | None:
     return str(getattr(windows[0], 'name', '') or '').strip() or None
 
 
+def _namespace_panes_are_authoritative(
+    *,
+    namespace_backend_family: str | None,
+    namespace_backend_impl: str | None,
+) -> bool:
+    return (
+        str(namespace_backend_impl or '').strip() == 'herdr'
+        or str(namespace_backend_family or '').strip() == 'herdr-native'
+    )
+
+
 def project_socket_active_panes(
     *,
     tmux_layout: TmuxStartLayout,
@@ -93,17 +123,18 @@ def project_socket_active_panes(
     root_pane_id: str | None,
     namespace_active_panes: tuple[str, ...] | None = None,
 ) -> tuple[list[str], str | None]:
+    clean_tmux_socket_path = str(tmux_socket_path or '').strip() or None
     active_panes: list[str] = []
     for pane_id in tuple(namespace_active_panes or ()):
         pane_text = str(pane_id or '').strip()
-        if pane_text.startswith('%') and pane_text not in active_panes:
+        if clean_tmux_socket_path is not None and pane_text.startswith('%') and pane_text not in active_panes:
             active_panes.append(pane_text)
-    if root_pane_id and tmux_socket_path is not None and root_pane_id not in active_panes:
+    if root_pane_id and clean_tmux_socket_path is not None and root_pane_id not in active_panes:
         active_panes.append(root_pane_id)
     cmd_pane_id = tmux_layout.cmd_pane_id
-    if cmd_pane_id is None and tmux_socket_path is not None and bool(getattr(config, 'cmd_enabled', False)):
+    if cmd_pane_id is None and clean_tmux_socket_path is not None and bool(getattr(config, 'cmd_enabled', False)):
         cmd_pane_id = root_pane_id
-    if cmd_pane_id and tmux_socket_path is not None and cmd_pane_id not in active_panes:
+    if cmd_pane_id and clean_tmux_socket_path is not None and cmd_pane_id not in active_panes:
         active_panes.append(cmd_pane_id)
     return active_panes, cmd_pane_id
 
@@ -119,7 +150,7 @@ def bootstrap_cmd_pane_if_needed(
     namespace_epoch: int | None,
     actions_taken: list[str],
 ) -> None:
-    if not fresh_namespace or cmd_pane_id is None:
+    if not fresh_namespace or cmd_pane_id is None or not str(tmux_socket_path or '').strip():
         return
     bootstrapped_cmd_pane = bootstrap_project_namespace_cmd_pane(
         deps,

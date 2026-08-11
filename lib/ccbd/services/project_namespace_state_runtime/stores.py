@@ -46,8 +46,13 @@ class ProjectNamespaceEventStore:
         return tuple(rows)
 
     def load_latest(self) -> ProjectNamespaceEvent | None:
-        rows = self.read_all()
-        return rows[-1] if rows else None
+        rows = self._store.read_tail(
+            self._layout.ccbd_lifecycle_log_path,
+            1,
+            loader=ProjectNamespaceEvent.from_record,
+            ignore_invalid=True,
+        )
+        return rows[0] if rows else None
 
 
 def next_namespace_epoch(current: ProjectNamespaceState | None) -> int:

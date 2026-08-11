@@ -11,9 +11,12 @@ from provider_core.tmux_ownership import (
 
 from .lifecycle_common import (
     activate_rebound_pane,
+    bind_session_to_pane,
     pane_exists,
+    pane_lifecycle_target,
     persist_crash_log,
 )
+from provider_runtime.session_payload import session_uses_tmux_compatible_pane
 
 
 def tmux_rebound_pane(
@@ -29,6 +32,16 @@ def tmux_rebound_pane(
     create_pane = getattr(backend, 'create_pane', None)
     if not start_cmd or (not callable(respawn) and not callable(create_pane)):
         return None
+    if not session_uses_tmux_compatible_pane(_session_data(session)):
+        return _backend_neutral_rebound_pane(
+            session,
+            backend,
+            pane_id,
+            start_cmd=start_cmd,
+            respawn=respawn,
+            now_str_fn=now_str_fn,
+            attach_pane_log_fn=attach_pane_log_fn,
+        )
 
     outcome = _respawn_existing_pane(
         session,
@@ -55,6 +68,50 @@ def tmux_rebound_pane(
     if created is not None:
         return True, created
     return False, f'Pane not alive and respawn failed: {outcome.error}'
+
+
+def _backend_neutral_rebound_pane(
+    session,
+    backend: object,
+    pane_id: str,
+    *,
+    start_cmd: str,
+    respawn,
+    now_str_fn: Callable[[], str],
+    attach_pane_log_fn: Callable[[object, object, str], None],
+) -> tuple[bool, str] | None:
+    if not callable(respawn) or not pane_id:
+        return _RespawnOutcome('respawn unavailable').as_tuple()
+    target = pane_lifecycle_target(session, pane_id)
+    if not target or not pane_exists(backend, target):
+        return _RespawnOutcome('pane target no longer exists').as_tuple()
+    blocked_detail = _stored_recovery_block(session, str(pane_id))
+    if blocked_detail is not None:
+        return _RespawnOutcome(blocked_detail, allow_replacement=False).as_tuple()
+    try:
+        reason = persist_crash_log(session, backend, target)
+        recovery = _prepare_crash_recovery(session, reason)
+        if recovery is not None and not recovery[0]:
+            _record_recovery_block(
+                session,
+                pane_id=str(pane_id),
+                reason=str(reason or 'provider_recovery_blocked'),
+                detail=recovery[1],
+                blocked_at=now_str_fn(),
+            )
+            return False, recovery[1]
+        prepared_start_cmd = str(getattr(session, 'start_cmd', '') or '').strip()
+        if prepared_start_cmd:
+            start_cmd = prepared_start_cmd
+        respawn(target, cmd=start_cmd, cwd=session.work_dir, remain_on_exit=True)
+        if not backend.is_alive(target):
+            return False, 'respawn did not revive pane'
+        bind_session_to_pane(session, str(pane_id), now_str_fn=now_str_fn)
+        attach_pane_log_fn(session, backend, str(pane_id))
+        clear_recovery_block(session)
+        return True, str(pane_id)
+    except Exception as exc:
+        return False, f'{exc}'
 
 
 def respawn_existing_pane(
@@ -149,6 +206,14 @@ def _prepare_crash_recovery(session, reason: str | None) -> tuple[bool, str] | N
 class _RespawnOutcome:
     error: str | None
     allow_replacement: bool = True
+
+    def as_tuple(self) -> tuple[bool, str]:
+        return False, str(self.error or 'respawn unavailable')
+
+
+def _session_data(session) -> dict[str, object]:
+    data = getattr(session, 'data', None)
+    return data if isinstance(data, dict) else {}
 
 
 def _stored_recovery_block(session, pane_id: str) -> str | None:

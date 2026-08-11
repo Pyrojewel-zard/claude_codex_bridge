@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 from ccbd.models import LeaseHealth
+from ccbd.control_plane_transport.endpoint import endpoint_from_legacy_socket_path, endpoint_from_record, endpoint_to_record
 from ccbd.services.lifecycle import lifecycle_from_inspection
 
 
@@ -43,6 +45,20 @@ class ProjectDaemonInspection:
             return None
         lease_value = str(getattr(self.lease, 'socket_path', '') or '').strip()
         return lease_value or None
+
+    @property
+    def control_plane_endpoint(self) -> dict | None:
+        value = getattr(self.lifecycle, 'control_plane_endpoint', None)
+        if isinstance(value, dict):
+            return endpoint_to_record(endpoint_from_record(value))
+        if self.lease is not None:
+            lease_value = getattr(self.lease, 'control_plane_endpoint', None)
+            if isinstance(lease_value, dict):
+                return endpoint_to_record(endpoint_from_record(lease_value))
+        socket_path = self.socket_path
+        if socket_path and os.name != 'nt':
+            return endpoint_to_record(endpoint_from_legacy_socket_path(socket_path))
+        return None
 
 
 def load_project_daemon_inspection(

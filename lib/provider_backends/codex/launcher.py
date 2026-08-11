@@ -87,7 +87,7 @@ def build_session_payload(
         'completion_artifact_dir': str(artifacts.completion_dir),
         'input_fifo': str(input_fifo),
         'output_fifo': str(output_fifo),
-        'terminal': 'tmux',
+        'terminal': str(prepared_state.get('ccb_backend_impl', 'tmux')).strip() or 'tmux',
         'tmux_session': pane_id,
         'pane_id': pane_id,
         'pane_title_marker': pane_title_marker,

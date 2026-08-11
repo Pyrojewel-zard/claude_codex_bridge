@@ -68,6 +68,12 @@ ccb update
 
 npm 管理のインストールでは、`ccb update` は同等の npm コマンドを表示するだけで、vendored payload を直接変更しません。
 
+Windows x64 では、`ccb doctor` と `ccb doctor --output` が
+`windows_x64_release_surface` 診断行を表示します。`release_install_entry`、
+`source_install_allowed`、`source_install_entry`、`update_entry`、
+`managed_python_status`、`native_helper_status`、`next_action` で、source/dev
+`install.ps1` フォールバックとブロックされた npm / release update ルートを区別できます。
+
 <details>
 <summary><b>GitHub release パッケージとソースインストールのフォールバック</b></summary>
 

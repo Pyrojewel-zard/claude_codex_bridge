@@ -6,10 +6,13 @@ from .nodes import LayoutLeaf, LayoutNode
 
 
 def prune_layout(node: LayoutNode, *, include_names: Iterable[str]) -> LayoutNode | None:
-    include = {str(name).strip() for name in include_names if str(name).strip()}
+    # include_names 通常来自 normalize_agent_name（小写），而布局 leaf 保留原始大小写
+    # （如 config 里写 Main_Code）。两端统一 lower 比较，避免含大写 agent 名被误裁剪
+    # 导致"layout_spec does not include any visible panes"（2026-08-06 采集暴露）。
+    include = {str(name).strip().lower() for name in include_names if str(name).strip()}
     if node.kind == 'leaf':
         assert node.leaf is not None
-        if node.leaf.name in include:
+        if str(node.leaf.name or '').lower() in include:
             return node
         return None
     assert node.left is not None

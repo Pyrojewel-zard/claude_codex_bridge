@@ -10,6 +10,11 @@ from agents.store import AgentRestoreStore, AgentSpecStore
 from cli.services.provider_hooks import prepare_provider_workspace, provider_workspace_path_for_prepare
 from cli.services.runtime_launch import effective_start_command
 from cli.services.runtime_launch_runtime import runtime_launcher
+from ccbd.start_runtime.binding_runtime.common import (
+    binding_pane_id,
+    is_pane_runtime_ref,
+    runtime_ref_backend,
+)
 from provider_backends.codex.session_runtime.live_identity import process_parent_snapshot
 from provider_profiles import validate_provider_runtime_home_uniqueness
 from runtime_observability import record_startup_operation, startup_operation_scope
@@ -51,7 +56,9 @@ def prepare_start_agents(
     namespace_epoch: int | None = None,
     namespace_pane_records: dict[str, object] | None = None,
     force_restart_agents: tuple[str, ...] = (),
+    namespace_agent_panes: dict[str, str] | None = None,
 ) -> tuple[PreparedStartAgent, ...]:
+    clean_tmux_socket_path = str(tmux_socket_path or '').strip() or None
     spec_store = AgentSpecStore(paths)
     restore_store = AgentRestoreStore(paths)
     planner = WorkspacePlanner()
@@ -97,17 +104,18 @@ def prepare_start_agents(
                 project_root=project_root,
                 ensure_usable=False,
             )
-            if tmux_socket_path is not None:
+            if clean_tmux_socket_path is not None:
                 binding = project_binding_filter_fn(
                     raw_binding,
                     cmd_enabled=bool(getattr(config, 'cmd_enabled', False)),
-                    tmux_socket_path=tmux_socket_path,
+                    tmux_socket_path=clean_tmux_socket_path,
                     tmux_session_name=tmux_session_name,
                     workspace_window_id=workspace_window_id,
                     agent_name=agent_name,
                     project_id=project_id,
                     window_name=binding_window_name,
                     namespace_epoch=namespace_epoch,
+                    assigned_pane_id=(namespace_agent_panes or {}).get(agent_name),
                     namespace_pane_records=namespace_pane_records,
                 )
             else:
@@ -118,6 +126,21 @@ def prepare_start_agents(
                     project_root=project_root,
                     ensure_usable=True,
                 )
+                if (
+                    binding is None
+                    and raw_binding is not None
+                    and (
+                        (
+                            is_pane_runtime_ref(getattr(raw_binding, 'runtime_ref', None))
+                            and runtime_ref_backend(getattr(raw_binding, 'runtime_ref', None)) != 'tmux'
+                        )
+                        or _binding_matches_assigned_pane(
+                            raw_binding,
+                            assigned_pane_id=(namespace_agent_panes or {}).get(agent_name),
+                        )
+                    )
+                ):
+                    binding = raw_binding
 
             force_restart = agent_name in forced_restarts
             if force_restart:
@@ -145,6 +168,7 @@ def prepare_start_agents(
                         project_id=project_id,
                         window_name=binding_window_name,
                         namespace_epoch=namespace_epoch,
+                        assigned_pane_id=(namespace_agent_panes or {}).get(agent_name),
                         namespace_pane_records=namespace_pane_records,
                     ) if not force_restart else 'manual_restart',
                 )
@@ -207,6 +231,7 @@ def _binding_reject_reason(
     project_id: str,
     window_name: str | None,
     namespace_epoch: int | None,
+    assigned_pane_id: str | None,
     namespace_pane_records: dict[str, object] | None,
 ) -> str | None:
     if binding is not None:
@@ -214,12 +239,15 @@ def _binding_reject_reason(
     if raw_binding is None:
         return 'binding_missing'
     runtime_ref = str(getattr(raw_binding, 'runtime_ref', None) or '').strip()
-    if not runtime_ref.startswith('tmux:'):
+    if not is_pane_runtime_ref(runtime_ref):
         return 'runtime_not_tmux'
     pane_state = str(getattr(raw_binding, 'pane_state', None) or '').strip().lower()
-    if cmd_enabled and pane_state != 'alive':
+    runtime_backend = runtime_ref_backend(runtime_ref)
+    if cmd_enabled and runtime_backend == 'tmux' and pane_state != 'alive':
         return f'pane_{pane_state or "state_missing"}'
     if not cmd_enabled and pane_state not in {'alive', 'unknown', ''}:
+        return f'pane_{pane_state}'
+    if cmd_enabled and runtime_backend != 'tmux' and pane_state not in {'alive', 'unknown', ''}:
         return f'pane_{pane_state}'
     identity_state = str(getattr(raw_binding, 'provider_identity_state', None) or '').strip().lower()
     if identity_state == 'mismatch':
@@ -253,14 +281,14 @@ def _binding_reject_reason(
 
 
 def _binding_pane_id(binding) -> str | None:
-    for attr in ('active_pane_id', 'pane_id'):
-        pane_id = str(getattr(binding, attr, None) or '').strip()
-        if pane_id.startswith('%'):
-            return pane_id
-    runtime_ref = str(getattr(binding, 'runtime_ref', None) or '').strip()
-    if runtime_ref.startswith('tmux:%'):
-        return runtime_ref.split(':', 1)[1]
-    return None
+    return binding_pane_id(binding)
+
+
+def _binding_matches_assigned_pane(binding, *, assigned_pane_id: str | None) -> bool:
+    assigned = str(assigned_pane_id or '').strip()
+    if not assigned:
+        return False
+    return _binding_pane_id(binding) == assigned
 
 
 def _window_name_for_agent(config, agent_name: str) -> str | None:

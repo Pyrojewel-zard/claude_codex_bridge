@@ -228,6 +228,13 @@ def _dispatch_roles(tokens: list[str], *, script_root: Path, cwd: Path, stdout: 
     return cmd_roles(tokens[1:], script_root=script_root, cwd=cwd, stdout=stdout, stderr=stderr)
 
 
+def _log_received_argv(tokens: list[str], *, stderr: TextIO) -> None:
+    import os
+    if os.environ.get('CCB_DEBUG_ARGV') not in {'1', 'true', 'yes', 'on'}:
+        return
+    print(f'[ccb8 argv] {tokens!r}', file=stderr)
+
+
 def run_cli_entrypoint(
     argv: list[str],
     *,
@@ -238,6 +245,7 @@ def run_cli_entrypoint(
     stderr: TextIO,
 ) -> int:
     tokens = list(argv or [])
+    _log_received_argv(tokens, stderr=stderr)
     if _should_print_version(tokens):
         print(f"v{version}", file=stdout)
         return 0

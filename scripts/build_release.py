@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from datetime import datetime, timezone
 
 
@@ -20,7 +21,7 @@ LIB_ROOT = REPO_ROOT / "lib"
 if str(LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(LIB_ROOT))
 
-from release_artifacts import normalize_arch, release_artifact_basename, release_build_arch
+from release_artifacts import normalize_arch, release_artifact_basename, release_artifact_name, release_build_arch
 
 
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "dist"
@@ -31,6 +32,7 @@ EXCLUDES = {
     ".architec",
     ".claude",
     ".codex",
+    ".codestable",
     ".gemini",
     ".hippocampus",
     ".loop",
@@ -44,6 +46,7 @@ EXCLUDES = {
     ".idea",
     "build",
     "dist-mobile",
+    "mobile",
     "node_modules",
     "target",
     # Maintainer-only utilities are versioned in git but must not ship in release tarballs.
@@ -51,10 +54,13 @@ EXCLUDES = {
     "dist",
     # Production roles live in the external agent-roles-spec catalog.
     "roles",
+    # Planning artifacts are maintained in-repo but are not runtime release payload.
+    "plantree",
 }
 _HOST_SYSTEMS = {
     "linux": "Linux",
     "macos": "Darwin",
+    "windows": "Windows",
 }
 
 
@@ -77,6 +83,7 @@ def main_for_target(target_platform: str) -> int:
         commit=commit,
         git_ref=args.git_ref if use_git_ref_source else None,
         release_manifest=args.release_manifest,
+        reject_existing_version=not args.allow_dirty,
     )
     artifact_basename = release_artifact_basename(target_platform, machine=platform.machine())
     if not artifact_basename:
@@ -85,7 +92,12 @@ def main_for_target(target_platform: str) -> int:
         )
     stage_root = output_dir / f".stage-{artifact_basename}"
     artifact_root = stage_root / artifact_basename
-    artifact_path = output_dir / f"{artifact_basename}.tar.gz"
+    artifact_name = release_artifact_name(target_platform, machine=platform.machine())
+    if not artifact_name:
+        raise RuntimeError(
+            f"unsupported release artifact for platform={target_platform!r} machine={platform.machine()!r}"
+        )
+    artifact_path = output_dir / artifact_name
     sha_path = output_dir / "SHA256SUMS"
 
     if stage_root.exists():
@@ -117,7 +129,7 @@ def main_for_target(target_platform: str) -> int:
         "install_mode": "release",
     }
     write_release_metadata(artifact_root, build_info)
-    create_tarball(stage_root=stage_root, artifact_root=artifact_root, artifact_path=artifact_path)
+    create_release_archive(stage_root=stage_root, artifact_root=artifact_root, artifact_path=artifact_path)
     write_sha256(artifact_path=artifact_path, output_path=sha_path)
 
     print(f"artifact: {artifact_path}")
@@ -198,6 +210,7 @@ def validate_release_identity(
     commit: str | None,
     git_ref: str | None = None,
     release_manifest: Path | None = None,
+    reject_existing_version: bool = True,
 ) -> None:
     package_text = (
         read_git_file(repo_root, git_ref=git_ref, relative_path="package.json")
@@ -214,7 +227,7 @@ def validate_release_identity(
         )
     if not commit:
         raise RuntimeError("release identity requires an exact Git commit")
-    if is_git_checkout(repo_root):
+    if reject_existing_version and is_git_checkout(repo_root):
         tagged_commit = run_git(repo_root, ["rev-parse", "--short", f"v{version}^{{commit}}"])
         if tagged_commit and tagged_commit != commit:
             raise RuntimeError(
@@ -342,7 +355,7 @@ def export_release_tree(
 
 def build_sidebar_helper_for_release(artifact_root: Path, *, target_platform: str = "linux") -> None:
     crate_dir = artifact_root / "tools" / "ccb-agent-sidebar"
-    output_bin = artifact_root / "bin" / "ccb-agent-sidebar"
+    output_bin = artifact_root / "bin" / release_binary_name("ccb-agent-sidebar", target_platform=target_platform)
     if not (crate_dir / "Cargo.toml").is_file():
         return
 
@@ -356,7 +369,7 @@ def build_sidebar_helper_for_release(artifact_root: Path, *, target_platform: st
 
 def build_rs_helper_for_release(artifact_root: Path, *, target_platform: str = "linux") -> None:
     crate_dir = artifact_root / "tools" / "ccb-rs-helper"
-    output_bin = artifact_root / "bin" / "ccb-rs-helper"
+    output_bin = artifact_root / "bin" / release_binary_name("ccb-rs-helper", target_platform=target_platform)
     if not (crate_dir / "Cargo.toml").is_file():
         return
 
@@ -369,9 +382,14 @@ def build_rs_helper_for_release(artifact_root: Path, *, target_platform: str = "
 
 
 def build_runtime_accelerator_for_release(artifact_root: Path, *, target_platform: str = "linux") -> None:
+    if str(target_platform or "").strip().lower() == "windows":
+        return
     workspace_dir = artifact_root / "rust"
     crate_dir = workspace_dir / "crates" / "ccb-runtime-accelerator"
-    output_bin = artifact_root / "bin" / "ccb-runtime-accelerator"
+    output_bin = artifact_root / "bin" / release_binary_name(
+        "ccb-runtime-accelerator",
+        target_platform=target_platform,
+    )
     if not (crate_dir / "Cargo.toml").is_file():
         return
 
@@ -392,7 +410,7 @@ def build_runtime_accelerator_for_release(artifact_root: Path, *, target_platfor
 
 
 def build_native_sidebar_helper(*, artifact_root: Path, crate_dir: Path, output_bin: Path) -> None:
-    source_bin = crate_dir / "target" / "release" / "ccb-agent-sidebar"
+    source_bin = crate_dir / "target" / "release" / output_bin.name
     run_sidebar_cargo_build(artifact_root=artifact_root, crate_dir=crate_dir, target=None)
     if not source_bin.is_file():
         raise RuntimeError(f"sidebar build did not produce expected binary: {source_bin}")
@@ -402,7 +420,7 @@ def build_native_sidebar_helper(*, artifact_root: Path, crate_dir: Path, output_
 
 
 def build_native_rs_helper(*, artifact_root: Path, crate_dir: Path, output_bin: Path) -> None:
-    source_bin = crate_dir / "target" / "release" / "ccb-rs-helper"
+    source_bin = crate_dir / "target" / "release" / output_bin.name
     run_rs_helper_cargo_build(artifact_root=artifact_root, crate_dir=crate_dir, target=None)
     if not source_bin.is_file():
         raise RuntimeError(f"ccb-rs-helper build did not produce expected binary: {source_bin}")
@@ -412,7 +430,7 @@ def build_native_rs_helper(*, artifact_root: Path, crate_dir: Path, output_bin: 
 
 
 def build_native_runtime_accelerator(*, artifact_root: Path, workspace_dir: Path, output_bin: Path) -> None:
-    source_bin = workspace_dir / "target" / "release" / "ccb-runtime-accelerator"
+    source_bin = workspace_dir / "target" / "release" / output_bin.name
     run_runtime_accelerator_cargo_build(artifact_root=artifact_root, workspace_dir=workspace_dir, target=None)
     if not source_bin.is_file():
         raise RuntimeError(f"ccb-runtime-accelerator build did not produce expected binary: {source_bin}")
@@ -695,6 +713,12 @@ def prune_excluded_paths(root: Path) -> None:
             path.unlink(missing_ok=True)
 
 
+def release_binary_name(stem: str, *, target_platform: str) -> str:
+    if str(target_platform or "").strip().lower() == "windows":
+        return f"{stem}.exe"
+    return stem
+
+
 def patch_ccb_metadata(ccb_path: Path, *, version: str, commit: str | None, date: str | None) -> None:
     text = ccb_path.read_text(encoding="utf-8", errors="replace")
     text = re.sub(r'^VERSION\s*=\s*"[^"]*"', f'VERSION = "{version}"', text, flags=re.MULTILINE)
@@ -725,6 +749,20 @@ def create_tarball(*, stage_root: Path, artifact_root: Path, artifact_path: Path
     shutil.rmtree(stage_root, ignore_errors=True)
 
 
+def create_zip_archive(*, stage_root: Path, artifact_root: Path, artifact_path: Path) -> None:
+    with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(artifact_root.rglob("*")):
+            archive.write(path, path.relative_to(stage_root).as_posix())
+    shutil.rmtree(stage_root, ignore_errors=True)
+
+
+def create_release_archive(*, stage_root: Path, artifact_root: Path, artifact_path: Path) -> None:
+    if artifact_path.name.endswith(".zip"):
+        create_zip_archive(stage_root=stage_root, artifact_root=artifact_root, artifact_path=artifact_path)
+        return
+    create_tarball(stage_root=stage_root, artifact_root=artifact_root, artifact_path=artifact_path)
+
+
 def write_sha256(*, artifact_path: Path, output_path: Path) -> None:
     digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     output_path.write_text(f"{digest}  {artifact_path.name}\n", encoding="utf-8")
@@ -742,6 +780,8 @@ __all__ = [
     "build_runtime_accelerator_for_release",
     "copy_repo_tree",
     "create_tarball",
+    "create_zip_archive",
+    "create_release_archive",
     "dirty_worktree_entries",
     "ensure_clean_worktree",
     "export_git_archive",
@@ -756,7 +796,9 @@ __all__ = [
     "prune_excluded_paths",
     "read_git_file",
     "release_artifact_basename",
+    "release_artifact_name",
     "release_build_arch",
+    "release_binary_name",
     "resolve_git_metadata",
     "resolve_version",
     "run_git",

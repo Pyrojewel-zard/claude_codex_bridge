@@ -68,6 +68,12 @@ ccb update
 
 في التثبيت الذي يديره npm يعرض `ccb update` أمر npm المكافئ ولا يعدّل payload المضمّن.
 
+على Windows x64 يعرض `ccb doctor` و `ccb doctor --output` أسطر
+`windows_x64_release_surface`. تميّز الحقول `release_install_entry` و
+`source_install_allowed` و `source_install_entry` و `update_entry` و
+`managed_python_status` و `native_helper_status` و `next_action` بين مسار
+fallback المصدر/التطوير `install.ps1` ومسارات npm أو release update المحجوبة.
+
 <details>
 <summary><b>حزم GitHub release وخيار التثبيت من المصدر</b></summary>
 

@@ -36,6 +36,12 @@ draft; visual changes are rendered to validated TOML by the backend.
 - Open the browser automatically when possible.
 - Print the URL as fallback.
 - Server exits after an idle timeout or explicit close.
+- The runtime summary must reflect the current host OS and the effective
+  `runtime.mux.backend` so the panel shows whether the draft is targeting
+  `tmux`, `rmux`, or `herdr`.
+- The Windows editor section projects the same window names that Herdr renders
+  as tabs; `main` is the default first visible tab/window, and adding a window
+  in the control panel must create the matching Herdr tab on apply.
 
 Landed runtime details:
 

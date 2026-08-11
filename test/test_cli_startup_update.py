@@ -337,6 +337,11 @@ def test_schedule_background_update_refresh_creates_lock_and_spawns_internal_com
         return _DummyProcess()
 
     monkeypatch.setattr(startup_update_refresh.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        startup_update_refresh,
+        "background_process_kwargs",
+        lambda: {"start_new_session": True, "creationflags": 0x08000000},
+    )
 
     assert startup_update_runtime.schedule_background_update_refresh(script_root=install_dir, install_dir=install_dir) is True
     assert captured["command"] == [
@@ -344,6 +349,7 @@ def test_schedule_background_update_refresh_creates_lock_and_spawns_internal_com
         str(install_dir / "ccb.py"),
         startup_update_runtime.BACKGROUND_REFRESH_COMMAND,
     ]
+    assert captured["kwargs"]["creationflags"] == 0x08000000
     assert startup_update_runtime.update_check_lock_path(install_dir).exists()
 
 

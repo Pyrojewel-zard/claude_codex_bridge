@@ -19,7 +19,8 @@ It is the authoritative design anchor for:
 - `ccb doctor`
 - `ccb doctor ps`
 - `ccb doctor logs <agent>`
-- `ccb doctor --bundle`
+- `ccb doctor --output`
+- `ccb doctor --bundle` (deprecated compatibility alias; use `ccb doctor --output`)
 
 The repo-local memory file [AGENTS.md](/home/bfly/yunwei/ccb_source/AGENTS.md) must point to this document instead of duplicating the rules.
 
@@ -690,12 +691,31 @@ Rules:
   shared cache as enabled.
 - it must not crash only because one diagnostics artifact is missing or malformed
 - malformed diagnostics files must surface as diagnostics errors, not silent omission
+- it must surface the Windows x64 release-surface projection when available,
+  including `windows_x64_release_surface`, `release_install_entry`,
+  `source_install_allowed`, `source_install_entry`, `update_entry`,
+  `managed_python_status`, `native_helper_status`, `failure_reason`, and
+  `next_action`; these rows are diagnostics only and must not imply final
+  Windows support, publish, tag, or release promotion authority
+- it may surface a Native Windows Herdr public workflow validation matrix when
+  the accepted matrix artifact is available. The stable matrix fields are
+  `backend_impl`, `os_platform`, `cpu_arch`, `ccb_version`,
+  `ccb_source_status`, `herdr_auto_restore_mode`, `required_workflows`,
+  `workflows`, `workflow_rows`, `public_providers`, `provider_workflows`,
+  `provider_workflow_rows`, `provider_workflow_detail_rows`,
+  `mobile_terminal_status`, `config_ui_status`,
+  `windows_npm_install_dry_run_status`, `beta_gaps`, `residual_risks`,
+  `artifacts`, `support_tier`, `support_tier_is_candidate`, and
+  `support_projection_allowed`. The matrix is evidence for support projection;
+  doctor output must not treat candidate fields as final support, publish,
+  tag, release promotion, provider runtime, or recovery authority.
 
 ### 3.7 Support Bundle Export
 
 Command:
 
-- `ccb doctor --bundle`
+- `ccb doctor --output`
+- Deprecated compatibility alias: `ccb doctor --bundle`
 
 Default output location:
 
@@ -759,7 +779,7 @@ Recommended support workflow:
 
 1. reproduce the issue in the project anchor
 2. run `ccb doctor`
-3. run `ccb doctor --bundle`
+3. run `ccb doctor --output`
 4. send the generated tarball
 
 The bundle is the transport unit. The reports inside it are the authoritative timeline.

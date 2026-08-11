@@ -101,6 +101,32 @@ def test_release_identity_rejects_same_version_tag_on_different_commit(tmp_path:
         raise AssertionError("expected a release tag collision")
 
 
+def test_release_identity_allows_preview_build_when_version_tag_exists_on_different_commit(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init")
+    _git(repo_root, "config", "user.email", "test@example.com")
+    _git(repo_root, "config", "user.name", "Test")
+    (repo_root / "VERSION").write_text("8.1.5\n", encoding="utf-8")
+    (repo_root / "package.json").write_text(json.dumps({"version": "8.1.5"}), encoding="utf-8")
+    _git(repo_root, "add", "VERSION", "package.json")
+    _git(repo_root, "commit", "-m", "tagged release")
+    _git(repo_root, "tag", "v8.1.5")
+    (repo_root / "note.txt").write_text("preview commit\n", encoding="utf-8")
+    _git(repo_root, "add", "note.txt")
+    _git(repo_root, "commit", "-m", "preview build")
+
+    commit, _date = module.resolve_git_metadata(repo_root, git_ref="HEAD")
+
+    module.validate_release_identity(
+        repo_root,
+        version="8.1.5",
+        commit=commit,
+        reject_existing_version=False,
+    )
+
+
 def _git(repo_root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo_root), *args], check=True, capture_output=True, text=True)
 
@@ -113,6 +139,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / ".ccb" / "ccbd").mkdir(parents=True)
     (repo_root / ".ccb-requests").mkdir(parents=True)
     (repo_root / ".loop").mkdir(parents=True)
+    (repo_root / ".codestable" / "features").mkdir(parents=True)
     (repo_root / ".architec").mkdir(parents=True)
     (repo_root / ".tmp_pytest" / "run").mkdir(parents=True)
     (repo_root / ".tmp_test_env_arch1" / "env").mkdir(parents=True)
@@ -131,6 +158,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / "useful_tools" / "codex_skills" / "plan-tree").mkdir(parents=True)
     (repo_root / "useful_tools" / "claude_skills" / "plan-tree").mkdir(parents=True)
     (repo_root / "roles" / "ccb.archi").mkdir(parents=True)
+    (repo_root / "docs" / "plantree" / "plans" / "drafts").mkdir(parents=True)
     (repo_root / "lib").mkdir(parents=True)
     (repo_root / "ccb").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     (repo_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
@@ -138,6 +166,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / ".ccb" / "ccbd" / "lease.json").write_text("{}", encoding="utf-8")
     (repo_root / ".ccb-requests" / "job_1.md").write_text("queued", encoding="utf-8")
     (repo_root / ".loop" / "state.json").write_text("{}", encoding="utf-8")
+    (repo_root / ".codestable" / "features" / "feature.md").write_text("dev planning\n", encoding="utf-8")
     (repo_root / ".architec" / "summary.json").write_text("{}", encoding="utf-8")
     (repo_root / ".tmp_pytest" / "run" / "state.json").write_text("{}", encoding="utf-8")
     (repo_root / ".tmp_test_env_arch1" / "env" / "state.json").write_text("{}", encoding="utf-8")
@@ -177,6 +206,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
     (repo_root / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
     (repo_root / "roles" / "ccb.archi" / "role.toml").write_text('schema = "rolepack/v1"\n', encoding="utf-8")
+    (repo_root / "docs" / "plantree" / "plans" / "drafts" / "plan.md").write_text("draft\n", encoding="utf-8")
 
     module.copy_repo_tree(repo_root, destination)
 
@@ -187,6 +217,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert (destination / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").exists()
     assert (destination / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").exists()
     assert not (destination / "roles").exists()
+    assert not (destination / ".codestable").exists()
     assert not (destination / ".git").exists()
     assert not (destination / ".ccb").exists()
     assert not (destination / ".ccb-requests").exists()
@@ -198,11 +229,13 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert not (destination / "tools" / "ccb-agent-sidebar" / "target").exists()
     assert not (destination / "tools" / "ccb-rs-helper" / "target").exists()
     assert not (destination / "mobile" / "app" / ".dart_tool").exists()
+    assert not (destination / "mobile").exists()
     assert not (destination / "mobile" / "app" / ".gradle").exists()
     assert not (destination / "mobile" / "app" / ".idea").exists()
     assert not (destination / "mobile" / "app" / "build").exists()
     assert not (destination / "mobile" / "app" / "node_modules").exists()
     assert not (destination / "dist-mobile").exists()
+    assert not (destination / "docs" / "plantree").exists()
 
 
 def test_copy_repo_tree_excludes_generated_output_subtree_inside_repo(tmp_path: Path) -> None:

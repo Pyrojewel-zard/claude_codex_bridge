@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -36,7 +37,10 @@ from cli.services.config_restart_intent import (
     record_config_restart_intent,
 )
 from cli.services.config_ui_settings import resolve_config_ui_settings
+from cli.services.herdr_surface import herdr_surface_projection_from_namespace_state
 from cli.services.theme import set_theme_preference, theme_preference_payload
+from ccbd.herdr_surface_projection import herdr_surface_projection_passes_gate
+from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_model_shortcuts import supported_provider_model_shortcuts
 from provider_profiles import supported_provider_api_shortcuts, validate_provider_runtime_home_uniqueness
@@ -45,6 +49,8 @@ from provider_profiles import supported_provider_api_shortcuts, validate_provide
 DEFAULT_IDLE_TIMEOUT_S = 30 * 60
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
 _BROWSER_OPEN_CONFIRM_TIMEOUT_S = 2.0
+_CAPABILITIES_CLI_MODELS_BUDGET_S = 0.1
+_CAPABILITIES_CLI_MODELS_RETRY_S = 0.5
 _PROFILE_NAME_PATTERN = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]{0,63}$')
 _CONFIG_UI_RELATIVE_PATH = Path('assets/config_ui/index.html')
 
@@ -56,14 +62,26 @@ class ConfigUiHandle:
     _server: ThreadingHTTPServer
     _last_activity: list[float]
     _idle_timeout_s: float
+    _serving: list[bool]
 
     def serve_forever(self) -> None:
         self._last_activity[0] = time.monotonic()
         self._server.timeout = min(1.0, max(0.05, self._idle_timeout_s))
-        while time.monotonic() - self._last_activity[0] < self._idle_timeout_s:
-            self._server.handle_request()
+        self._serving[0] = True
+        try:
+            while time.monotonic() - self._last_activity[0] < self._idle_timeout_s:
+                self._server.handle_request()
+        finally:
+            self._serving[0] = False
 
     def close(self) -> None:
+        if self._serving[0]:
+            self._last_activity[0] = time.monotonic() - self._idle_timeout_s
+            try:
+                with socket.create_connection(self._server.server_address[:2], timeout=0.2):
+                    pass
+            except OSError:
+                pass
         self._server.server_close()
 
 
@@ -86,19 +104,43 @@ def prepare_config_ui(
     config_path = project_root / '.ccb' / 'ccb.config'
     settings = resolve_config_ui_settings(project_root=project_root, cli_port=command.port)
     session_payload = json.dumps(
-        {
-            'schema_version': 2,
-            'mode': 'editor',
-            'project_root': str(project_root),
-            'config_path': str(config_path),
-            'config_exists': config_path.is_file(),
-        },
+        _config_ui_session_payload(
+            context,
+            project_root=project_root,
+            config_path=config_path,
+        ),
         ensure_ascii=False,
     ).encode('utf-8')
-    capabilities_payload = json.dumps(
-        config_ui_provider_capabilities(project_root=project_root),
-        ensure_ascii=False,
-    ).encode('utf-8')
+    capabilities_cache: list[bytes | None] = [None]
+    capabilities_retry_at: list[float] = [0.0]
+    capabilities_last_partial: list[bytes | None] = [None]
+    capabilities_probe: list[dict[str, object] | None] = [None]
+    capabilities_cache_lock = threading.Lock()
+
+    def capabilities_payload() -> bytes:
+        with capabilities_cache_lock:
+            if capabilities_cache[0] is not None:
+                return capabilities_cache[0]
+            now = time.monotonic()
+            if capabilities_last_partial[0] is not None and now < capabilities_retry_at[0]:
+                return capabilities_last_partial[0]
+            if capabilities_probe[0] is None:
+                capabilities_probe[0] = _start_provider_cli_models_probe(dict(os.environ))
+            cli_models, probe_complete = _join_provider_cli_models_probe(
+                capabilities_probe[0],
+                budget_s=_CAPABILITIES_CLI_MODELS_BUDGET_S,
+            )
+            payload = json.dumps(
+                config_ui_provider_capabilities(project_root=project_root, cli_models=cli_models),
+                ensure_ascii=False,
+            ).encode('utf-8')
+            if probe_complete:
+                capabilities_cache[0] = payload
+                capabilities_probe[0] = None
+            else:
+                capabilities_last_partial[0] = payload
+                capabilities_retry_at[0] = now + _CAPABILITIES_CLI_MODELS_RETRY_S
+            return payload
     access_token = token if token is not None else settings.token or secrets.token_urlsafe(24)
     last_activity = [time.monotonic()]
     if reload_action is None:
@@ -154,6 +196,7 @@ def prepare_config_ui(
         _server=server,
         _last_activity=last_activity,
         _idle_timeout_s=max(0.05, float(idle_timeout_s)),
+        _serving=[False],
     )
 
 
@@ -185,7 +228,7 @@ def open_config_ui_url(url: str) -> bool:
     try:
         if webbrowser.open(url, new=2):
             return True
-    except Exception:
+    except (OSError, webbrowser.Error):
         pass
     return False
 
@@ -228,6 +271,84 @@ def _is_wsl_environment() -> bool:
         return False
 
 
+def _config_ui_session_payload(
+    context: CliContext,
+    *,
+    project_root: Path,
+    config_path: Path,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        'schema_version': 2,
+        'mode': 'editor',
+        'project_root': str(project_root),
+        'config_path': str(config_path),
+        'config_exists': config_path.is_file(),
+    }
+    payload['runtime_summary'] = _config_ui_runtime_summary(project_root)
+    projection = _config_ui_herdr_surface_projection(context)
+    if projection is not None:
+        payload['herdr_surface_projection'] = projection
+        payload['config_ui_readonly_status'] = _config_ui_readonly_status(projection)
+    return payload
+
+
+def _config_ui_runtime_summary(project_root: Path) -> dict[str, object]:
+    """Detected OS and effective ``runtime.mux.backend`` for the Config Control.
+
+    Lets the user see before editing whether the current config targets
+    ``tmux``, ``rmux``, or ``herdr`` semantics, and on which OS.  ``backend``
+    is the effective ``runtime.mux.backend`` from the loaded config
+    (``None`` when the config does not declare one — meaning the platform
+    default backend applies).
+    """
+    backend: str | None = None
+    try:
+        from agents.config_loader import load_project_config
+
+        loaded = load_project_config(project_root)
+        config = getattr(loaded, 'config', None)
+        backend = str(getattr(config, 'runtime_mux_backend', '') or '').strip() or None
+    except Exception:
+        backend = None
+    return {
+        'os_platform': _config_ui_os_platform(),
+        'effective_mux_backend': backend,
+    }
+
+
+def _config_ui_os_platform() -> str:
+    if sys.platform == 'win32':
+        return 'windows'
+    if sys.platform == 'darwin':
+        return 'darwin'
+    if sys.platform.startswith('linux'):
+        return 'linux'
+    return sys.platform
+
+
+def _config_ui_herdr_surface_projection(context: CliContext) -> dict[str, object] | None:
+    paths = getattr(context, 'paths', None)
+    if paths is None:
+        return None
+    try:
+        namespace_state = ProjectNamespaceStateStore(paths).load()
+    except Exception:
+        return None
+    return herdr_surface_projection_from_namespace_state(namespace_state)
+
+
+def _config_ui_readonly_status(projection: dict[str, object]) -> dict[str, object]:
+    capability_status = str(projection.get('capability_status') or '').strip() or 'blocked'
+    status = 'pass' if herdr_surface_projection_passes_gate(projection) else 'blocked'
+    reason = None if status == 'pass' else f'capability_status={capability_status}'
+    return {
+        'status': status,
+        'backend_impl': 'herdr',
+        'reason': reason,
+        'degraded_next_action': projection.get('degraded_next_action'),
+    }
+
+
 def config_ui_asset_path() -> Path:
     return Path(__file__).resolve().parents[3] / _CONFIG_UI_RELATIVE_PATH
 
@@ -247,10 +368,14 @@ def config_ui_provider_capabilities(
         project_root=project_root,
         explicit_path=codex_models_path,
     )
-    discovered_cli_models = cli_models or {
-        'opencode': _provider_cli_models('opencode', env),
-        'mimo': _provider_cli_models('mimo', env),
-    }
+    discovered_cli_models = (
+        {
+            'opencode': _provider_cli_models('opencode', env),
+            'mimo': _provider_cli_models('mimo', env),
+        }
+        if cli_models is None
+        else cli_models
+    )
     suggestions: dict[str, list[dict[str, object]]] = {
         'codex': codex_models,
         'claude': [
@@ -429,7 +554,7 @@ def _provider_cli_models(program: str, environ: dict[str, str]) -> list[str]:
             text=True,
             encoding='utf-8',
             errors='replace',
-            timeout=3,
+            timeout=0.5,
             check=False,
             env=environ,
         )
@@ -438,6 +563,49 @@ def _provider_cli_models(program: str, environ: dict[str, str]) -> list[str]:
     if result.returncode != 0:
         return []
     return list(dict.fromkeys(line.strip() for line in result.stdout.splitlines() if '/' in line.strip()))
+
+
+def _start_provider_cli_models_probe(environ: dict[str, str]) -> dict[str, object]:
+    programs = ('opencode', 'mimo')
+    results: dict[str, list[str] | None] = {program: None for program in programs}
+
+    def probe(program: str) -> None:
+        results[program] = _provider_cli_models(program, environ)
+
+    workers = [
+        threading.Thread(target=probe, args=(program,), daemon=True)
+        for program in programs
+    ]
+    for worker in workers:
+        worker.start()
+    return {'programs': programs, 'results': results, 'workers': workers}
+
+
+def _join_provider_cli_models_probe(
+    state: dict[str, object],
+    *,
+    budget_s: float,
+) -> tuple[dict[str, list[str]], bool]:
+    programs = tuple(str(program) for program in state.get('programs', ()))
+    results = state.get('results')
+    workers = state.get('workers')
+    if not isinstance(results, dict) or not isinstance(workers, list):
+        return {program: [] for program in programs}, False
+    if budget_s <= 0:
+        return {program: list(results.get(program) or []) for program in programs}, False
+    deadline = time.monotonic() + budget_s
+    for worker in workers:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        worker.join(remaining)
+    return (
+        {
+            program: list(results[program] or [])
+            for program in programs
+        },
+        all(not worker.is_alive() for worker in workers),
+    )
 
 
 def _model(
@@ -459,7 +627,7 @@ def _handler_for(
     *,
     page: bytes,
     session_payload: bytes,
-    capabilities_payload: bytes,
+    capabilities_payload: Callable[[], bytes],
     config_path: Path,
     project_root: Path,
     path_layout,
@@ -487,7 +655,7 @@ def _handler_for(
                 self._send(HTTPStatus.OK, session_payload, 'application/json; charset=utf-8')
                 return
             if parsed.path == '/api/capabilities':
-                self._send(HTTPStatus.OK, capabilities_payload, 'application/json; charset=utf-8')
+                self._send(HTTPStatus.OK, capabilities_payload(), 'application/json; charset=utf-8')
                 return
             if parsed.path == '/api/theme':
                 self._send_json(HTTPStatus.OK, theme_preference_payload())
@@ -728,7 +896,7 @@ def _config_payload(
         return payload
     raw = config_path.read_bytes()
     try:
-        text = raw.decode('utf-8')
+        text = raw.decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
     except UnicodeDecodeError as exc:
         raise _ConfigUiHttpError(HTTPStatus.UNPROCESSABLE_ENTITY, 'ccb.config must be UTF-8') from exc
     payload: dict[str, object] = {
@@ -1182,9 +1350,12 @@ def _apply_candidate(
                 current_config,
                 candidate_config,
             )
-        backup_path = _backup_config(config_path)
-        atomic_write_text(config_path, text)
-        saved = _config_payload(config_path)
+        backup_path = _backup_config(config_path) if changed else None
+        if changed:
+            atomic_write_text(config_path, text)
+            saved = _config_payload(config_path)
+        else:
+            saved = current
         validation = _validate_candidate(
             {'text': str(saved['text'])},
             config_path=config_path,
@@ -1200,16 +1371,20 @@ def _apply_candidate(
             'validation': validation,
         }
         if mode == 'save':
-            intent = record_config_restart_intent(
-                project_root,
-                target_config_digest=str(saved['digest']),
-                affected_agents=validation.get('restart_bound_agents') or (),
-                reason='active_config_saved',
-                layout=path_layout,
+            intent = (
+                record_config_restart_intent(
+                    project_root,
+                    target_config_digest=str(saved['digest']),
+                    affected_agents=validation.get('restart_bound_agents') or (),
+                    reason='active_config_saved',
+                    layout=path_layout,
+                )
+                if changed
+                else None
             )
             result.update(
-                restart_required=True,
-                restart_intent=intent.to_record(),
+                restart_required=changed,
+                restart_intent=intent.to_record() if changed else None,
             )
             return HTTPStatus.OK, result
 

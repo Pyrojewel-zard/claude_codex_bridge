@@ -205,14 +205,21 @@ def test_cmd_update_current_release_runs_provider_flow_without_reinstall(
     assert "Already up to date" in capsys.readouterr().out
 
 
-def test_cmd_update_rejects_non_unix_platform(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_update_windows_uses_release_surface_diagnostic(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setattr(update_runtime.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(update_runtime.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(
+        update_runtime,
+        "get_available_versions",
+        lambda: (_ for _ in ()).throw(AssertionError("diagnostic-only Windows update must not resolve releases")),
+    )
 
     code = update_runtime.cmd_update(SimpleNamespace(target=None), script_root=tmp_path / "script-root")
 
     assert code == 1
-    captured = capsys.readouterr()
-    assert "Linux, macOS, or WSL" in captured.out
+    output = capsys.readouterr().out
+    assert "Windows x64 release route is blocked" in output
+    assert "Use install.ps1 for source/dev checkout installs" in output
 
 
 def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -282,6 +289,13 @@ def test_release_artifact_name_uses_macos_universal_bundle(monkeypatch) -> None:
     monkeypatch.setattr(update_runtime.platform, "machine", lambda: "arm64")
 
     assert update_runtime._release_artifact_name() == "ccb-macos-universal.tar.gz"
+
+
+def test_release_artifact_name_uses_windows_x64_zip(monkeypatch) -> None:
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(update_runtime.platform, "machine", lambda: "AMD64")
+
+    assert update_runtime._release_artifact_name() == "ccb-windows-x86_64.zip"
 
 
 def test_release_artifact_url_points_to_release_download() -> None:

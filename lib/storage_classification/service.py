@@ -502,10 +502,10 @@ def _relative_display(layout: PathLayout, root: Path, path: Path, *, root_kind: 
     try:
         relative = path.relative_to(root)
     except Exception:
-        return str(path)
+        return path.as_posix()
     if root_kind == 'runtime' and root != layout.ccb_dir:
-        return str(relative)
-    return str(relative)
+        return relative.as_posix()
+    return relative.as_posix()
 
 
 def _safe_size(path: Path) -> int:

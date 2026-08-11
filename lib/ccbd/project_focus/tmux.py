@@ -6,7 +6,11 @@ from .models import FocusErrorCode, ProjectFocusError
 
 
 def backend_for_namespace(backend_factory, namespace):
-    return build_backend(backend_factory, socket_path=namespace.tmux_socket_path)
+    return build_backend(
+        backend_factory,
+        socket_path=namespace.tmux_socket_path,
+        namespace_state=namespace,
+    )
 
 
 def select_window(backend, *, session_name: str, window_name: str) -> None:

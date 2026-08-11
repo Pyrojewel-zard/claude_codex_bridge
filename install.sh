@@ -1231,20 +1231,46 @@ install_watchdog_for_python() {
   PYTHON_BIN="$previous_python_bin"
 }
 
-# Return linux / macos / unknown based on uname
+# ── OS platform detection ─────────────────────────────────────────────────
+# Returns one of: linux, macos, wsl, native_windows, unknown
+#
+# Detection strategy:
+#   - uname = Darwin  → macos
+#   - uname = Linux   → check WSL markers → wsl or linux
+#   - otherwise       → unknown (native_windows is detected in install.ps1)
+
 detect_platform() {
   local name
   name="$(uname -s 2>/dev/null || echo unknown)"
   case "$name" in
-    Linux) echo "linux" ;;
     Darwin) echo "macos" ;;
+    Linux)
+      if is_wsl; then
+        echo "wsl"
+      else
+        echo "linux"
+      fi
+      ;;
     *) echo "unknown" ;;
   esac
 }
 
 
 is_wsl() {
-  [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
+  # WSL2 interop socket (most reliable signal)
+  if [[ -n "${WSL_INTEROP:-}" ]]; then
+    return 0
+  fi
+  # WSL distro name env
+  if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    return 0
+  fi
+  # /proc/version kernel marker
+  if [[ -f /proc/version ]]; then
+    grep -qi microsoft /proc/version 2>/dev/null && return 0
+    grep -qi wsl /proc/version 2>/dev/null && return 0
+  fi
+  return 1
 }
 
 get_wsl_version() {
@@ -1253,6 +1279,50 @@ get_wsl_version() {
   else
     echo 1
   fi
+}
+
+# Print platform-specific guidance after detection.
+print_platform_guidance() {
+  local platform
+  platform="$(detect_platform)"
+  case "$platform" in
+    wsl)
+      echo "INFO: 检测到 WSL 环境 — 后端默认使用 tmux（Linux 工具链）。"
+      echo "INFO: 如需在 Windows 原生侧使用 CCB，请在 Windows 侧运行 install.ps1。"
+      echo "INFO: Windows 原生侧需要 Herdr >= v0.8.0 作为终端后端。"
+      echo "INFO: Herdr 下载: https://herdr.dev/"
+      ;;
+    linux)
+      echo "INFO: 检测到 Linux 环境 — 后端默认使用 tmux。"
+      ;;
+    macos)
+      echo "INFO: 检测到 macOS 环境 — 后端默认使用 tmux。"
+      ;;
+  esac
+}
+
+# ── Herdr guidance for cross-platform setups ─────────────────────────────
+
+HERDR_MIN_STABLE="0.8.0"
+HERDR_MIN_PREVIEW_DATE="2026-08-04"
+HERDR_MIN_PREVIEW_COMMIT="d78e3d3b"
+
+print_herdr_guidance() {
+  echo ""
+  echo "================================================================"
+  echo "INFO: Native Windows 上的 CCB 需要 Herdr 作为终端后端"
+  echo "================================================================"
+  echo "  最低版本要求:"
+  echo "    - 稳定版 >= v${HERDR_MIN_STABLE}"
+  echo "    - 预览版 >= ${HERDR_MIN_PREVIEW_DATE}-${HERDR_MIN_PREVIEW_COMMIT}..."
+  echo ""
+  echo "  安装步骤:"
+  echo "    1. 下载 Herdr: https://herdr.dev/ 或 https://github.com/herdrdev/herdr"
+  echo "    2. 安装后确保 herdr.exe 在 PATH 中"
+  echo "    3. 验证: herdr --version"
+  echo ""
+  echo "  CCB 启动时将自动检测 Herdr 是否可用。"
+  echo "================================================================"
 }
 
 current_utc_timestamp() {
@@ -1692,6 +1762,9 @@ confirm_backend_env_wsl() {
   echo "Please confirm: you will install and run codex/gemini in WSL (not Windows native)."
   echo "If you plan to run codex/gemini in Windows native, exit and run on Windows side:"
   echo "   powershell -ExecutionPolicy Bypass -File .\\install.ps1 install"
+  echo
+  echo "INFO: Windows 原生侧需要 Herdr >= v0.8.0 作为终端后端。"
+  echo "INFO: 本 WSL 安装将使用 tmux 后端（Linux 工具链）。"
   echo "================================================================"
   echo
   read -r -p "Confirm continue installing in WSL? (y/N): " reply
@@ -1712,7 +1785,7 @@ print_tmux_install_hint() {
         echo "   macOS: Homebrew not detected, install from https://brew.sh then run 'brew install tmux'"
       fi
       ;;
-    linux)
+    linux|wsl)
       if command -v apt-get >/dev/null 2>&1; then
         echo "   Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y tmux"
       elif command -v dnf >/dev/null 2>&1; then
@@ -1726,7 +1799,7 @@ print_tmux_install_hint() {
       elif command -v zypper >/dev/null 2>&1; then
         echo "   openSUSE: sudo zypper install -y tmux"
       else
-        echo "   Linux: Please use your distro's package manager to install tmux"
+        echo "   Linux/WSL: Please use your distro's package manager to install tmux"
       fi
       ;;
     *)

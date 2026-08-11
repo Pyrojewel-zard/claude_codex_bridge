@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 
 def binding_line(agent) -> str:
     return (
@@ -12,4 +14,37 @@ def binding_line(agent) -> str:
     )
 
 
-__all__ = ['binding_line']
+def herdr_surface_lines(value: object, *, prefix: str = 'herdr') -> list[str]:
+    if not isinstance(value, Mapping) or value.get('backend_impl') != 'herdr':
+        return []
+    refs = value.get('evidence_refs') if isinstance(value.get('evidence_refs'), Mapping) else {}
+    lines = [
+        f'{prefix}_surface: '
+        f'capability_status={value.get("capability_status")} '
+        f'support_tier_projection={value.get("support_tier_projection")} '
+        f'source={value.get("support_tier_projection_source")} '
+        f'beta_gaps={_format_list(value.get("beta_gaps"))} '
+        f'blocking_gaps={_format_list(value.get("blocking_gaps"))} '
+        f'next_action={value.get("degraded_next_action")}'
+    ]
+    namespace_ref = refs.get('namespace_ref') if isinstance(refs, Mapping) else None
+    if isinstance(namespace_ref, Mapping):
+        lines.append(f'{prefix}_namespace_ref: {_format_mapping(namespace_ref)}')
+    pane_ref = refs.get('pane_ref') if isinstance(refs, Mapping) else None
+    if isinstance(pane_ref, Mapping):
+        lines.append(f'{prefix}_pane_ref: {_format_mapping(pane_ref)}')
+    return lines
+
+
+def _format_mapping(value: Mapping[str, object]) -> str:
+    return ','.join(f'{key}={value[key]}' for key in sorted(value))
+
+
+def _format_list(value: object) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return ','.join(str(item) for item in value) or 'none'
+    text = str(value or '').strip()
+    return text or 'none'
+
+
+__all__ = ['binding_line', 'herdr_surface_lines']

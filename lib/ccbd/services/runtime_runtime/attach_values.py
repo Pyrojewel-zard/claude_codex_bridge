@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from agents.models import RuntimeBindingSource
 from agents.runtime_binding import merge_runtime_binding, runtime_binding_from_runtime
+from provider_runtime.session_payload import (
+    namespace_restore_token_present,
+    redacted_namespace_ref,
+    redacted_provider_runtime_backend_ref,
+)
 
 from ..runtime_attach import (
     binding_source_for_attach,
@@ -29,6 +36,12 @@ def resolve_attach_runtime_values(
     runtime_root: str | None,
     runtime_pid: int | None,
     terminal_backend: str | None,
+    provider_runtime_backend_ref: Mapping[str, object] | None,
+    namespace_ref: Mapping[str, object] | None,
+    pane_ref: Mapping[str, object] | None,
+    namespace_restore_token_present: bool | None,
+    herdr_auto_restore_mode: str | None,
+    herdr_agent_state_ref: str | None,
     pane_id: str | None,
     active_pane_id: str | None,
     pane_title_marker: str | None,
@@ -74,6 +87,39 @@ def resolve_attach_runtime_values(
     runtime_root_value = preferred_text(existing, 'runtime_root', runtime_root)
     runtime_pid_value = next_runtime_pid(existing, runtime_pid=runtime_pid, pid=pid)
     terminal_backend_value = preferred_terminal_backend(existing, terminal_backend=terminal_backend, runtime_ref_value=runtime_ref_value)
+    raw_provider_runtime_backend_ref = preferred_mapping(
+        existing,
+        'provider_runtime_backend_ref',
+        provider_runtime_backend_ref,
+    )
+    raw_namespace_ref = preferred_mapping(existing, 'namespace_ref', namespace_ref)
+    provider_runtime_backend_ref_value = redacted_provider_runtime_backend_ref(
+        raw_provider_runtime_backend_ref
+    )
+    namespace_ref_value = redacted_namespace_ref(raw_namespace_ref)
+    pane_ref_value = preferred_mapping(existing, 'pane_ref', pane_ref)
+    backend_namespace_ref = (
+        raw_provider_runtime_backend_ref.get('namespace_ref')
+        if isinstance(raw_provider_runtime_backend_ref, Mapping)
+        else None
+    )
+    namespace_restore_token_present_value = preferred_bool(
+        existing,
+        'namespace_restore_token_present',
+        namespace_restore_token_present,
+    ) or namespace_restore_token_present_fn(raw_namespace_ref) or namespace_restore_token_present_fn(
+        backend_namespace_ref if isinstance(backend_namespace_ref, Mapping) else None
+    )
+    herdr_auto_restore_mode_value = preferred_text(
+        existing,
+        'herdr_auto_restore_mode',
+        herdr_auto_restore_mode,
+    )
+    herdr_agent_state_ref_value = preferred_text(
+        existing,
+        'herdr_agent_state_ref',
+        herdr_agent_state_ref,
+    )
     active_pane_id_value = preferred_active_pane_id(existing, active_pane_id=active_pane_id, pane_id_value=pane_id_value)
     tmux_socket_name_value = preferred_text(existing, 'tmux_socket_name', tmux_socket_name)
     tmux_socket_path_value = preferred_text(existing, 'tmux_socket_path', tmux_socket_path)
@@ -109,6 +155,12 @@ def resolve_attach_runtime_values(
         runtime_root=runtime_root_value,
         runtime_pid=runtime_pid_value,
         terminal_backend=terminal_backend_value,
+        provider_runtime_backend_ref=provider_runtime_backend_ref_value,
+        namespace_ref=namespace_ref_value,
+        pane_ref=pane_ref_value,
+        namespace_restore_token_present=namespace_restore_token_present_value,
+        herdr_auto_restore_mode=herdr_auto_restore_mode_value,
+        herdr_agent_state_ref=herdr_agent_state_ref_value,
         pane_id=pane_id_value,
         active_pane_id=active_pane_id_value,
         pane_title_marker=preferred_text(existing, 'pane_title_marker', pane_title_marker),
@@ -152,6 +204,27 @@ def preferred_terminal_backend(existing, *, terminal_backend: str | None, runtim
         or terminal_backend_from_runtime_ref(runtime_ref_value)
         or (existing.terminal_backend if existing is not None else None)
     )
+
+
+def preferred_mapping(
+    existing,
+    field_name: str,
+    explicit_value: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    if isinstance(explicit_value, Mapping):
+        return dict(explicit_value)
+    current = getattr(existing, field_name, None) if existing is not None else None
+    return dict(current) if isinstance(current, Mapping) else None
+
+
+def preferred_bool(existing, field_name: str, explicit_value: bool | None) -> bool:
+    if explicit_value is not None:
+        return bool(explicit_value)
+    return bool(getattr(existing, field_name, False)) if existing is not None else False
+
+
+def namespace_restore_token_present_fn(namespace_ref: Mapping[str, object] | None) -> bool:
+    return namespace_restore_token_present(namespace_ref)
 
 
 def preferred_pane_id(existing, *, pane_id: str | None, runtime_ref_value: str | None) -> str | None:

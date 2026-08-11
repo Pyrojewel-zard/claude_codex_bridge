@@ -84,7 +84,14 @@ def connect_mounted_daemon(
             return handle
     _manager, _guard, inspection = inspect_daemon_fn(context)
     phase = _phase(inspection)
-    if allow_restart_stale and _should_wait_or_recover(inspection, should_restart_unreachable_daemon_fn):
+    # start 命令（allow_restart_stale=True）是用户的显式启动意图：即使 lifecycle
+    # desired_state=stopped（如 prestart kill -f 遗留 stop_all），也应通过
+    # ensure_daemon_started 把意图恢复为 running 并拉起 ccbd，而不是直接报
+    # lease_unmounted（2026-08-06 采集暴露）。
+    if allow_restart_stale and (
+        _should_wait_or_recover(inspection, should_restart_unreachable_daemon_fn)
+        or _desired_state(inspection) == 'stopped'
+    ):
         return ensure_daemon_started_fn(context)
     if phase == 'unmounted':
         raise CcbdServiceError('project ccbd is unmounted; run `ccb` first')
@@ -155,6 +162,10 @@ def _startup_wait_exhausted(
     now = time.time()
     if now >= local_deadline:
         return True
+    if phase == 'failed':
+        return _desired_state(inspection) != 'running' or bool(
+            str(getattr(inspection, 'last_failure_reason', '') or '').strip()
+        )
     if phase != 'starting' and not (
         phase == 'mounted' and not mounted_control_plane_ready(inspection)
     ):

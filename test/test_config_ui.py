@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import sys
 import threading
@@ -26,6 +27,7 @@ from cli.services.config_ui import (
 )
 from cli.services.config_ui_settings import resolve_config_ui_settings
 from agents.config_loader import ConfigValidationError
+from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from storage.paths import PathLayout
 
 
@@ -120,7 +122,7 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
     assert handle.summary['url'].endswith('/')
     assert handle.summary['bind'] == 'loopback'
     time.sleep(0.35)
-    thread = threading.Thread(target=handle.serve_forever)
+    thread = threading.Thread(target=handle.serve_forever, daemon=True)
     thread.start()
 
     try:
@@ -133,13 +135,13 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         session_url = f'{parsed.scheme}://{parsed.netloc}/api/session?{urlencode({"token": token})}'
         with urlopen(session_url, timeout=2) as response:
             payload = json.loads(response.read())
-        assert payload == {
-            'schema_version': 2,
-            'mode': 'editor',
-            'project_root': str(project_root.resolve()),
-            'config_path': str(config_path.resolve()),
-            'config_exists': True,
-        }
+        assert payload['schema_version'] == 2
+        assert payload['mode'] == 'editor'
+        assert payload['project_root'] == str(project_root.resolve())
+        assert payload['config_path'] == str(config_path.resolve())
+        assert payload['config_exists'] is True
+        assert payload['runtime_summary']['os_platform'] in {'windows', 'linux', 'darwin'}
+        assert payload['runtime_summary']['effective_mux_backend'] is None
 
         capabilities_url = f'{parsed.scheme}://{parsed.netloc}/api/capabilities?{urlencode({"token": token})}'
         with urlopen(capabilities_url, timeout=2) as response:
@@ -168,9 +170,214 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
             urlopen(f'{parsed.scheme}://{parsed.netloc}/', timeout=2)
         assert exc_info.value.code == 403
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
+
+
+def test_config_ui_capabilities_probe_cli_models_lazily(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = tmp_path / 'repo-lazy-capabilities'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('agent1:codex\n', encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    calls: list[str] = []
+
+    def fake_provider_cli_models(program: str, _environ: dict[str, str]) -> list[str]:
+        calls.append(program)
+        if program == 'opencode':
+            return ['openai/gpt-5.6-sol']
+        if program == 'mimo':
+            return ['xiaomi/mimo-v2.5-pro']
+        return []
+
+    monkeypatch.setattr(config_ui_module, '_provider_cli_models', fake_provider_cli_models)
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=0.3,
+    )
+    assert calls == []
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        capabilities = _get_json(handle.url, '/api/capabilities')
+        providers = {provider['id']: provider for provider in capabilities['providers']}
+        assert [model['id'] for model in providers['opencode']['models']] == ['openai/gpt-5.6-sol']
+        assert [model['id'] for model in providers['mimo']['models']] == ['xiaomi/mimo-v2.5-pro']
+        assert calls == ['opencode', 'mimo']
+        _get_json(handle.url, '/api/capabilities')
+        assert calls == ['opencode', 'mimo']
+    finally:
+        handle.close()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
+def test_config_ui_capabilities_endpoint_bounds_slow_cli_model_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-slow-capabilities'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('agent1:codex\n', encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    calls: list[str] = []
+
+    def slow_provider_cli_models(program: str, _environ: dict[str, str]) -> list[str]:
+        calls.append(program)
+        time.sleep(0.08)
+        return [f'{program}/slow-model']
+
+    monkeypatch.setattr(config_ui_module, '_provider_cli_models', slow_provider_cli_models)
+    monkeypatch.setattr(config_ui_module, '_CAPABILITIES_CLI_MODELS_BUDGET_S', 0.05)
+    monkeypatch.setattr(config_ui_module, '_CAPABILITIES_CLI_MODELS_RETRY_S', 0.05)
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=2.0,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        started_at = time.monotonic()
+        capabilities = _get_json(handle.url, '/api/capabilities')
+        elapsed = time.monotonic() - started_at
+        providers = {provider['id']: provider for provider in capabilities['providers']}
+        assert elapsed < 0.75
+        assert {provider['id'] for provider in capabilities['providers']} >= {'codex', 'opencode', 'mimo'}
+        assert providers['opencode']['models'] == []
+        assert providers['mimo']['models'] == []
+        assert set(calls) == {'opencode', 'mimo'}
+        time.sleep(0.1)
+        capabilities = _get_json(handle.url, '/api/capabilities')
+        providers = {provider['id']: provider for provider in capabilities['providers']}
+        assert [model['id'] for model in providers['opencode']['models']] == ['opencode/slow-model']
+        assert [model['id'] for model in providers['mimo']['models']] == ['mimo/slow-model']
+        assert set(calls) == {'opencode', 'mimo'}
+        _get_json(handle.url, '/api/capabilities')
+        assert set(calls) == {'opencode', 'mimo'}
+    finally:
+        handle.close()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
+def test_config_ui_session_projects_herdr_readonly_status(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-herdr'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('agent1:codex\n', encoding='utf-8')
+    paths = PathLayout(project_root)
+    ProjectNamespaceStateStore(paths).save(
+        ProjectNamespaceState(
+            project_id=paths.project_id,
+            namespace_epoch=4,
+            tmux_socket_path='',
+            tmux_session_name='ccb-herdr',
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            namespace_id='workspace-1',
+            namespace_session_name='ccb-herdr',
+            namespace_ipc_kind='herdr_socket',
+            namespace_ipc_ref='herdr://workspace-1',
+            namespace_restore_token='raw-secret-token',
+        )
+    )
+    context = SimpleNamespace(project=SimpleNamespace(project_root=project_root), paths=paths)
+    payload = config_ui_module._config_ui_session_payload(
+        context,
+        project_root=project_root.resolve(),
+        config_path=config_path.resolve(),
+    )
+
+    projection = payload['herdr_surface_projection']
+    assert projection['backend_impl'] == 'herdr'
+    assert projection['capability_status'] == 'partial'
+    assert projection['support_tier_projection'] == 'experimental'
+    assert projection['support_tier_projection_source'] == 'validation_pending'
+    assert projection['evidence_refs']['namespace_ref']['namespace_id'] == 'workspace-1'
+    assert payload['config_ui_readonly_status'] == {
+        'status': 'blocked',
+        'backend_impl': 'herdr',
+        'reason': 'capability_status=partial',
+        'degraded_next_action': None,
+    }
+    assert 'raw-secret-token' not in json.dumps(payload)
+
+
+def test_config_ui_runtime_summary_reports_os_and_effective_mux_backend(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-mux'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        'version = 2\nentry_window = "main"\n\n[runtime.mux]\nbackend = "herdr"\n\n'
+        '[windows]\nmain = "agent1:codex"\n',
+        encoding='utf-8',
+    )
+    paths = PathLayout(project_root)
+    context = SimpleNamespace(project=SimpleNamespace(project_root=project_root), paths=paths)
+    payload = config_ui_module._config_ui_session_payload(
+        context,
+        project_root=project_root.resolve(),
+        config_path=config_path.resolve(),
+    )
+    summary = payload['runtime_summary']
+    assert summary['effective_mux_backend'] == 'herdr'
+    assert summary['os_platform'] in {'windows', 'linux', 'darwin'}
+    assert 'config_exists' in payload
+
+
+def test_config_ui_runtime_summary_tolerates_missing_or_invalid_config(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-empty'
+    payload = config_ui_module._config_ui_runtime_summary(project_root.resolve())
+    assert payload['effective_mux_backend'] is None
+    assert payload['os_platform'] in {'windows', 'linux', 'darwin'}
+
+
+def test_config_ui_herdr_readonly_status_fails_closed_for_contradictory_projection() -> None:
+    base_projection = {
+        'backend_impl': 'herdr',
+        'capability_status': 'supported',
+        'support_tier_projection': 'beta',
+        'support_tier_projection_source': 'backend_capability',
+        'beta_gaps': [],
+        'blocking_gaps': [],
+        'degraded_next_action': None,
+    }
+    contradictions = [
+        {'beta_gaps': ['config-ui-validation-pending']},
+        {'support_tier_projection': 'experimental'},
+        {'support_tier_projection_source': 'validation_pending'},
+    ]
+
+    for contradiction in contradictions:
+        projection = {**base_projection, **contradiction}
+        payload = config_ui_module._config_ui_readonly_status(projection)
+
+        assert payload == {
+            'status': 'blocked',
+            'backend_impl': 'herdr',
+            'reason': 'capability_status=supported',
+            'degraded_next_action': None,
+        }
+
+    incomplete_projection = dict(base_projection)
+    incomplete_projection.pop('beta_gaps')
+    assert config_ui_module.herdr_surface_projection_passes_gate(incomplete_projection) is False
+    malformed_projection = {**base_projection, 'blocking_gaps': {}}
+    assert config_ui_module.herdr_surface_projection_passes_gate(malformed_projection) is False
 
 
 def test_config_ui_reads_and_saves_user_theme_preference(
@@ -224,8 +431,8 @@ def test_config_ui_reads_and_saves_user_theme_preference(
             _post_json(handle.url, '/api/theme', {'theme': 'unknown'})
         assert invalid.value.code == 422
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
 
 
@@ -353,6 +560,8 @@ main = "agent1:codex"
 
 
 def test_config_ui_rejects_insecure_token_file_without_leaking_contents(tmp_path: Path) -> None:
+    if os.name == 'nt':
+        pytest.skip('Windows chmod does not expose POSIX owner-only mode bits')
     project_root = tmp_path / 'repo'
     config_path = project_root / '.ccb' / 'ccb.config'
     token_path = project_root / '.ccb' / 'config-ui.token'
@@ -413,8 +622,8 @@ def test_config_ui_uses_builtin_demo_config_when_project_config_is_missing(
             'percent': None,
         }
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
 
 
@@ -554,8 +763,47 @@ def test_config_ui_validates_saves_with_digest_guard_and_hot_reloads(tmp_path: P
         backup_path = Path(applied['backup_path'])
         assert backup_path.read_text(encoding='utf-8') == original
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
+def test_config_ui_crlf_noop_save_preserves_file_and_reports_unchanged(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-crlf-save'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original_crlf = 'version = 2\r\n\r\n[windows]\r\nmain = "agent1:codex"\r\n'
+    normalized = original_crlf.replace('\r\n', '\n')
+    config_path.write_text(original_crlf, encoding='utf-8', newline='')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=0.3,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        assert config['text'] == normalized
+        applied = _post_json(
+            handle.url,
+            '/api/apply',
+            {'text': config['text'], 'expected_digest': config['digest'], 'mode': 'save'},
+        )
+        assert applied['status'] == 'saved'
+        assert applied['changed'] is False
+        assert applied['backup_path'] is None
+        assert applied['restart_required'] is False
+        assert applied['restart_intent'] is None
+        assert config_path.read_text(encoding='utf-8', newline='') == original_crlf
+    finally:
+        handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
 
 
@@ -639,8 +887,8 @@ url = "https://old.example.test"
         assert 'new-secret' not in persisted
         assert 'https://new.example.test' not in persisted
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
 
 
@@ -783,8 +1031,8 @@ def test_config_ui_rejects_invalid_candidate_without_writing(tmp_path: Path) -> 
         assert config_path.read_text(encoding='utf-8') == original
         assert not tuple(config_path.parent.glob('ccb.config.bak.*'))
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
 
 
@@ -851,8 +1099,8 @@ role = "agentroles.coder"
         assert '[agents.agent2]' not in saved_text
         assert Path(applied['backup_path']).read_text(encoding='utf-8') == original
     finally:
-        thread.join(timeout=2)
         handle.close()
+        thread.join(timeout=2)
     assert not thread.is_alive()
 
 

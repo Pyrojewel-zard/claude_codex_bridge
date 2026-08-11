@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from ccbd.reload_additive_agents import append_agent_plan_for_window, window_agent_names, window_map
-from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 
+from .backend import apply_pane_identity, kill_pane, move_pane
 from .remove_patch_agents import reflow_window_after_agent_change
 
 
@@ -53,13 +53,13 @@ def move_agent_panes(
             anchor = _target_anchor(agent_name, target_window, old_target, moved_by_target, existing_agent_panes, result.moved_agents)
             direction = _move_direction(agent_name, old_target, new_target)
             placeholder_pane = None
-        _move_pane(backend, source_pane=source_pane, anchor_pane=anchor, direction=direction, timeout_s=timeout_s)
+        move_pane(backend, source_pane=source_pane, anchor_pane=anchor, direction=direction, timeout_s=timeout_s)
         if placeholder_pane:
             _kill_placeholder_pane(backend, placeholder_pane, result=result, timeout_s=timeout_s)
         order_index = _agent_order_index(new_target, agent_name)
-        apply_ccb_pane_identity(
+        apply_pane_identity(
             backend,
-            source_pane,
+            pane_id=source_pane,
             title=agent_name,
             agent_label=agent_name,
             project_id=controller._project_id,
@@ -171,37 +171,8 @@ def _agent_order_index(window, agent_name: str) -> int | None:
         return None
 
 
-def _move_pane(backend, *, source_pane: str, anchor_pane: str, direction: str, timeout_s: float | None) -> None:
-    runner = getattr(backend, '_tmux_run', None)
-    if not callable(runner):
-        raise RuntimeError('tmux backend does not support move-pane')
-    flag = '-h' if direction == 'right' else '-v'
-    completed = runner(
-        ['move-pane', flag, '-s', source_pane, '-t', anchor_pane],
-        check=False,
-        capture=True,
-        timeout=timeout_s,
-    )
-    if int(getattr(completed, 'returncode', 1) or 0) != 0:
-        detail = str(getattr(completed, 'stderr', '') or getattr(completed, 'stdout', '') or '').strip()
-        raise RuntimeError(f'failed to move tmux pane {source_pane!r}: {detail}')
-
-
 def _kill_placeholder_pane(backend, pane_id: str, *, result, timeout_s: float | None) -> None:
-    killer = getattr(backend, 'kill_pane', None)
-    if callable(killer):
-        try:
-            killer(pane_id)
-        except TypeError:
-            killer(pane_id, timeout_s=timeout_s)
-    else:
-        runner = getattr(backend, '_tmux_run', None)
-        if not callable(runner):
-            raise RuntimeError('tmux backend does not support placeholder pane cleanup')
-        completed = runner(['kill-pane', '-t', pane_id], check=False, capture=True, timeout=timeout_s)
-        if int(getattr(completed, 'returncode', 1) or 0) != 0:
-            detail = str(getattr(completed, 'stderr', '') or getattr(completed, 'stdout', '') or '').strip()
-            raise RuntimeError(f'failed to clean moved target placeholder pane {pane_id!r}: {detail}')
+    kill_pane(backend, pane_id=pane_id, timeout_s=timeout_s)
     try:
         result.created_panes.remove(pane_id)
     except ValueError:

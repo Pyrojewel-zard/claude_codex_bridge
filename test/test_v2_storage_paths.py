@@ -151,6 +151,20 @@ def test_path_layout_wsl_runtime_state_uses_account_home_instead_of_process_home
     assert not str(layout.runtime_state_root).startswith(str(provider_home))
 
 
+def test_path_layout_honors_runtime_state_home_without_anchor_ref(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-source-dev'
+    runtime_state_home = tmp_path / 'source-dev-state' / 'runtime-state'
+    monkeypatch.setenv('CCB_RUNTIME_STATE_HOME', str(runtime_state_home))
+
+    layout = PathLayout(project_root)
+
+    assert layout.runtime_state_placement.root_kind == 'relocated'
+    assert layout.runtime_state_placement.relocation_reason == 'runtime_state_home'
+    assert layout.runtime_state_root == runtime_state_home / layout.project_id
+    assert layout.ccbd_dir == layout.runtime_state_root / 'ccbd'
+    assert layout.runtime_marker_status == 'missing'
+
+
 def test_runtime_state_root_from_anchor_ref_rejects_invalid_payloads(tmp_path: Path) -> None:
     anchor = tmp_path / 'repo' / '.ccb'
     anchor.mkdir(parents=True, exist_ok=True)

@@ -77,6 +77,7 @@ _RUNTIME_KEYS = frozenset(
         'name_template',
         'release_policy',
         'window_policy',
+        'mux',
     }
 )
 _REQUIRED_RESIDENT = {
@@ -364,6 +365,7 @@ def _parse_runtime(value: object) -> WorkflowRuntimePolicy:
             'workflow.runtime.name_template',
             f'missing required tokens: {", ".join(missing_tokens)}',
         )
+    mux_backend = _parse_runtime_mux_backend_v3(raw, path='workflow.runtime.mux')
     return WorkflowRuntimePolicy(
         max_workgroups=max_workgroups,
         max_parallel_workgroups=max_parallel,
@@ -376,7 +378,35 @@ def _parse_runtime(value: object) -> WorkflowRuntimePolicy:
         name_template=name_template,
         release_policy=release,
         window_policy=window_policy,
+        mux_backend=mux_backend,
     )
+
+
+def _parse_runtime_mux_backend_v3(raw: dict[str, object], *, path: str) -> str | None:
+    """解析 v3 workflow.runtime.mux.backend（原生 Windows 后端声明）。
+
+    与 v2 runtime.mux.backend 语义对齐；rmux 未实现，fail-closed。
+    """
+    if 'mux' not in raw:
+        return None
+    mux_value = raw.get('mux')
+    if mux_value is None:
+        # 显式 null mux 视为 absent（与 v2 runtime.mux 语义对齐）
+        return None
+    mux = _mapping(mux_value, path=path)
+    _reject_unknown(mux, frozenset({'backend'}), path=path)
+    backend = mux.get('backend')
+    if backend is None:
+        return None
+    if not isinstance(backend, str) or backend not in {'herdr', 'rmux'}:
+        _fail('v3_mux_backend_invalid', f'{path}.backend', 'must be one of: herdr, rmux')
+    if backend == 'rmux':
+        _fail(
+            'v3_rmux_backend_not_implemented',
+            f'{path}.backend',
+            'rmux backend is not implemented yet',
+        )
+    return backend
 
 
 def _parse_role(

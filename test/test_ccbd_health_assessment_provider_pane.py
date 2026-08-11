@@ -44,6 +44,31 @@ def test_assess_provider_pane_reports_missing_session(monkeypatch) -> None:
     assert assessment.health == 'session-missing'
 
 
+def test_assess_provider_pane_accepts_mux_runtime_ref_with_non_tmux_terminal(monkeypatch) -> None:
+    binding = _binding()
+    session = SimpleNamespace(pane_id='w7V:p3')
+    monkeypatch.setattr(
+        'ccbd.services.health_assessment.provider_pane.load_provider_session',
+        lambda binding, workspace_path, agent_name: session,
+    )
+    monkeypatch.setattr(
+        'ccbd.services.health_assessment.provider_pane.session_terminal',
+        lambda session: 'mux',
+    )
+
+    assessment = assess_provider_pane(
+        runtime=_runtime(runtime_ref='mux:w7V:p3'),
+        registry=_registry(),
+        session_bindings={'codex': binding},
+        namespace_state_store=object(),
+    )
+
+    assert assessment is not None
+    assert assessment.session is session
+    assert assessment.terminal == 'mux'
+    assert assessment.health == 'healthy'
+
+
 def test_assess_provider_pane_marks_foreign_tmux_pane(monkeypatch) -> None:
     binding = _binding()
     session = SimpleNamespace(pane_id='%9')

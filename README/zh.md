@@ -76,6 +76,12 @@ CLI，并只提示一次可安全管理的更新。可使用 `--providers check`
 版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
 provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
 
+在 Windows x64 上，`ccb doctor` 和 `ccb doctor --output` 会输出
+`windows_x64_release_surface` 诊断行。使用 `release_install_entry`、
+`source_install_allowed`、`source_install_entry`、`update_entry`、
+`managed_python_status`、`native_helper_status` 和 `next_action` 区分
+source/dev `install.ps1` 兜底路径与被阻断的 npm 或 release update 路由。
+
 版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
 manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
 立即清理，仍在运行或属于其他现存项目的缓存会保留到对应项目下一次成功

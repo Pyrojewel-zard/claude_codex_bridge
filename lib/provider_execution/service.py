@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from threading import RLock
 
 from ccbd.api_models import JobRecord
@@ -244,10 +245,28 @@ class ExecutionService(ExecutionServiceStateMixin):
 
 def interrupt_active_submission(submission: ProviderSubmission) -> None:
     backend = submission.runtime_state.get("backend")
-    pane_id = str(submission.runtime_state.get("pane_id") or "").strip()
-    if backend is None or not pane_id:
+    pane_target = _runtime_pane_target(submission.runtime_state)
+    if backend is None or pane_target is None:
         return
-    interrupt_and_clear_runtime_target(backend, pane_id)
+    interrupt_and_clear_runtime_target(backend, pane_target)
+
+
+def _runtime_pane_target(runtime_state: Mapping[str, object]) -> object | None:
+    pane_ref = runtime_state.get("pane_ref")
+    if _complete_herdr_pane_ref(pane_ref):
+        return dict(pane_ref)
+    pane_id = str(runtime_state.get("pane_id") or "").strip()
+    return pane_id or None
+
+
+def _complete_herdr_pane_ref(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    return (
+        str(value.get("backend_impl") or "").strip() == "herdr"
+        and bool(str(value.get("pane_id") or "").strip())
+        and bool(str(value.get("session_name") or "").strip())
+    )
 
 
 def _cancel_submission(adapter, submission: ProviderSubmission) -> None:

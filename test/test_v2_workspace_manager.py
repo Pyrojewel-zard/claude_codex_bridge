@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 
 import pytest
@@ -425,6 +427,29 @@ def test_reconcile_keeps_user_untracked_file_as_retirement_blocker(tmp_path: Pat
     assert summary.retired == ()
     assert user_artifact.read_text(encoding='utf-8') == 'keep me\n'
     assert plan.workspace_path.exists()
+
+
+def test_reconcile_removes_retired_agent_state_with_readonly_files(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    project_root.mkdir()
+    paths = PathLayout(project_root)
+    spec = _spec(name='retired', workspace_mode=WorkspaceMode.INPLACE)
+    AgentSpecStore(paths).save(spec)
+    readonly_file = paths.agent_dir('retired') / 'provider-state' / 'claude' / 'home' / '.git' / 'objects' / 'pack' / 'pack.idx'
+    readonly_file.parent.mkdir(parents=True)
+    readonly_file.write_text('readonly\n', encoding='utf-8')
+    readonly_file.chmod(stat.S_IREAD)
+
+    try:
+        summary = reconcile_start_workspaces(project_root, type('Config', (), {'agents': {}})())
+    finally:
+        if readonly_file.exists():
+            os.chmod(readonly_file, stat.S_IREAD | stat.S_IWRITE)
+
+    assert paths.agent_dir('retired').exists() is False
+    assert len(summary.retired) == 1
+    assert summary.retired[0].agent_name == 'retired'
+    assert summary.retired[0].removed_agent_state is True
 
 
 def _init_git_repo(project_root: Path) -> None:

@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import socket
 import time
 
 import pytest
 
 from ccbd.api_models import RpcRequest
+from ccbd.control_plane_transport.fake import FakeControlPlaneTransport
 from ccbd.socket_client_runtime import decode_response, recv_response_line, send_request
 from ccbd.socket_server import CcbdSocketServer
 
 
+def _server(tmp_path: Path) -> CcbdSocketServer:
+    return CcbdSocketServer(
+        tmp_path / 'ccbd.sock',
+        control_plane_transport=FakeControlPlaneTransport(),
+    )
+
+
 def test_bootstrap_probe_roundtrips_through_normal_request_worker(tmp_path: Path) -> None:
-    server = CcbdSocketServer(tmp_path / 'ccbd.sock')
+    server = _server(tmp_path)
     server.register_handler(
         'ping',
         lambda payload: {
@@ -35,7 +44,7 @@ def test_bootstrap_probe_roundtrips_through_normal_request_worker(tmp_path: Path
 
 
 def test_runtime_bootstrap_gate_rejects_non_ping_without_calling_handler(tmp_path: Path) -> None:
-    server = CcbdSocketServer(tmp_path / 'ccbd.sock')
+    server = _server(tmp_path)
     called = []
     server.register_handler('submit', lambda payload: called.append(payload) or {'accepted': True})
     client, accepted = socket.socketpair()
@@ -55,8 +64,8 @@ def test_runtime_bootstrap_gate_rejects_non_ping_without_calling_handler(tmp_pat
         server.shutdown()
 
 
-def test_probe_failure_freezes_gate_until_shutdown(tmp_path: Path) -> None:
-    server = CcbdSocketServer(tmp_path / 'ccbd.sock')
+def test_probe_failure_stops_server_without_latching_active_flag(tmp_path: Path) -> None:
+    server = _server(tmp_path)
     server.register_handler(
         'ping',
         lambda payload: {'bootstrap_probe_nonce': payload.get('bootstrap_probe_nonce')},
@@ -68,7 +77,7 @@ def test_probe_failure_freezes_gate_until_shutdown(tmp_path: Path) -> None:
             raise RuntimeError('planned identity rejection')
 
     assert server._stop_event.is_set() is True
-    assert server._bootstrap_probe_active is True
+    assert server._bootstrap_probe_active is False
     server.shutdown()
     assert server._bootstrap_probe_active is False
     assert server._runtime_bootstrap_active is False
@@ -77,7 +86,7 @@ def test_probe_failure_freezes_gate_until_shutdown(tmp_path: Path) -> None:
 
 
 def test_nested_bootstrap_probe_fails_closed(tmp_path: Path) -> None:
-    server = CcbdSocketServer(tmp_path / 'ccbd.sock')
+    server = _server(tmp_path)
     server.register_handler(
         'ping',
         lambda payload: {'bootstrap_probe_nonce': payload.get('bootstrap_probe_nonce')},
@@ -93,6 +102,8 @@ def test_nested_bootstrap_probe_fails_closed(tmp_path: Path) -> None:
 
 
 def test_slow_preexisting_client_cannot_consume_self_probe_budget(tmp_path: Path) -> None:
+    if os.name == 'nt' or not hasattr(socket, 'AF_UNIX'):
+        pytest.skip('AF_UNIX bootstrap slow-client regression is Unix-only')
     server = CcbdSocketServer(tmp_path / 'ccbd.sock')
     server.register_handler(
         'ping',

@@ -3,8 +3,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
+from ccbd.control_plane_transport.endpoint import endpoint_from_legacy_socket_path
+from ccbd.control_plane_transport.factory import endpoint_connectable
 from ccbd.models import CcbdLease, LeaseHealth, LeaseInspection, MountState
-from ccbd.system import parse_utc_timestamp, process_exists, unix_socket_connectable, utc_now
+from ccbd.system import parse_utc_timestamp, process_exists, utc_now
 from storage.locks import file_lock
 from storage.paths import PathLayout
 
@@ -21,14 +23,15 @@ class OwnershipGuard:
         *,
         clock=utc_now,
         pid_exists=process_exists,
-        socket_probe=unix_socket_connectable,
+        socket_probe=None,
         heartbeat_grace_seconds: float = 15.0,
     ) -> None:
         self._layout = layout
         self._mount_manager = mount_manager
         self._clock = clock
         self._pid_exists = pid_exists
-        self._socket_probe = socket_probe
+        self._socket_probe = socket_probe or endpoint_connectable
+        self._socket_probe_uses_endpoint = socket_probe is None
         self._heartbeat_grace_seconds = heartbeat_grace_seconds
 
     @contextmanager
@@ -191,6 +194,9 @@ class OwnershipGuard:
     def _mounted_socket_connectable(self, lease: CcbdLease) -> bool:
         if lease.mount_state is not MountState.MOUNTED:
             return False
+        if self._socket_probe_uses_endpoint:
+            endpoint = lease.control_plane_endpoint or endpoint_from_legacy_socket_path(lease.socket_path)
+            return self._socket_probe(endpoint)
         return self._socket_probe(lease.socket_path)
 
     def _takeover_allowed(

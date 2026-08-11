@@ -78,6 +78,12 @@ on the next `ccb update`; skipping a version hides only that exact version.
 CCB never restarts active provider panes during this flow, so an accepted
 provider update applies when that pane next starts or is explicitly restarted.
 
+On Windows x64, `ccb doctor` and `ccb doctor --output` expose the
+`windows_x64_release_surface` diagnostics rows. Use `release_install_entry`,
+`source_install_allowed`, `source_install_entry`, `update_entry`,
+`managed_python_status`, `native_helper_status`, and `next_action` to distinguish
+source/dev `install.ps1` fallback from blocked npm or release update routes.
+
 After a release change, the newly installed CCB also retires old
 project-scoped Claude/Gemini caches. Manifest-valid caches for deleted projects
 are removed immediately. A stopped current project is cleaned immediately;

@@ -151,6 +151,11 @@ def register_handlers(app) -> None:
                         if app.expected_startup_fence is not None
                         else None
                     ),
+                    'source_runtime_identity': getattr(
+                        app,
+                        'source_runtime_identity',
+                        None,
+                    ),
                 },
             ),
         ),

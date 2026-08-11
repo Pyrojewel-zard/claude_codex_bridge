@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import fcntl
 import os
-import pty
 import re
-import select
 import struct
 import subprocess
-import termios
 import threading
 import time
 import unicodedata
 from typing import Mapping
+
+try:
+    import fcntl  # type: ignore
+    import termios  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - exercised on native Windows
+    fcntl = None
+    termios = None
 
 
 MOBILE_TERMINAL_INITIAL_HISTORY_LINES = 1000
@@ -46,9 +49,18 @@ class TerminalAttachTarget:
     target_summary: dict[str, object]
     tmux_binary: str = 'tmux'
     include_history: bool = True
+    backend_impl: str = 'tmux'
+    namespace_ref: dict[str, object] | None = None
+    pane_ref: dict[str, object] | None = None
+    attach_supported: bool = True
+    history_supported: bool = True
+    input_supported: bool = True
+    blocked_reason: str | None = None
 
     @property
     def command(self) -> list[str]:
+        if self.backend_impl != 'tmux':
+            raise RuntimeError(f'terminal command is not available for {self.backend_impl}')
         return _tmux_capture_command(self, self.geometry)
 
 
@@ -63,9 +75,18 @@ class TerminalHistoryTarget:
     session_name: str
     max_lines: int = 200
     tmux_binary: str = 'tmux'
+    backend_impl: str = 'tmux'
+    namespace_ref: dict[str, object] | None = None
+    pane_ref: dict[str, object] | None = None
+    attach_supported: bool = True
+    history_supported: bool = True
+    input_supported: bool = True
+    blocked_reason: str | None = None
 
     @property
     def command(self) -> list[str]:
+        if self.backend_impl != 'tmux':
+            raise RuntimeError(f'terminal history command is not available for {self.backend_impl}')
         return [
             self.tmux_binary,
             '-S',
@@ -89,6 +110,13 @@ class PaneMessageTarget:
     socket_path: str
     session_name: str
     tmux_binary: str = 'tmux'
+    backend_impl: str = 'tmux'
+    namespace_ref: dict[str, object] | None = None
+    pane_ref: dict[str, object] | None = None
+    attach_supported: bool = True
+    history_supported: bool = True
+    input_supported: bool = True
+    blocked_reason: str | None = None
 
 
 def capture_tmux_pane_text(
@@ -268,6 +296,8 @@ class TmuxTerminalSession:
             self._closed = True
 
     def _resize(self, geometry: TerminalGeometry) -> None:
+        if fcntl is None or termios is None:
+            raise RuntimeError('terminal resize ioctl is not available on this platform')
         rows = max(1, int(geometry.rows))
         columns = max(1, int(geometry.columns))
         pixels_y = max(0, int(geometry.pixel_height))
@@ -299,14 +329,16 @@ def resolve_tmux_binary(
     candidates: list[str] = []
     seen: set[str] = set()
     for directory in os.get_exec_path(env):
-        candidate = os.path.join(directory, 'tmux')
-        if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
-            continue
-        identity = os.path.realpath(candidate)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        candidates.append(candidate)
+        for candidate in _tmux_binary_candidates(directory, env=env):
+            if not os.path.isfile(candidate):
+                continue
+            if os.name != 'nt' and not os.access(candidate, os.X_OK):
+                continue
+            identity = os.path.realpath(candidate)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append(candidate)
 
     failures: list[str] = []
     for candidate in candidates:
@@ -336,6 +368,18 @@ def resolve_tmux_binary(
 
     detail = '; '.join(failures) or 'no executable tmux found in PATH'
     raise RuntimeError(f'no compatible tmux client for {session_name}: {detail}')
+
+
+def _tmux_binary_candidates(directory: str, *, env: Mapping[str, str]) -> tuple[str, ...]:
+    base = os.path.join(directory, 'tmux')
+    if os.name != 'nt':
+        return (base,)
+    extensions = [item.strip().lower() for item in str(env.get('PATHEXT') or '').split(os.pathsep) if item.strip()]
+    if not extensions:
+        extensions = ['.exe', '.cmd', '.bat', '.com']
+    candidates = [base]
+    candidates.extend(base + extension for extension in extensions)
+    return tuple(dict.fromkeys(candidates))
 
 
 def _with_compatible_tmux(target):

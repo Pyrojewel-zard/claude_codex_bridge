@@ -27,6 +27,7 @@ ALLOWED_TOP_LEVEL_KEYS = {
     'maintenance',
     'loop',
     'config_ui',
+    'runtime',
 }
 ALLOWED_PROVIDER_PROFILE_KEYS = {
     'mode',

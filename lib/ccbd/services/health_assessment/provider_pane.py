@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ccbd.start_runtime.binding_runtime.common import is_pane_runtime_ref
 from provider_core.session_binding_evidence import session_terminal
 
 from ..provider_runtime_facts import load_provider_session
@@ -54,7 +55,7 @@ def health_from_pane_state(pane_state: str) -> str:
 
 
 def _is_tmux_runtime(runtime) -> bool:
-    return str(runtime.runtime_ref or '').strip().startswith('tmux:')
+    return is_pane_runtime_ref(getattr(runtime, 'runtime_ref', None))
 
 
 def _resolve_binding(*, runtime, registry, session_bindings):

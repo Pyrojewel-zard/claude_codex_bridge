@@ -26,6 +26,7 @@ AGENT_TIMING_KEYS = {
     "build_start_cmd",
     "tmux_respawn",
     "pane_identity",
+    "pane_agent_report",
     "session_write",
     "provider_post_launch",
     "binding_resolve",

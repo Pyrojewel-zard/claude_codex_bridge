@@ -15,6 +15,7 @@ _AGENT_TIMING_FIELDS = (
     'build_start_cmd',
     'tmux_respawn',
     'pane_identity',
+    'pane_agent_report',
     'session_write',
     'provider_post_launch',
     'binding_resolve',
@@ -44,6 +45,51 @@ def _binding_attr(binding, field_name: str):
     return getattr(binding, field_name, None) if binding is not None else None
 
 
+def _best_effort_resolve_pane_pid(*, pane_id, namespace_backend_impl, resolver) -> int | None:
+    """方向 A：herdr pane-backed agent 回填 runtime_pid。
+
+    binding.runtime_pid 来自 provider session（herdr pane respawn 不经
+    provider session，故为 None）。用注入的 resolver 从 herdr ``pane
+    process-info`` 查询 pane 前台进程 pid。best-effort：任何失败返回 None。
+
+    ``pane_id`` 优先用 binding_state.runtime_pane_id（herdr 实际 pane）；
+    binding.pane_id 在 herdr 下可能为空（binding 不经 provider session）。
+    """
+    if resolver is None:
+        return None
+    if str(namespace_backend_impl or '').strip().lower() != 'herdr':
+        return None
+    if not pane_id:
+        return None
+    try:
+        pid = resolver(pane_id)
+    except Exception:
+        return None
+    if pid is None:
+        return None
+    try:
+        return int(pid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _runtime_ref_prefix(
+    namespace_backend_impl: str | None,
+    assigned_pane_ref: dict[str, object] | None,
+) -> str:
+    """按后端选择 runtime_ref 前缀（design I-2）。
+
+    tmux/rmux → ``tmux:``，herdr → ``mux:``。
+    优先取 namespace_backend_impl，其次 assigned_pane_ref['backend_impl']。
+    """
+    backend = str(namespace_backend_impl or '').strip().lower()
+    if not backend and isinstance(assigned_pane_ref, dict):
+        backend = str(assigned_pane_ref.get('backend_impl') or '').strip().lower()
+    if backend == 'herdr':
+        return 'mux'
+    return 'tmux'
+
+
 def start_agent_runtime(
     *,
     context,
@@ -56,9 +102,12 @@ def start_agent_runtime(
     raw_binding,
     stale_binding: bool,
     assigned_pane_id: str | None,
+    assigned_pane_ref: dict[str, object] | None = None,
+    namespace_ref: dict[str, object] | None = None,
     style_index: int,
     project_id: str,
     tmux_socket_path: str | None,
+    namespace_backend_impl: str | None = None,
     namespace_epoch: int | None,
     ensure_agent_runtime_fn,
     launch_binding_hint_fn,
@@ -72,6 +121,7 @@ def start_agent_runtime(
     effective_command=None,
     provider_prepare_ms: float = 0.0,
     binding_reject_reason: str | None = None,
+    pane_runtime_pid_resolver=None,
 ) -> StartAgentExecution:
     started_ns = monotonic_ns()
     timings_ms: dict[str, float] = {}
@@ -99,9 +149,12 @@ def start_agent_runtime(
             raw_binding=raw_binding,
             stale_binding=stale_binding,
             assigned_pane_id=assigned_pane_id,
+            assigned_pane_ref=assigned_pane_ref,
+            namespace_ref=namespace_ref,
             style_index=style_index,
             project_id=project_id,
             tmux_socket_path=tmux_socket_path,
+            namespace_backend_impl=namespace_backend_impl,
             namespace_epoch=namespace_epoch,
             window_name=window_name,
             ensure_agent_runtime_fn=ensure_agent_runtime_fn,
@@ -141,7 +194,10 @@ def start_agent_runtime(
             stale_binding=stale_binding,
             tmux_socket_path=tmux_socket_path,
         )
-        namespace_runtime_ref = f'tmux:{namespace_pane_id}' if namespace_pane_id else None
+        namespace_runtime_ref = (
+            f'{_runtime_ref_prefix(namespace_backend_impl, assigned_pane_ref)}:{namespace_pane_id}'
+            if namespace_pane_id else None
+        )
         namespace_socket_path = str(tmux_socket_path or '').strip() or None
         binding_pane_id = _binding_attr(binding_state.binding, 'pane_id') or namespace_pane_id
         namespace_record = (namespace_pane_records or {}).get(str(binding_pane_id or ''))
@@ -164,7 +220,18 @@ def start_agent_runtime(
             health=None if preserve_existing_success_health else binding_state.health,
             provider=spec.provider,
             runtime_root=_binding_attr(binding_state.binding, 'runtime_root'),
-            runtime_pid=_binding_attr(binding_state.binding, 'runtime_pid'),
+            runtime_pid=(
+                _binding_attr(binding_state.binding, 'runtime_pid')
+                or _best_effort_resolve_pane_pid(
+                    pane_id=(
+                        binding_state.runtime_pane_id
+                        or _binding_attr(binding_state.binding, 'pane_id')
+                        or _binding_attr(binding_state.binding, 'active_pane_id')
+                    ),
+                    namespace_backend_impl=namespace_backend_impl,
+                    resolver=pane_runtime_pid_resolver,
+                )
+            ),
             terminal_backend=(
                 _binding_attr(binding_state.binding, 'terminal')
                 or ('tmux' if namespace_pane_id else None)
@@ -209,7 +276,15 @@ def start_agent_runtime(
 
     attach_started_ns = monotonic_ns()
     try:
-        if attempt_id and getattr(existing, 'reconcile_state', None) == 'starting':
+        warm_reuse_without_store_write = (
+            reused_existing_binding
+            and preserve_existing_success_health
+            and existing is not None
+            and _existing_runtime_matches_attach(existing, attach_kwargs)
+        )
+        if warm_reuse_without_store_write:
+            runtime = existing
+        elif attempt_id and getattr(existing, 'reconcile_state', None) == 'starting':
             runtime, applied = runtime_service.attach_mount_attempt_authority(
                 attempt_id=attempt_id,
                 **attach_kwargs,
@@ -373,6 +448,43 @@ def _pane_identity_is_current(
 def _record_elapsed_ms(timings_ms: dict[str, float], field_name: str, started_ns: int) -> None:
     elapsed_ms = max(0.0, (monotonic_ns() - started_ns) / 1_000_000)
     timings_ms[field_name] = timings_ms.get(field_name, 0.0) + elapsed_ms
+
+
+def _existing_runtime_matches_attach(existing, attach_kwargs: dict[str, object]) -> bool:
+    comparable_fields = (
+        'agent_name',
+        'workspace_path',
+        'backend_type',
+        'runtime_ref',
+        'session_ref',
+        'provider',
+        'runtime_root',
+        'runtime_pid',
+        'terminal_backend',
+        'pane_id',
+        'active_pane_id',
+        'pane_title_marker',
+        'pane_state',
+        'tmux_socket_name',
+        'tmux_socket_path',
+        'tmux_window_name',
+        'tmux_window_id',
+        'session_file',
+        'session_id',
+        'slot_key',
+        'window_id',
+        'workspace_epoch',
+        'lifecycle_state',
+        'managed_by',
+    )
+    for field_name in comparable_fields:
+        if _attach_compare_text(getattr(existing, field_name, None)) != _attach_compare_text(attach_kwargs.get(field_name)):
+            return False
+    return True
+
+
+def _attach_compare_text(value: object) -> str:
+    return str(value or '').replace('\\', '/')
 
 
 def _finish_agent_timings(timings_ms: dict[str, float], *, duration_ms: float) -> None:

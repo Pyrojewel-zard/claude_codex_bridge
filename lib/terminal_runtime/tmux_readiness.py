@@ -128,7 +128,13 @@ def _tmux_command_text(
     else:
         items = tmux_base(socket_path=socket_path)
         items.extend(str(item) for item in (args or ()))
-    return shlex.join(items) if items else ''
+    return ' '.join(_quote_command_item(item) for item in items) if items else ''
+
+
+def _quote_command_item(item: str) -> str:
+    if not item or any(char.isspace() for char in item):
+        return shlex.quote(item)
+    return item
 
 
 def _single_line_detail(detail: str | None) -> str:

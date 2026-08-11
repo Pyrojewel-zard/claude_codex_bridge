@@ -45,6 +45,7 @@
     "bin/ctx-transfer.js",
     "bin/ccb-npm-install.js",
     "bin/ccb-npm-runner.js",
+    "lib/terminal_runtime/windows_x64_release_surface_projection.json",
     "README.md",
     "README/*.md",
     "LICENSE",
@@ -59,7 +60,8 @@
   },
   "os": [
     "linux",
-    "darwin"
+    "darwin",
+    "win32"
   ],
   "cpu": [
     "x64",

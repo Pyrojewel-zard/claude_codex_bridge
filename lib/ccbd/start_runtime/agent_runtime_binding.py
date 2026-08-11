@@ -3,6 +3,12 @@ from __future__ import annotations
 import math
 from time import monotonic_ns
 
+from .binding_runtime.common import (
+    binding_pane_id,
+    is_pane_runtime_ref,
+    runtime_ref_backend,
+    runtime_ref_pane_id,
+)
 from .agent_runtime_models import RuntimeBindingState
 
 
@@ -17,9 +23,12 @@ def resolve_runtime_binding_state(
     raw_binding,
     stale_binding: bool,
     assigned_pane_id: str | None,
+    assigned_pane_ref: dict[str, object] | None = None,
+    namespace_ref: dict[str, object] | None = None,
     style_index: int,
     project_id: str,
     tmux_socket_path: str | None,
+    namespace_backend_impl: str | None = None,
     namespace_epoch: int | None,
     window_name: str | None = None,
     ensure_agent_runtime_fn,
@@ -42,8 +51,11 @@ def resolve_runtime_binding_state(
             raw_binding=raw_binding,
             stale_binding=stale_binding,
             assigned_pane_id=assigned_pane_id,
+            assigned_pane_ref=assigned_pane_ref,
+            namespace_ref=namespace_ref,
             style_index=style_index,
             tmux_socket_path=tmux_socket_path,
+            namespace_backend_impl=namespace_backend_impl,
             ensure_agent_runtime_fn=ensure_agent_runtime_fn,
             launch_binding_hint_fn=launch_binding_hint_fn,
             provider_prepared=provider_prepared,
@@ -116,14 +128,17 @@ def launch_or_reuse_binding(
     raw_binding,
     stale_binding: bool,
     assigned_pane_id: str | None,
+    assigned_pane_ref: dict[str, object] | None = None,
+    namespace_ref: dict[str, object] | None = None,
     style_index: int,
     tmux_socket_path: str | None,
+    namespace_backend_impl: str | None = None,
     ensure_agent_runtime_fn,
     launch_binding_hint_fn,
     provider_prepared: bool = False,
     effective_command=None,
 ):
-    if binding is not None:
+    if binding is not None and not _is_herdr_assigned_pane_ref(assigned_pane_ref):
         return binding, 'attached', {}
 
     launch_kwargs = dict(
@@ -132,6 +147,12 @@ def launch_or_reuse_binding(
         tmux_socket_path=tmux_socket_path,
         provider_prepared=provider_prepared,
     )
+    if assigned_pane_ref is not None:
+        launch_kwargs['assigned_pane_ref'] = assigned_pane_ref
+    if namespace_ref is not None:
+        launch_kwargs['namespace_ref'] = namespace_ref
+    if namespace_backend_impl is not None:
+        launch_kwargs['namespace_backend_impl'] = namespace_backend_impl
     if effective_command is not None:
         launch_kwargs['effective_command'] = effective_command
     launch = ensure_agent_runtime_fn(
@@ -155,6 +176,12 @@ def launch_or_reuse_binding(
     if launch.launched:
         return binding, 'launched', launch_timings_ms
     return binding, 'attached', launch_timings_ms
+
+
+def _is_herdr_assigned_pane_ref(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return str(value.get('backend_impl') or '').strip() == 'herdr'
 
 
 def relabel_runtime_pane(
@@ -219,12 +246,17 @@ def runtime_pane_facts(
     tmux_socket_path: str | None,
     same_tmux_socket_path_fn,
 ) -> tuple[str | None, str | None, str | None]:
-    if not runtime_ref or not str(runtime_ref).startswith('tmux:') or binding is None:
+    if not runtime_ref or not is_pane_runtime_ref(runtime_ref) or binding is None:
         return None, None, None
-    runtime_pane_id = str(runtime_ref)[len('tmux:') :]
+    runtime_pane_id = binding_pane_id(binding) or runtime_ref_pane_id(runtime_ref)
+    if runtime_pane_id is None:
+        return None, None, None
     socket_name = binding.tmux_socket_path or binding.tmux_socket_name
     project_socket_active_pane_id = None
-    if same_tmux_socket_path_fn(getattr(binding, 'tmux_socket_path', None), tmux_socket_path):
+    if (
+        runtime_ref_backend(runtime_ref) == 'tmux'
+        and same_tmux_socket_path_fn(getattr(binding, 'tmux_socket_path', None), tmux_socket_path)
+    ):
         project_socket_active_pane_id = runtime_pane_id
     return socket_name, runtime_pane_id, project_socket_active_pane_id
 

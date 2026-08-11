@@ -574,6 +574,83 @@ def test_doctor_summary_includes_namespace_state_and_latest_event(tmp_path: Path
     assert payload['ccbd']['namespace_last_event_at'] == '2026-04-03T00:05:00Z'
 
 
+def test_doctor_summary_projects_herdr_surface_from_remote_ping(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-doctor-herdr-remote'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(ParsedDoctorCommand(project=None), cwd=project_root, bootstrap_if_missing=False)
+    projection = {
+        'backend_impl': 'herdr',
+        'capability_status': 'partial',
+        'support_tier_projection': 'experimental',
+        'support_tier_projection_source': 'validation_pending',
+        'beta_gaps': ['mobile-terminal-validation-pending'],
+        'blocking_gaps': ['config-ui-validation-pending'],
+        'degraded_next_action': 'collect-validation-transcript',
+        'evidence_refs': {
+            'namespace_ref': {
+                'backend_impl': 'herdr',
+                'namespace_id': 'workspace-1',
+                'session_name': 'ccb-herdr',
+                'restore_token_present': True,
+            },
+            'pane_ref': {'backend_impl': 'herdr', 'pane_id': 'pane-1'},
+        },
+    }
+
+    monkeypatch.setattr(
+        'cli.services.doctor.ping_local_state',
+        lambda _context: LocalPingSummary(
+            project_id=context.project.project_id,
+            mount_state='mounted',
+            desired_state='running',
+            health='healthy',
+            generation=4,
+            project_anchor_path=str(context.paths.ccb_dir),
+            runtime_state_root=str(context.paths.runtime_state_root),
+            runtime_root_kind=context.paths.runtime_state_placement.root_kind,
+            runtime_relocation_reason=context.paths.runtime_state_placement.relocation_reason,
+            runtime_filesystem_hint=context.paths.runtime_state_placement.filesystem_hint,
+            runtime_marker_status=context.paths.runtime_marker_status,
+            socket_path=str(context.paths.ccbd_socket_path),
+            preferred_socket_path=str(context.paths.ccbd_socket_placement.preferred_path),
+            effective_socket_path=str(context.paths.ccbd_socket_placement.effective_path),
+            socket_root_kind=context.paths.ccbd_socket_placement.root_kind,
+            socket_fallback_reason=context.paths.ccbd_socket_placement.fallback_reason,
+            socket_filesystem_hint=context.paths.ccbd_socket_placement.filesystem_hint,
+            tmux_socket_path=str(context.paths.ccbd_tmux_socket_path),
+            tmux_preferred_socket_path=str(context.paths.ccbd_tmux_socket_placement.preferred_path),
+            tmux_effective_socket_path=str(context.paths.ccbd_tmux_socket_placement.effective_path),
+            tmux_socket_root_kind=context.paths.ccbd_tmux_socket_placement.root_kind,
+            tmux_socket_fallback_reason=context.paths.ccbd_tmux_socket_placement.fallback_reason,
+            tmux_socket_filesystem_hint=context.paths.ccbd_tmux_socket_placement.filesystem_hint,
+            last_heartbeat_at='2026-05-08T00:00:00Z',
+            pid_alive=True,
+            socket_connectable=True,
+            heartbeat_fresh=True,
+            takeover_allowed=False,
+            reason='healthy',
+        ),
+    )
+
+    class _Client:
+        def ping(self, target: str) -> dict:
+            assert target == 'ccbd'
+            return {'diagnostics': {}, 'herdr_surface_projection': projection}
+
+        def project_view(self, *, schema_version: int) -> dict:
+            assert schema_version == 1
+            return {'view': {'comms': []}}
+
+    monkeypatch.setattr('cli.services.doctor.CcbdClient', lambda socket_path, timeout_s=None: _Client())
+
+    payload = doctor_summary(context)
+
+    assert payload['ccbd']['herdr_surface_projection'] == projection
+    assert 'raw-secret-token' not in str(payload['ccbd']['herdr_surface_projection'])
+
+
 def test_doctor_summary_includes_startup_and_shutdown_report_fields(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-doctor-reports'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)

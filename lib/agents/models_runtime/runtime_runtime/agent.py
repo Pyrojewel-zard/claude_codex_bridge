@@ -28,6 +28,12 @@ class AgentRuntime:
     runtime_root: str | None = None
     runtime_pid: int | None = None
     terminal_backend: str | None = None
+    provider_runtime_backend_ref: dict[str, Any] | None = None
+    namespace_ref: dict[str, Any] | None = None
+    pane_ref: dict[str, Any] | None = None
+    namespace_restore_token_present: bool = False
+    herdr_auto_restore_mode: str | None = None
+    herdr_agent_state_ref: str | None = None
     pane_id: str | None = None
     active_pane_id: str | None = None
     pane_title_marker: str | None = None
@@ -61,6 +67,22 @@ class AgentRuntime:
         normalize_runtime_defaults(self)
 
     def to_record(self) -> dict[str, Any]:
+        provider_runtime_backend_ref = _redacted_provider_runtime_backend_ref(
+            self.provider_runtime_backend_ref
+        )
+        namespace_ref = _redacted_namespace_ref(self.namespace_ref)
+        backend_namespace_ref = (
+            self.provider_runtime_backend_ref.get('namespace_ref')
+            if isinstance(self.provider_runtime_backend_ref, dict)
+            else None
+        )
+        namespace_restore_token_present_value = (
+            self.namespace_restore_token_present
+            or _namespace_restore_token_present(self.namespace_ref)
+            or _namespace_restore_token_present(
+                backend_namespace_ref if isinstance(backend_namespace_ref, dict) else None
+            )
+        )
         return {
             'schema_version': SCHEMA_VERSION,
             'record_type': 'agent_runtime',
@@ -81,6 +103,12 @@ class AgentRuntime:
             'runtime_root': self.runtime_root,
             'runtime_pid': self.runtime_pid,
             'terminal_backend': self.terminal_backend,
+            'provider_runtime_backend_ref': provider_runtime_backend_ref,
+            'namespace_ref': namespace_ref,
+            'pane_ref': self.pane_ref,
+            'namespace_restore_token_present': namespace_restore_token_present_value,
+            'herdr_auto_restore_mode': self.herdr_auto_restore_mode,
+            'herdr_agent_state_ref': self.herdr_agent_state_ref,
             'pane_id': self.pane_id,
             'active_pane_id': self.active_pane_id,
             'pane_title_marker': self.pane_title_marker,
@@ -108,6 +136,31 @@ class AgentRuntime:
             'last_failure_reason': self.last_failure_reason,
             'mount_attempt_id': self.mount_attempt_id,
         }
+
+
+def _redacted_namespace_ref(namespace_ref: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(namespace_ref, dict):
+        return None
+    return {str(key): value for key, value in namespace_ref.items() if str(key) != 'restore_token'}
+
+
+def _redacted_provider_runtime_backend_ref(
+    backend_ref: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(backend_ref, dict):
+        return None
+    payload = {str(key): value for key, value in backend_ref.items() if str(key) != 'restore_token'}
+    namespace_ref = payload.get('namespace_ref')
+    if isinstance(namespace_ref, dict):
+        payload['namespace_ref'] = _redacted_namespace_ref(namespace_ref)
+    return payload
+
+
+def _namespace_restore_token_present(namespace_ref: dict[str, Any] | None) -> bool:
+    if not isinstance(namespace_ref, dict):
+        return False
+    token = namespace_ref.get('restore_token')
+    return bool(str(token or '').strip())
 
 
 __all__ = ['AgentRuntime']

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import os
 import platform
 import re
@@ -9,8 +10,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 
 from release_artifacts import release_artifact_name
+from terminal_runtime.windows_x64_release_surface import load_windows_x64_release_surface_projection
 from cli.roles_runtime.commands import cmd_roles
 from cli.services.mobile_host import start_or_replace_mobile_host_service
 from cli.services.mobile_update import (
@@ -59,14 +62,16 @@ def set_tmux_ui_active(active: bool) -> None:
 
 
 def cmd_update(args, *, script_root: Path) -> int:
-    supported, reason = _supported_update_platform()
-    if not supported:
-        print(reason)
-        return 1
     if _update_target_is_rich(args):
         return _update_rich_bundle()
     if _update_target_is_mobile(args):
         return _update_mobile_bundle(script_root=script_root, args=args)
+    if platform.system() == "Windows":
+        return _cmd_update_windows_release_surface(args, script_root=script_root)
+    supported, reason = _supported_update_platform()
+    if not supported:
+        print(reason)
+        return 1
     source_repo_install = is_source_repo_root(script_root)
     install_dir = resolve_managed_install_dir(script_root=script_root)
 
@@ -160,6 +165,100 @@ def _supported_update_platform() -> tuple[bool, str | None]:
         "❌ `ccb update` is currently supported only on Linux/macOS/WSL.\n"
         "   Please use a Linux, macOS, or WSL runtime, or reinstall manually on this platform.",
     )
+
+
+def _cmd_update_windows_release_surface(args, *, script_root: Path) -> int:
+    projection = load_windows_x64_release_surface_projection(
+        script_root,
+        _windows_update_host_evidence(),
+    )
+    update_entry = str(projection.get("update_entry") or "diagnostic_only")
+    if update_entry in {"diagnostic_only", "npm", "source"}:
+        _print_windows_release_surface_update_diagnostic(projection, update_entry=update_entry)
+        return 1
+    if update_entry != "install_ps1":
+        _print_windows_release_surface_update_diagnostic(
+            projection,
+            update_entry="diagnostic_only",
+            fallback="Windows update projection has an unsupported update_entry.",
+        )
+        return 1
+
+    target_version = _resolve_target_version(args)
+    if target_version is False:
+        return 1
+    install_dir = resolve_managed_install_dir(script_root=script_root)
+    old_info = get_version_info(install_dir)
+    provider_mode = _provider_update_mode(args)
+    cache_cleanup_enabled = _cache_cleanup_enabled(args)
+    resolved_target = target_version or _resolve_latest_release_version()
+    if not resolved_target:
+        print("❌ Could not determine latest release version")
+        return 1
+    try:
+        tmp_base = pick_temp_base_dir(install_dir)
+    except Exception as exc:
+        print(str(exc))
+        return 1
+    return _update_via_windows_release_surface(
+        tmp_base,
+        install_dir=install_dir,
+        target_version=resolved_target,
+        old_info=old_info,
+        projection=projection,
+        provider_mode=provider_mode,
+        cache_cleanup_enabled=cache_cleanup_enabled,
+    )
+
+
+def _windows_update_host_evidence() -> dict[str, object]:
+    system_name = platform.system()
+    machine = platform.machine()
+    env_arch = str(os.environ.get("PROCESSOR_ARCHITECTURE") or machine or "").strip()
+    native_arch = str(os.environ.get("PROCESSOR_ARCHITEW6432") or "").strip()
+    return {
+        "os_platform": _release_surface_os_platform(system_name),
+        "cpu_arch": _release_surface_cpu_arch(native_arch or env_arch or machine),
+        "process_arch": _release_surface_cpu_arch(env_arch or machine),
+        "wow64": bool(native_arch and _release_surface_cpu_arch(env_arch) == "ia32"),
+        "installer_entrypoint": "update",
+    }
+
+
+def _release_surface_os_platform(system_name: str) -> str:
+    if system_name == "Windows":
+        return "win32"
+    if system_name == "Darwin":
+        return "darwin"
+    if system_name == "Linux":
+        return "linux"
+    return "unknown"
+
+
+def _release_surface_cpu_arch(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"amd64", "x86_64", "x64"}:
+        return "x64"
+    if normalized in {"aarch64", "arm64"}:
+        return "arm64"
+    if normalized in {"x86", "i386", "i686", "ia32"}:
+        return "ia32"
+    return "unknown"
+
+
+def _print_windows_release_surface_update_diagnostic(
+    projection: dict[str, object],
+    *,
+    update_entry: str,
+    fallback: str | None = None,
+) -> None:
+    diagnostic = str(projection.get("diagnostic") or fallback or "Windows x64 update route is not available.")
+    next_action = str(projection.get("next_action") or "").strip()
+    failure_reason = str(projection.get("failure_reason") or "unknown")
+    print(f"❌ Windows x64 update route is {update_entry}: {diagnostic}")
+    print(f"   failure_reason={failure_reason}")
+    if next_action:
+        print(f"   next_action={next_action}")
 
 
 def _resolve_latest_release_version() -> str | None:
@@ -259,6 +358,215 @@ def _update_via_tarball(
     finally:
         if transaction_dir is not None and not preserve_backup:
             shutil.rmtree(transaction_dir, ignore_errors=True)
+
+
+def _update_via_windows_release_surface(
+    tmp_base: Path,
+    *,
+    install_dir: Path,
+    target_version: str | None,
+    old_info: dict[str, object],
+    projection: dict[str, object],
+    provider_mode: str = "prompt",
+    cache_cleanup_enabled: bool = True,
+) -> int:
+    if not target_version:
+        print("❌ Update failed: no release version selected")
+        return 1
+    archive_name = _required_projection_text(projection, "archive_name")
+    extract_dir_name = _required_projection_text(projection, "extract_dir")
+    checksum_entry = _required_projection_text(projection, "checksum_entry")
+    release_artifact_ref = _required_projection_text(projection, "release_artifact_ref")
+    installer_entry = _required_projection_text(projection, "windows_installer_entry")
+    if not archive_name or not extract_dir_name or not checksum_entry or not release_artifact_ref or installer_entry != "install.ps1":
+        print("❌ Update failed: Windows release projection is missing a valid install.ps1 route")
+        return 1
+
+    tarball_url = _release_artifact_url(target_version, artifact_name=archive_name)
+    checksum_url = _release_artifact_url(target_version, artifact_name="SHA256SUMS")
+    transaction_dir: Path | None = None
+    backup_dir: Path | None = None
+    preserve_backup = False
+    install_attempted = False
+    try:
+        transaction_dir = _safe_update_transaction_dir(tmp_base=tmp_base, install_dir=install_dir)
+        print(f"📥 Downloading v{target_version}...")
+        archive_path = transaction_dir / archive_name
+        if not download_tarball(tarball_url, archive_path):
+            print("❌ Update failed: unable to download Windows release archive")
+            return 1
+        sums_path = transaction_dir / "SHA256SUMS"
+        if not download_tarball(checksum_url, sums_path):
+            print("❌ Update failed: unable to download Windows release checksums")
+            return 1
+        checksum_error = _windows_release_checksum_error(
+            archive_path=archive_path,
+            sums_path=sums_path,
+            checksum_entry=checksum_entry,
+        )
+        if checksum_error:
+            print(f"❌ Update failed: {checksum_error}")
+            return 1
+
+        print("📂 Extracting...")
+        _extract_windows_release_archive(archive_path, transaction_dir)
+        extracted_dir = transaction_dir / extract_dir_name
+        installer_path = extracted_dir / installer_entry
+        if not installer_path.exists():
+            print("❌ Update failed: staged Windows installer entry is missing")
+            return 1
+
+        staged_info = get_version_info(extracted_dir)
+        identity_error = _update_identity_error(
+            old_info=old_info,
+            staged_info=staged_info,
+            target_version=target_version,
+        )
+        if identity_error:
+            print(f"❌ Update failed: {identity_error}")
+            return 1
+
+        backup_dir = _backup_install_prefix(install_dir=install_dir, transaction_dir=transaction_dir)
+
+        print("🔧 Installing...")
+        install_attempted = True
+        returncode = _run_staged_windows_installer(
+            "install",
+            source_dir=extracted_dir,
+            install_dir=install_dir,
+            installer_entry=installer_entry,
+            extra_env={
+                "CODEX_INSTALL_PREFIX": str(install_dir),
+                "CCB_CLEAN_INSTALL": "1",
+                "CCB_INSTALL_ROLES": "0",
+            },
+        )
+        if returncode != 0:
+            preserve_backup = _restore_or_retain_backup(install_dir=install_dir, backup_dir=backup_dir)
+            print(f"❌ Update failed: installer exited with code {returncode}")
+            return returncode
+
+        new_info = get_version_info(install_dir)
+        installed_identity_error = _installed_identity_error(staged_info=staged_info, new_info=new_info)
+        if installed_identity_error:
+            preserve_backup = _restore_or_retain_backup(install_dir=install_dir, backup_dir=backup_dir)
+            print(f"❌ Update failed: {installed_identity_error}")
+            return 1
+        _print_update_outcome(old_info, new_info)
+        if not _run_post_update_with_new_entrypoint(
+            install_dir=install_dir,
+            old_info=old_info,
+            new_info=new_info,
+            provider_mode=provider_mode,
+            cache_cleanup_enabled=cache_cleanup_enabled,
+        ):
+            preserve_backup = _restore_or_retain_backup(install_dir=install_dir, backup_dir=backup_dir)
+            return 1
+        return 0
+    except Exception as exc:
+        if install_attempted:
+            preserve_backup = _restore_or_retain_backup(install_dir=install_dir, backup_dir=backup_dir)
+        print(f"❌ Update failed: {exc}")
+        return 1
+    finally:
+        if transaction_dir is not None and not preserve_backup:
+            shutil.rmtree(transaction_dir, ignore_errors=True)
+
+
+def _required_projection_text(projection: dict[str, object], field: str) -> str | None:
+    value = projection.get(field)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _windows_release_checksum_error(
+    *,
+    archive_path: Path,
+    sums_path: Path,
+    checksum_entry: str,
+) -> str | None:
+    checksums = _parse_sha256_sums(sums_path.read_text(encoding="utf-8", errors="ignore"))
+    expected = checksums.get(Path(checksum_entry).name)
+    if not expected:
+        return f"SHA256SUMS does not contain {checksum_entry}"
+    actual = _sha256_file(archive_path)
+    if actual != expected:
+        return f"checksum mismatch for {archive_path.name}"
+    return None
+
+
+def _parse_sha256_sums(text: str) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.match(r"^([a-fA-F0-9]{64})\s+\*?(.+)$", stripped)
+        if match:
+            checksums[Path(match.group(2)).name] = match.group(1).lower()
+    return checksums
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _extract_windows_release_archive(archive_path: Path, destination: Path) -> None:
+    if archive_path.suffix.lower() == ".zip":
+        _safe_extract_zip(archive_path, destination)
+        return
+    with tarfile.open(archive_path, "r:gz") as tar:
+        safe_extract_tar(tar, destination)
+
+
+def _safe_extract_zip(archive_path: Path, destination: Path) -> None:
+    destination = destination.resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            member_path = (destination / member.filename).resolve()
+            if not _path_is_within(destination, member_path):
+                raise RuntimeError(f"Unsafe zip member path: {member.filename}")
+        archive.extractall(destination)
+
+
+def _run_staged_windows_installer(
+    action: str,
+    *,
+    source_dir: Path,
+    install_dir: Path,
+    installer_entry: str = "install.ps1",
+    extra_env: dict[str, str] | None = None,
+) -> int:
+    script = Path(source_dir).expanduser() / installer_entry
+    if not script.exists():
+        print(f"❌ install.ps1 not found in {source_dir}", file=sys.stderr)
+        return 1
+    powershell = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+    env = os.environ.copy()
+    env["CODEX_INSTALL_PREFIX"] = str(install_dir)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            action,
+            "-InstallPrefix",
+            str(install_dir),
+        ],
+        cwd=source_dir,
+        env=env,
+    ).returncode
 
 
 def _update_identity_error(

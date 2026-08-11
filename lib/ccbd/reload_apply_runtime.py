@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ccbd.reload_apply_results import not_published_diagnostics
 from ccbd.reload_runtime_mount_models import AdditiveRuntimeMountResult
+from ccbd.reload_runtime_mount_models import deferred_mount_result
 from ccbd.reload_runtime_mount import run_additive_agent_mounts
 from ccbd.reload_runtime_move import run_moved_agent_runtime_updates
 from ccbd.reload_runtime_replace import run_replaced_agent_runtime_updates
@@ -21,6 +22,11 @@ def run_runtime_mount(
     run_runtime_mount_fn,
     run_start_flow_fn,
 ):
+    if _is_herdr_namespace(namespace):
+        return deferred_mount_result(
+            tuple(str(agent) for agent in tuple(getattr(namespace_patch, 'agent_panes', {}) or {})),
+            tuple(str(agent) for agent in tuple(getattr(namespace_patch, 'preserved_before', {}) or {})),
+        )
     if run_runtime_mount_fn is not None:
         try:
             return run_runtime_mount_fn(
@@ -67,6 +73,13 @@ def run_runtime_mount(
         return run_additive_agent_mounts(app, target_graph, **kwargs)
     except Exception as exc:
         return exception_runtime_mount_result(exc)
+
+
+def _is_herdr_namespace(namespace) -> bool:
+    return (
+        str(getattr(namespace, 'backend_impl', '') or '').strip() == 'herdr'
+        or str(getattr(namespace, 'namespace_backend_family', '') or '').strip() == 'herdr-native'
+    )
 
 
 def exception_runtime_mount_result(exc: Exception) -> AdditiveRuntimeMountResult:
