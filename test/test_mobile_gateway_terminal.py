@@ -10,6 +10,7 @@ from mobile_gateway.terminal import (
     TerminalAttachTarget,
     TerminalGeometry,
     TmuxTerminalSession,
+    _fit_terminal_snapshot,
     _send_tmux_terminal_bytes,
     _send_tmux_terminal_literal,
     _select_tmux_terminal_pane,
@@ -129,7 +130,7 @@ def test_terminal_session_repaints_visible_pane_without_reappending_history(
     assert len(calls) == 3
 
 
-def test_terminal_delta_accounts_for_client_side_line_wrapping(monkeypatch) -> None:
+def test_terminal_snapshot_clips_wide_rows_instead_of_wrapping_them(monkeypatch) -> None:
     visible_outputs = iter(
         (
             b'12345678\nbefore',
@@ -155,14 +156,10 @@ def test_terminal_delta_accounts_for_client_side_line_wrapping(monkeypatch) -> N
     session.read(0)
     output = session.read(0)
 
-    assert output == (
-        b'\x1b[?25l\x1b[0m'
-        b'\x1b[3;1H\x1b[0Jafter'
-        b'\x1b[0m'
-    )
+    assert output == b'\x1b[?25l\x1b[0m\x1b[2;1H\x1b[0Jafte\x1b[0m\x1b[0m'
 
 
-def test_terminal_delta_uses_full_repaint_when_wrapped_content_exceeds_viewport(
+def test_terminal_delta_keeps_clipped_rows_within_viewport(
     monkeypatch,
 ) -> None:
     visible_outputs = iter(
@@ -190,7 +187,18 @@ def test_terminal_delta_uses_full_repaint_when_wrapped_content_exceeds_viewport(
     session.read(0)
     output = session.read(0)
 
-    assert output == b'\x1b[?25l\x1b[3J\x1b[H\x1b[2J12345678\r\nafter'
+    assert output == b'\x1b[?25l\x1b[0m\x1b[2;1H\x1b[0Jafte\x1b[0m\x1b[0m'
+
+
+def test_terminal_snapshot_clipping_preserves_ansi_and_wide_characters() -> None:
+    snapshot = (
+        '\x1b[36m状态 OK and trailing text\x1b[0m\n'
+        'short'
+    ).encode()
+
+    fitted = _fit_terminal_snapshot(snapshot, 9)
+
+    assert fitted == '\x1b[36m状态 OK a\x1b[0m\nshort'.encode()
 
 
 def test_terminal_resumed_session_repaints_visible_pane_without_history(monkeypatch) -> None:

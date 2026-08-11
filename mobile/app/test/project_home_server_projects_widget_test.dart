@@ -9,6 +9,94 @@ import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
 
 void main() {
+  testWidgets('home terminal launcher opens project windows and agents', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+    final profile = _pairedHost(hostId: 'server-host', deviceId: 'phone');
+    final profileStore = await _profileStoreWith([profile]);
+    final gatewayRepository = _ServerProjectsRepository([
+      _projectFixture(
+        id: 'test_ccb2',
+        displayName: 'test_ccb2',
+        root: '/srv/ccb/test_ccb2',
+      ),
+    ]);
+    final terminalTransport = RecordingTerminalTransport();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _activatePairedGatewayListOnly(tester);
+
+    expect(gatewayRepository.getProjectViewCalls, isEmpty);
+    await tester.tap(
+      find.byKey(const ValueKey('project-list-terminal-action')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('home-terminal-launcher-sheet')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('home-terminal-project-test_ccb2')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gatewayRepository.getProjectViewCalls, ['test_ccb2']);
+    expect(
+      find.byKey(const ValueKey('home-terminal-window-main')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('home-terminal-agent-lead')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('home-terminal-window-main')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('ccb-live-terminal-view')),
+      findsOneWidget,
+    );
+    expect(terminalTransport.requests, hasLength(1));
+    expect(
+      terminalTransport.requests.single.target.kind,
+      CcbTerminalTargetKind.windowActivePane,
+    );
+    expect(terminalTransport.requests.single.target.window, 'main');
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('project-list-terminal-action')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('home-terminal-project-test_ccb2')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('home-terminal-agent-lead')));
+    await tester.pumpAndSettle();
+
+    expect(terminalTransport.requests, hasLength(2));
+    expect(
+      terminalTransport.requests.last.target.kind,
+      CcbTerminalTargetKind.agent,
+    );
+    expect(terminalTransport.requests.last.target.agent, 'lead');
+  });
+
   testWidgets(
     'paired gateway lists server projects before opening real project',
     (tester) async {

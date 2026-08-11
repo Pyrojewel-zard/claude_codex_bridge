@@ -265,6 +265,25 @@ class CcbMobileLocalizations {
 
   String get openTerminal => isChinese ? '打开终端' : 'Open Terminal';
 
+  String get chooseTerminalProject =>
+      isChinese ? '选择项目和终端' : 'Choose a project and terminal';
+
+  String get windows => isChinese ? '窗口' : 'Windows';
+
+  String get agents => isChinese ? 'Agent' : 'Agents';
+
+  String get activeWindow => isChinese ? '当前活动窗口' : 'Active window';
+
+  String get windowTerminal => isChinese ? '窗口当前 pane' : 'Window active pane';
+
+  String get noTerminalTargets =>
+      isChinese ? '这个项目没有可用终端' : 'No terminals are available for this project';
+
+  String get terminalAccessUnavailable =>
+      isChinese
+          ? '当前配对未启用终端权限'
+          : 'Terminal access is not enabled for this pairing';
+
   String get returnToChat => isChinese ? '返回对话' : 'Return to Chat';
 
   String messageAgent(String agentName) {

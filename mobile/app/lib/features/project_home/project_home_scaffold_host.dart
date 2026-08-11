@@ -53,6 +53,7 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
   const ProjectHomeServerProjectListHost({
     required this.projects,
     required this.onRefreshProjects,
+    required this.onOpenTerminal,
     required this.onOpenSettings,
     required this.onOpenProject,
     this.unreadProjectIds = const {},
@@ -62,6 +63,7 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
 
   final List<CcbProject> projects;
   final VoidCallback onRefreshProjects;
+  final VoidCallback onOpenTerminal;
   final VoidCallback onOpenSettings;
   final ValueChanged<CcbProject> onOpenProject;
   final Set<String> unreadProjectIds;
@@ -87,6 +89,12 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
                       tooltip: strings.refreshProjects,
                       onPressed: onRefreshProjects,
                       icon: const Icon(Icons.refresh),
+                    ),
+                    IconButton(
+                      key: const ValueKey('project-list-terminal-action'),
+                      tooltip: strings.openTerminal,
+                      onPressed: onOpenTerminal,
+                      icon: const Icon(Icons.terminal),
                     ),
                     IconButton(
                       key: const ValueKey('project-list-settings-action'),

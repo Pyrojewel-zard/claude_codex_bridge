@@ -719,9 +719,31 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
                             onEscape: () => _sendKey(const [27], 'Esc'),
                             onTab: () => _sendKey(const [9], 'Tab'),
                             onCtrlC: () => _sendKey(const [3], 'Ctrl-C'),
+                            onCtrlD: () => _sendKey(const [4], 'Ctrl-D'),
+                            onCtrlU: () => _sendKey(const [21], 'Ctrl-U'),
+                            onCtrlL: () => _sendKey(const [12], 'Ctrl-L'),
+                            onDelete:
+                                () =>
+                                    _sendKey(const [27, 91, 51, 126], 'Delete'),
+                            onHome: () => _sendKey(const [27, 91, 72], 'Home'),
+                            onEnd: () => _sendKey(const [27, 91, 70], 'End'),
+                            onPageUp:
+                                () =>
+                                    _sendKey(const [27, 91, 53, 126], 'PageUp'),
+                            onPageDown:
+                                () => _sendKey(const [
+                                  27,
+                                  91,
+                                  54,
+                                  126,
+                                ], 'PageDown'),
+                            onArrowLeft:
+                                () => _sendKey(const [27, 91, 68], 'Left'),
                             onArrowUp: () => _sendKey(const [27, 91, 65], 'Up'),
                             onArrowDown:
                                 () => _sendKey(const [27, 91, 66], 'Down'),
+                            onArrowRight:
+                                () => _sendKey(const [27, 91, 67], 'Right'),
                           ),
                         ),
                       ),
@@ -831,8 +853,18 @@ class TerminalControlToolbar extends StatefulWidget {
     required this.onEscape,
     required this.onTab,
     required this.onCtrlC,
+    required this.onCtrlD,
+    required this.onCtrlU,
+    required this.onCtrlL,
+    required this.onDelete,
+    required this.onHome,
+    required this.onEnd,
+    required this.onPageUp,
+    required this.onPageDown,
+    required this.onArrowLeft,
     required this.onArrowUp,
     required this.onArrowDown,
+    required this.onArrowRight,
     super.key,
   });
 
@@ -841,8 +873,18 @@ class TerminalControlToolbar extends StatefulWidget {
   final VoidCallback onEscape;
   final VoidCallback onTab;
   final VoidCallback onCtrlC;
+  final VoidCallback onCtrlD;
+  final VoidCallback onCtrlU;
+  final VoidCallback onCtrlL;
+  final VoidCallback onDelete;
+  final VoidCallback onHome;
+  final VoidCallback onEnd;
+  final VoidCallback onPageUp;
+  final VoidCallback onPageDown;
+  final VoidCallback onArrowLeft;
   final VoidCallback onArrowUp;
   final VoidCallback onArrowDown;
+  final VoidCallback onArrowRight;
 
   @override
   State<TerminalControlToolbar> createState() => _TerminalControlToolbarState();
@@ -875,86 +917,140 @@ class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
               elevation: _expanded ? 4 : 0,
               borderRadius: BorderRadius.circular(24),
               clipBehavior: Clip.antiAlias,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Padding(
-                  padding:
-                      _expanded
-                          ? const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 3,
-                          )
-                          : EdgeInsets.zero,
-                  child: Row(
-                    key:
-                        _expanded
-                            ? const ValueKey('terminal-shortcuts-panel')
-                            : null,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Opacity(
-                        opacity: _expanded ? 0.9 : 0.62,
-                        child: IconButton.filledTonal(
-                          key: const ValueKey('terminal-shortcuts-toggle'),
-                          tooltip:
-                              _expanded
-                                  ? 'Hide terminal shortcuts'
-                                  : 'Show terminal shortcuts',
-                          onPressed:
-                              () => setState(() => _expanded = !_expanded),
-                          icon: Icon(_expanded ? Icons.close : Icons.add),
-                        ),
-                      ),
-                      if (_expanded) ...[
-                        const SizedBox(width: 2),
-                        _TerminalShortcutIconButton(
-                          key: const ValueKey('terminal-key-latest-output'),
-                          tooltip: 'Latest output',
-                          enabled: true,
-                          onPressed: widget.onLatestOutput,
-                          icon: Icons.vertical_align_bottom,
-                        ),
-                        _ToolbarTextButton(
-                          key: const ValueKey('terminal-key-escape'),
-                          label: 'Esc',
-                          enabled: widget.enabled,
-                          onPressed: widget.onEscape,
-                        ),
-                        _ToolbarTextButton(
-                          key: const ValueKey('terminal-key-tab'),
-                          label: 'Tab',
-                          enabled: widget.enabled,
-                          onPressed: widget.onTab,
-                        ),
-                        _ToolbarTextButton(
-                          key: const ValueKey('terminal-key-ctrl-c'),
-                          label: 'C-c',
-                          enabled: widget.enabled,
-                          onPressed: widget.onCtrlC,
-                        ),
-                        _TerminalShortcutIconButton(
-                          key: const ValueKey('terminal-key-arrow-up'),
-                          tooltip: 'Up',
-                          enabled: widget.enabled,
-                          onPressed: widget.onArrowUp,
-                          icon: Icons.keyboard_arrow_up,
-                        ),
-                        _TerminalShortcutIconButton(
-                          key: const ValueKey('terminal-key-arrow-down'),
-                          tooltip: 'Down',
-                          enabled: widget.enabled,
-                          onPressed: widget.onArrowDown,
-                          icon: Icons.keyboard_arrow_down,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
+              child: Padding(
+                padding:
+                    _expanded
+                        ? const EdgeInsets.symmetric(horizontal: 4, vertical: 3)
+                        : EdgeInsets.zero,
+                child:
+                    _expanded
+                        ? Column(
+                          key: const ValueKey('terminal-shortcuts-panel'),
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _TerminalShortcutRow(
+                              children: [
+                                _shortcutToggle(),
+                                _TerminalShortcutIconButton(
+                                  key: const ValueKey(
+                                    'terminal-key-latest-output',
+                                  ),
+                                  tooltip: 'Latest output',
+                                  enabled: true,
+                                  onPressed: widget.onLatestOutput,
+                                  icon: Icons.vertical_align_bottom,
+                                ),
+                                _textKey('escape', 'Esc', widget.onEscape),
+                                _textKey('tab', 'Tab', widget.onTab),
+                                _textKey('ctrl-c', 'C-c', widget.onCtrlC),
+                                _textKey('ctrl-d', 'C-d', widget.onCtrlD),
+                                _textKey('ctrl-u', 'C-u', widget.onCtrlU),
+                                _textKey('ctrl-l', 'C-l', widget.onCtrlL),
+                                _textKey('delete', 'Del', widget.onDelete),
+                              ],
+                            ),
+                            _TerminalShortcutRow(
+                              children: [
+                                _textKey('home', 'Home', widget.onHome),
+                                _iconKey(
+                                  'page-up',
+                                  'Page up',
+                                  Icons.keyboard_double_arrow_up,
+                                  widget.onPageUp,
+                                ),
+                                _iconKey(
+                                  'arrow-left',
+                                  'Left',
+                                  Icons.keyboard_arrow_left,
+                                  widget.onArrowLeft,
+                                ),
+                                _iconKey(
+                                  'arrow-up',
+                                  'Up',
+                                  Icons.keyboard_arrow_up,
+                                  widget.onArrowUp,
+                                ),
+                                _iconKey(
+                                  'arrow-down',
+                                  'Down',
+                                  Icons.keyboard_arrow_down,
+                                  widget.onArrowDown,
+                                ),
+                                _iconKey(
+                                  'arrow-right',
+                                  'Right',
+                                  Icons.keyboard_arrow_right,
+                                  widget.onArrowRight,
+                                ),
+                                _iconKey(
+                                  'page-down',
+                                  'Page down',
+                                  Icons.keyboard_double_arrow_down,
+                                  widget.onPageDown,
+                                ),
+                                _textKey('end', 'End', widget.onEnd),
+                              ],
+                            ),
+                          ],
+                        )
+                        : _shortcutToggle(),
               ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _shortcutToggle() {
+    return Opacity(
+      opacity: _expanded ? 0.9 : 0.62,
+      child: IconButton.filledTonal(
+        key: const ValueKey('terminal-shortcuts-toggle'),
+        tooltip:
+            _expanded ? 'Hide terminal shortcuts' : 'Show terminal shortcuts',
+        onPressed: () => setState(() => _expanded = !_expanded),
+        icon: Icon(_expanded ? Icons.close : Icons.add),
+      ),
+    );
+  }
+
+  Widget _textKey(String id, String label, VoidCallback callback) {
+    return _ToolbarTextButton(
+      key: ValueKey('terminal-key-$id'),
+      label: label,
+      enabled: widget.enabled,
+      onPressed: callback,
+    );
+  }
+
+  Widget _iconKey(
+    String id,
+    String tooltip,
+    IconData icon,
+    VoidCallback callback,
+  ) {
+    return _TerminalShortcutIconButton(
+      key: ValueKey('terminal-key-$id'),
+      tooltip: tooltip,
+      enabled: widget.enabled,
+      onPressed: callback,
+      icon: icon,
+    );
+  }
+}
+
+class _TerminalShortcutRow extends StatelessWidget {
+  const _TerminalShortcutRow({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(mainAxisSize: MainAxisSize.min, children: children),
     );
   }
 }

@@ -395,7 +395,42 @@ def _capture_tmux_terminal_pane(
     if cp.returncode != 0:
         message = (cp.stderr or b'').decode('utf-8', errors='replace').strip()
         raise RuntimeError(message or 'tmux capture-pane failed')
-    return bytes(cp.stdout or b'')
+    return _fit_terminal_snapshot(bytes(cp.stdout or b''), geometry.columns)
+
+
+def _fit_terminal_snapshot(snapshot: bytes, columns: int) -> bytes:
+    """Keep a wide tmux pane from wrapping into unrelated mobile rows."""
+    text = snapshot.decode('utf-8', errors='replace')
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+    return '\n'.join(
+        _clip_terminal_line(line, columns) for line in normalized.split('\n')
+    ).encode('utf-8')
+
+
+def _clip_terminal_line(line: str, columns: int) -> str:
+    width_limit = max(1, int(columns))
+    rendered_width = 0
+    output: list[str] = []
+    index = 0
+    clipped = False
+    while index < len(line):
+        if line[index] == '\x1b' and index + 1 < len(line) and line[index + 1] == '[':
+            match = re.match(r'\x1b\[[0-?]*[ -/]*[@-~]', line[index:])
+            if match is not None:
+                output.append(match.group(0))
+                index += len(match.group(0))
+                continue
+        character = line[index]
+        character_width = _terminal_character_width(character)
+        if rendered_width + character_width > width_limit:
+            clipped = True
+            break
+        output.append(character)
+        rendered_width += character_width
+        index += 1
+    if clipped:
+        output.append('\x1b[0m')
+    return ''.join(output)
 
 
 def _render_terminal_snapshot(
@@ -463,14 +498,15 @@ def _terminal_visual_rows(lines: list[str], columns: int) -> int:
 
 
 def _terminal_display_width(text: str) -> int:
-    width = 0
-    for character in text:
-        if unicodedata.combining(character):
-            continue
-        if unicodedata.category(character).startswith('C'):
-            continue
-        width += 2 if unicodedata.east_asian_width(character) in {'F', 'W'} else 1
-    return width
+    return sum(_terminal_character_width(character) for character in text)
+
+
+def _terminal_character_width(character: str) -> int:
+    if unicodedata.combining(character):
+        return 0
+    if unicodedata.category(character).startswith('C'):
+        return 0
+    return 2 if unicodedata.east_asian_width(character) in {'F', 'W'} else 1
 
 
 def _select_tmux_terminal_pane(target: TerminalAttachTarget) -> None:

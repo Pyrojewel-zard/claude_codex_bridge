@@ -30,6 +30,7 @@ import '../../transport/http_gateway_transport.dart';
 import '../../transport/route_provider.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/agent_execution_status.dart';
+import 'home_terminal_launcher_sheet.dart';
 import 'project_home_connection_details_panel_host.dart';
 import 'gateway_lan_network_banner.dart';
 import 'project_home_focus_coordinator.dart';
@@ -909,6 +910,9 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         return ProjectHomeServerProjectListHost(
           projects: projects,
           onRefreshProjects: _retryServerProjects,
+          onOpenTerminal: () {
+            _openHomeTerminalLauncher(projects);
+          },
           onOpenSettings: _openPairingSettings,
           onOpenProject: _openServerProject,
           unreadProjectIds: _unreadProjectIds,
@@ -2254,6 +2258,49 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       terminalTransport: null,
       gatewayTerminal: spec.gatewayTerminal,
     );
+  }
+
+  Future<void> _openHomeTerminalLauncher(List<CcbProject> projects) async {
+    final strings = CcbMobileLocalizations.of(context);
+    final profile = _selectedProfile;
+    final transport = _terminalTransport;
+    if (profile == null ||
+        transport == null ||
+        !profile.profile.scopes.contains('terminal_input')) {
+      _showSnack(strings.terminalAccessUnavailable);
+      return;
+    }
+    final target = await showHomeTerminalLauncherSheet(
+      context,
+      projects: projects,
+      loadProjectView: _loadHomeTerminalProjectView,
+    );
+    if (!mounted || target == null) {
+      return;
+    }
+    setState(() {
+      _rememberProjectUsed(target.projectId);
+    });
+    await pushProjectHomeTerminalRoute(
+      context,
+      repository: _activeRepository,
+      projectId: target.projectId,
+      agentName: target.agentName,
+      windowName: target.windowName,
+      terminalTransport: transport,
+      gatewayTerminal: true,
+    );
+  }
+
+  Future<CcbProjectView> _loadHomeTerminalProjectView(String projectId) async {
+    final profile = _selectedProfile;
+    try {
+      return await _activeRepository
+          .getProjectView(projectId)
+          .timeout(projectHomeRuntimeViewLoadTimeout);
+    } catch (error) {
+      throw await _gatewayRequestFailure(profile, error);
+    }
   }
 
   void _openConnectionDetails(CcbProjectView view) {
