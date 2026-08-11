@@ -83,6 +83,42 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert embedded_icon == mobile_icon.read_bytes()
 
 
+def test_config_ui_capabilities_expose_role_catalog_without_private_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rolepacks.sources as role_sources
+
+    monkeypatch.setattr(
+        role_sources,
+        'role_catalog_status',
+        lambda **_: (
+            {
+                'role_id': 'agentroles.mother',
+                'name': 'Role Mother',
+                'description': 'Role design and source audit',
+                'version': '0.2.3',
+                'installed_version': '0.2.3',
+                'status': 'current',
+                'source': 'agentroles',
+                'path': '/private/role/source',
+                'digest': 'sha256:private',
+            },
+        ),
+    )
+
+    payload = config_ui_provider_capabilities(environ={})
+
+    assert payload['roles'] == [
+        {
+            'role_id': 'agentroles.mother',
+            'name': 'Role Mother',
+            'description': 'Role design and source audit',
+            'version': '0.2.3',
+            'installed_version': '0.2.3',
+            'status': 'current',
+            'source': 'agentroles',
+        }
+    ]
+
+
 def test_config_ui_layout_canvas_can_fill_stretched_workspace_column() -> None:
     page = config_ui_asset_path().read_text(encoding='utf-8')
 
@@ -145,6 +181,8 @@ def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path)
         with urlopen(capabilities_url, timeout=2) as response:
             capabilities = json.loads(response.read())
         assert capabilities['schema_version'] == 1
+        assert 'roles' in capabilities
+        assert isinstance(capabilities['roles'], list)
         assert {provider['id'] for provider in capabilities['providers']} >= {
             'codex',
             'claude',

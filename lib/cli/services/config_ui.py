@@ -313,9 +313,38 @@ def config_ui_provider_capabilities(
                 'static_thinking': provider in {'codex', 'deepseek'},
             }
         )
+    # Role bindings are part of the same editor surface as provider/model
+    # overlays.  Keep the catalog authoritative here instead of making the
+    # browser ship a second, inevitably stale list of RolePack ids.
+    try:
+        from rolepacks.sources import role_catalog_status
+
+        roles = [
+            {
+                key: row.get(key)
+                for key in (
+                    'role_id',
+                    'name',
+                    'description',
+                    'version',
+                    'installed_version',
+                    'status',
+                    'source',
+                    'warning',
+                )
+                if key in row
+            }
+            for row in role_catalog_status(refresh_default=False)
+        ]
+    except Exception:
+        # A missing/unavailable role source must not make the config editor
+        # unusable.  The editor still preserves a currently configured role
+        # and the full TOML editor remains available.
+        roles = []
     return {
         'schema_version': 1,
         'providers': providers,
+        'roles': roles,
     }
 
 
