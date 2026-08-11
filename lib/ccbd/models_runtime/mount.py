@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
+from ccbd.control_plane_transport.endpoint import endpoint_from_legacy_socket_path, endpoint_from_record, endpoint_to_record
+
 from .common import API_VERSION, SCHEMA_VERSION, CcbdModelError
 
 
@@ -54,6 +56,7 @@ class CcbdLease:
     config_signature: str | None = None
     keeper_pid: int | None = None
     daemon_instance_id: str | None = None
+    control_plane_endpoint: dict[str, Any] | None = None
     api_version: int = API_VERSION
 
     def __post_init__(self) -> None:
@@ -93,6 +96,11 @@ class CcbdLease:
             'config_signature': self.config_signature,
             'keeper_pid': self.keeper_pid,
             'daemon_instance_id': self.daemon_instance_id,
+            'control_plane_endpoint': endpoint_to_record(
+                endpoint_from_record(self.control_plane_endpoint)
+                if self.control_plane_endpoint
+                else endpoint_from_legacy_socket_path(self.socket_path)
+            ),
         }
 
 

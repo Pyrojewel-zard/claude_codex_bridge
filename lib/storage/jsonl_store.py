@@ -74,6 +74,8 @@ class JsonlStore:
         path: Path,
         limit: int,
         loader: Callable[[dict[str, Any]], T] | None = None,
+        *,
+        ignore_invalid: bool = False,
     ) -> list[T] | list[dict[str, Any]]:
         if limit < 0:
             raise ValueError('limit cannot be negative')
@@ -82,7 +84,7 @@ class JsonlStore:
         target = Path(path)
         if not target.exists():
             return []
-        if _strict_jsonl_helper_required():
+        if _strict_jsonl_helper_required() and not ignore_invalid:
             from rust_helpers_jsonl import read_jsonl_tail_strict_required
 
             rows = read_jsonl_tail_strict_required(target, limit).value
@@ -110,10 +112,14 @@ class JsonlStore:
                     text = raw.decode('utf-8').strip()
                     if not text:
                         continue
-                    payload = json.loads(text)
-                    if not isinstance(payload, dict):
-                        raise ValueError(f'{path}: expected JSON object rows')
-                    rows.append(loader(payload) if loader else payload)
+                    try:
+                        payload = json.loads(text)
+                        if not isinstance(payload, dict):
+                            raise ValueError(f'{path}: expected JSON object rows')
+                        rows.append(loader(payload) if loader else payload)
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+                        if not ignore_invalid:
+                            raise
         rows.reverse()
         return rows
 

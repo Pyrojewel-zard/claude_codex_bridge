@@ -4,11 +4,22 @@ import json
 import time
 from pathlib import Path
 
+from agents.models import RuntimeMode
+from completion.models import CompletionSourceKind
 from provider_backends.codex.session_authority import resume_authority_matches
-from provider_backends.session_authority import merge_session_continuity, provider_authority_matches
+from provider_backends.session_authority import provider_authority_matches
+from provider_core.catalog import build_default_provider_catalog
 from provider_core.pathing import session_filename_for_agent
 from project.identity import normalize_work_dir
 from provider_core.runtime_shared import pane_title_marker as build_pane_title_marker
+from provider_runtime.session_payload import (
+    build_provider_runtime_backend_ref,
+    completion_source_for_kind,
+    managed_home_from_provider_payload,
+    merge_provider_payload,
+    namespace_restore_token_present,
+    redacted_namespace_ref,
+)
 from provider_sessions.files import safe_write_session
 from rolepacks.runtime_lookup import load_installed_role, tree_digest
 from rolepacks.sources import installed_role_metadata
@@ -28,9 +39,32 @@ def write_session_file(
     start_cmd: str,
     launch_session_id: str,
     provider_payload: dict[str, object],
+    backend_family: str = 'tmux-family',
+    backend_impl: str = 'tmux',
+    namespace_ref: dict[str, object] | None = None,
+    pane_ref: dict[str, object] | None = None,
 ) -> Path:
     session_path = context.paths.ccb_dir / session_filename(spec)
     existing_payload = _read_existing_session_payload(session_path)
+    backend_impl_value = str(backend_impl or 'tmux').strip() or 'tmux'
+    backend_family_value = str(backend_family or 'tmux-family').strip() or 'tmux-family'
+    completion_source_kind = _completion_source_kind_for_provider(str(spec.provider or ''))
+    completion_source = completion_source_for_kind(completion_source_kind)
+    managed_home = managed_home_from_provider_payload(
+        str(spec.provider or ''),
+        provider_payload,
+    )
+    public_namespace_ref = redacted_namespace_ref(namespace_ref)
+    public_pane_ref = dict(pane_ref) if isinstance(pane_ref, dict) else None
+    runtime_backend_ref = build_provider_runtime_backend_ref(
+        provider=str(spec.provider or '').strip().lower(),
+        agent_slug=str(spec.name),
+        backend_impl=backend_impl_value,
+        namespace_ref=public_namespace_ref,
+        pane_ref=public_pane_ref,
+        managed_home=managed_home,
+        completion_source_kind=completion_source_kind,
+    )
     payload = {
         "ccb_session_id": launch_session_id,
         "agent_name": spec.name,
@@ -40,10 +74,17 @@ def write_session_file(
         "runtime_state_root": str(getattr(context.paths, "runtime_state_root", context.paths.ccb_dir)),
         "runtime_dir": str(runtime_dir),
         "completion_artifact_dir": str(runtime_dir / "completion"),
-        "terminal": "tmux",
+        "terminal": "tmux" if backend_impl_value == "tmux" else "mux",
+        "backend_family": backend_family_value,
+        "backend_impl": backend_impl_value,
         "tmux_session": pane_id,
         "pane_id": pane_id,
         "pane_title_marker": pane_title_marker,
+        "provider_runtime_backend_ref": runtime_backend_ref,
+        "managed_home": managed_home,
+        "completion_source": completion_source,
+        "completion_source_kind": completion_source_kind,
+        "namespace_restore_token_present": namespace_restore_token_present(namespace_ref),
         "workspace_path": str(plan.workspace_path),
         "work_dir": str(run_cwd),
         "work_dir_norm": normalize_work_dir(run_cwd),
@@ -57,10 +98,12 @@ def write_session_file(
         payload["tmux_socket_name"] = str(tmux_socket_name)
     if tmux_socket_path:
         payload["tmux_socket_path"] = str(Path(tmux_socket_path).expanduser())
-    payload.update(provider_payload)
-    provider = str(spec.provider or '').strip().lower()
-    _merge_existing_session_binding(payload, existing_payload, provider=provider)
-    merge_session_continuity(payload, existing_payload, provider)
+    if public_namespace_ref is not None:
+        payload["namespace_ref"] = public_namespace_ref
+    if public_pane_ref is not None:
+        payload["pane_ref"] = public_pane_ref
+    merge_provider_payload(payload, provider_payload)
+    _merge_existing_session_binding(payload, existing_payload, provider=str(spec.provider or '').strip().lower())
     ok, error = safe_write_session(session_path, json.dumps(payload, ensure_ascii=False, indent=2))
     if not ok:
         raise RuntimeError(error or f"failed to write session file: {session_path}")
@@ -178,6 +221,17 @@ def _merge_keys(payload: dict[str, object], existing_payload: dict[str, object],
         if key in payload and str(payload.get(key) or '').strip():
             continue
         payload[key] = value
+
+
+def _completion_source_kind_for_provider(provider: str) -> str:
+    try:
+        manifest = build_default_provider_catalog().resolve_completion_manifest(
+            provider,
+            RuntimeMode.PANE_BACKED,
+        )
+    except Exception:
+        return CompletionSourceKind.TERMINAL_TEXT.value
+    return manifest.completion_source_kind.value
 
 
 def _project_role_launch_evidence(spec) -> dict[str, str]:

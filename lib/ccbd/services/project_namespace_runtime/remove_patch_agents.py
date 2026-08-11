@@ -4,7 +4,7 @@ from agents.config_loader import load_project_config
 from ccbd.reload_additive_agents import window_agent_names, window_map
 
 from .agent_window_reflow import reflow_agent_window_fixed
-from .backend import find_window, kill_window, session_window_target
+from .backend import find_window, kill_pane, kill_window, reflow_window, session_window_target
 from .materialize_topology import sync_topology_sidebar_widths
 
 
@@ -85,7 +85,7 @@ def _remove_window_agents(
         pane_id = existing_agent_panes.get(agent_name)
         if not pane_id:
             raise RuntimeError(f'pane missing for removed agent {agent_name!r}')
-        _kill_pane(backend, pane_id, timeout_s=timeout_s)
+        kill_pane(backend, pane_id=pane_id, timeout_s=timeout_s)
         _append_unique(result.removed_panes, pane_id)
         result.removed_agents[agent_name] = pane_id
 
@@ -137,6 +137,23 @@ def reflow_window_after_agent_change(
 ) -> None:
     target = _reflow_target(backend, current=current, topology_plan=topology_plan, window_name=window_name, timeout_s=timeout_s)
     runner = getattr(backend, '_tmux_run', None)
+    is_mux_backend = callable(getattr(backend, 'capabilities', None)) and not callable(runner)
+    if is_mux_backend:
+        try:
+            reflow_window(
+                backend,
+                session_name=current.tmux_session_name,
+                window_name=window_name,
+                target=target,
+                timeout_s=timeout_s,
+                prefer_topology_layout=prefer_topology_layout,
+            )
+        except Exception as exc:
+            result.reflow_errors[window_name] = str(exc)
+            raise
+        _append_unique(result.reflowed_windows, window_name)
+        _sync_sidebar_widths(controller, backend, current=current, topology_plan=topology_plan, window_name=window_name, result=result, timeout_s=timeout_s)
+        return
     if not callable(runner):
         result.reflow_errors[window_name] = 'tmux backend does not support select-layout'
         return
@@ -157,18 +174,9 @@ def reflow_window_after_agent_change(
         _sync_sidebar_widths(controller, backend, current=current, topology_plan=topology_plan, window_name=window_name, result=result, timeout_s=timeout_s)
         return
     try:
-        completed = runner(
-            ['select-layout', '-E', '-t', target],
-            check=False,
-            capture=True,
-            timeout=timeout_s,
-        )
+        reflow_window(backend, session_name=current.tmux_session_name, window_name=window_name, target=target, timeout_s=timeout_s)
     except Exception as exc:
         result.reflow_errors[window_name] = str(exc)
-        return
-    if int(getattr(completed, 'returncode', 1) or 0) != 0:
-        detail = str(getattr(completed, 'stderr', '') or getattr(completed, 'stdout', '') or '').strip()
-        result.reflow_errors[window_name] = detail or 'select-layout failed'
         return
     _append_unique(result.reflowed_windows, window_name)
     _sync_sidebar_widths(controller, backend, current=current, topology_plan=topology_plan, window_name=window_name, result=result, timeout_s=timeout_s)
@@ -235,24 +243,6 @@ def _window_is_static_config_owned(controller, *, topology_plan, window_name: st
     window = window_map(topology_plan).get(str(window_name))
     names = window_agent_names(window) if window is not None else ()
     return bool(names) and all(name in configured for name in names)
-
-
-def _kill_pane(backend, pane_id: str, *, timeout_s: float | None) -> None:
-    killer = getattr(backend, 'kill_pane', None)
-    if callable(killer):
-        try:
-            killer(pane_id)
-            return
-        except TypeError:
-            killer(pane_id, timeout_s=timeout_s)
-            return
-    runner = getattr(backend, '_tmux_run', None)
-    if not callable(runner):
-        raise RuntimeError('tmux backend does not support kill-pane')
-    result = runner(['kill-pane', '-t', pane_id], check=False, capture=True, timeout=timeout_s)
-    if int(getattr(result, 'returncode', 1) or 0) != 0:
-        detail = str(getattr(result, 'stderr', '') or getattr(result, 'stdout', '') or '').strip()
-        raise RuntimeError(f'failed to kill tmux pane {pane_id!r}: {detail}')
 
 
 def _append_unique(values: list[str], value: str) -> None:

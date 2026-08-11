@@ -158,6 +158,15 @@ def choose_runtime_state_placement(
     del project_root
     anchor = Path(anchor_path).expanduser()
     filesystem_hint = socket_filesystem_hint(anchor)
+    runtime_state_home = _absolute_path_from_env('CCB_RUNTIME_STATE_HOME')
+    if runtime_state_home is not None:
+        return RuntimeStatePlacement(
+            anchor_path=anchor,
+            effective_path=runtime_state_home / project_id,
+            root_kind='relocated',
+            relocation_reason='runtime_state_home',
+            filesystem_hint=filesystem_hint,
+        )
     ref_root = runtime_state_root_from_anchor_ref(anchor, project_id=project_id)
     if ref_root is not None:
         return RuntimeStatePlacement(
@@ -218,8 +227,8 @@ def choose_socket_placement(
 def socket_placement_payload(placement: SocketPlacement, *, prefix: str = '') -> dict[str, Any]:
     field_prefix = f'{prefix}_' if prefix else ''
     return {
-        f'{field_prefix}preferred_socket_path': str(placement.preferred_path),
-        f'{field_prefix}effective_socket_path': str(placement.effective_path),
+        f'{field_prefix}preferred_socket_path': _display_path(placement.preferred_path),
+        f'{field_prefix}effective_socket_path': _display_path(placement.effective_path),
         f'{field_prefix}socket_root_kind': placement.root_kind,
         f'{field_prefix}socket_fallback_reason': placement.fallback_reason,
         f'{field_prefix}socket_filesystem_hint': placement.filesystem_hint,
@@ -228,12 +237,16 @@ def socket_placement_payload(placement: SocketPlacement, *, prefix: str = '') ->
 
 def runtime_state_placement_payload(placement: RuntimeStatePlacement) -> dict[str, Any]:
     return {
-        'project_anchor_path': str(placement.anchor_path),
-        'runtime_state_root': str(placement.effective_path),
+        'project_anchor_path': _display_path(placement.anchor_path),
+        'runtime_state_root': _display_path(placement.effective_path),
         'runtime_root_kind': placement.root_kind,
         'runtime_relocation_reason': placement.relocation_reason,
         'runtime_filesystem_hint': placement.filesystem_hint,
     }
+
+
+def _display_path(path: Path) -> str:
+    return Path(path).as_posix()
 
 
 def runtime_root_marker_path(runtime_state_root: Path) -> Path:

@@ -68,6 +68,12 @@ ccb update
 
 В установке под управлением npm команда `ccb update` выводит эквивалентную npm-команду и не изменяет vendored payload.
 
+В Windows x64 `ccb doctor` и `ccb doctor --output` выводят строки диагностики
+`windows_x64_release_surface`. Поля `release_install_entry`,
+`source_install_allowed`, `source_install_entry`, `update_entry`,
+`managed_python_status`, `native_helper_status` и `next_action` отделяют
+fallback source/dev `install.ps1` от заблокированных маршрутов npm или release update.
+
 <details>
 <summary><b>GitHub release package и установка из исходников как fallback</b></summary>
 

@@ -69,6 +69,10 @@ def build_start_cmd(
         profile=profile,
         codex_home_overrides=codex_home_overrides,
     )
+    # herdr backend 适配：CODEX_TERMINAL 按实际后端设置
+    backend_impl = str(prepared_state.get('ccb_backend_impl', '')).strip()
+    if backend_impl and backend_impl != 'tmux':
+        env_map['CODEX_TERMINAL'] = backend_impl
     prefix_parts = build_codex_shell_prefix_fn(profile=profile)
     exports = ' '.join(f'{key}={shlex.quote(str(value))}' for key, value in env_map.items() if str(value).strip())
     if exports:

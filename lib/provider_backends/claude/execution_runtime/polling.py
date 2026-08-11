@@ -169,6 +169,9 @@ def _idle_pane_round_result_terminal(
         finished_at=now,
         diagnostics={
             "completion_source": "idle_pane_round_result",
+            "completion_fallback_source": "terminal_capture",
+            "completion_fallback_kind": "provider_declared",
+            "terminal_capture_role": "provider_declared_fallback",
             "pane_id": prepared.pane_id,
             "round_result": round_result,
             "session_event_final_text_missing": True,

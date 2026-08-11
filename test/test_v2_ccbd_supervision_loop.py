@@ -795,6 +795,100 @@ def test_runtime_supervision_loop_keeps_healthy_cmd_slot_stable(tmp_path: Path, 
     assert remount_calls == []
 
 
+def test_runtime_supervision_loop_keeps_healthy_herdr_cmd_slot_stable(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-supervision-herdr-cmd-healthy'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    config = replace(_provider_config('codex'), cmd_enabled=True, layout_spec='cmd; codex')
+    registry = AgentRegistry(layout, config)
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101, health='healthy'))
+    remount_calls: list[str] = []
+
+    class _HerdrBackend:
+        backend_impl = 'herdr'
+
+        def __init__(self) -> None:
+            self.expected: dict[str, str] | None = None
+
+        def capabilities(self):
+            return {}
+
+        def list_panes_by_user_options(self, expected: dict[str, str]) -> list[str]:
+            self.expected = dict(expected)
+            return ['w-main:p2']
+
+        def describe_pane(self, pane_id: str, *, user_options=()):
+            del user_options
+            return {
+                'pane_id': pane_id,
+                'session_name': layout.ccbd_tmux_session_name,
+                'window_id': 'w-main',
+                'window_name': 'main',
+                'pane_dead': '0',
+                '@ccb_role': 'cmd',
+                '@ccb_slot': 'cmd',
+                '@ccb_window': 'main',
+                '@ccb_project_id': ctx.project_id,
+                '@ccb_managed_by': 'ccbd',
+                '@ccb_namespace_epoch': '7',
+            }
+
+    fake_backend = _HerdrBackend()
+
+    class _NamespaceController:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._backend_factory = lambda socket_path=None, namespace_state=None: fake_backend
+
+        def load(self):
+            return SimpleNamespace(
+                ui_attachable=True,
+                tmux_socket_path='',
+                tmux_session_name=layout.ccbd_tmux_session_name,
+                namespace_backend_family='herdr-native',
+                backend_impl='herdr',
+                namespace_id='w-main',
+                namespace_session_name=layout.ccbd_tmux_session_name,
+                namespace_ipc_kind='herdr_socket',
+                namespace_ipc_ref='herdr://local',
+                namespace_restore_token=f'{layout.ccbd_tmux_session_name}::w-main',
+                namespace_epoch=7,
+                workspace_window_name='main',
+                workspace_window_id='w-main',
+            )
+
+    monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.build_backend',
+        lambda backend_factory, socket_path=None, namespace_state=None: fake_backend,
+    )
+
+    loop = RuntimeSupervisionLoop(
+        project_id=ctx.project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        runtime_service=runtime_service,
+        remount_project_fn=lambda reason: remount_calls.append(reason),
+        clock=lambda: '2026-03-18T00:00:10Z',
+        generation_getter=lambda: 46,
+    )
+
+    statuses = loop.reconcile_once()
+
+    assert statuses == {'codex': 'healthy'}
+    assert remount_calls == []
+    assert fake_backend.expected == {
+        '@ccb_project_id': ctx.project_id,
+        '@ccb_role': 'cmd',
+        '@ccb_slot': 'cmd',
+        '@ccb_managed_by': 'ccbd',
+        '@ccb_namespace_epoch': '7',
+        '@ccb_window': 'main',
+    }
+
+
 def test_runtime_supervision_loop_defers_cmd_recovery_on_transient_tmux_unavailable(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-supervision-cmd-deferred'
     project_root.mkdir()
@@ -872,7 +966,10 @@ def test_runtime_supervision_loop_reflows_when_cmd_slot_is_missing(tmp_path: Pat
             return '%8'
 
     monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
-    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: fake_backend)
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.build_backend',
+        lambda backend_factory, socket_path=None, namespace_state=None: fake_backend,
+    )
     monkeypatch.setattr(
         'ccbd.supervision.cmd_slot.inspect_project_namespace_pane',
         lambda backend, pane_id: (
@@ -976,7 +1073,10 @@ def test_runtime_supervision_loop_restores_cmd_slot_locally_while_other_agent_bu
             return '%8'
 
     monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
-    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: fake_backend)
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.build_backend',
+        lambda backend_factory, socket_path=None, namespace_state=None: fake_backend,
+    )
     monkeypatch.setattr(
         'ccbd.supervision.cmd_slot.inspect_project_namespace_pane',
         lambda backend, pane_id: (
@@ -1101,7 +1201,10 @@ def test_runtime_supervision_loop_reflows_cmd_when_local_replacement_is_unavaila
             raise RuntimeError('workspace root unavailable')
 
     monkeypatch.setattr('ccbd.supervision.cmd_slot.ProjectNamespaceController', _NamespaceController)
-    monkeypatch.setattr('ccbd.supervision.cmd_slot.build_backend', lambda backend_factory, socket_path=None: object())
+    monkeypatch.setattr(
+        'ccbd.supervision.cmd_slot.build_backend',
+        lambda backend_factory, socket_path=None, namespace_state=None: object(),
+    )
 
     loop = RuntimeSupervisionLoop(
         project_id=ctx.project_id,

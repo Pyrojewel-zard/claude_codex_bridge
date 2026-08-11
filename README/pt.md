@@ -68,6 +68,12 @@ ccb update
 
 Em uma instalação gerenciada pelo npm, `ccb update` mostra o comando npm equivalente sem modificar o payload incluído.
 
+No Windows x64, `ccb doctor` e `ccb doctor --output` exibem as linhas
+`windows_x64_release_surface`. Os campos `release_install_entry`,
+`source_install_allowed`, `source_install_entry`, `update_entry`,
+`managed_python_status`, `native_helper_status` e `next_action` distinguem o
+fallback source/dev `install.ps1` das rotas npm ou release update bloqueadas.
+
 <details>
 <summary><b>Pacote GitHub release e instalação por fonte como fallback</b></summary>
 

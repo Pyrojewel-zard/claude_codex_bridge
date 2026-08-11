@@ -548,6 +548,7 @@ def _materialize_settings(
     )
     if merged is None:
         return
+    _rewrite_tilde_paths(merged, source_home=source_home)
     atomic_write_text(
         target_layout.settings_path,
         json.dumps(merged, ensure_ascii=False, indent=2) + '\n',
@@ -1441,6 +1442,47 @@ def _inherits_commands(profile) -> bool:
 
 def _inherits_memory(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_memory', True))
+
+
+def _rewrite_tilde_paths(payload: dict[str, object], *, source_home: Path) -> None:
+    """Replace ``~`` / ``~/`` prefixes in settings string values with *source_home*.
+
+    In a managed pane ``HOME`` points to the agent's private home, so ``~`` in
+    settings (e.g. ``statusLine.command`` or hook commands) would resolve to the
+    wrong directory.  Rewriting to the real source home fixes the resolution
+    without requiring the user to hard-code absolute paths.
+    """
+    source_root = str(Path(source_home).expanduser()).replace('\\', '/')
+    _rewrite_tilde_in_place(payload, source_root)
+
+
+def _rewrite_tilde_in_place(value: object, source_root: str) -> None:
+    """Walk *value* (dict/list) and replace ``~``-prefixed strings in place."""
+    if isinstance(value, dict):
+        for key in list(value.keys()):
+            child = value[key]
+            if isinstance(child, str):
+                value[key] = _replace_tilde_prefix(child, source_root)
+            else:
+                _rewrite_tilde_in_place(child, source_root)
+    elif isinstance(value, list):
+        for index in range(len(value)):
+            child = value[index]
+            if isinstance(child, str):
+                value[index] = _replace_tilde_prefix(child, source_root)
+            else:
+                _rewrite_tilde_in_place(child, source_root)
+
+
+def _replace_tilde_prefix(text: str, source_root: str) -> str:
+    """Replace leading ``~`` or ``~/`` with *source_root*."""
+    if not text or not source_root:
+        return text
+    if text == '~':
+        return source_root
+    if text.startswith('~/'):
+        return f'{source_root}/{text[2:]}'
+    return text
 
 
 def _read_json_object(path: Path) -> dict[str, object]:

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from .backend import ensure_server_policy, find_window, kill_server, session_window_target, window_root_pane
+from .backend import (
+    ensure_server_policy,
+    find_window,
+    kill_server,
+    namespace_state_fields,
+    session_window_target,
+    window_root_pane,
+)
 from .ensure_context import rebuild_namespace_backend
 from .ensure_identity import apply_namespace_identity
 from .models import ProjectNamespace
@@ -20,6 +27,7 @@ def force_recreate_namespace(controller, context):
         backend=rebuild_namespace_backend(
             controller,
             socket_path=context.desired_socket_path,
+            namespace_state=context.current,
         ),
         session_is_alive=False,
         recreate_cause=context.recreate_cause or 'forced_recreate',
@@ -53,6 +61,7 @@ def recreate_for_layout_change(controller, context):
         backend=rebuild_namespace_backend(
             controller,
             socket_path=context.desired_socket_path,
+            namespace_state=context.current,
         ),
         session_is_alive=False,
         recreate_cause=reason,
@@ -96,11 +105,21 @@ def persist_refreshed_namespace(controller, context, *, timeout_s: float | None 
             tmux_socket_path=context.desired_socket_path,
             tmux_session_name=context.desired_session_name,
         )
+    namespace_fields = namespace_state_fields(
+        context.backend,
+        session_name=context.desired_session_name,
+        tmux_socket_path=context.desired_socket_path,
+    )
+    state_tmux_socket_path = (
+        ''
+        if namespace_fields.get('namespace_backend_family') == 'herdr-native'
+        else context.desired_socket_path
+    )
     state = build_active_state(
         project_id=controller._project_id,
         current=current,
         namespace_epoch=current.namespace_epoch,
-        tmux_socket_path=context.desired_socket_path,
+        tmux_socket_path=state_tmux_socket_path,
         tmux_session_name=context.desired_session_name,
         layout_version=controller._layout_version,
         layout_signature=context.desired_layout_signature or current.layout_signature,
@@ -111,6 +130,7 @@ def persist_refreshed_namespace(controller, context, *, timeout_s: float | None 
         workspace_epoch=max(1, int(current.workspace_epoch)),
         ui_attachable=True,
         last_started_at=current.last_started_at,
+        **namespace_fields,
     )
     controller._state_store.save(state)
     return namespace_from_state(state)
@@ -132,11 +152,21 @@ def build_created_namespace(controller, context, *, timeout_s: float | None = No
         window_name=context.desired_workspace_window_name,
         timeout_s=timeout_s,
     )
+    namespace_fields = namespace_state_fields(
+        context.backend,
+        session_name=context.desired_session_name,
+        tmux_socket_path=context.desired_socket_path,
+    )
+    state_tmux_socket_path = (
+        ''
+        if namespace_fields.get('namespace_backend_family') == 'herdr-native'
+        else context.desired_socket_path
+    )
     state = build_active_state(
         project_id=controller._project_id,
         current=current,
         namespace_epoch=epoch,
-        tmux_socket_path=context.desired_socket_path,
+        tmux_socket_path=state_tmux_socket_path,
         tmux_session_name=context.desired_session_name,
         layout_version=controller._layout_version,
         layout_signature=context.desired_layout_signature,
@@ -145,8 +175,9 @@ def build_created_namespace(controller, context, *, timeout_s: float | None = No
         workspace_window_name=context.desired_workspace_window_name,
         workspace_window_id=workspace_window.window_id if workspace_window is not None else None,
         workspace_epoch=1,
-        ui_attachable=True,
+        ui_attachable=bool(getattr(controller, '_last_namespace_socket_verified', True)),
         last_started_at=occurred_at,
+        **namespace_fields,
     )
     controller._state_store.save(state)
     controller._event_store.append(
@@ -154,8 +185,15 @@ def build_created_namespace(controller, context, *, timeout_s: float | None = No
             project_id=controller._project_id,
             occurred_at=occurred_at,
             namespace_epoch=epoch,
-            tmux_socket_path=context.desired_socket_path,
+            tmux_socket_path=state.tmux_socket_path,
             tmux_session_name=context.desired_session_name,
+            namespace_backend_family=state.namespace_backend_family,
+            backend_impl=state.backend_impl,
+            namespace_id=state.namespace_id,
+            namespace_session_name=state.namespace_session_name,
+            namespace_ipc_kind=state.namespace_ipc_kind,
+            namespace_ipc_ref=state.namespace_ipc_ref,
+            namespace_restore_token=state.namespace_restore_token,
             recreated=bool(current is not None),
             reason=context.recreate_cause
             or ('missing_session' if current is not None else 'initial_create'),
@@ -174,6 +212,13 @@ def build_created_namespace(controller, context, *, timeout_s: float | None = No
         workspace_window_id=state.workspace_window_id,
         workspace_epoch=state.workspace_epoch,
         ui_attachable=state.ui_attachable,
+        namespace_backend_family=state.namespace_backend_family,
+        backend_impl=state.backend_impl,
+        namespace_id=state.namespace_id,
+        namespace_session_name=state.namespace_session_name,
+        namespace_ipc_kind=state.namespace_ipc_kind,
+        namespace_ipc_ref=state.namespace_ipc_ref,
+        namespace_restore_token=state.namespace_restore_token,
         created_this_call=True,
     )
 

@@ -1,56 +1,23 @@
 from __future__ import annotations
 
-import errno
 from pathlib import Path
 import json
-import socket
-import time
 
 from ccbd.api_models import RpcRequest, RpcResponse
+from ccbd.control_plane_transport.factory import transport_for_legacy_socket_path
 
 from .errors import CcbdClientError
 
-_CONNECT_RETRY_INTERVAL_S = 0.05
-_CONNECT_MAX_RETRIES = 2
-_CONNECT_RETRY_ERRNOS = frozenset({
-    errno.EAGAIN,
-    errno.ECONNREFUSED,
-    errno.ENOENT,
-})
+_MAX_RESPONSE_BYTES = 1024 * 1024
 
 
 def connect_socket(socket_path: Path, *, timeout_s: float):
-    if not hasattr(socket, 'AF_UNIX'):
-        raise CcbdClientError('unix domain sockets are not supported on this platform')
-    deadline = time.monotonic() + max(0.0, float(timeout_s))
-    last_error: OSError | None = None
-    for attempt in range(_CONNECT_MAX_RETRIES + 1):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(remaining)
-        try:
-            sock.connect(str(socket_path))
-            return sock
-        except OSError as exc:
-            sock.close()
-            last_error = exc
-            if not _is_transient_connect_error(exc):
-                break
-            if attempt >= _CONNECT_MAX_RETRIES:
-                break
-            sleep_for = min(_CONNECT_RETRY_INTERVAL_S, max(0.0, deadline - time.monotonic()))
-            if sleep_for <= 0:
-                break
-            time.sleep(sleep_for)
-    if last_error is not None:
-        raise CcbdClientError(str(last_error)) from last_error
-    raise CcbdClientError('timed out')
-
-
-def _is_transient_connect_error(exc: OSError) -> bool:
-    return int(getattr(exc, 'errno', 0) or 0) in _CONNECT_RETRY_ERRNOS
+    try:
+        return transport_for_legacy_socket_path(socket_path).connect(timeout_s=timeout_s)
+    except CcbdClientError:
+        raise
+    except Exception as exc:
+        raise CcbdClientError(str(exc)) from exc
 
 
 def send_request(sock, request: RpcRequest) -> None:
@@ -59,13 +26,21 @@ def send_request(sock, request: RpcRequest) -> None:
 
 
 def recv_response_line(sock) -> bytes:
-    raw = b''
-    while b'\n' not in raw:
+    raw = bytearray()
+    while raw.find(b'\n') < 0:
         chunk = sock.recv(65536)
         if not chunk:
             break
-        raw += chunk
-    return raw
+        raw.extend(chunk)
+        newline_at = raw.find(b'\n')
+        if newline_at >= 0:
+            frame_end = newline_at + 1
+            if frame_end > _MAX_RESPONSE_BYTES:
+                raise CcbdClientError('ccbd response exceeds maximum size')
+            return bytes(raw[:frame_end])
+        if len(raw) > _MAX_RESPONSE_BYTES:
+            raise CcbdClientError('ccbd response exceeds maximum size')
+    return bytes(raw)
 
 
 def decode_response(raw: bytes) -> RpcResponse:

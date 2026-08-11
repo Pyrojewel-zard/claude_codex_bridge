@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from completion.models import CompletionConfidence, CompletionStatus
 from completion.tracker import CompletionTrackerView
+from provider_execution.completion_authority import annotate_completion_authority
 
 from .execution_cleanup import finish_stale_execution_update
 from .records import append_event, get_job
@@ -60,6 +61,11 @@ def _resolve_update_decision(dispatcher, update, tracked):
 
 
 def _validate_provider_completion_decision(submission, decision):
+    decision = annotate_completion_authority(
+        submission,
+        decision,
+        authority='provider_execution',
+    )
     if decision is None:
         return None
     if not decision.terminal or decision.status is not CompletionStatus.COMPLETED:

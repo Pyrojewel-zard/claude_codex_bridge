@@ -8,6 +8,11 @@ from provider_core.tmux_ownership import (
     apply_session_tmux_identity,
     inspect_tmux_pane_ownership,
 )
+from provider_runtime.session_payload import (
+    pane_ref_from_session,
+    session_uses_tmux_compatible_pane,
+)
+from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
 
 # Substrings that mark a pane crash as an *unrecoverable* provider auth failure:
 # restarting the pane will not fix it, the provider must be re-authenticated.
@@ -65,22 +70,59 @@ def classify_crash_reason(text: str) -> str | None:
     return None
 
 
-def attach_pane_log(session, backend: object, pane_id: str) -> None:
+def attach_pane_log(session, backend: object, pane_id: object) -> None:
+    pane_target = pane_lifecycle_target(session, pane_id)
     ensure = getattr(backend, 'ensure_pane_log', None)
     if callable(ensure):
         try:
-            ensure(str(pane_id))
+            ensure(pane_target)
+            return
         except Exception:
             pass
+    capture = getattr(backend, 'capture_pane', None)
+    if not callable(capture) or session_uses_tmux_compatible_pane(_session_data(session)):
+        return
+    try:
+        capture(pane_target, lines=1)
+    except Exception:
+        pass
 
 
 def live_owned_pane(session, backend: object, pane_id: str) -> str | None:
-    if not pane_id or not backend.is_alive(pane_id):
+    if not pane_id or not backend_is_alive(backend, pane_lifecycle_target(session, pane_id)):
         return None
+    if not session_uses_tmux_compatible_pane(_session_data(session)):
+        return str(pane_id)
     ownership = inspect_tmux_pane_ownership(session, backend, str(pane_id))
     if not ownership.is_owned:
         return None
     return str(pane_id)
+
+
+def backend_is_alive(backend: object, pane_target: object) -> bool:
+    checker = getattr(backend, 'is_alive', None)
+    if not callable(checker):
+        return False
+    return bool(checker(pane_target))
+
+
+def pane_lifecycle_target(session, pane_id: object) -> object:
+    if not session_uses_tmux_compatible_pane(_session_data(session)):
+        pane_ref = pane_ref_from_session(_session_data(session))
+        if pane_ref is not None:
+            return pane_ref
+    return str(pane_id or '').strip()
+
+
+def lifecycle_backend_error_text(exc: MuxCommandErrorV2) -> str:
+    if exc.backend_impl == 'herdr':
+        return f'Herdr backend {exc.category} during {exc.operation}: {exc.detail}'
+    return f'{exc.detail}'
+
+
+def _session_data(session) -> dict[str, object]:
+    data = getattr(session, 'data', None)
+    return data if isinstance(data, dict) else {}
 
 
 def activate_rebound_pane(
@@ -211,10 +253,13 @@ def bind_session_to_pane(session, pane_id: str, *, now_str_fn: Callable[[], str]
 __all__ = [
     'activate_rebound_pane',
     'attach_pane_log',
+    'backend_is_alive',
     'bind_session_to_pane',
     'classify_crash_reason',
+    'lifecycle_backend_error_text',
     'live_owned_pane',
     'MAX_PANE_CRASH_LOGS',
     'pane_exists',
+    'pane_lifecycle_target',
     'persist_crash_log',
 ]

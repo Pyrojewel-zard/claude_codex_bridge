@@ -68,6 +68,12 @@ ccb update
 
 npm 관리 설치에서 `ccb update`는 동일한 npm 명령만 표시하며 vendored payload를 직접 변경하지 않습니다.
 
+Windows x64에서는 `ccb doctor`와 `ccb doctor --output`이
+`windows_x64_release_surface` 진단 행을 출력합니다. `release_install_entry`,
+`source_install_allowed`, `source_install_entry`, `update_entry`,
+`managed_python_status`, `native_helper_status`, `next_action`으로 source/dev
+`install.ps1` fallback과 차단된 npm 또는 release update 경로를 구분합니다.
+
 <details>
 <summary><b>GitHub release 패키지와 소스 설치 대체 경로</b></summary>
 

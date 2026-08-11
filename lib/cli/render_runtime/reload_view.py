@@ -81,7 +81,21 @@ def _reload_active_drain_lines(payload: Mapping[str, object]) -> list[str]:
 
 def _reload_diagnostic_lines(diagnostics: Mapping[str, object]) -> list[str]:
     lines: list[str] = []
-    lines.extend(_optional_key_values('reload_diagnostic', diagnostics, ('reason', 'message')))
+    lines.extend(
+        _optional_key_values(
+            'reload_diagnostic',
+            diagnostics,
+            (
+                'reason',
+                'message',
+                'error_operation',
+                'error_category',
+                'error_backend_impl',
+                'error_ipc_ref',
+                'error_evidence',
+            ),
+        )
+    )
     replace_agents = diagnostics.get('replace_agents')
     if isinstance(replace_agents, (list, tuple)):
         lines.append(f'reload_diagnostic: replace_agents={_render_value(replace_agents)}')

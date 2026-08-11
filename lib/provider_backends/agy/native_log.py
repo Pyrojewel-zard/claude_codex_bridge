@@ -61,7 +61,7 @@ def agy_home_from_start_cmd(start_cmd: str) -> Path | None:
     if prefix.startswith("export "):
         prefix = prefix[len("export ") :]
     try:
-        parts = shlex.split(prefix)
+        parts = shlex.split(prefix, posix=(os.name != "nt"))
     except ValueError:
         return None
     for part in parts:

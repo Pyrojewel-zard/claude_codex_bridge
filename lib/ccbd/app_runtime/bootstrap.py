@@ -33,6 +33,7 @@ from provider_execution.service import ExecutionService
 from provider_execution.state_store import ExecutionStateStore
 from storage.paths import PathLayout
 from storage.text_artifacts import sweep_expired_text_artifacts
+from runtime_env.source_identity import current_source_runtime_identity
 
 from .handlers import register_handlers
 from .request_guard import lifecycle_is_stopping, rejection_for_request
@@ -79,6 +80,7 @@ def initialize_app(
     keeper_pid = str(os.environ.get('CCB_KEEPER_PID') or '').strip()
     app.keeper_pid = int(keeper_pid) if keeper_pid.isdigit() and int(keeper_pid) > 0 else None
     app.daemon_instance_id = uuid.uuid4().hex
+    app.source_runtime_identity = current_source_runtime_identity()
     app.expected_startup_fence = expected_startup_fence
     app.keeper_startup_checkpoint = keeper_startup_checkpoint
     app.start_maintenance_lock = threading.Lock()

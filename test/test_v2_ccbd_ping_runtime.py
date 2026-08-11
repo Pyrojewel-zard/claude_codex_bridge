@@ -139,6 +139,11 @@ def test_build_ccbd_payload_prefers_lifecycle_phase_over_lease_mount_state() -> 
             'serving_daemon_instance_id': 'daemon-1',
             'serving_lease_generation': 7,
             'accepted_startup_id': 'a' * 32,
+            'source_runtime_identity': {
+                'kind': 'source-tree',
+                'root': '/src/ccb',
+                'digest': 'digest-1',
+            },
         },
     )
 
@@ -155,6 +160,11 @@ def test_build_ccbd_payload_prefers_lifecycle_phase_over_lease_mount_state() -> 
     assert payload['serving_daemon_instance_id'] == 'daemon-1'
     assert payload['serving_lease_generation'] == 7
     assert payload['accepted_startup_id'] == 'a' * 32
+    assert payload['source_runtime_identity'] == {
+        'kind': 'source-tree',
+        'root': '/src/ccb',
+        'digest': 'digest-1',
+    }
     assert payload['diagnostics']['last_request_queue_wait_s'] == 0.012
     assert payload['diagnostics']['last_submit_duration_s'] == 0.034
     assert payload['diagnostics']['last_ping_duration_s'] == 0.056
@@ -384,6 +394,107 @@ def test_build_agent_payload_surfaces_provider_auth_recovery_block() -> None:
     assert payload['diagnostics']['recovery_failure_count'] == 1
     assert payload['diagnostics']['last_reconcile_at'] == '2026-04-22T00:00:02Z'
     assert payload['diagnostics']['last_failure_reason'] == detail
+
+
+def test_build_ccbd_payload_projects_herdr_namespace_surface() -> None:
+    payload = build_ccbd_payload(
+        project_id='proj-herdr',
+        config=_config(),
+        paths=_paths(),
+        inspection=_inspection(phase='mounted', desired_state='running'),
+        execution_summary={},
+        restore_summary={},
+        namespace_summary={
+            'namespace_backend_family': 'herdr-native',
+            'namespace_backend_impl': 'herdr',
+            'namespace_id': 'workspace-1',
+            'namespace_session_name': 'ccb-herdr',
+            'namespace_ipc_kind': 'herdr_socket',
+            'namespace_ipc_ref': 'herdr://workspace-1',
+            'namespace_restore_token_present': True,
+        },
+        namespace_event_summary={},
+        start_policy_summary={},
+    )
+
+    projection = payload['herdr_surface_projection']
+    assert projection['backend_impl'] == 'herdr'
+    assert projection['capability_status'] == 'partial'
+    assert projection['support_tier_projection'] == 'experimental'
+    assert projection['support_tier_projection_source'] == 'validation_pending'
+    assert projection['beta_gaps'] == ['validation_pending']
+    assert projection['evidence_refs']['namespace_ref'] == {
+        'backend_family': 'herdr-native',
+        'backend_impl': 'herdr',
+        'namespace_id': 'workspace-1',
+        'session_name': 'ccb-herdr',
+        'ipc_kind': 'herdr_socket',
+        'ipc_ref': 'herdr://workspace-1',
+    }
+    assert 'restore_token' not in str(projection)
+
+
+def test_build_agent_payload_projects_herdr_runtime_surface() -> None:
+    config = _config()
+    runtime = AgentRuntime(
+        agent_name='demo',
+        state=AgentState.DEGRADED,
+        pid=123,
+        started_at='2026-04-22T00:00:00Z',
+        last_seen_at='2026-04-22T00:00:01Z',
+        runtime_ref='herdr:pane-1',
+        session_ref='session-1',
+        workspace_path='/tmp/ws',
+        project_id='proj-herdr',
+        backend_type='pane-backed',
+        queue_depth=0,
+        socket_path=None,
+        health='process-dead',
+        provider='codex',
+        terminal_backend='herdr',
+        provider_runtime_backend_ref={
+            'backend_impl': 'herdr',
+            'namespace_ref': {
+                'backend_impl': 'herdr',
+                'namespace_id': 'workspace-1',
+                'restore_token': 'raw-token',
+            },
+            'pane_ref': {'backend_impl': 'herdr', 'pane_id': 'pane-1'},
+        },
+        namespace_ref={
+            'backend_impl': 'herdr',
+            'namespace_id': 'workspace-1',
+            'restore_token': 'raw-token',
+        },
+        pane_ref={'backend_impl': 'herdr', 'pane_id': 'pane-1'},
+        namespace_restore_token_present=True,
+        herdr_auto_restore_mode='observe-only',
+        reconcile_state='blocked',
+        last_failure_reason='Herdr auto restore observe-only blocks CCB-owned recovery',
+    )
+
+    payload = build_agent_payload(
+        project_id='proj-herdr',
+        agent_name='demo',
+        registry=SimpleNamespace(
+            spec_for=lambda name: config.agents[name],
+            get=lambda name: runtime,
+        ),
+        inspection=_inspection(phase='mounted', desired_state='running'),
+        execution_registry=SimpleNamespace(get=lambda provider: None),
+    )
+
+    projection = payload['diagnostics']['herdr_surface_projection']
+    assert projection['backend_impl'] == 'herdr'
+    assert projection['capability_status'] == 'blocked'
+    assert projection['support_tier_projection'] == 'experimental'
+    assert projection['blocking_gaps'] == [
+        'Herdr auto restore observe-only blocks CCB-owned recovery',
+        'herdr_auto_restore_mode:observe-only',
+    ]
+    assert projection['degraded_next_action'] == 'collect-validation-transcript'
+    assert projection['evidence_refs']['pane_ref'] == {'backend_impl': 'herdr', 'pane_id': 'pane-1'}
+    assert 'raw-token' not in str(projection)
 
 
 def test_ping_target_unmounted_ccbd_includes_timing_fields(monkeypatch, tmp_path: Path) -> None:

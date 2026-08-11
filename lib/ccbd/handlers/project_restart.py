@@ -81,6 +81,20 @@ def build_project_restart_agent_handler(app):
 
         result = dict(results[0]) if results else {'agent': agent_name, 'status': 'failed', 'reason': 'no_result'}
         restarted = str(result.get('status') or '') == 'restarted'
+        deferred = str(result.get('status') or '') in {'deferred', 'unsupported'}
+        if deferred:
+            return {
+                'status': 'unsupported',
+                'restart_status': 'deferred',
+                'agent_name': agent_name,
+                'restartable_agents': list(_configured_agent_names(app)),
+                'reason': str(result.get('reason') or 'deferred_to_provider_runtime_on_herdr'),
+                'busy_gate': busy_gate,
+                'old_runtime': old_runtime,
+                'new_runtime': _runtime_evidence(app.registry.get(agent_name)),
+                'result': result,
+                'recreate_reason': RESTART_AGENT_REASON,
+            }
         return {
             'status': 'ok' if restarted else 'failed',
             'restart_status': 'ok' if restarted else 'failed',
@@ -101,6 +115,22 @@ def build_project_restart_panes_handler(app):
     def handle(payload: dict) -> tuple[dict, object]:
         del payload
         agent_names = tuple(app.config.agents)
+        namespace = _load_project_namespace_or_none(app)
+        if _namespace_is_herdr(namespace):
+            results = _herdr_restart_deferred_results(agent_names, namespace=namespace)
+            restart_evidence = _herdr_restart_deferred_evidence(namespace, result_count=len(results))
+            return {
+                'status': 'unsupported',
+                'restart_status': 'deferred',
+                'agent_names': list(agent_names),
+                'restart_mode': 'provider_runtime_required',
+                'reason': 'deferred_to_provider_runtime_on_herdr',
+                'backend_impl': 'herdr',
+                'namespace_backend_family': getattr(namespace, 'namespace_backend_family', 'herdr-native'),
+                'restart_evidence': restart_evidence,
+                'results': list(results),
+                'recreate_reason': RESTART_PANES_REASON,
+            }, lambda: None
 
         def _after_response() -> None:
             try:
@@ -271,13 +301,73 @@ def restart_project_agent_panes_in_place(app, *, agent_names: tuple[str, ...]) -
     namespace = app.project_namespace.load()
     if namespace is None:
         raise RuntimeError('project namespace is not mounted')
+    if _namespace_is_herdr(namespace):
+        return _herdr_restart_deferred_results(agent_names, namespace=namespace)
+    backend = TmuxBackend(socket_path=namespace.tmux_socket_path)
     results: list[dict[str, object]] = []
     for agent_name in agent_names:
         results.append(_restart_agent_pane(app, agent_name=str(agent_name)))
     return tuple(results)
 
 
-def _restart_agent_pane(app, *, agent_name: str) -> dict[str, object]:
+def _load_project_namespace_or_none(app):
+    loader = getattr(getattr(app, 'project_namespace', None), 'load', None)
+    if not callable(loader):
+        return None
+    try:
+        return loader()
+    except Exception:
+        return None
+
+
+def _namespace_is_herdr(namespace) -> bool:
+    if namespace is None:
+        return False
+    return (
+        str(getattr(namespace, 'backend_impl', '') or '').strip() == 'herdr'
+        or str(getattr(namespace, 'namespace_backend_family', '') or '').strip() == 'herdr-native'
+    )
+
+
+def _herdr_restart_deferred_results(agent_names: tuple[str, ...], *, namespace) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            'agent': str(agent_name),
+            'status': 'deferred',
+            'reason': 'deferred_to_provider_runtime_on_herdr',
+            'backend_impl': 'herdr',
+            'namespace_backend_family': getattr(namespace, 'namespace_backend_family', 'herdr-native'),
+            'restart_mode': 'provider_runtime_required',
+            'restart_evidence': _herdr_restart_deferred_evidence(namespace, agent_name=str(agent_name)),
+        }
+        for agent_name in agent_names
+    )
+
+
+def _herdr_restart_deferred_evidence(
+    namespace,
+    *,
+    agent_name: str | None = None,
+    result_count: int | None = None,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        'backend_impl': 'herdr',
+        'namespace_backend_family': getattr(namespace, 'namespace_backend_family', 'herdr-native'),
+        'restart_surface': 'provider_runtime_required',
+        'restart_status': 'deferred',
+        'reason': 'deferred_to_provider_runtime_on_herdr',
+        'respawn_evidence': 'not_attempted',
+        'session_binding_evidence': 'not_attempted',
+    }
+    if agent_name is not None:
+        evidence['agent'] = agent_name
+    if result_count is not None:
+        evidence['result_count'] = result_count
+    return evidence
+
+
+def _restart_agent_pane(app, *, backend, agent_name: str) -> dict[str, object]:
+
     runtime = app.registry.get(agent_name)
     session = _load_agent_provider_session(app, agent_name=agent_name, runtime=runtime)
     pane_id = _restart_pane_id(runtime=runtime, session=session)

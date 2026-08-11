@@ -55,16 +55,32 @@ def test_control_plane_env_keeps_agent_roles_store_pin(monkeypatch) -> None:
     assert env['AGENT_ROLES_STORE'] == '/home/demo/.roles'
 
 
+def test_control_plane_env_keeps_windows_profile_roots(monkeypatch) -> None:
+    monkeypatch.setenv('APPDATA', 'C:/Users/demo/AppData/Roaming')
+    monkeypatch.setenv('LOCALAPPDATA', 'C:/Users/demo/AppData/Local')
+    monkeypatch.setenv('USERPROFILE', 'C:/Users/demo')
+
+    env = control_plane_env()
+
+    assert env['APPDATA'] == 'C:/Users/demo/AppData/Roaming'
+    assert env['LOCALAPPDATA'] == 'C:/Users/demo/AppData/Local'
+    assert env['USERPROFILE'] == 'C:/Users/demo'
+
+
 def test_control_plane_env_keeps_source_test_wrapper_signals(monkeypatch) -> None:
     monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+    monkeypatch.setenv('CCB_RUNTIME_STATE_HOME', '/tmp/source-dev-state/projects')
     monkeypatch.setenv('CCB_SOURCE_ALLOWED_ROOTS', '/tmp/source-test-root')
+    monkeypatch.setenv('CCB_SOURCE_ROOT', '/tmp/ccb-source')
     monkeypatch.setenv('CCB_TEST_ROOTS', '/tmp/extra-test-root')
     monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
 
     env = control_plane_env()
 
     assert env['CCB_TEST_ENTRYPOINT'] == '1'
+    assert env['CCB_RUNTIME_STATE_HOME'] == '/tmp/source-dev-state/projects'
     assert env['CCB_SOURCE_ALLOWED_ROOTS'] == '/tmp/source-test-root'
+    assert env['CCB_SOURCE_ROOT'] == '/tmp/ccb-source'
     assert env['CCB_TEST_ROOTS'] == '/tmp/extra-test-root'
     assert 'CCB_CALLER_ACTOR' not in env
 
@@ -99,6 +115,32 @@ def test_control_plane_env_keeps_mobile_host_state_override(monkeypatch) -> None
     env = control_plane_env()
 
     assert env['CCB_MOBILE_HOST_STATE_HOME'] == '/tmp/ccb-mobile-state'
+
+
+def test_control_plane_env_keeps_herdr_runtime_selection(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_HERDR_EXE', '/opt/herdr/herdr')
+    monkeypatch.setenv('CCB_HERDR_SOCKET_REF', 'herdr://cmd-013-local')
+    monkeypatch.setenv('CCB_HERDR_CAPABILITY_REPORT', '/tmp/herdr-capabilities.json')
+    monkeypatch.setenv('CCB_HERDR_SESSION', 'cmd-013-session')
+
+    env = control_plane_env()
+
+    assert env['CCB_HERDR_EXE'] == '/opt/herdr/herdr'
+    assert env['CCB_HERDR_SOCKET_REF'] == 'herdr://cmd-013-local'
+    assert env['CCB_HERDR_CAPABILITY_REPORT'] == '/tmp/herdr-capabilities.json'
+    assert env['CCB_HERDR_SESSION'] == 'cmd-013-session'
+
+
+def test_control_plane_env_keeps_windows_processor_arch_for_platform_gate(monkeypatch) -> None:
+    monkeypatch.setenv('PROCESSOR_ARCHITECTURE', 'AMD64')
+    monkeypatch.setenv('PROCESSOR_ARCHITEW6432', 'ARM64')
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
+
+    env = control_plane_env()
+
+    assert env['PROCESSOR_ARCHITECTURE'] == 'AMD64'
+    assert env['PROCESSOR_ARCHITEW6432'] == 'ARM64'
+    assert 'CCB_CALLER_ACTOR' not in env
 
 
 def test_control_plane_env_keeps_user_session_transport_for_cmd_shell(monkeypatch) -> None:

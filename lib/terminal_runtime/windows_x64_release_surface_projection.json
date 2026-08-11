@@ -1,0 +1,75 @@
+{
+  "archive_name": null,
+  "artifact_basename": null,
+  "artifact_status": "missing",
+  "baseline_gate_ref": null,
+  "baseline_version_ref": "VERSION",
+  "baseline_version_status": "v8.5.2",
+  "beta_gaps": [],
+  "checksum_entry": null,
+  "diagnostic": "Windows x64 release route is blocked by the current release-surface projection.",
+  "extract_dir": null,
+  "failure_reason": "release-artifact-missing",
+  "host_gate": {
+    "default_failure_reason": "projection-schema-invalid",
+    "default_next_action": "Regenerate the Windows x64 release-surface projection.",
+    "rules": [
+      {
+        "diagnostic": "Windows x64 release route requires os_platform=win32.",
+        "failure_reason": "not-windows",
+        "field": "os_platform",
+        "next_action": "Use Linux/macOS release routes or retry on native Windows x64.",
+        "op": "equals",
+        "value": "win32"
+      },
+      {
+        "diagnostic": "Windows x64 release route requires cpu_arch=x64.",
+        "failure_reason": "not-x64",
+        "field": "cpu_arch",
+        "next_action": "Retry from a native Windows x64 host.",
+        "op": "equals",
+        "value": "x64"
+      },
+      {
+        "diagnostic": "WOW64 is not a native Windows x64 process.",
+        "failure_reason": "wow64",
+        "field": "wow64",
+        "next_action": "Use a native 64-bit shell and Node runtime.",
+        "op": "is_false",
+        "value": false
+      }
+    ]
+  },
+  "implementation_admission": "admitted",
+  "managed_python_status": "unknown",
+  "native_helper_status": "unknown",
+  "next_action": "Use install.ps1 for source/dev checkout installs and keep release/npm routes diagnostic-only.",
+  "package_cpu": [
+    "x64",
+    "arm64"
+  ],
+  "package_metadata_policy": "win32-enabled-postinstall-gated",
+  "package_os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "packaged_projection_ref": "lib/terminal_runtime/windows_x64_release_surface_projection.json",
+  "projection_source": "default_blocked",
+  "release_artifact_ref": null,
+  "release_gate_detail": "Windows x64 release route is blocked until release artifact evidence is present.",
+  "release_install_entry": "diagnostic_only",
+  "schema_version": 1,
+  "source_install_allowed": true,
+  "source_install_entry": "install_ps1",
+  "surface_state": "blocked",
+  "update_entry": "diagnostic_only",
+  "upstream_detail_reason": "release-artifact-missing",
+  "upstream_failure_ref": null,
+  "upstream_gate_status": "blocked",
+  "user_surfaces_parity_ref": null,
+  "windows_bin_entries": {},
+  "windows_executable_entry": null,
+  "windows_installer_entry": null,
+  "windows_npm_enabled": false
+}

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
 import time
 from typing import Callable
 
+from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
+from terminal_runtime.placeholders import pane_placeholder_argv, pane_placeholder_cmd
 from terminal_runtime.tmux_readiness import (
     TmuxCommandError,
     TmuxTransientServerUnavailable,
@@ -16,7 +19,10 @@ from terminal_runtime.tmux_readiness import (
     tmux_object_ready_timeout_s,
     tmux_failure_detail,
 )
-from terminal_runtime.placeholders import pane_placeholder_argv, pane_placeholder_cmd
+
+_MUX_NAMESPACE_REF_ATTR = '_ccb_project_namespace_ref'
+_MUX_NAMESPACE_REF_ALIASES_ATTR = '_ccb_project_namespace_ref_aliases'
+_MUX_PANE_REFS_ATTR = '_ccb_project_pane_refs'
 
 _TMUX_ENVIRONMENT_KEYS = (
     'TERM',
@@ -75,14 +81,78 @@ class TmuxWindowRecord:
     active: bool = False
 
 
-def build_backend(backend_factory, *, socket_path: str):
+def build_backend(backend_factory, *, socket_path: str, namespace_state=None):
     try:
-        return backend_factory(socket_path=socket_path)
+        return backend_factory(socket_path=socket_path, namespace_state=namespace_state)
     except TypeError:
-        return backend_factory()
+        try:
+            return backend_factory(socket_path=socket_path)
+        except TypeError:
+            return backend_factory()
+
+
+def remember_namespace_state_ref(backend, state) -> None:
+    if not _is_mux_backend(backend) or state is None:
+        return
+    namespace_ref = getattr(state, 'namespace_ref', None)
+    if callable(namespace_ref):
+        ref = namespace_ref()
+        if not _namespace_state_matches_backend(backend, state, ref):
+            return
+        _remember_mux_namespace_ref(
+            backend,
+            ref,
+            requested_session_name=getattr(state, 'tmux_session_name', None),
+        )
+
+
+def _namespace_state_matches_backend(backend, state, namespace: object | None = None) -> bool:
+    backend_impl = str(getattr(backend, 'backend_impl', '') or '').strip()
+    state_impl = str(getattr(state, 'backend_impl', '') or '').strip()
+    state_family = str(getattr(state, 'namespace_backend_family', '') or '').strip()
+    ref_impl_value = namespace.get('backend_impl') if isinstance(namespace, dict) else ''
+    ref_family_value = namespace.get('backend_family') if isinstance(namespace, dict) else ''
+    ref_impl = str(ref_impl_value or '').strip()
+    ref_family = str(ref_family_value or '').strip()
+    if backend_impl == 'herdr':
+        if state_impl or state_family:
+            return state_impl == 'herdr' or state_family == 'herdr-native'
+        return ref_impl == 'herdr' or ref_family == 'herdr-native'
+    if backend_impl:
+        if state_impl or state_family:
+            return state_impl in {'', backend_impl} and state_family != 'herdr-native'
+        return ref_impl in {'', backend_impl} and ref_family != 'herdr-native'
+    return state_impl not in {'herdr'} and ref_impl not in {'herdr'}
+
+
+def namespace_state_fields(backend, *, session_name: str, tmux_socket_path: str) -> dict[str, object | None]:
+    ref = _mux_namespace_ref_if_present(backend, session_name=session_name) if _is_mux_backend(backend) else None
+    if ref is None:
+        return {
+            'namespace_backend_family': 'tmux-family',
+            'backend_impl': 'tmux',
+            'namespace_id': None,
+            'namespace_session_name': None,
+            'namespace_ipc_kind': None,
+            'namespace_ipc_ref': None,
+            'namespace_restore_token': None,
+        }
+    return {
+        'namespace_backend_family': ref.get('backend_family'),
+        'backend_impl': ref.get('backend_impl'),
+        'namespace_id': ref.get('namespace_id'),
+        'namespace_session_name': ref.get('session_name') or session_name,
+        'namespace_ipc_kind': ref.get('ipc_kind'),
+        'namespace_ipc_ref': ref.get('ipc_ref') or tmux_socket_path,
+        'namespace_restore_token': ref.get('restore_token'),
+    }
 
 
 def prepare_server(backend, *, timeout_s: float | None = None) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='prepare_server', methods=('prepare_server',))
+        backend.prepare_server()
+        return
     _tmux_run_ready(
         backend,
         ['start-server'],
@@ -92,6 +162,12 @@ def prepare_server(backend, *, timeout_s: float | None = None) -> None:
 
 
 def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
+    if _is_mux_backend(backend):
+        policy = getattr(backend, 'ensure_server_policy', None)
+        if callable(policy):
+            _require_mux_operation(backend, operation='ensure_server_policy', methods=('ensure_server_policy',))
+            policy()
+        return
     _tmux_run_ready(
         backend,
         ['set-option', '-g', 'destroy-unattached', 'off'],
@@ -205,6 +281,15 @@ def create_session(
     terminal_size: tuple[int, int] | None = None,
     timeout_s: float | None = None,
 ) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='create_session', methods=('create_session',))
+        namespace = backend.create_session(
+            project_id=session_name,
+            cwd=str(project_root),
+            title=session_name,
+        )
+        _remember_mux_namespace_ref(backend, namespace, requested_session_name=session_name)
+        return
     width, height = _resolved_session_size(terminal_size)
     args = [
         'new-session',
@@ -261,6 +346,10 @@ def session_window_target(session_name: str, window_name: str | None = None) -> 
 
 
 def list_windows(backend, session_name: str, *, timeout_s: float | None = None) -> tuple[TmuxWindowRecord, ...]:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='list_windows', methods=('list_windows',))
+        namespace = _mux_namespace_ref(backend, session_name=session_name)
+        return tuple(_mux_window_record(item) for item in backend.list_windows(namespace))
     result = _tmux_run_ready(
         backend,
         ['list-windows', '-t', session_name, '-F', '#{window_id}\t#{window_name}\t#{window_active}'],
@@ -302,6 +391,19 @@ def find_window(backend, *, session_name: str, window_name: str, timeout_s: floa
 
 
 def create_window(backend, *, session_name: str, window_name: str, project_root, select: bool = False, timeout_s: float | None = None) -> TmuxWindowRecord:
+    if _is_mux_backend(backend):
+        creator = getattr(backend, 'create_window', None)
+        if not callable(creator):
+            creator = getattr(backend, 'ensure_window', None)
+        _require_mux_operation(backend, operation='create_window', methods=('create_window', 'ensure_window'), require_any=True)
+        namespace = _mux_namespace_ref(backend, session_name=session_name)
+        record = creator(
+            namespace,
+            window_name=window_name,
+            cwd=str(project_root),
+            select=select,
+        )
+        return _mux_window_record(record)
     _tmux_run_ready(
         backend,
         [
@@ -330,6 +432,16 @@ def create_window(backend, *, session_name: str, window_name: str, project_root,
 
 
 def ensure_window(backend, *, session_name: str, window_name: str, project_root, select: bool = False, timeout_s: float | None = None) -> TmuxWindowRecord:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='ensure_window', methods=('ensure_window',))
+        namespace = _mux_namespace_ref(backend, session_name=session_name)
+        record = backend.ensure_window(
+            namespace,
+            window_name=window_name,
+            cwd=str(project_root),
+            select=select,
+        )
+        return _mux_window_record(record)
     record = find_window(backend, session_name=session_name, window_name=window_name, timeout_s=timeout_s)
     if record is None:
         record = create_window(
@@ -349,6 +461,16 @@ def ensure_window(backend, *, session_name: str, window_name: str, project_root,
 
 
 def rename_window(backend, *, target: str, new_name: str, timeout_s: float | None = None) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='rename_window', methods=('rename_window',))
+        namespace = _mux_namespace_ref(backend, session_name=_target_session_name(target))
+        backend.rename_window(
+            namespace,
+            window_id=_target_window_name(target),
+            target=target,
+            new_name=new_name,
+        )
+        return
     _tmux_run_ready(
         backend,
         ['rename-window', '-t', target, new_name],
@@ -362,6 +484,11 @@ def rename_window(backend, *, target: str, new_name: str, timeout_s: float | Non
 
 
 def kill_window(backend, *, target: str, timeout_s: float | None = None) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='kill_window', methods=('kill_window',))
+        namespace = _mux_namespace_ref(backend, session_name=_target_session_name(target))
+        backend.kill_window(namespace, window_id=_target_window_name(target), target=target)
+        return
     _tmux_run_ready(
         backend,
         ['kill-window', '-t', target],
@@ -371,6 +498,12 @@ def kill_window(backend, *, target: str, timeout_s: float | None = None) -> None
 
 
 def session_alive(backend, session_name: str, *, timeout_s: float | None = None) -> bool:
+    if _is_mux_backend(backend):
+        checker = getattr(backend, 'namespace_alive', None) or getattr(backend, 'session_alive', None)
+        if not callable(checker):
+            return _mux_namespace_ref_if_present(backend, session_name=session_name) is not None
+        _require_mux_operation(backend, operation='session_alive', methods=('namespace_alive', 'session_alive'), require_any=True)
+        return bool(checker(_mux_namespace_ref(backend, session_name=session_name)))
     runner = getattr(backend, '_tmux_run', None)
     if not callable(runner):
         checker = getattr(backend, 'is_alive', None)
@@ -394,6 +527,14 @@ def session_root_pane(backend, session_name: str, *, timeout_s: float | None = N
 
 
 def window_root_pane(backend, *, target_window: str, timeout_s: float | None = None) -> str:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='window_root_pane', methods=('window_root_pane',))
+        namespace = _mux_namespace_ref(backend, session_name=_target_session_name(target_window))
+        pane = backend.window_root_pane(
+            namespace,
+            window_name=_target_window_name(target_window) or _target_session_name(target_window),
+        )
+        return _remember_mux_pane_ref(backend, pane)
     pane_id = wait_for_root_pane(backend, target_window=target_window, timeout_s=timeout_s)
     if not pane_id.startswith('%'):
         raise RuntimeError(f'failed to resolve root pane for tmux target {target_window!r}')
@@ -409,6 +550,19 @@ def split_pane(
     project_root,
     timeout_s: float | None = None,
 ) -> str:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='split_pane', methods=('split_pane',))
+        pane = _mux_pane_ref(backend, target)
+        new_pane = backend.split_pane(
+            pane,
+            direction=direction,
+            percent=max(1, min(99, int(percent))),
+            command=None,
+            cwd=str(project_root),
+            env={},
+            title='',
+        )
+        return _remember_mux_pane_ref(backend, new_pane)
     try:
         pane_id = backend.split_pane(
             target,
@@ -431,7 +585,184 @@ def split_pane(
     raise RuntimeError(f'failed to split tmux pane from target {target!r}')
 
 
+def respawn_pane(
+    backend,
+    *,
+    pane_id: str,
+    command: str,
+    cwd: str,
+    timeout_s: float | None = None,
+) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='respawn_pane', methods=('respawn_pane',))
+        from terminal_runtime.shell_launch import herdr_respawn_command
+        backend.respawn_pane(
+            _mux_pane_ref(backend, pane_id),
+            command=herdr_respawn_command(
+                command,
+                Path(cwd),
+                f'pane-{pane_id.replace(":", "_")}',
+            ),
+            cwd=str(cwd),
+            env={},
+        )
+        return
+    respawn = getattr(backend, 'respawn_pane', None)
+    if callable(respawn):
+        respawn(pane_id, cmd=command, cwd=str(cwd), remain_on_exit=True)
+        return
+    _tmux_run_ready(
+        backend,
+        ['respawn-pane', '-k', '-t', pane_id, 'sh', '-lc', command],
+        failure_message=f'failed to respawn tmux pane {pane_id!r}',
+        timeout_s=timeout_s,
+    )
+
+
+def kill_pane(backend, *, pane_id: str, timeout_s: float | None = None) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='kill_pane', methods=('kill_pane',))
+        backend.kill_pane(_mux_pane_ref(backend, pane_id))
+        return
+    killer = getattr(backend, 'kill_pane', None)
+    if callable(killer):
+        try:
+            killer(pane_id)
+        except TypeError:
+            killer(pane_id, timeout_s=timeout_s)
+        return
+    _tmux_run_ready(
+        backend,
+        ['kill-pane', '-t', pane_id],
+        failure_message=f'failed to kill tmux pane {pane_id!r}',
+        timeout_s=timeout_s,
+    )
+
+
+def move_pane(
+    backend,
+    *,
+    source_pane: str,
+    anchor_pane: str,
+    direction: str,
+    timeout_s: float | None = None,
+) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='move_pane', methods=('move_pane',))
+        backend.move_pane(
+            _mux_pane_ref(backend, source_pane),
+            _mux_pane_ref(backend, anchor_pane),
+            direction=direction,
+        )
+        return
+    flag = '-h' if direction == 'right' else '-v'
+    _tmux_run_ready(
+        backend,
+        ['move-pane', flag, '-s', source_pane, '-t', anchor_pane],
+        failure_message=f'failed to move tmux pane {source_pane!r}',
+        timeout_s=timeout_s,
+    )
+
+
+def reflow_window(
+    backend,
+    *,
+    session_name: str,
+    window_name: str,
+    target: str | None = None,
+    timeout_s: float | None = None,
+    prefer_topology_layout: bool = False,
+) -> None:
+    resolved_target = target or session_window_target(session_name, window_name)
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='reflow_window', methods=('reflow_window',))
+        namespace = _mux_namespace_ref(backend, session_name=session_name)
+        backend.reflow_window(
+            namespace,
+            window_name=window_name,
+            window_id=_target_window_name(resolved_target),
+            target=resolved_target,
+            prefer_topology_layout=prefer_topology_layout,
+        )
+        return
+    _tmux_run_ready(
+        backend,
+        ['select-layout', '-E', '-t', resolved_target],
+        failure_message=f'failed to reflow tmux window target {resolved_target!r}',
+        timeout_s=timeout_s,
+    )
+
+
+def apply_pane_identity(
+    backend,
+    *,
+    pane_id: str,
+    title: str,
+    agent_label: str,
+    project_id: str,
+    order_index: int | None = None,
+    is_cmd: bool = False,
+    role: str | None = None,
+    slot_key: str | None = None,
+    window_name: str | None = None,
+    sidebar_instance: str | None = None,
+    session_id: str | None = None,
+    namespace_epoch: int | None = None,
+    managed_by: str | None = None,
+    provider_kind: str = "",
+) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='set_pane_identity', methods=('set_pane_identity',))
+        backend.set_pane_identity(
+            _mux_pane_ref(backend, pane_id),
+            title=title,
+            agent_label=agent_label,
+            project_id=project_id,
+            order_index=order_index,
+            is_cmd=is_cmd,
+            role=role,
+            slot_key=slot_key,
+            window_name=window_name,
+            sidebar_instance=sidebar_instance,
+            session_id=session_id,
+            namespace_epoch=namespace_epoch,
+            managed_by=managed_by,
+            provider_kind=provider_kind or None,
+        )
+        return
+    from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+
+    apply_ccb_pane_identity(
+        backend,
+        pane_id,
+        title=title,
+        agent_label=agent_label,
+        project_id=project_id,
+        order_index=order_index,
+        is_cmd=is_cmd,
+        role=role,
+        slot_key=slot_key,
+        window_name=window_name,
+        sidebar_instance=sidebar_instance,
+        session_id=session_id,
+        namespace_epoch=namespace_epoch,
+        managed_by=managed_by,
+    )
+
+
 def kill_server(backend) -> bool:
+    if _is_mux_backend(backend):
+        namespace = _mux_namespace_ref_if_present(backend, session_name=None)
+        if namespace is None:
+            return False
+        destroyer = getattr(backend, 'destroy_namespace', None)
+        if callable(destroyer):
+            _require_mux_operation(backend, operation='destroy_namespace', methods=('destroy_namespace',))
+            destroyer(namespace)
+            return True
+        _require_mux_operation(backend, operation='kill_server', methods=('kill_server',))
+        backend.kill_server(namespace)
+        return True
     try:
         backend._tmux_run(['kill-server'], check=False, capture=True)  # type: ignore[attr-defined]
         import os
@@ -452,6 +783,240 @@ def kill_server(backend) -> bool:
         return False
 
 
+def _is_mux_backend(backend) -> bool:
+    capabilities = getattr(backend, 'capabilities', None)
+    if not callable(capabilities):
+        return False
+    return not callable(getattr(backend, '_tmux_run', None))
+
+
+def _require_mux_operation(
+    backend,
+    *,
+    operation: str,
+    methods: tuple[str, ...],
+    require_any: bool = False,
+) -> None:
+    found = [name for name in methods if callable(getattr(backend, name, None))]
+    if (require_any and not found) or (not require_any and len(found) != len(methods)):
+        _raise_mux_unsupported(
+            backend,
+            operation=operation,
+            detail=f'mux backend lacks required method for {operation}',
+            evidence={'required_methods': list(methods), 'available_methods': found},
+        )
+    capabilities_fn = getattr(backend, 'capabilities', None)
+    try:
+        capabilities = capabilities_fn()
+    except MuxCommandErrorV2:
+        raise
+    except Exception as exc:
+        _raise_mux_unsupported(
+            backend,
+            operation=operation,
+            detail=f'mux backend capabilities unavailable for {operation}: {exc}',
+        )
+    if not isinstance(capabilities, dict):
+        _raise_mux_unsupported(backend, operation=operation, detail='mux backend capabilities must be an object')
+    command_status = capabilities.get('command_status')
+    semantic_status = capabilities.get('semantic_status')
+    if not isinstance(command_status, dict) or not isinstance(semantic_status, dict):
+        _raise_mux_unsupported(backend, operation=operation, detail='mux backend capability statuses are missing')
+    keys = _capability_keys_for_operation(operation)
+    missing = [key for key in keys if key not in command_status and key not in semantic_status]
+    unsupported = [
+        key
+        for key in keys
+        if str(command_status.get(key) or semantic_status.get(key) or '').strip() != 'supported'
+    ]
+    if missing or unsupported:
+        _raise_mux_unsupported(
+            backend,
+            operation=operation,
+            detail=f'mux backend capability unsupported for {operation}',
+            evidence={'missing_capabilities': missing, 'unsupported_capabilities': unsupported},
+        )
+
+
+def _capability_keys_for_operation(operation: str) -> tuple[str, ...]:
+    return {
+        'prepare_server': ('session_attach',),
+        'ensure_server_policy': ('session_attach',),
+        'create_session': ('session_attach', 'workspace_create', 'workspace_metadata', 'pane_metadata'),
+        'session_alive': ('session_attach', 'pane_list'),
+        'list_windows': ('workspace_list', 'pane_list'),
+        'create_window': (
+            'workspace_list',
+            'workspace_create',
+            'workspace_focus',
+            'pane_list',
+            'workspace_metadata',
+            'pane_metadata',
+        ),
+        'ensure_window': (
+            'workspace_list',
+            'workspace_create',
+            'workspace_focus',
+            'pane_list',
+            'workspace_metadata',
+            'pane_metadata',
+        ),
+        'window_root_pane': ('workspace_list', 'pane_list'),
+        'split_pane': ('pane_list', 'pane_split', 'pane_run'),
+        'kill_window': ('workspace_list', 'pane_list', 'workspace_close'),
+        'rename_window': ('workspace_list', 'pane_list', 'workspace_metadata', 'pane_metadata'),
+        'select_window': ('workspace_list', 'pane_list', 'workspace_focus'),
+        'kill_server': ('workspace_list', 'pane_list', 'workspace_close'),
+        'destroy_namespace': ('workspace_list', 'pane_list', 'workspace_close'),
+        'kill_pane': ('kill_pane',),
+        'move_pane': ('pane_list', 'pane_split'),
+        'reflow_window': ('workspace_list', 'pane_list'),
+        'respawn_pane': ('pane_list', 'pane_run'),
+        'set_pane_identity': ('pane_list', 'pane_metadata'),
+    }.get(operation, (operation,))
+
+
+def _raise_mux_unsupported(
+    backend,
+    *,
+    operation: str,
+    detail: str,
+    evidence: dict[str, object] | None = None,
+) -> None:
+    raise MuxCommandErrorV2(
+        category='unsupported',
+        backend_impl=str(getattr(backend, 'backend_impl', 'herdr') or 'herdr'),  # type: ignore[arg-type]
+        operation=operation,
+        detail=detail,
+        evidence=evidence or {},
+    )
+
+
+def _remember_mux_namespace_ref(
+    backend,
+    namespace,
+    *,
+    requested_session_name: str | None = None,
+) -> dict[str, object]:
+    if not isinstance(namespace, dict):
+        _raise_mux_unsupported(backend, operation='create_session', detail='mux create_session returned invalid namespace ref')
+    ref = dict(namespace)
+    setattr(backend, _MUX_NAMESPACE_REF_ATTR, ref)
+    aliases: dict[str, dict[str, object]] = {}
+    for name in (requested_session_name, ref.get('session_name')):
+        clean_name = str(name or '').strip()
+        if clean_name:
+            aliases[clean_name] = dict(ref)
+    if aliases:
+        setattr(backend, _MUX_NAMESPACE_REF_ALIASES_ATTR, aliases)
+    elif hasattr(backend, _MUX_NAMESPACE_REF_ALIASES_ATTR):
+        delattr(backend, _MUX_NAMESPACE_REF_ALIASES_ATTR)
+    return dict(ref)
+
+
+def _mux_namespace_ref(backend, *, session_name: str) -> dict[str, object]:
+    ref = _mux_namespace_ref_if_present(backend, session_name=session_name)
+    if ref is not None:
+        return ref
+    namespace_builder = getattr(backend, 'namespace_ref', None)
+    if callable(namespace_builder):
+        namespace = namespace_builder(session_name, session_name)
+        return _remember_mux_namespace_ref(backend, namespace, requested_session_name=session_name)
+    _raise_mux_unsupported(
+        backend,
+        operation='namespace_ref',
+        detail='mux namespace ref is missing; create_session must run before namespace operations',
+        evidence={'session_name': session_name},
+    )
+
+
+def _mux_namespace_ref_if_present(backend, *, session_name: str | None) -> dict[str, object] | None:
+    if session_name is not None:
+        aliases = getattr(backend, _MUX_NAMESPACE_REF_ALIASES_ATTR, None)
+        if isinstance(aliases, dict):
+            alias = aliases.get(str(session_name or '').strip())
+            if isinstance(alias, dict):
+                return dict(alias)
+    ref = getattr(backend, _MUX_NAMESPACE_REF_ATTR, None)
+    if not isinstance(ref, dict):
+        return None
+    if session_name is not None and str(ref.get('session_name') or '').strip() != str(session_name or '').strip():
+        return None
+    return dict(ref)
+
+
+def _mux_window_record(value) -> TmuxWindowRecord:
+    if isinstance(value, TmuxWindowRecord):
+        return value
+    if isinstance(value, dict):
+        return TmuxWindowRecord(
+            window_id=_clean_optional(value.get('window_id') or value.get('id')),
+            window_name=str(value.get('window_name') or value.get('name') or '').strip(),
+            active=bool(value.get('active', False)),
+        )
+    return TmuxWindowRecord(
+        window_id=_clean_optional(getattr(value, 'window_id', None) or getattr(value, 'id', None)),
+        window_name=str(getattr(value, 'window_name', None) or getattr(value, 'name', '') or '').strip(),
+        active=bool(getattr(value, 'active', False)),
+    )
+
+
+def _remember_mux_pane_ref(backend, pane) -> str:
+    if isinstance(pane, dict):
+        pane_id = str(pane.get('pane_id') or '').strip()
+        if not pane_id:
+            _raise_mux_unsupported(backend, operation='pane_ref', detail='mux pane ref is missing pane_id')
+        refs = getattr(backend, _MUX_PANE_REFS_ATTR, None)
+        if not isinstance(refs, dict):
+            refs = {}
+            setattr(backend, _MUX_PANE_REFS_ATTR, refs)
+        refs[pane_id] = dict(pane)
+        return pane_id
+    pane_id = str(pane or '').strip()
+    if not pane_id:
+        _raise_mux_unsupported(backend, operation='pane_ref', detail='mux pane id cannot be empty')
+    return pane_id
+
+
+def _mux_pane_ref(backend, pane_id: str) -> dict[str, object]:
+    refs = getattr(backend, _MUX_PANE_REFS_ATTR, None)
+    if isinstance(refs, dict) and pane_id in refs and isinstance(refs[pane_id], dict):
+        return dict(refs[pane_id])
+    namespace = _mux_namespace_ref_if_present(backend, session_name=None)
+    session_name = str(namespace.get('session_name') or '') if namespace is not None else ''
+    if not session_name:
+        _raise_mux_unsupported(
+            backend,
+            operation='pane_ref',
+            detail='mux pane ref is missing; window_root_pane must run before split_pane',
+            evidence={'pane_id': pane_id},
+        )
+    return {
+        'backend_impl': str(getattr(backend, 'backend_impl', 'herdr') or 'herdr'),
+        'pane_id': str(pane_id or '').strip(),
+        'session_name': session_name,
+        'window_name': None,
+        'agent_slug': None,
+    }
+
+
+def _target_session_name(target: str) -> str:
+    session_name, _sep, _window = str(target or '').partition(':')
+    return session_name.strip()
+
+
+def _target_window_name(target: str) -> str | None:
+    _session, sep, window = str(target or '').partition(':')
+    if not sep:
+        return None
+    return window.strip() or None
+
+
+def _clean_optional(value: object) -> str | None:
+    text = str(value or '').strip()
+    return text or None
+
+
 def wait_for_window(
     backend,
     *,
@@ -467,6 +1032,11 @@ def wait_for_window(
 
 
 def select_window(backend, *, target: str) -> None:
+    if _is_mux_backend(backend):
+        _require_mux_operation(backend, operation='select_window', methods=('select_window',))
+        namespace = _mux_namespace_ref(backend, session_name=_target_session_name(target))
+        backend.select_window(namespace, window_id=_target_window_name(target), target=target)
+        return
     _wait_until_ready(
         lambda: _tmux_run_ready(
             backend,
@@ -639,6 +1209,7 @@ def _tmux_object_ready_poll_interval_s() -> float:
 
 __all__ = [
     'build_backend',
+    'apply_pane_identity',
     'create_session',
     'create_window',
     'ensure_server_policy',
@@ -646,9 +1217,15 @@ __all__ = [
     'find_window',
     'kill_window',
     'kill_server',
+    'kill_pane',
     'list_windows',
+    'move_pane',
+    'namespace_state_fields',
     'prepare_server',
     'rename_window',
+    'reflow_window',
+    'remember_namespace_state_ref',
+    'respawn_pane',
     'session_alive',
     'session_root_pane',
     'session_window_target',

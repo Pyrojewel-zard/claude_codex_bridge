@@ -24,12 +24,39 @@ def build_active_state(
     workspace_epoch: int,
     ui_attachable: bool,
     last_started_at: str | None,
+    namespace_backend_family: str | None = None,
+    backend_impl: str | None = None,
+    namespace_id: str | None = None,
+    namespace_session_name: str | None = None,
+    namespace_ipc_kind: str | None = None,
+    namespace_ipc_ref: str | None = None,
+    namespace_restore_token: str | None = None,
 ):
     return ProjectNamespaceState(
         project_id=project_id,
         namespace_epoch=namespace_epoch,
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
+        namespace_backend_family=namespace_backend_family
+        or (current.namespace_backend_family if current is not None else 'tmux-family'),
+        backend_impl=backend_impl or (current.backend_impl if current is not None else 'tmux'),
+        namespace_id=namespace_id if namespace_id is not None else (current.namespace_id if current is not None else None),
+        namespace_session_name=(
+            namespace_session_name
+            if namespace_session_name is not None
+            else (current.namespace_session_name if current is not None else None)
+        ),
+        namespace_ipc_kind=(
+            namespace_ipc_kind if namespace_ipc_kind is not None else (current.namespace_ipc_kind if current is not None else None)
+        ),
+        namespace_ipc_ref=(
+            namespace_ipc_ref if namespace_ipc_ref is not None else (current.namespace_ipc_ref if current is not None else None)
+        ),
+        namespace_restore_token=(
+            namespace_restore_token
+            if namespace_restore_token is not None
+            else (current.namespace_restore_token if current is not None else None)
+        ),
         layout_version=layout_version,
         layout_signature=layout_signature,
         control_window_name=control_window_name,
@@ -53,6 +80,13 @@ def build_created_event(
     tmux_session_name: str,
     recreated: bool,
     reason: str,
+    namespace_backend_family: str | None = None,
+    backend_impl: str | None = None,
+    namespace_id: str | None = None,
+    namespace_session_name: str | None = None,
+    namespace_ipc_kind: str | None = None,
+    namespace_ipc_ref: str | None = None,
+    namespace_restore_token: str | None = None,
 ):
     return ProjectNamespaceEvent(
         event_kind='namespace_created',
@@ -61,6 +95,13 @@ def build_created_event(
         namespace_epoch=namespace_epoch,
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
+        namespace_backend_family=namespace_backend_family,
+        backend_impl=backend_impl,
+        namespace_id=namespace_id,
+        namespace_session_name=namespace_session_name,
+        namespace_ipc_kind=namespace_ipc_kind,
+        namespace_ipc_ref=namespace_ipc_ref,
+        namespace_restore_token=namespace_restore_token,
         details={'recreated': recreated, 'reason': reason},
     )
 
@@ -103,6 +144,13 @@ def build_destroyed_event(
     tmux_session_name: str,
     destroyed: bool,
     reason: str,
+    namespace_backend_family: str | None = None,
+    backend_impl: str | None = None,
+    namespace_id: str | None = None,
+    namespace_session_name: str | None = None,
+    namespace_ipc_kind: str | None = None,
+    namespace_ipc_ref: str | None = None,
+    namespace_restore_token: str | None = None,
 ):
     return ProjectNamespaceEvent(
         event_kind='namespace_destroyed',
@@ -111,6 +159,13 @@ def build_destroyed_event(
         namespace_epoch=namespace_epoch,
         tmux_socket_path=tmux_socket_path,
         tmux_session_name=tmux_session_name,
+        namespace_backend_family=namespace_backend_family,
+        backend_impl=backend_impl,
+        namespace_id=namespace_id,
+        namespace_session_name=namespace_session_name,
+        namespace_ipc_kind=namespace_ipc_kind,
+        namespace_ipc_ref=namespace_ipc_ref,
+        namespace_restore_token=namespace_restore_token,
         details={'destroyed': destroyed, 'reason': reason},
     )
 

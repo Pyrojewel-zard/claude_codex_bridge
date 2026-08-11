@@ -9,6 +9,7 @@ from agents.config_loader import load_project_config
 from ccbd.app import CcbdApp
 from ccbd.models import CcbdStartupAgentResult
 from ccbd.reload_apply import run_additive_reload_apply
+from ccbd.reload_apply_runtime import run_runtime_mount
 from ccbd.reload_handoff import ReloadHandoffStore
 from ccbd.reload_runtime_mount import AdditiveRuntimeMountResult
 from ccbd.services.lifecycle import build_lifecycle
@@ -16,6 +17,7 @@ from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.project_namespace_runtime import NamespacePatchApplyResult, build_namespace_topology_plan
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from ccbd.start_flow_runtime import StartFlowSummary
+from cli.render import render_reload
 
 
 BASE_CONFIG = """version = 2
@@ -29,6 +31,37 @@ mode = "every_window"
 width = "15%"
 bottom_height = 20
 """
+
+
+def test_reload_runtime_mount_defers_provider_runtime_for_herdr_namespace() -> None:
+    called = False
+
+    def provider_mount(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError('provider runtime must be deferred for Herdr')
+
+    result = run_runtime_mount(
+        object(),
+        object(),
+        namespace=SimpleNamespace(
+            backend_impl='herdr',
+            namespace_backend_family='herdr-native',
+        ),
+        namespace_patch=SimpleNamespace(
+            agent_panes={'agent2': 'w1:p3'},
+            preserved_before={'agent1': 'w1:p2'},
+        ),
+        run_runtime_mount_fn=provider_mount,
+        run_start_flow_fn=None,
+    )
+
+    assert result.status == 'noop'
+    assert result.requested_agents == ('agent2',)
+    assert result.preserved_runtime_unchanged_agents == ('agent1',)
+    assert result.diagnostics['reason'] == 'provider_runtime_deferred_on_herdr'
+    assert result.diagnostics['runtime_mount_deferred'] is True
+    assert called is False
 
 VIEW_CONFIG = BASE_CONFIG + """
 [ui.sidebar.view]
@@ -925,6 +958,52 @@ def test_additive_reload_apply_namespace_patch_failure_stops_before_runtime_and_
     assert app.lifecycle_store.load().to_record() == old_lifecycle
 
 
+def test_additive_reload_apply_namespace_patch_failure_redacts_restore_token_evidence(
+    tmp_path: Path,
+) -> None:
+    app = _started_app(tmp_path / 'repo-namespace-token-fail', BASE_CONFIG)
+    new_config = _load_config(app.project_root, ADD_WINDOW_CONFIG)
+    expected_token = 'expected-session::workspace-1'
+    actual_token = 'actual-session::workspace-1'
+    nested_token = 'nested-session::workspace-1'
+    camel_token = 'camel-session::workspace-1'
+    namespace_patch = NamespacePatchApplyResult(
+        status='failed',
+        diagnostics={
+            'reason': 'namespace_patch_failed',
+            'error_type': 'MuxCommandErrorV2',
+            'error': 'Herdr restore_session returned a restore_token different from the requested token',
+            'error_evidence': {
+                'socket_ref': 'herdr://local',
+                'expected_restore_token': expected_token,
+                'nested': {
+                    'actual_restore_token': actual_token,
+                    'items': [{'restore_token': nested_token, 'restoreToken': camel_token}],
+                },
+            },
+        },
+    )
+
+    result = run_additive_reload_apply(
+        app,
+        new_config,
+        current_namespace=_namespace(app),
+        apply_namespace_patch_fn=lambda **_kwargs: namespace_patch,
+        run_runtime_mount_fn=_fail_with('namespace failure must not mount runtime'),
+        publish_transaction_fn=_fail_with('namespace failure must not publish'),
+    )
+    payload = result.to_record()
+    rendered = '\n'.join(render_reload(payload))
+    encoded = json.dumps(payload, sort_keys=True)
+
+    assert result.diagnostics['error_evidence']['expected_restore_token'] == '<redacted>'
+    assert payload['namespace_patch']['diagnostics']['error_evidence']['nested']['items'][0]['restore_token'] == '<redacted>'
+    assert payload['namespace_patch']['diagnostics']['error_evidence']['nested']['items'][0]['restoreToken'] == '<redacted>'
+    for token in (expected_token, actual_token, nested_token, camel_token):
+        assert token not in encoded
+        assert token not in rendered
+
+
 def test_additive_reload_apply_runtime_mount_failure_stops_before_publish(tmp_path: Path) -> None:
     app = _started_app(tmp_path / 'repo-runtime-fail', BASE_CONFIG)
     old_graph = app.service_graph
@@ -1335,7 +1414,11 @@ def test_project_reload_non_dry_run_namespace_failure_reports_residue_without_pu
             created_panes=('%3',),
             partial=True,
             rollback_actions=('created_pane:%3',),
-            diagnostics={'reason': 'namespace_patch_failed', 'message': 'split failed'},
+            diagnostics={
+                'reason': 'namespace_patch_failed',
+                'message': 'split failed',
+                'error_evidence': {'expected_restore_token': 'handler-session::workspace-1'},
+            },
         ),
     )
     monkeypatch.setattr(
@@ -1352,6 +1435,7 @@ def test_project_reload_non_dry_run_namespace_failure_reports_residue_without_pu
     assert payload['diagnostics']['namespace_residue']['created_windows'] == ['review']
     assert payload['diagnostics']['namespace_residue']['created_panes'] == ['%3']
     assert payload['diagnostics']['graph_published'] is False
+    assert 'handler-session::workspace-1' not in json.dumps(payload, sort_keys=True)
     assert app.service_graph is old_graph
 
 

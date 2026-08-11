@@ -4,7 +4,7 @@ from collections.abc import Mapping
 import json
 
 from .common import cleanup_csv, render_tmux_cleanup_summaries
-from .ops_views_common import binding_line
+from .ops_views_common import binding_line, herdr_surface_lines
 
 
 def render_agent_lifecycle(summary) -> tuple[str, ...]:
@@ -458,6 +458,7 @@ def render_layout(summary) -> tuple[str, ...]:
                 f'session={namespace.get("tmux_session_name", "")} '
                 f'workspace={namespace.get("workspace_window_name", "")}'
             )
+            lines.extend(herdr_surface_lines(namespace.get('herdr_surface_projection')))
     for window in tuple(payload.get('windows') or ()):
         if not isinstance(window, Mapping):
             continue
@@ -1146,6 +1147,7 @@ def render_ps(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'project_id: {payload["project_id"]}',
         f'ccbd_state: {payload["ccbd_state"]}',
     ]
+    lines.extend(herdr_surface_lines(payload.get('herdr_surface_projection')))
     for agent in payload['agents']:
         lines.append(
             f'agent: name={agent["agent_name"]} state={agent["state"]} provider={agent["provider"]} queue={agent["queue_depth"]}'

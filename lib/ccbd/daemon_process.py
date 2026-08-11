@@ -8,6 +8,7 @@ import sys
 import time
 
 from runtime_env.control_plane import control_plane_env
+from process_background import background_process_kwargs
 
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.startup_fence import (
@@ -51,7 +52,7 @@ def spawn_ccbd_process(
             env=env,
             stdout=stdout_log,
             stderr=stderr_log,
-            start_new_session=True,
+            **background_process_kwargs(),
         )
         try:
             _wait_for_ccbd_ready(

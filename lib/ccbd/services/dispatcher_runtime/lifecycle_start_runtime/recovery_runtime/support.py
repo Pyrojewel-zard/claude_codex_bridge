@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ccbd.services.runtime_recovery_policy import RECOVERABLE_RUNTIME_HEALTHS, normalized_runtime_health
+from ccbd.services.runtime_recovery_policy import should_attempt_background_recovery
 
 
 def provider_supports_resume(dispatcher, agent_name: str) -> bool:
@@ -15,7 +15,7 @@ def provider_supports_resume(dispatcher, agent_name: str) -> bool:
 def can_attempt_runtime_recovery(dispatcher, runtime) -> bool:
     if dispatcher._execution_service is None or dispatcher._runtime_service is None:
         return False
-    if normalized_runtime_health(runtime) not in RECOVERABLE_RUNTIME_HEALTHS:
+    if not should_attempt_background_recovery(runtime):
         return False
     return provider_supports_resume(dispatcher, runtime.agent_name)
 

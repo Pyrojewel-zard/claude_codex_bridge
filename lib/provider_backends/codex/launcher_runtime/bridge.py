@@ -8,6 +8,7 @@ import sys
 
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 from provider_profiles import load_resolved_provider_profile
+from provider_core.transport import endpoint_for_fifo_path
 
 from .command import prepare_codex_home_overrides
 from .session_paths import session_file_for_runtime_dir
@@ -17,13 +18,30 @@ def post_launch(backend: object, pane_id: str, runtime_dir: Path, launch_session
     del launch_session_id
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     write_pane_pid(backend, pane_id, artifacts.codex_pid)
+    # design D3 决策 A：herdr 下 bridge 降级为辅助。bridge 依赖 tmux 环境变量
+    # （CODEX_TERMINAL=tmux），在 herdr 下 bootstrap 可能失败并阻断 agent launch。
+    # 交互 codex CLI 已通过 respawn 进 herdr pane，bridge RPC 为辅助，失败不阻塞。
+    if _backend_is_herdr(backend):
+        return
     spawn_codex_bridge(runtime_dir=runtime_dir, pane_id=pane_id, prepared_state=prepared_state)
     validate_bridge_bootstrap(runtime_dir)
+
+
+def _backend_is_herdr(backend: object) -> bool:
+    """检测 backend 是否为 herdr-native 后端。
+
+    通过 ``backend_impl`` 类/实例属性显式检测，而非依赖方法存在性判断。
+    HerdrBackend 设 ``backend_impl = "herdr"``，TmuxBackend 无此属性。
+    """
+    return str(getattr(backend, 'backend_impl', '') or '').strip() == 'herdr'
 
 
 def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str, prepared_state: dict[str, object] | None = None) -> None:
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     env = os.environ.copy()
+    # TODO(herdr): CODEX_TERMINAL 应随 backend 选择（herdr→'herdr'，tmux→'tmux'）。
+    # 当前硬编码 'tmux' 不影响 herdr pane 内交互 codex CLI（respawn 已进 pane）；
+    # bridge 为辅助 RPC，CODEX_TERMINAL 适配留后续 herdr integration。
     env['CODEX_TERMINAL'] = 'tmux'
     env['CODEX_TMUX_SESSION'] = pane_id
     env['CODEX_RUNTIME_DIR'] = str(runtime_dir)
@@ -75,9 +93,9 @@ def bridge_runtime_env(runtime_dir: Path, *, prepared_state: dict[str, object] |
 def validate_bridge_bootstrap(runtime_dir: Path) -> None:
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     missing: list[str] = []
-    if not artifacts.input_fifo.exists():
+    if not endpoint_for_fifo_path(artifacts.input_fifo).exists():
         missing.append(str(artifacts.input_fifo.name))
-    if not artifacts.output_fifo.exists():
+    if not endpoint_for_fifo_path(artifacts.output_fifo).exists():
         missing.append(str(artifacts.output_fifo.name))
     if not artifacts.completion_dir.is_dir():
         missing.append(str(artifacts.completion_dir.name))
@@ -91,8 +109,15 @@ def validate_bridge_bootstrap(runtime_dir: Path) -> None:
 
 
 def write_pane_pid(backend: object, pane_id: str, path: Path) -> None:
+    # herdr backend 通过 respawn 把 codex 交互 CLI 已送进 pane；
+    # bridge 为辅助 RPC，PID 缺失不阻塞 launch（design D3 决策 A）。
+    if _backend_is_herdr(backend):
+        return
+    run_fn = getattr(backend, '_tmux_run', None)
+    if not callable(run_fn):
+        return
     try:
-        result = backend._tmux_run(  # type: ignore[attr-defined]
+        result = run_fn(
             ['display-message', '-p', '-t', pane_id, '#{pane_pid}'],
             capture=True,
             timeout=1.0,

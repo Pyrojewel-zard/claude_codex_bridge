@@ -6,9 +6,9 @@ import time
 
 from agents.config_loader import load_project_config
 from ccbd.services.project_namespace import ProjectNamespaceController
+from ccbd.services.project_namespace_runtime.backend import build_backend
 from ccbd.services.project_namespace_runtime import build_namespace_topology_plan
 from ccbd.services.project_namespace_runtime.materialize_topology import refresh_topology_sidebar_helpers
-from terminal_runtime import TmuxBackend
 
 from .daemon import ensure_daemon_started
 from .daemon_runtime.policy import STARTUP_TRANSACTION_TIMEOUT_S
@@ -108,7 +108,11 @@ def _refresh_running_sidebar_helpers(context) -> dict[str, object]:
         topology_plan = build_namespace_topology_plan(
             load_project_config(context.project.project_root).config
         )
-        backend = TmuxBackend(socket_path=namespace.tmux_socket_path)
+        backend = build_backend(
+            controller._backend_factory,
+            socket_path=namespace.tmux_socket_path,
+            namespace_state=namespace,
+        )
         refreshed = refresh_topology_sidebar_helpers(
             controller,
             backend,

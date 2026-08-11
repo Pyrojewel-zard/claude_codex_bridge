@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,14 +15,20 @@ from runtime_observability import (
 )
 
 
+def _directory_fsync_supported() -> bool:
+    return hasattr(os, 'O_DIRECTORY')
+
+
 def _open_directory(path: Path) -> int:
-    if not hasattr(os, 'O_DIRECTORY'):
+    if not _directory_fsync_supported():
         raise NotImplementedError('durable atomic writes require directory fsync support')
     flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_CLOEXEC', 0)
     return os.open(path, flags)
 
 
 def _fsync_directory(path: Path) -> None:
+    if not _directory_fsync_supported():
+        return
     fd = _open_directory(path)
     try:
         os.fsync(fd)
@@ -82,6 +89,11 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = 'utf-8') -> None
     if collect_metrics:
         record_startup_operation('atomic_durable_write_attempt_count')
     ensure_durable_directory(target.parent)
+    if not _directory_fsync_supported():
+        _atomic_write_text_path_replace(target, text, encoding=encoding)
+        written_bytes = target.stat().st_size if target.exists() else None
+        _record_atomic_write_metrics(collect_metrics, written_bytes=written_bytes)
+        return
     directory_fd = _open_directory(target.parent)
     _verify_directory_path(directory_fd, target.parent)
     tmp_name = f'.{target.name}.{secrets.token_hex(8)}.tmp'
@@ -122,15 +134,62 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = 'utf-8') -> None
         raise
     else:
         os.close(directory_fd)
-    if collect_metrics:
-        counts = {'atomic_durable_write_count': 1}
+    _record_atomic_write_metrics(collect_metrics, written_bytes=written_bytes)
+
+
+def _atomic_write_text_path_replace(target: Path, text: str, *, encoding: str) -> None:
+    tmp_path = target.parent / f'.{target.name}.{secrets.token_hex(8)}.tmp'
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0)
+    fd = os.open(tmp_path, flags, 0o600)
+    handle_opened = False
+    try:
+        with os.fdopen(fd, 'w', encoding=encoding) as handle:
+            handle_opened = True
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_path_with_windows_retry(tmp_path, target)
+    except BaseException:
+        if not handle_opened:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+        try:
+            tmp_path.unlink()
+        except BaseException:
+            pass
+        raise
+
+
+def _replace_path_with_windows_retry(source: Path, target: Path) -> None:
+    for attempt in range(4):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            if not _is_transient_windows_replace_error(exc) or attempt == 3:
+                raise
+            time.sleep(0.025 * (attempt + 1))
+
+
+def _is_transient_windows_replace_error(exc: OSError) -> bool:
+    if os.name != 'nt':
+        return False
+    return int(getattr(exc, 'winerror', 0) or 0) in {5, 32}
+
+
+def _record_atomic_write_metrics(collect_metrics: bool, *, written_bytes: int | None) -> None:
+    if not collect_metrics:
+        return
+    counts = {'atomic_durable_write_count': 1}
+    if written_bytes is not None:
+        counts['atomic_durable_write_byte_count'] = written_bytes
+    if in_startup_operation_scope('provider_prepare'):
+        counts['provider_prepare_atomic_write_count'] = 1
         if written_bytes is not None:
-            counts['atomic_durable_write_byte_count'] = written_bytes
-        if in_startup_operation_scope('provider_prepare'):
-            counts['provider_prepare_atomic_write_count'] = 1
-            if written_bytes is not None:
-                counts['provider_prepare_atomic_write_byte_count'] = written_bytes
-        record_startup_operations(counts)
+            counts['provider_prepare_atomic_write_byte_count'] = written_bytes
+    record_startup_operations(counts)
 
 
 def atomic_write_json(path: Path, payload: Any, *, encoding: str = 'utf-8') -> None:

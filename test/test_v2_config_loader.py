@@ -355,6 +355,37 @@ def test_load_project_config_normalizes_mixed_case_compact_agent_names(tmp_path:
     )
 
 
+def test_load_project_config_normalizes_mixed_case_windows_agent_names(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-windows-mixed-case'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        '\n'.join(
+            [
+                'version = 2',
+                'entry_window = "main"',
+                '',
+                '[windows]',
+                'main = "Main_Claude:claude; Reviewer:codex"',
+                '',
+                '[agents.Main_Claude]',
+                'role = "agentroles.archi"',
+                '',
+                '[agents.Reviewer]',
+                'role = "agentroles.coder"',
+                '',
+            ]
+        ),
+    )
+
+    result = load_project_config(project_root)
+
+    assert result.config.windows[0].agent_names == ('main_claude', 'reviewer')
+    assert tuple(result.config.agents) == ('main_claude', 'reviewer')
+    assert result.config.agents['main_claude'].provider == 'claude'
+    assert result.config.agents['reviewer'].provider == 'codex'
+
+
 def test_load_project_config_rejects_case_insensitive_duplicates(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     config_path = project_root / '.ccb' / 'ccb.config'

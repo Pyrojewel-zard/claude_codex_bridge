@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from ccbd.services.runtime_recovery_policy import (
     RUNTIME_RECOVERY_PROBING_HEALTH,
+    herdr_auto_restore_mode,
     normalized_runtime_health,
+    recovery_circuit_threshold,
+    should_record_recovery_capability_block,
 )
 from ccbd.system import parse_utc_timestamp
 
@@ -12,6 +15,7 @@ from .recovery_transitions import (
     RECOVERY_STABILITY_WINDOW_S,
     SUCCESS_RUNTIME_HEALTHS,
     attempt_recovery_action,
+    mark_recovery_blocked,
     mark_recovery_circuit_open,
     mark_recovery_failed,
     mark_recovery_missing,
@@ -52,6 +56,15 @@ def recover_runtime(
     )
     attempted_at = ctx.clock()
     prior_health = normalized_runtime_health(ctx.runtime) or ctx.runtime.health
+    if should_record_recovery_capability_block(ctx.runtime):
+        mode = herdr_auto_restore_mode(ctx.runtime)
+        return mark_recovery_blocked(
+            ctx,
+            runtime=ctx.runtime,
+            occurred_at=attempted_at,
+            prior_health=prior_health,
+            reason=f'herdr-auto-restore-{mode}-not-recovery-capable',
+        )
     if _recovery_probe_active(ctx.runtime):
         if _recovery_probe_stable(ctx.runtime, now=attempted_at):
             return mark_recovery_succeeded(
@@ -68,7 +81,10 @@ def recover_runtime(
         }:
             return ctx.runtime.health
     recovery_failure_count = int(getattr(ctx.runtime, 'recovery_failure_count', 0) or 0)
-    if recovery_failure_count >= MAX_CONSECUTIVE_RECOVERY_ATTEMPTS:
+    if recovery_failure_count >= recovery_circuit_threshold(
+        ctx.runtime,
+        default=MAX_CONSECUTIVE_RECOVERY_ATTEMPTS,
+    ):
         return mark_recovery_circuit_open(
             ctx,
             runtime=ctx.runtime,

@@ -8,6 +8,10 @@ from ccbd.socket_client import CcbdClient, CcbdClientError
 from cli.services.config_restart_intent import (
     config_restart_required_for_inspection,
 )
+from runtime_env.source_identity import (
+    current_source_runtime_identity,
+    source_runtime_identity_matches,
+)
 
 from .models import CcbdServiceError, DaemonHandle
 
@@ -17,6 +21,8 @@ def daemon_matches_project_config(context, client) -> bool:
         load_project_config(context.project.project_root).config
     )
     payload = client.ping('ccbd')
+    if not _payload_source_runtime_matches_current(payload):
+        return False
     actual_signature = str(payload.get('config_signature') or '').strip()
     if actual_signature:
         if actual_signature == expected['config_signature']:
@@ -35,6 +41,8 @@ def daemon_matches_project_config(context, client) -> bool:
 
 
 def inspection_matches_project_config(context, inspection) -> bool:
+    if current_source_runtime_identity() is not None:
+        return False
     try:
         expected = project_config_identity_payload(
             load_project_config(context.project.project_root).config
@@ -85,6 +93,18 @@ def connect_compatible_daemon(
     try:
         matches_config = daemon_matches_project_config_fn(context, probe_client)
     except CcbdClientError:
+        if current_source_runtime_identity() is not None:
+            if not restart_on_mismatch:
+                return None
+            if shutdown_incompatible_daemon_fn is None:
+                raise ValueError(
+                    'shutdown_incompatible_daemon_fn is required when restart_on_mismatch'
+                )
+            shutdown_incompatible_daemon_fn(
+                context,
+                runtime_client_factory(effective_socket_path),
+            )
+            return None
         # A transient ping failure is not evidence of config drift.
         return DaemonHandle(
             client=runtime_client_factory(effective_socket_path),
@@ -115,6 +135,13 @@ def _inspection_config_signature(inspection) -> str:
     if lifecycle_signature:
         return lifecycle_signature
     return str(getattr(getattr(inspection, 'lease', None), 'config_signature', '') or '').strip()
+
+
+def _payload_source_runtime_matches_current(payload: dict[str, object]) -> bool:
+    expected = current_source_runtime_identity()
+    if expected is None:
+        return True
+    return source_runtime_identity_matches(expected, payload.get('source_runtime_identity'))
 
 
 def shutdown_incompatible_daemon(

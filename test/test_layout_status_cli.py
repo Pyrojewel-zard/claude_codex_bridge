@@ -384,6 +384,10 @@ main = "main:fake"
         'observe_status': 'skipped',
         'reason': 'namespace_unmounted',
     }
+    # 三阶段状态拆分：配置有效、runtime store 未挂载、UI 未观察到
+    assert payload['configured_ok'] is True
+    assert payload['runtime_store_ok'] is False
+    assert payload['live_ui_observed_ok'] is False
 
 
 def test_layout_status_observes_tmux_pane_geometry(
@@ -455,6 +459,10 @@ main = "main:fake, helper:fake"
 
     assert result == 0, stderr
     assert payload['observed']['observe_status'] == 'ok'
+    # 三阶段状态拆分：配置有效、runtime store 挂载、UI 真实观察到 pane
+    assert payload['configured_ok'] is True
+    assert payload['runtime_store_ok'] is True
+    assert payload['live_ui_observed_ok'] is True
     windows = {window['name']: window for window in payload['windows']}
     observed_panes = windows['main']['observed']['panes']
     assert [(pane['pane_id'], pane['pane_index'], pane['pane_left'], pane['pane_top'], pane['pane_width'], pane['pane_height']) for pane in observed_panes] == [

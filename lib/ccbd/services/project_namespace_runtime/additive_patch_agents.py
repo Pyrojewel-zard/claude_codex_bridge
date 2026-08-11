@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from agents.models import LayoutNode, parse_layout_spec
+from agents.models import AgentValidationError, LayoutNode, normalize_agent_name, parse_layout_spec
 from ccbd.reload_additive_agents import append_agent_plan_for_window, append_agent_windows, window_agent_names, window_map
-from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 
-from .backend import session_window_target, split_pane
+from .backend import apply_pane_identity, reflow_window, split_pane
 from .remove_patch_agents import reflow_window_after_agent_change
 
 
@@ -85,8 +84,15 @@ def _append_window_agent_panes(
     agent_panes: dict[str, str] = {}
     appended_sequence = tuple(appended_agents)
     for index, appended in enumerate(appended_sequence):
-        if appended.agent in excluded_agents:
-            target = _anchor_pane(existing_agent_panes, appended.agent)
+        # 物化 token / agent_panes key 统一用 normalized 名（layout 可能保留原始大小写
+        # 如 Main_Code，而 CCB 内部 agent 标识是 main_code）——否则大小写敏感匹配下
+        # agent 拿不到 pane（2026-08-06 采集暴露）。
+        try:
+            agent_name = normalize_agent_name(str(appended.agent))
+        except AgentValidationError:
+            agent_name = str(appended.agent)
+        if agent_name in excluded_agents:
+            target = _anchor_pane(existing_agent_panes, agent_name)
             continue
         target = _append_single_agent_pane(
             controller,
@@ -94,13 +100,13 @@ def _append_window_agent_panes(
             appended=appended,
             target=target,
             window_name=window_name,
-            order_index=style_index_by_agent.get(appended.agent),
+            order_index=style_index_by_agent.get(agent_name),
             namespace_epoch=namespace_epoch,
             created_panes=created_panes,
             timeout_s=timeout_s,
         )
-        agent_panes[appended.agent] = target
-        if any(item.agent not in excluded_agents for item in appended_sequence[index + 1 :]):
+        agent_panes[agent_name] = target
+        if any(str(item.agent) not in excluded_agents for item in appended_sequence[index + 1 :]):
             _prepare_window_for_next_append(
                 backend,
                 session_name=current.tmux_session_name,
@@ -117,18 +123,12 @@ def _prepare_window_for_next_append(
     window_name: str,
     timeout_s: float | None,
 ) -> None:
-    runner = getattr(backend, '_tmux_run', None)
-    if not callable(runner):
-        return
-    completed = runner(
-        ['select-layout', '-E', '-t', session_window_target(session_name, window_name)],
-        check=False,
-        capture=True,
-        timeout=timeout_s,
+    reflow_window(
+        backend,
+        session_name=session_name,
+        window_name=window_name,
+        timeout_s=timeout_s,
     )
-    if int(getattr(completed, 'returncode', 1) or 0) != 0:
-        detail = str(getattr(completed, 'stderr', '') or getattr(completed, 'stdout', '') or '').strip()
-        raise RuntimeError(detail or f'failed to prepare window {window_name!r} for another appended pane')
 
 
 def _anchor_pane(existing_agent_panes: dict[str, str], anchor_agent: str) -> str:
@@ -159,15 +159,19 @@ def _append_single_agent_pane(
         timeout_s=timeout_s,
     )
     _append_unique(created_panes, pane_id)
-    apply_ccb_pane_identity(
+    try:
+        agent_label = normalize_agent_name(str(appended.agent))
+    except AgentValidationError:
+        agent_label = str(appended.agent)
+    apply_pane_identity(
         backend,
-        pane_id,
+        pane_id=pane_id,
         title=appended.agent,
-        agent_label=appended.agent,
+        agent_label=agent_label,
         project_id=controller._project_id,
         order_index=order_index,
         role='agent',
-        slot_key=appended.agent,
+        slot_key=agent_label,
         window_name=window_name,
         namespace_epoch=namespace_epoch,
         managed_by='ccbd',

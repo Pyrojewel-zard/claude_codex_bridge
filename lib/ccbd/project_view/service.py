@@ -12,9 +12,18 @@ import threading
 from agents.config_loader import load_project_config
 from agents.models import AgentState
 from ccbd.api_models import JobStatus, TargetKind
+from ccbd.herdr_surface_projection import (
+    build_herdr_runtime_surface_projection,
+    build_herdr_surface_projection,
+)
 from ccbd.models import MountState
 from ccbd.reload_drain_status import reload_drain_revision, reload_drain_status_payload
 from ccbd.project_focus.tmux import backend_for_namespace, refresh_sidebar_panes
+from ccbd.services.project_namespace_state_runtime.namespace_projection import (
+    NAMESPACE_BACKEND_FAMILY,
+    redacted_namespace_projection,
+    resolved_namespace_backend_family,
+)
 from ccbd.services.dispatcher_runtime import comms_recoverability_for_job
 from ccbd.system import parse_utc_timestamp, utc_now
 from execution_phase import derive_execution_phase, execution_phase_evidence_from_records
@@ -896,7 +905,9 @@ def _agent_view(
     )
     record = {
         'name': agent_name,
+        'display_name': _agent_display_name(agent_name),
         'provider': spec.provider,
+        'provider_display_name': _display_name_token(spec.provider),
         'window': window_name,
         'order': order,
         'pane_id': getattr(runtime, 'pane_id', None) if runtime is not None else None,
@@ -916,9 +927,24 @@ def _agent_view(
     }
     if provider_runtime is not None:
         record['provider_runtime'] = provider_runtime
+    projection = build_herdr_runtime_surface_projection(runtime)
+    if projection is not None:
+        record['herdr_surface_projection'] = projection
     if provider_runtime_status is not None:
         record['provider_runtime_status'] = provider_runtime_status.to_record()
     return record
+
+
+def _agent_display_name(agent_name: object) -> str:
+    return _display_name_token(agent_name)
+
+
+def _display_name_token(value: object) -> str:
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    words = text.replace('_', ' ').replace('-', ' ').split()
+    return ' '.join(word[:1].upper() + word[1:].lower() for word in words)
 
 
 def _is_codex_provider(provider: object) -> bool:
@@ -1302,15 +1328,51 @@ def _namespace_view(*, config, sidebar_view_result, namespace, focus: dict[str, 
     sidebar['view'] = sidebar_view.to_record()
     if sidebar_view_error is not None:
         sidebar['view_error'] = sidebar_view_error
-    return {
+    namespace_projection = _redacted_namespace_view_projection(namespace)
+    record = {
         'epoch': namespace.namespace_epoch if namespace is not None else None,
         'socket_path': namespace.tmux_socket_path if namespace is not None else None,
         'session_name': namespace.tmux_session_name if namespace is not None else None,
+        **namespace_projection,
         'active_window': focus.get('active_window') or config.entry_window,
         'active_pane_id': focus.get('active_pane_id'),
         'entry_window': config.entry_window,
         'sidebar': sidebar,
     }
+    projection = _namespace_herdr_surface_projection(namespace)
+    if projection is not None:
+        record['herdr_surface_projection'] = projection
+    return record
+
+
+def _redacted_namespace_view_projection(namespace) -> dict[str, object]:
+    if namespace is None:
+        return {}
+    return redacted_namespace_projection(
+        {
+            'namespace_backend_family': getattr(namespace, 'namespace_backend_family', None),
+            'backend_impl': getattr(namespace, 'backend_impl', None),
+            'namespace_id': getattr(namespace, 'namespace_id', None),
+            'namespace_session_name': (
+                getattr(namespace, 'namespace_session_name', None)
+                or getattr(namespace, 'tmux_session_name', None)
+            ),
+            'namespace_ipc_kind': getattr(namespace, 'namespace_ipc_kind', None),
+            'namespace_ipc_ref': getattr(namespace, 'namespace_ipc_ref', None),
+            'namespace_restore_token': getattr(namespace, 'namespace_restore_token', None),
+        }
+    )
+
+
+def _namespace_herdr_surface_projection(namespace) -> dict[str, object] | None:
+    if namespace is None:
+        return None
+    namespace_ref = getattr(namespace, 'namespace_ref', None)
+    evidence = {
+        'backend_impl': getattr(namespace, 'backend_impl', None),
+        'namespace_ref': namespace_ref() if callable(namespace_ref) else None,
+    }
+    return build_herdr_surface_projection(evidence)
 
 
 def _current_sidebar_view(deps: ProjectViewDependencies):
@@ -1362,6 +1424,8 @@ def _tmux_snapshot(context: _ProjectViewBuildContext) -> dict[str, dict[str, obj
 
 def _collect_tmux_project_view_facts(context: _ProjectViewBuildContext) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
     namespace = context.namespace
+    if not _namespace_has_tmux_project_view_facts(namespace):
+        return {}, {}
     backend = context.namespace_backend()
     if namespace is None or backend is None:
         return {}, {}
@@ -1423,6 +1487,16 @@ def _collect_tmux_project_view_facts(context: _ProjectViewBuildContext) -> tuple
             continue
         result.setdefault(window_name, {})['sidebar_pane_id'] = pane_id
     return dict(focus), result
+
+
+def _namespace_has_tmux_project_view_facts(namespace) -> bool:
+    if namespace is None:
+        return False
+    family = resolved_namespace_backend_family(
+        getattr(namespace, 'backend_impl', None),
+        getattr(namespace, 'namespace_backend_family', None),
+    )
+    return family == NAMESPACE_BACKEND_FAMILY
 
 
 def _parse_tmux_project_view_outputs(

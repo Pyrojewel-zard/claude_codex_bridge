@@ -4,8 +4,10 @@ from agents.config_loader import load_project_config
 from agents.store import AgentRuntimeStore
 from cli.context import CliContext
 from cli.models import ParsedPsCommand
+from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 
 from .daemon import ping_local_state
+from .herdr_surface import herdr_surface_projection_from_namespace_state
 from .provider_binding import binding_status
 
 
@@ -19,6 +21,7 @@ def ps_summary(context: CliContext, command: ParsedPsCommand) -> dict:
     for agent_name, spec in sorted(config.agents.items()):
         runtime = store.load(agent_name)
         agents.append(_agent_summary(context, agent_name=agent_name, spec=spec, runtime=runtime, ccbd_state=ccbd_state))
+    herdr_projection = _namespace_herdr_surface_projection(context)
     return {
         'project_id': context.project.project_id,
         'ccbd_state': ccbd_state,
@@ -28,6 +31,7 @@ def ps_summary(context: CliContext, command: ParsedPsCommand) -> dict:
         'ccbd_pid_alive': _local_attr(local, 'pid_alive'),
         'ccbd_socket_connectable': _local_attr(local, 'socket_connectable'),
         'ccbd_heartbeat_fresh': _local_attr(local, 'heartbeat_fresh'),
+        **({'herdr_surface_projection': herdr_projection} if herdr_projection is not None else {}),
         'agents': agents,
     }
 
@@ -110,3 +114,11 @@ def _session_ref(runtime) -> str | None:
     if runtime is None:
         return None
     return runtime.session_file or runtime.session_id or runtime.session_ref
+
+
+def _namespace_herdr_surface_projection(context: CliContext) -> dict[str, object] | None:
+    try:
+        namespace_state = ProjectNamespaceStateStore(context.paths).load()
+    except Exception:
+        return None
+    return herdr_surface_projection_from_namespace_state(namespace_state)

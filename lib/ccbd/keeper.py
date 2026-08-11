@@ -124,6 +124,7 @@ def _spawn_daemon(app: ProjectKeeper, *, state: KeeperState, start_timeout_s: fl
                 config_signature=config_signature,
                 socket_path=str(app.paths.ccbd_socket_path),
                 socket_inode=None,
+                control_plane_endpoint=None,
                 last_failure_reason=None,
                 shutdown_intent=None,
             )

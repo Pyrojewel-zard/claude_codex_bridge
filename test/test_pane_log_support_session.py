@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from provider_backends.pane_log_support import lifecycle
 from provider_backends.pane_log_support import session as pane_session
+from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
 
 
 def test_compute_session_key_for_provider_uses_bound_project_id_and_scope(monkeypatch) -> None:
@@ -29,3 +33,107 @@ def test_compute_session_key_for_provider_falls_back_to_unknown_project(monkeypa
     key = pane_session.compute_session_key_for_provider(session, provider='codex')
 
     assert key == 'codex:unknown:scope-7'
+
+
+class _HerdrBackend:
+    def __init__(self, *, alive: bool = True) -> None:
+        self.alive = alive
+        self.is_alive_calls: list[object] = []
+        self.capture_calls: list[object] = []
+        self.ensure_log_calls: list[object] = []
+        self.respawn_calls: list[object] = []
+
+    def is_alive(self, pane) -> bool:
+        self.is_alive_calls.append(pane)
+        return self.alive
+
+    def capture_pane(self, pane, *, lines: int):
+        self.capture_calls.append((pane, lines))
+        return '', {'operation': 'capture_pane', 'backend_impl': 'herdr', 'pane_id': pane['pane_id']}
+
+    def ensure_pane_log(self, pane) -> None:
+        self.ensure_log_calls.append(pane)
+
+    def respawn_pane(self, *args, **kwargs) -> None:
+        self.respawn_calls.append((args, kwargs))
+        raise AssertionError('Herdr ensure_pane must not use tmux rebound respawn')
+
+
+class _UnsupportedHerdrBackend(_HerdrBackend):
+    def is_alive(self, pane) -> bool:
+        self.is_alive_calls.append(pane)
+        raise MuxCommandErrorV2(
+            category='unsupported',
+            backend_impl='herdr',
+            operation='capture_pane',
+            detail='capture_pane capability is unsupported',
+        )
+
+
+def _herdr_session(tmp_path, backend):
+    pane_ref = {
+        'backend_impl': 'herdr',
+        'pane_id': 'pane-1',
+        'session_name': 'ccb-demo',
+        'window_name': 'main',
+        'agent_slug': 'agent1',
+    }
+    return pane_session.PaneLogProjectSessionBase(
+        session_file=tmp_path / '.codex-session',
+        data={
+            'ccb_session_id': 'ccb-agent1-1',
+            'agent_name': 'agent1',
+            'terminal': 'mux',
+            'backend_impl': 'herdr',
+            'pane_id': 'pane-1',
+            'pane_ref': pane_ref,
+            'runtime_dir': str(tmp_path),
+            'work_dir': str(tmp_path),
+            'active': True,
+        },
+    ), pane_ref
+
+
+def test_herdr_ensure_pane_uses_pane_ref_liveness_and_skips_tmux_ownership(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _HerdrBackend(alive=True)
+    sess, pane_ref = _herdr_session(tmp_path, backend)
+    sess.backend = lambda: backend  # type: ignore[method-assign]
+
+    def _fail_tmux_ownership(*args, **kwargs):
+        raise AssertionError('Herdr ensure_pane must not inspect tmux ownership')
+
+    monkeypatch.setattr(lifecycle, 'inspect_tmux_pane_ownership', _fail_tmux_ownership)
+
+    ok, pane = sess.ensure_pane()
+
+    assert (ok, pane) == (True, 'pane-1')
+    assert backend.is_alive_calls == [pane_ref]
+    assert backend.ensure_log_calls == [pane_ref]
+    assert backend.capture_calls == []
+    assert backend.respawn_calls == []
+
+
+def test_herdr_ensure_pane_reports_actionable_unsupported_liveness(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _UnsupportedHerdrBackend(alive=False)
+    sess, pane_ref = _herdr_session(tmp_path, backend)
+    sess.backend = lambda: backend  # type: ignore[method-assign]
+
+    def _fail_tmux_ownership(*args, **kwargs):
+        raise AssertionError('Herdr ensure_pane must not inspect tmux ownership')
+
+    monkeypatch.setattr(lifecycle, 'inspect_tmux_pane_ownership', _fail_tmux_ownership)
+
+    ok, detail = sess.ensure_pane()
+
+    assert ok is False
+    assert 'Herdr backend unsupported' in detail
+    assert 'capture_pane capability is unsupported' in detail
+    assert backend.is_alive_calls == [pane_ref]
+    assert backend.ensure_log_calls == []
+    assert backend.respawn_calls == []

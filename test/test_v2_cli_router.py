@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 import cli.entrypoint_runtime as entrypoint_runtime
+import cli.phase2_runtime.handlers_start as handlers_start
 from cli.entrypoint import run_cli_entrypoint
 from cli.router import (
     dispatch_auxiliary_command,
@@ -580,6 +581,36 @@ def test_run_cli_entrypoint_does_not_auto_launch_rich_when_guard_blocks(monkeypa
     )
 
     assert result == 31
+
+
+def test_handle_start_invokes_foreground_attach_in_interactive_terminal(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeStream:
+        def isatty(self) -> bool:
+            return True
+
+    class _FakeServices:
+        def start_agents(self, context, command, terminal_size=None):
+            del context, command, terminal_size
+            calls.append("start_agents")
+            return {"status": "ok"}
+
+        def write_lines(self, *_args, **_kwargs):
+            raise AssertionError("interactive attach should skip text output")
+
+    monkeypatch.setattr(handlers_start.sys, "stdin", _FakeStream())
+    monkeypatch.setattr(handlers_start, "_stream_is_tty", lambda stream: True)
+    monkeypatch.setattr(
+        handlers_start,
+        "attach_started_project_namespace",
+        lambda context: calls.append(f"attach:{type(context).__name__}") or None,
+    )
+
+    result = handlers_start.handle_start(object(), argparse.Namespace(), StringIO(), _FakeServices())
+
+    assert result == 0
+    assert calls == ["start_agents", "attach:object"]
 
 
 def test_run_cli_entrypoint_rejects_rich_install_help_as_removed() -> None:

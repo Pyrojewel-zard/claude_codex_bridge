@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shutil
+import stat
 
 from agents.models import AgentSpec, WorkspaceMode
 from agents.store import AgentSpecStore
@@ -303,7 +305,18 @@ def _remove_agent_state(paths: PathLayout, agent_name: str) -> None:
             target.unlink()
             continue
         if target.is_dir():
-            shutil.rmtree(target)
+            _rmtree_agent_state(target)
+
+
+def _rmtree_agent_state(target: Path) -> None:
+    shutil.rmtree(target, onexc=_retry_remove_readonly)
+
+
+def _retry_remove_readonly(function, path, excinfo) -> None:
+    if not isinstance(excinfo, PermissionError):
+        raise excinfo
+    os.chmod(path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
+    function(path)
 
 
 def _workspace_binding_authority(plan) -> WorkspaceBindingAuthority:

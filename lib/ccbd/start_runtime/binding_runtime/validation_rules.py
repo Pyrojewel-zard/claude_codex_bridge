@@ -4,6 +4,8 @@ from .session_file import declared_binding_tmux_socket_path
 from .validation_context import (
     BindingValidationContext,
     binding_matches_project_socket,
+    binding_matches_assigned_pane,
+    binding_runtime_ref,
     binding_pane_state,
     binding_with_namespace_record,
     declares_current_project_socket,
@@ -23,6 +25,9 @@ def usable_project_namespace_binding_for_context(binding, *, context: BindingVal
         return None
     if not binding_matches_project_socket(binding, context=context):
         return None
+    if binding_matches_assigned_pane(binding, context=context):
+        if str(binding_runtime_ref(binding)).strip().split(':', 1)[0].lower() != 'tmux':
+            return binding
     record = matching_namespace_binding(binding=binding, context=context)
     if record is None:
         return None

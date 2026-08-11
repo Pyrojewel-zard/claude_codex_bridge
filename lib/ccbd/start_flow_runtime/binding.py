@@ -15,6 +15,7 @@ def usable_project_binding(
     project_id: str,
     window_name: str | None = None,
     namespace_epoch: int | None = None,
+    assigned_pane_id: str | None = None,
     namespace_pane_records: dict[str, object] | None = None,
 ):
     return deps.usable_project_binding_impl(
@@ -27,6 +28,7 @@ def usable_project_binding(
         project_id=project_id,
         window_name=window_name,
         namespace_epoch=namespace_epoch,
+        assigned_pane_id=assigned_pane_id,
         namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=deps.tmux_backend_cls,
         inspect_project_namespace_pane_fn=deps.inspect_project_namespace_pane_fn,

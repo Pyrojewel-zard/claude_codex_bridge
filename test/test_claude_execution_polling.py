@@ -294,6 +294,8 @@ def test_poll_submission_recovers_anchored_round_result_from_idle_pane(monkeypat
     assert result.decision.reason == "claude_idle_pane_round_result"
     assert result.decision.reply == "round result: pass"
     assert result.decision.diagnostics["completion_source"] == "idle_pane_round_result"
+    assert result.decision.diagnostics["completion_fallback_source"] == "terminal_capture"
+    assert result.decision.diagnostics["terminal_capture_role"] == "provider_declared_fallback"
 
 
 def test_poll_submission_does_not_use_round_result_while_pane_is_busy(monkeypatch) -> None:

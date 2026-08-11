@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from agents.models import AgentState
 from ccbd.services.runtime_recovery_policy import (
+    PROVIDER_RECOVERY_BLOCKED_RUNTIME_HEALTH,
     PROVIDER_RECOVERY_BLOCKED_RUNTIME_HEALTHS,
     RUNTIME_RECOVERY_CIRCUIT_OPEN_HEALTH,
     RUNTIME_RECOVERY_PROBING_HEALTH,
     normalized_runtime_health,
+    recovery_circuit_threshold,
 )
 
 from .recovery_context import RecoveryContext
@@ -66,7 +68,10 @@ def mark_recovery_missing(
     recovery_failure_count: int,
     prior_health: str,
 ) -> str:
-    if recovery_failure_count >= MAX_CONSECUTIVE_RECOVERY_ATTEMPTS:
+    if recovery_failure_count >= recovery_circuit_threshold(
+        recovering,
+        default=MAX_CONSECUTIVE_RECOVERY_ATTEMPTS,
+    ):
         return mark_recovery_circuit_open(
             ctx,
             runtime=recovering,
@@ -96,6 +101,35 @@ def mark_recovery_missing(
         details={'reason': 'runtime-missing-after-recover'},
     )
     return 'unmounted'
+
+
+def mark_recovery_blocked(
+    ctx: RecoveryContext,
+    *,
+    runtime,
+    occurred_at: str,
+    prior_health: str,
+    reason: str,
+) -> str:
+    blocked = ctx.upsert_if_changed_fn(
+        runtime,
+        state=AgentState.DEGRADED,
+        health=PROVIDER_RECOVERY_BLOCKED_RUNTIME_HEALTH,
+        reconcile_state='blocked',
+        last_reconcile_at=occurred_at,
+        last_failure_reason=reason,
+        lifecycle_state='degraded',
+    )
+    append_recovery_event(
+        ctx,
+        event_kind='recover_blocked',
+        occurred_at=occurred_at,
+        runtime=blocked,
+        prior_health=prior_health,
+        result_health=PROVIDER_RECOVERY_BLOCKED_RUNTIME_HEALTH,
+        details={'action': 'blocked', 'reason': reason},
+    )
+    return blocked.health
 
 
 def mark_recovery_succeeded(
@@ -184,7 +218,10 @@ def mark_recovery_failed(
 ) -> str:
     next_health = normalized_runtime_health(refreshed) or next_health
     recovery_blocked = next_health in PROVIDER_RECOVERY_BLOCKED_RUNTIME_HEALTHS
-    if not recovery_blocked and recovery_failure_count >= MAX_CONSECUTIVE_RECOVERY_ATTEMPTS:
+    if not recovery_blocked and recovery_failure_count >= recovery_circuit_threshold(
+        refreshed,
+        default=MAX_CONSECUTIVE_RECOVERY_ATTEMPTS,
+    ):
         return mark_recovery_circuit_open(
             ctx,
             runtime=refreshed,
@@ -252,7 +289,10 @@ def mark_recovery_circuit_open(
         details={
             'reason': reason,
             'recovery_failure_count': recovery_failure_count,
-            'max_attempts': MAX_CONSECUTIVE_RECOVERY_ATTEMPTS,
+            'max_attempts': recovery_circuit_threshold(
+                runtime,
+                default=MAX_CONSECUTIVE_RECOVERY_ATTEMPTS,
+            ),
         },
     )
     return blocked.health
@@ -262,6 +302,7 @@ __all__ = [
     'MAX_CONSECUTIVE_RECOVERY_ATTEMPTS',
     'RECOVERY_STABILITY_WINDOW_S',
     'attempt_recovery_action',
+    'mark_recovery_blocked',
     'mark_recovery_circuit_open',
     'mark_recovery_failed',
     'mark_recovery_missing',

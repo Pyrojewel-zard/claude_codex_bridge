@@ -518,6 +518,87 @@ def test_start_agent_runtime_relaunches_and_tracks_project_socket_pane() -> None
     assert execution.agent_result.binding_reject_reason == 'namespace_epoch_mismatch'
 
 
+def test_start_agent_runtime_launches_herdr_assigned_pane_even_with_existing_binding() -> None:
+    runtime_service = _RuntimeService()
+    existing_binding = _binding(
+        runtime_ref='mux:w1:p3',
+        session_ref='old-session',
+        terminal='mux',
+        tmux_socket_name=None,
+        tmux_socket_path=None,
+        pane_id='w1:p3',
+        active_pane_id='w1:p3',
+        pane_state='unknown',
+        runtime_pid=None,
+    )
+    launched_binding = _binding(
+        runtime_ref='herdr:w1:p3',
+        session_ref='session-herdr-1',
+        terminal='herdr',
+        tmux_socket_name=None,
+        tmux_socket_path=None,
+        pane_id='w1:p3',
+        active_pane_id='w1:p3',
+        pane_state='alive',
+        runtime_pid=901,
+    )
+    ensure_calls: list[dict[str, object]] = []
+
+    def ensure_runtime(*args, **kwargs):
+        del args
+        ensure_calls.append(dict(kwargs))
+        return RuntimeLaunchResult(launched=True, binding=launched_binding)
+
+    execution = start_agent_runtime(
+        context=object(),
+        command=SimpleNamespace(restore=False),
+        runtime_service=runtime_service,
+        agent_name='agent1',
+        spec=SimpleNamespace(provider='codex', runtime_mode=SimpleNamespace(value='pane-backed')),
+        plan=SimpleNamespace(workspace_path='/tmp/ws'),
+        binding=existing_binding,
+        raw_binding=existing_binding,
+        stale_binding=False,
+        assigned_pane_id='w1:p3',
+        assigned_pane_ref={
+            'backend_impl': 'herdr',
+            'pane_id': 'w1:p3',
+            'session_name': 'ccb-herdr-session',
+            'window_name': 'main',
+            'agent_slug': 'agent1',
+        },
+        namespace_ref={
+            'backend_family': 'herdr-native',
+            'backend_impl': 'herdr',
+            'namespace_id': 'w1',
+            'session_name': 'ccb-herdr-session',
+            'ipc_kind': 'herdr_socket',
+            'ipc_ref': 'herdr://local',
+            'restore_token': None,
+        },
+        style_index=0,
+        project_id='proj-1',
+        tmux_socket_path=None,
+        namespace_backend_impl='herdr',
+        namespace_epoch=1,
+        ensure_agent_runtime_fn=ensure_runtime,
+        launch_binding_hint_fn=lambda **kwargs: existing_binding,
+        relabel_project_namespace_pane_fn=lambda **kwargs: 'w1:p3',
+        same_tmux_socket_path_fn=lambda left, right: left == right,
+        window_name='main',
+    )
+
+    assert len(ensure_calls) == 1
+    assert ensure_calls[0]['assigned_pane_ref']['backend_impl'] == 'herdr'
+    assert execution.agent_result.action == 'launched'
+    assert execution.actions_taken == (
+        'relabel_runtime_pane:agent1:w1:p3',
+        'launch_runtime:agent1',
+    )
+    assert runtime_service.attach_calls[-1]['terminal_backend'] == 'herdr'
+    assert runtime_service.attach_calls[-1]['pane_id'] == 'w1:p3'
+
+
 def test_start_agent_runtime_records_exact_boundary_timings(monkeypatch) -> None:
     now_ns = 0
 
@@ -595,6 +676,7 @@ def test_start_agent_runtime_records_exact_boundary_timings(monkeypatch) -> None
         'build_start_cmd': 4.0,
         'tmux_respawn': 0.0,
         'pane_identity': 0.0,
+        'pane_agent_report': 0.0,
         'session_write': 0.0,
         'provider_post_launch': 0.0,
         'binding_resolve': 3.0,
@@ -672,6 +754,7 @@ def test_start_agent_runtime_attaches_structured_failure_without_wrapping(monkey
         'build_start_cmd': 4.0,
         'tmux_respawn': 0.0,
         'pane_identity': 0.0,
+        'pane_agent_report': 0.0,
         'session_write': 0.0,
         'provider_post_launch': 0.0,
         'binding_resolve': 0.0,

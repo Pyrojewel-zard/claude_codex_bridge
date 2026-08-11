@@ -45,6 +45,8 @@ def call(
     *,
     timeout_s: float = 0.2,
 ) -> dict[str, Any]:
+    if not hasattr(socket, "AF_UNIX"):
+        raise AcceleratorError("af_unix_unavailable")
     request = (
         json.dumps({"method": method, "params": params or {}}, ensure_ascii=False).encode("utf-8")
         + b"\n"

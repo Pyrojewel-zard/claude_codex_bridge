@@ -909,7 +909,7 @@ def test_ensure_agent_runtime_relaunches_provider_identity_mismatch(monkeypatch,
         binding_runtime_alive_fn=runtime_launch._binding_runtime_alive,
         provider_executable_fn=runtime_launch._provider_executable,
         cleanup_stale_tmux_binding_fn=runtime_launch._cleanup_stale_tmux_binding,
-        launch_tmux_runtime_fn=_fake_launch,
+        launch_runtime_fn=_fake_launch,
         resolve_agent_binding_fn=_resolve_agent_binding,
     )
 

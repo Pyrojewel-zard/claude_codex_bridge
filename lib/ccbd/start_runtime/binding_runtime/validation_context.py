@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .common import binding_pane_id, matching_project_namespace_record
+from .common import (
+    binding_pane_id,
+    is_pane_runtime_ref,
+    matching_project_namespace_record,
+    runtime_ref_backend,
+)
 
 
 @dataclass(frozen=True)
@@ -14,6 +19,7 @@ class BindingValidationContext:
     project_id: str
     window_name: str | None
     namespace_epoch: int | None
+    assigned_pane_id: str | None
     namespace_pane_records: dict[str, object] | None
     tmux_backend_factory: object
     inspect_project_namespace_pane_fn: object
@@ -29,7 +35,7 @@ def binding_pane_state(binding) -> str:
 
 
 def is_tmux_binding(binding) -> bool:
-    return binding_runtime_ref(binding).startswith('tmux:')
+    return is_pane_runtime_ref(binding_runtime_ref(binding))
 
 
 def build_binding_validation_context(
@@ -44,6 +50,7 @@ def build_binding_validation_context(
     same_tmux_socket_path_fn,
     window_name: str | None = None,
     namespace_epoch: int | None = None,
+    assigned_pane_id: str | None = None,
     namespace_pane_records: dict[str, object] | None = None,
 ) -> BindingValidationContext:
     return BindingValidationContext(
@@ -54,6 +61,7 @@ def build_binding_validation_context(
         project_id=project_id,
         window_name=window_name,
         namespace_epoch=namespace_epoch,
+        assigned_pane_id=str(assigned_pane_id or '').strip() or None,
         namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=tmux_backend_factory,
         inspect_project_namespace_pane_fn=inspect_project_namespace_pane_fn,
@@ -77,6 +85,13 @@ def matching_namespace_binding(binding, *, context: BindingValidationContext):
     )
 
 
+def binding_matches_assigned_pane(binding, *, context: BindingValidationContext) -> bool:
+    assigned_pane_id = str(context.assigned_pane_id or '').strip()
+    if not assigned_pane_id:
+        return False
+    return binding_pane_id(binding) == assigned_pane_id
+
+
 def binding_with_namespace_record(binding, record):
     updates = {}
     if hasattr(binding, 'tmux_window_id'):
@@ -95,6 +110,8 @@ def binding_with_namespace_record(binding, record):
 
 
 def binding_matches_project_socket(binding, *, context: BindingValidationContext) -> bool:
+    if runtime_ref_backend(binding_runtime_ref(binding)) != 'tmux':
+        return True
     return context.same_tmux_socket_path_fn(
         getattr(binding, 'tmux_socket_path', None),
         context.tmux_socket_path,
@@ -106,7 +123,12 @@ def binding_has_live_namespace_record(binding, *, context: BindingValidationCont
 
 
 def is_live_tmux_binding(binding) -> bool:
-    return binding is not None and is_tmux_binding(binding) and binding_pane_state(binding) == 'alive'
+    if binding is None or not is_tmux_binding(binding):
+        return False
+    pane_state = binding_pane_state(binding)
+    if runtime_ref_backend(binding_runtime_ref(binding)) == 'tmux':
+        return pane_state == 'alive'
+    return pane_state in {'', 'alive', 'unknown'}
 
 
 def has_reusable_tmux_pane(binding) -> bool:
@@ -136,6 +158,7 @@ def has_project_tmux_session_name(context: BindingValidationContext) -> bool:
 __all__ = [
     'BindingValidationContext',
     'binding_has_live_namespace_record',
+    'binding_matches_assigned_pane',
     'binding_with_namespace_record',
     'binding_matches_project_socket',
     'binding_pane_state',

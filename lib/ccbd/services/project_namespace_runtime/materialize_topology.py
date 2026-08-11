@@ -5,9 +5,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from cli.services.tmux_ui import apply_project_tmux_ui
-from agents.models import layout_tool_alias_command, layout_tool_alias_label, parse_layout_spec
+from agents.models import (
+    AgentValidationError,
+    layout_tool_alias_command,
+    layout_tool_alias_label,
+    normalize_agent_name,
+    parse_layout_spec,
+)
 from terminal_runtime.placeholders import pane_placeholder_cmd
-from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 from terminal_runtime.tmux_theme import tmux_theme_profile
 from ccbd.services.project_namespace_pane import (
     ProjectNamespacePaneRecord,
@@ -15,10 +20,12 @@ from ccbd.services.project_namespace_pane import (
 )
 
 from .backend import (
+    apply_pane_identity,
     create_session,
     ensure_window,
     ensure_server_policy,
     rename_window,
+    respawn_pane,
     select_window,
     session_window_target,
     split_pane,
@@ -28,6 +35,9 @@ from .sidebar_helper import SIDEBAR_HELPER_ID_OPTION, sidebar_helper_fingerprint
 
 
 def refresh_topology_ui(context) -> None:
+    if not callable(getattr(context.backend, '_tmux_run', None)):
+        _sync_topology_sidebar_widths(None, context, topology_plan=getattr(context, 'topology_plan', None))
+        return
     apply_project_tmux_ui(
         tmux_socket_path=context.desired_socket_path,
         tmux_session_name=context.desired_session_name,
@@ -56,12 +66,13 @@ def refresh_topology_ui_for_project(
             tmux_session_name=context.desired_session_name,
             namespace_epoch=resolved_epoch,
         )
-    apply_project_tmux_ui(
-        tmux_socket_path=context.desired_socket_path,
-        ccbd_socket_path=str(controller._layout.ccbd_socket_path),
-        tmux_session_name=context.desired_session_name,
-        backend=context.backend,
-    )
+    if callable(getattr(context.backend, '_tmux_run', None)):
+        apply_project_tmux_ui(
+            tmux_socket_path=context.desired_socket_path,
+            ccbd_socket_path=str(controller._layout.ccbd_socket_path),
+            tmux_session_name=context.desired_session_name,
+            backend=context.backend,
+        )
     _sync_topology_sidebar_widths(
         controller,
         context,
@@ -99,10 +110,10 @@ def materialize_topology(
     epoch: int,
     terminal_size: tuple[int, int] | None = None,
     timeout_s: float | None = None,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], str | None]:
     windows = tuple(getattr(topology_plan, 'windows', ()) or ())
     if not windows:
-        return {}
+        return {}, None
     first_window = windows[0]
     if not context.session_is_alive:
         create_session(
@@ -123,15 +134,17 @@ def materialize_topology(
             timeout_s=timeout_s,
         )
     ensure_server_policy(context.backend, timeout_s=timeout_s)
-    apply_project_tmux_ui(
-        tmux_socket_path=context.desired_socket_path,
-        ccbd_socket_path=str(controller._layout.ccbd_socket_path),
-        tmux_session_name=context.desired_session_name,
-        backend=context.backend,
-    )
+    if callable(getattr(context.backend, '_tmux_run', None)):
+        apply_project_tmux_ui(
+            tmux_socket_path=context.desired_socket_path,
+            ccbd_socket_path=str(controller._layout.ccbd_socket_path),
+            tmux_session_name=context.desired_session_name,
+            backend=context.backend,
+        )
     _rename_legacy_workspace_if_needed(controller, context, first_window_name=first_window.name, timeout_s=timeout_s)
 
     agent_panes: dict[str, str] = {}
+    cmd_pane: str | None = None
     for index, window in enumerate(windows):
         ensure_window(
             context.backend,
@@ -151,16 +164,16 @@ def materialize_topology(
             epoch=epoch,
             timeout_s=timeout_s,
         )
-        agent_panes.update(
-            _materialize_agent_layout(
-                controller,
-                context,
-                window=window,
-                user_root=user_root,
-                epoch=epoch,
-                timeout_s=timeout_s,
-            )
+        window_agent_panes, window_cmd_pane = _materialize_agent_layout(
+            controller,
+            context,
+            window=window,
+            user_root=user_root,
+            epoch=epoch,
+            timeout_s=timeout_s,
         )
+        agent_panes.update(window_agent_panes)
+        cmd_pane = cmd_pane or window_cmd_pane
         _materialize_tool_window(
             controller,
             context,
@@ -181,7 +194,7 @@ def materialize_topology(
         context.backend,
         target=session_window_target(context.desired_session_name, topology_plan.entry_window),
     )
-    return agent_panes
+    return agent_panes, cmd_pane
 
 
 def existing_topology_agent_panes(
@@ -496,9 +509,9 @@ def _materialize_sidebar(
             timeout_s=timeout_s,
         )
         _respawn_sidebar(context.backend, sidebar_pane, sidebar.launch_args, cwd=str(controller._layout.project_root))
-        apply_ccb_pane_identity(
+        apply_pane_identity(
             context.backend,
-            sidebar_pane,
+            pane_id=sidebar_pane,
             title='sidebar',
             agent_label='sidebar',
             project_id=controller._project_id,
@@ -523,9 +536,9 @@ def _materialize_sidebar(
         timeout_s=timeout_s,
     )
     _respawn_sidebar(context.backend, root_pane, sidebar.launch_args, cwd=str(controller._layout.project_root))
-    apply_ccb_pane_identity(
+    apply_pane_identity(
         context.backend,
-        root_pane,
+        pane_id=root_pane,
         title='sidebar',
         agent_label='sidebar',
         project_id=controller._project_id,
@@ -597,7 +610,10 @@ def _record_sidebar_helper_identity(backend, pane_id: str, *, identity: str | No
     resolved = identity or sidebar_helper_fingerprint()
     if not resolved:
         return
-    backend.set_pane_user_option(pane_id, SIDEBAR_HELPER_ID_OPTION, resolved)
+    setter = getattr(backend, 'set_pane_user_option', None)
+    if not callable(setter):
+        return
+    setter(pane_id, SIDEBAR_HELPER_ID_OPTION, resolved)
 
 
 def _materialize_agent_layout(
@@ -608,20 +624,22 @@ def _materialize_agent_layout(
     user_root: str,
     epoch: int,
     timeout_s: float | None,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], str | None]:
     if str(getattr(window, 'kind', '') or '') == 'tool':
-        return {}
+        return {}, None
     layout = parse_layout_spec(window.user_layout)
     agent_names = tuple(str(name) for name in getattr(window, 'agent_names', ()) or ())
     tool_names = set(str(name) for name in tuple(getattr(window, 'tool_names', ()) or ()))
     style_index_by_agent = {name: index for index, name in enumerate(agent_names)}
     agent_panes: dict[str, str] = {}
+    cmd_pane: str | None = None
 
     def assign_leaf(item: str, pane_id: str) -> None:
+        nonlocal cmd_pane
         if item == 'cmd':
-            apply_ccb_pane_identity(
+            apply_pane_identity(
                 context.backend,
-                pane_id,
+                pane_id=pane_id,
                 title='cmd',
                 agent_label='cmd',
                 project_id=controller._project_id,
@@ -632,6 +650,7 @@ def _materialize_agent_layout(
                 namespace_epoch=epoch,
                 managed_by='ccbd',
             )
+            cmd_pane = pane_id
             return
         item_tool = str(item or '').strip().lower()
         if item_tool in tool_names:
@@ -647,16 +666,25 @@ def _materialize_agent_layout(
                 epoch=epoch,
             )
             return
-        agent_panes[item] = pane_id
-        apply_ccb_pane_identity(
+        # 用 normalize_agent_name 统一 agent 标识（layout leaf 可能保留原始大小写如
+        # Main_Code，而 CCB 内部 config key / topology agent_names 是 normalized
+        # main_code）。否则 pane token 与提取/匹配用大小写敏感比较，main_code 会
+        # 拿不到 pane → provider_runtime_deferred_on_herdr（2026-08-06 采集暴露）。
+        try:
+            agent_name = normalize_agent_name(item)
+        except AgentValidationError:
+            # 非法 agent 名（罕见）：保留原始名，避免物化中断
+            agent_name = item
+        agent_panes[agent_name] = pane_id
+        apply_pane_identity(
             context.backend,
-            pane_id,
+            pane_id=pane_id,
             title=item,
-            agent_label=item,
+            agent_label=agent_name,
             project_id=controller._project_id,
-            order_index=style_index_by_agent.get(item),
+            order_index=style_index_by_agent.get(agent_name),
             role='agent',
-            slot_key=item,
+            slot_key=agent_name,
             window_name=window.name,
             namespace_epoch=epoch,
             managed_by='ccbd',
@@ -670,7 +698,7 @@ def _materialize_agent_layout(
         assign_leaf=assign_leaf,
         timeout_s=timeout_s,
     )
-    return agent_panes
+    return agent_panes, cmd_pane
 
 
 def _materialize_tool_window(
@@ -710,14 +738,15 @@ def _materialize_tool_pane(
     epoch: int,
 ) -> None:
     command = str(command or '').strip() or pane_placeholder_cmd()
-    respawn = getattr(context.backend, 'respawn_pane', None)
-    if callable(respawn):
-        respawn(pane_id, cmd=command, cwd=str(controller._layout.project_root), remain_on_exit=True)
-    else:
-        context.backend._tmux_run(['respawn-pane', '-k', '-t', pane_id, 'sh', '-lc', command], check=False)
-    apply_ccb_pane_identity(
+    respawn_pane(
         context.backend,
-        pane_id,
+        pane_id=pane_id,
+        command=command,
+        cwd=str(controller._layout.project_root),
+    )
+    apply_pane_identity(
+        context.backend,
+        pane_id=pane_id,
         title=label,
         agent_label=label,
         project_id=controller._project_id,
@@ -1235,11 +1264,7 @@ def _respawn_sidebar(backend, pane_id: str, launch_args: tuple[str, ...], *, cwd
     args = sidebar_respawn_args(tuple(launch_args or ()))
     command = ' '.join(shlex.quote(str(part)) for part in args) if args else pane_placeholder_cmd()
     command = f'CCB_SIDEBAR_THEME_PROFILE={shlex.quote(tmux_theme_profile())} {command}'
-    respawn = getattr(backend, 'respawn_pane', None)
-    if callable(respawn):
-        respawn(pane_id, cmd=command, cwd=cwd, remain_on_exit=True)
-        return
-    backend._tmux_run(['respawn-pane', '-k', '-t', pane_id, 'sh', '-lc', command], check=False)
+    respawn_pane(backend, pane_id=pane_id, command=command, cwd=cwd)
 
 
 __all__ = [

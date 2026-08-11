@@ -9,10 +9,18 @@ def resolve_backend(
     terminal_type,
     detect_terminal_fn,
     tmux_backend_factory,
+    herdr_backend_factory=None,
+    platform_gate_fn=None,
+    herdr_capability_report_fn=None,
+    herdr_capability_report_ref_fn=None,
 ):
     return TerminalBackendSelection(
         detect_terminal_fn=detect_terminal_fn,
         tmux_backend_factory=tmux_backend_factory,
+        herdr_backend_factory=herdr_backend_factory,
+        platform_gate_fn=platform_gate_fn,
+        herdr_capability_report_fn=herdr_capability_report_fn,
+        herdr_capability_report_ref_fn=herdr_capability_report_ref_fn,
         cached_backend=cached_backend,
     ).get_backend(terminal_type)
 

@@ -192,16 +192,17 @@ def archive_path_for_source(context, source: Path) -> str:
     source_path = _resolve_source(source)
     try:
         relative = source_path.relative_to(_resolve_source(context.project.project_root))
-        return str(Path('project') / relative)
+        return (Path('project') / relative).as_posix()
     except Exception:
         pass
     try:
         relative = source_path.relative_to(_resolve_source(context.paths.runtime_state_root))
-        return str(Path('project') / '.ccb' / relative)
+        return (Path('project') / '.ccb' / relative).as_posix()
     except Exception:
-        safe_parts = [part for part in source.parts if part not in ('/', '')]
+        anchors = {source_path.anchor, source_path.drive, source_path.root, '/', '\\', ''}
+        safe_parts = [part for part in source_path.parts if part not in anchors]
         suffix = Path(*safe_parts[-4:]) if safe_parts else Path(source.name)
-        return str(Path('external') / suffix)
+        return (Path('external') / suffix).as_posix()
 
 
 def _agent_source_items(

@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from process_background import background_process_kwargs
+
 from .commands_runtime import latest_version
 from .install import find_install_dir
 from .startup_update_state import (
@@ -130,7 +132,7 @@ def _spawn_background_refresh(*, script_root: Path, install_dir: Path, lock_path
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        **background_process_kwargs(),
     )
 
 

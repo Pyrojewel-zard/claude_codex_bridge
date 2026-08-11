@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import json
 from pathlib import Path
 import re
 from types import SimpleNamespace
@@ -269,7 +270,7 @@ def test_submit_ask_rejects_workspace_binding_that_escapes_current_project(
     _write_config(project_root)
     _write_config(other_project)
     (workspace / '.ccb-workspace.json').write_text(
-        f'{{"target_project":"{other_project}"}}',
+        json.dumps({'target_project': str(other_project)}),
         encoding='utf-8',
     )
     monkeypatch.delenv('CCB_CALLER_PROJECT_ROOT', raising=False)
@@ -1005,7 +1006,15 @@ def test_resolve_ask_sender_prefers_relocated_runtime_dir_actor(monkeypatch: pyt
     relocated_root = tmp_path / 'state-root'
     project_id = compute_project_id(project_root)
     (project_root / '.ccb' / 'runtime-root-ref.json').write_text(
-        f'{{"schema_version":1,"record_type":"ccb_runtime_root_ref","project_id":"{project_id}","runtime_state_root":"{relocated_root}","created_at":"2026-05-07T00:00:00Z"}}',
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_runtime_root_ref',
+                'project_id': project_id,
+                'runtime_state_root': str(relocated_root),
+                'created_at': '2026-05-07T00:00:00Z',
+            }
+        ),
         encoding='utf-8',
     )
     context = CliContextBuilder().build(

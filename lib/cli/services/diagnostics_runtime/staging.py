@@ -14,13 +14,24 @@ _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
 
 def stage_file(context, stage_root: Path, *, category: str, source: Path) -> DiagnosticBundleEntry:
     archive_path = archive_path_for_source(context, source)
+    target = stage_root / archive_path
+    stage_root_resolved = stage_root.resolve(strict=False)
+    target_resolved = target.resolve(strict=False)
+    try:
+        target_resolved.relative_to(stage_root_resolved)
+    except ValueError:
+        return DiagnosticBundleEntry(
+            category=category,
+            source_path=str(source),
+            archive_path=archive_path,
+            status='error',
+            error='diagnostic archive path escapes staging root',
+        )
     exists, error = _source_exists(source)
     if error is not None:
         return DiagnosticBundleEntry(category=category, source_path=str(source), archive_path=archive_path, status='error', error=error)
     if not exists:
         return DiagnosticBundleEntry(category=category, source_path=str(source), archive_path=archive_path, status='missing')
-
-    target = stage_root / archive_path
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.suffix.lower() in _TAIL_SUFFIXES:
         return _stage_tailed_text(category=category, source=source, archive_path=archive_path, target=target)

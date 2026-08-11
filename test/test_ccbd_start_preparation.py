@@ -112,6 +112,19 @@ def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
     monkeypatch.setattr(
         'ccbd.start_preparation.prepare_provider_workspace',
         lambda **kwargs: calls.append(kwargs['agent_name']),
+def test_prepare_start_agents_treats_empty_tmux_socket_path_as_missing(monkeypatch, tmp_path: Path) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-empty-tmux')
+    binding = SimpleNamespace(runtime_ref='mux:w4M:p3')
+    called: list[tuple[bool, str | None]] = []
+
+    def resolve_agent_binding_fn(*, ensure_usable: bool, **kwargs):
+        del kwargs
+        called.append((ensure_usable, None))
+        return binding
+
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: None,
     )
 
     prepared = prepare_start_agents(
@@ -121,11 +134,13 @@ def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
         context=context,
         project_root=project_root,
         project_id=context.project.project_id,
-        tmux_socket_path=None,
-        tmux_session_name=None,
+        tmux_socket_path='',
+        tmux_session_name='',
         workspace_window_id=None,
-        resolve_agent_binding_fn=lambda **kwargs: binding,
-        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        resolve_agent_binding_fn=resolve_agent_binding_fn,
+        project_binding_filter_fn=lambda candidate, **kwargs: (_ for _ in ()).throw(
+            AssertionError('tmux filter must not run for empty socket path')
+        ),
         restore_state_builder=lambda restore_mode: AgentRestoreState(
             restore_mode=RestoreMode(restore_mode),
             last_checkpoint=None,
@@ -141,6 +156,61 @@ def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
     assert prepared[0].provider_prepared is True
     assert prepared[0].effective_command is not None
     assert prepared[0].binding_reject_reason == 'manual_restart'
+    )
+
+    assert prepared[0].binding is binding
+    assert prepared[0].binding_reject_reason is None
+    assert called == [(False, None), (True, None)]
+
+
+def test_prepare_start_agents_uses_assigned_pane_fallback_for_mux_binding_without_tmux_socket(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-mux-fallback')
+    raw_binding = SimpleNamespace(
+        runtime_ref='mux:w4M:p3',
+        pane_id='w4M:p3',
+        active_pane_id='w4M:p3',
+        pane_state='unknown',
+    )
+    calls: list[bool] = []
+
+    def resolve_agent_binding_fn(*, ensure_usable: bool, **kwargs):
+        del kwargs
+        calls.append(ensure_usable)
+        return raw_binding if not ensure_usable else None
+
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: None,
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path='',
+        tmux_session_name='',
+        workspace_window_id=None,
+        namespace_agent_panes={'agent1': 'w4M:p3'},
+        resolve_agent_binding_fn=resolve_agent_binding_fn,
+        project_binding_filter_fn=lambda candidate, **kwargs: (_ for _ in ()).throw(
+            AssertionError('tmux filter must not run for empty socket path')
+        ),
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert prepared[0].binding is raw_binding
+    assert prepared[0].binding_reject_reason is None
+    assert calls == [False, True]
 
 
 def test_prepare_start_agents_prepares_missing_binding_once(monkeypatch, tmp_path: Path) -> None:
@@ -281,6 +351,7 @@ workspace_mode = "inplace"
 def test_prepare_start_agents_rejects_duplicate_effective_provider_homes(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-start-prep-duplicate-provider-home'
     shared_home = tmp_path / 'shared-codex-home'
+    shared_home_toml = str(shared_home).replace('\\', '\\\\')
     (project_root / '.ccb').mkdir(parents=True)
     (project_root / '.ccb' / 'ccb.config').write_text(
         f"""version = 2
@@ -295,7 +366,7 @@ permission = "manual"
 
 [agents.agent1.provider_profile]
 mode = "isolated"
-home = "{shared_home}"
+home = "{shared_home_toml}"
 
 [agents.agent2]
 provider = "codex"
@@ -306,7 +377,7 @@ permission = "manual"
 
 [agents.agent2.provider_profile]
 mode = "isolated"
-home = "{shared_home}"
+home = "{shared_home_toml}"
 """,
         encoding='utf-8',
     )

@@ -10,10 +10,18 @@ from ccbd.reload_apply_results import (
     stage_result,
     status_of,
 )
+from ccbd.reload_sensitive_diagnostics import redact_sensitive_diagnostics
 from ccbd.reload_transaction_records import record
 
 
 def namespace_patch_failed(old_graph, target_graph, plan, namespace_patch):
+    patch_record = record(namespace_patch) or {}
+    patch_diagnostics = redact_sensitive_diagnostics(dict(patch_record.get('diagnostics') or {}))
+    message = message_of(namespace_patch)
+    if not message:
+        error = str(patch_diagnostics.get('error') or '').strip()
+        if error:
+            message = f'{patch_diagnostics.get("error_type", "error")}: {error}'
     return stage_result(
         'blocked' if status_of(namespace_patch) == 'blocked' else 'failed',
         'namespace_patch',
@@ -23,7 +31,12 @@ def namespace_patch_failed(old_graph, target_graph, plan, namespace_patch):
         namespace_patch=namespace_patch,
         diagnostics={
             'reason': reason_of(namespace_patch, fallback='namespace_patch_failed'),
-            'message': message_of(namespace_patch),
+            'message': message,
+            **{
+                key: value
+                for key, value in patch_diagnostics.items()
+                if str(key).startswith('error_')
+            },
             'namespace_residue': namespace_residue(namespace_patch),
             **not_published_diagnostics(),
         },

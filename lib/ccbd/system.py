@@ -6,6 +6,8 @@ import os
 import platform
 import socket
 
+from process_liveness import process_exists as _platform_process_exists
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -41,15 +43,7 @@ def read_boot_id() -> str:
 
 
 def process_exists(pid: int | None) -> bool:
-    if pid is None or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    except Exception:
-        return False
-    return True
+    return _platform_process_exists(pid)
 
 
 def unix_socket_connectable(path: str | Path, *, timeout_s: float = 0.2) -> bool:

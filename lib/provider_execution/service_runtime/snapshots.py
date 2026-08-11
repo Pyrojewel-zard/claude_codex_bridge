@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from provider_runtime.session_payload import completion_source_for_kind
+
 from .reliability import deadline_at, last_progress_timestamp, timeout_policy_for
 
 _RUNTIME_STATE_KEYS = (
     'mode',
     'pane_id',
+    'pane_ref',
     'request_anchor',
     'next_seq',
     'anchor_seen',
@@ -45,6 +48,15 @@ _RUNTIME_STATE_KEYS = (
     'reliability_timeout_s',
     'reliability_timeout_deadline_at',
 )
+_PANE_REF_PUBLIC_KEYS = frozenset(
+    {
+        'backend_impl',
+        'pane_id',
+        'session_name',
+        'window_name',
+        'agent_slug',
+    }
+)
 
 
 def active_runtime_snapshots(service) -> tuple[dict[str, object], ...]:
@@ -81,6 +93,8 @@ def active_runtime_snapshots(service) -> tuple[dict[str, object], ...]:
                 'agent_name': submission.agent_name,
                 'provider': submission.provider,
                 'source_kind': source_kind,
+                'completion_source': completion_source_for_kind(source_kind),
+                'completion_source_kind': source_kind,
                 'status': status,
                 'reason': submission.reason,
                 'confidence': confidence,
@@ -102,7 +116,7 @@ def _safe_runtime_state(runtime_state: Mapping[str, object] | None) -> dict[str,
     result: dict[str, object] = {}
     for key in _RUNTIME_STATE_KEYS:
         value = runtime_state.get(key)
-        safe = _safe_value(value)
+        safe = _safe_pane_ref(value) if key == 'pane_ref' else _safe_value(value)
         if safe is not _UNSAFE:
             result[key] = safe
     return result
@@ -119,6 +133,18 @@ def _safe_value(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return _UNSAFE
+
+
+def _safe_pane_ref(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return _UNSAFE
+    result: dict[str, object] = {}
+    for key in _PANE_REF_PUBLIC_KEYS:
+        item = value.get(key)
+        safe = _safe_value(item)
+        if safe is not _UNSAFE:
+            result[key] = safe
+    return result if result.get('pane_id') else _UNSAFE
 
 
 def _optional_float(value: object) -> float | None:

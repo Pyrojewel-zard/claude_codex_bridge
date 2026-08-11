@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from provider_core.transport import endpoint_for_fifo_path
+
 
 def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[bool, str]:
     codex_pid, codex_error = _try_read_pid(
@@ -28,7 +30,7 @@ def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[b
     if not healthy:
         return healthy, status
 
-    if not input_fifo.exists():
+    if not endpoint_for_fifo_path(input_fifo).exists():
         return False, "Communication pipe does not exist"
     return True, "Session healthy"
 

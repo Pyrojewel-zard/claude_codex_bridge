@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 import threading
 from types import SimpleNamespace
 
@@ -309,19 +310,24 @@ def test_terminal_attach_env_removes_nested_tmux_and_sets_term(monkeypatch) -> N
 
 
 def test_terminal_selects_client_compatible_with_target_server(tmp_path) -> None:
-    old_bin = tmp_path / 'old' / 'tmux'
-    current_bin = tmp_path / 'current' / 'tmux'
+    suffix = '.cmd' if os.name == 'nt' else ''
+    old_bin = tmp_path / 'old' / f'tmux{suffix}'
+    current_bin = tmp_path / 'current' / f'tmux{suffix}'
     old_bin.parent.mkdir()
     current_bin.parent.mkdir()
-    old_bin.write_text('#!/bin/sh\necho "server exited unexpectedly" >&2\nexit 1\n')
-    current_bin.write_text('#!/bin/sh\nexit 0\n')
+    if os.name == 'nt':
+        old_bin.write_text('@echo off\necho server exited unexpectedly 1>&2\nexit /b 1\n')
+        current_bin.write_text('@echo off\nexit /b 0\n')
+    else:
+        old_bin.write_text('#!/bin/sh\necho "server exited unexpectedly" >&2\nexit 1\n')
+        current_bin.write_text('#!/bin/sh\nexit 0\n')
     old_bin.chmod(0o755)
     current_bin.chmod(0o755)
 
     resolved = resolve_tmux_binary(
         '/tmp/ccb-test/tmux.sock',
         'ccb-test',
-        environ={'PATH': f'{old_bin.parent}:{current_bin.parent}', 'TERM': 'dumb'},
+        environ={'PATH': os.pathsep.join((str(old_bin.parent), str(current_bin.parent))), 'TERM': 'dumb'},
     )
 
     assert resolved == str(current_bin)

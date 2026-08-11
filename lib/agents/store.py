@@ -140,6 +140,16 @@ def _agent_runtime_from_record(record: dict) -> AgentRuntime:
         runtime_root=record.get('runtime_root'),
         runtime_pid=record.get('runtime_pid'),
         terminal_backend=record.get('terminal_backend'),
+        provider_runtime_backend_ref=(
+            dict(record['provider_runtime_backend_ref'])
+            if isinstance(record.get('provider_runtime_backend_ref'), dict)
+            else None
+        ),
+        namespace_ref=dict(record['namespace_ref']) if isinstance(record.get('namespace_ref'), dict) else None,
+        pane_ref=dict(record['pane_ref']) if isinstance(record.get('pane_ref'), dict) else None,
+        namespace_restore_token_present=bool(record.get('namespace_restore_token_present', False)),
+        herdr_auto_restore_mode=record.get('herdr_auto_restore_mode'),
+        herdr_agent_state_ref=record.get('herdr_agent_state_ref'),
         pane_id=record.get('pane_id'),
         active_pane_id=record.get('active_pane_id'),
         pane_title_marker=record.get('pane_title_marker'),

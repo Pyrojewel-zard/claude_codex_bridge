@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 import ccbd.daemon_process as daemon_process
+import process_background
 from ccbd.daemon_process import _ccbd_env, _prepend_tool_paths, _ready_payload_matches_expected
 from ccbd.startup_fence import (
     EXPECTED_GENERATION_ENV,
@@ -129,6 +130,20 @@ def test_prepend_tool_paths_deduplicates_existing_entries(tmp_path: Path) -> Non
     assert env['PATH'].split(os.pathsep) == [str(root / 'bin'), str(root), '/usr/bin']
 
 
+def test_background_process_kwargs_detaches_windows_console(monkeypatch) -> None:
+    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    monkeypatch.setattr(process_background.subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200, raising=False)
+    monkeypatch.setattr(process_background.subprocess, 'DETACHED_PROCESS', 0x00000008, raising=False)
+    monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
+
+    kwargs = process_background.background_process_kwargs()
+
+    assert kwargs['start_new_session'] is True
+    assert kwargs['creationflags'] & 0x00000200
+    assert kwargs['creationflags'] & 0x00000008
+    assert kwargs['creationflags'] & 0x08000000
+
+
 def test_spawn_failure_reclaims_only_spawned_child_and_closes_parent_logs(
     tmp_path: Path,
     monkeypatch,
@@ -190,7 +205,8 @@ def test_spawned_process_cleanup_escalates_and_reaps(monkeypatch) -> None:
             raise AssertionError('process-group kill should be used')
 
     signals: list[tuple[int, int]] = []
-    monkeypatch.setattr(daemon_process.os, 'killpg', lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(daemon_process.os, 'killpg', lambda pid, sig: signals.append((pid, sig)), raising=False)
+    monkeypatch.setattr(daemon_process.signal, 'SIGKILL', 9, raising=False)
     process = FakeProcess()
 
     daemon_process._terminate_spawned_process(process, timeout_s=0.01)

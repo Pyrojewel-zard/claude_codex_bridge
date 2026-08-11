@@ -31,7 +31,7 @@ def serve_forever(
             runtime_socket.settimeout(_ACCEPT_POLL_TIMEOUT_S)
             try:
                 conn, _ = runtime_socket.accept()
-            except socket.timeout:
+            except (socket.timeout, TimeoutError):
                 if server._stop_event.is_set() or server._server is not runtime_socket:
                     break
                 continue

@@ -38,6 +38,12 @@ Changing an environment variable or provider flag that changes the effective
 root requires changing the projection target and migration logic in the same
 patch.
 
+Native Windows keeps the source authority default simple: every supported
+CLI/provider may use the system source path, and `inherit_*` remains the
+fine-grained gate for which auth/config/skills/commands/memory fields are
+projected. That choice does not change the one-way boundary or introduce a new
+isolation class.
+
 ## 3. Projection Mechanisms
 
 ### 3.1 Immutable optional assets

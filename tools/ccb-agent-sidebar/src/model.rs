@@ -134,7 +134,11 @@ impl Default for WindowView {
 pub struct AgentView {
     pub name: String,
     #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
     pub provider: String,
+    #[serde(default)]
+    pub provider_display_name: String,
     #[serde(default)]
     pub window: String,
     #[serde(default)]
