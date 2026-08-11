@@ -130,6 +130,73 @@ void main() {
     },
   );
 
+  test(
+    'provider control preserves fenced settings over encrypted relay',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+      );
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+
+      final details = await transport.getAgentProviderControl(
+        projectId: 'proj-demo',
+        agentName: 'worker1',
+      );
+      final quota = await transport.getAgentProviderQuota(
+        projectId: 'proj-demo',
+        agentName: 'worker1',
+      );
+      final result = await transport.updateAgentProviderSettings(
+        projectId: 'proj-demo',
+        agentName: 'worker1',
+        model: 'gpt-5.6-sol',
+        thinking: 'xhigh',
+        expectedRevision: 'config-r1',
+        expectedNamespaceEpoch: 7,
+        expectedProvider: 'codex',
+        expectedRuntimeRevision: 'runtime-r1',
+        idempotencyKey: 'provider-idempotency-0001',
+      );
+
+      expect(details.control.activeModel, 'gpt-5.5');
+      expect(details.accountUsage, isNull);
+      expect(quota.windows.single.usedPct, 25);
+      expect(result.status, 'pending_restart');
+      expect(relay.requests.map((request) => request['operation']), [
+        'get_agent_provider_control',
+        'get_agent_provider_quota',
+        'update_agent_provider_settings',
+      ]);
+      expect(relay.requests.last['payload'], {
+        'project_id': 'proj-demo',
+        'agent': 'worker1',
+        'model': 'gpt-5.6-sol',
+        'thinking': 'xhigh',
+        'expected_revision': 'config-r1',
+        'expected_namespace_epoch': 7,
+        'expected_provider': 'codex',
+        'expected_runtime_revision': 'runtime-r1',
+        'idempotency_key': 'provider-idempotency-0001',
+        'device_token': 'device-secret',
+      });
+    },
+  );
+
   test('fails closed on host fingerprint mismatch', () async {
     final hostSeed = List<int>.generate(32, (index) => index + 101);
     final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
@@ -694,6 +761,62 @@ class _RelaySocketHarness {
                 'status': 200,
                 'body': switch (message.operation) {
                   'get_project_view' => demoProjectViewFixture,
+                  'get_agent_provider_control' => {
+                    'project_id': 'proj-demo',
+                    'agent': 'worker1',
+                    'namespace_epoch': 7,
+                    'config_revision': 'config-r1',
+                    'provider_control': {
+                      'provider': 'codex',
+                      'configured_model': 'gpt-5.5',
+                      'configured_thinking': 'medium',
+                      'active_model': 'gpt-5.5',
+                      'active_thinking': 'medium',
+                      'runtime_revision': 'runtime-r1',
+                      'mutation_mode': 'restart_required',
+                      'capabilities': {
+                        'model_catalog': true,
+                        'model_select': true,
+                        'thinking_select': true,
+                        'session_usage': true,
+                        'account_quota': true,
+                      },
+                    },
+                    'provider_catalog': {
+                      'id': 'codex',
+                      'model_shortcut': true,
+                      'models': [
+                        {
+                          'id': 'gpt-5.5',
+                          'label': 'GPT-5.5',
+                          'reasoning_levels': ['low', 'medium', 'xhigh'],
+                        },
+                      ],
+                    },
+                  },
+                  'get_agent_provider_quota' => {
+                    'project_id': 'proj-demo',
+                    'agent': 'worker1',
+                    'account_usage': {
+                      'provider_id': 'codex',
+                      'status': 'available',
+                      'windows': [
+                        {'id': 'weekly', 'label': 'Weekly', 'used_pct': 25},
+                      ],
+                    },
+                  },
+                  'update_agent_provider_settings' => {
+                    'status': 'pending_restart',
+                    'agent': 'worker1',
+                    'provider': 'codex',
+                    'configured_model': 'gpt-5.6-sol',
+                    'configured_thinking': 'xhigh',
+                    'config_revision': 'config-r2',
+                    'changed': true,
+                    'restart_required': true,
+                    'idempotency_key': 'provider-idempotency-0001',
+                    'namespace_epoch': 7,
+                  },
                   'health' => {
                     'schema_version': 1,
                     'status': 'ok',

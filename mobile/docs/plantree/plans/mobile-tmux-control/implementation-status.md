@@ -2,6 +2,22 @@
 
 Date: 2026-08-02
 
+## Paseo-Aligned Provider Control Plane — In Progress
+
+The source and Flutter implementation now expose selected-agent Provider,
+active/configured/pending model and thinking state, bounded Codex/Claude native
+session usage, a capability-driven model sheet, and separately loaded account
+quota. Model/thinking changes are scope-protected and fenced by project epoch,
+Provider identity, runtime revision, config revision, and idempotency key; the
+current truthful apply mode is `restart_required` and never auto-restarts an
+active task. Direct HTTP and encrypted Relay carry the same fixed contract.
+
+Paseo alignment is pinned to `getpaseo/paseo` commit `b599d38`; provenance and
+source-to-target mapping are recorded in `mobile/THIRD_PARTY_NOTICES.md` and
+[Decision 025](decisions/025-paseo-provider-control-alignment.md). Focused
+Python/Flutter tests and Flutter analyze pass. Full suites, APK builds, and the
+real Codex/Claude server-wide Emulator matrix remain the completion gate.
+
 ## LAN Network Awareness And Recovery — Implemented, Physical Gate Pending
 
 The Android LAN reliability gap is now closed at source/build level. The app

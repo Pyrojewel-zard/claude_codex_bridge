@@ -82,14 +82,14 @@ void main() {
       bodies.add(body);
       final payload =
           request.uri.path == '/v1/projects' && projectListPayloads.isNotEmpty
-          ? _GatewayResponse(projectListPayloads.removeAt(0))
-          : _payloadForRequest(
-              request.method,
-              request.uri.path,
-              body,
-              authorization,
-              request.headers.value(HttpHeaders.hostHeader),
-            );
+              ? _GatewayResponse(projectListPayloads.removeAt(0))
+              : _payloadForRequest(
+                request.method,
+                request.uri.path,
+                body,
+                authorization,
+                request.headers.value(HttpHeaders.hostHeader),
+              );
       request.response.headers.contentType = ContentType.json;
       request.response.statusCode = payload.statusCode;
       request.response.write(jsonEncode(payload.body));
@@ -264,6 +264,72 @@ void main() {
         isNot(contains('tmux.sock')),
       );
       expect(requests, ['/v1/projects/proj-demo/view']);
+    },
+  );
+
+  test(
+    'reads and updates provider control with complete fencing fields',
+    () async {
+      final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+      final authed = HttpGatewayTransport(
+        profile: GatewayHostProfile(
+          hostId: 'host-demo',
+          deviceId: 'device-demo',
+          routeProvider: RouteProvider(
+            kind: RouteProviderKind.lan,
+            gatewayUrl: baseUrl,
+          ),
+          scopes: {'view', 'provider_settings'},
+        ),
+        deviceToken: 'device-secret',
+      );
+      try {
+        final details = await authed.getAgentProviderControl(
+          projectId: 'proj-demo',
+          agentName: 'mobile',
+        );
+        final quota = await authed.getAgentProviderQuota(
+          projectId: 'proj-demo',
+          agentName: 'mobile',
+        );
+        final result = await authed.updateAgentProviderSettings(
+          projectId: 'proj-demo',
+          agentName: 'mobile',
+          model: 'gpt-5.6-sol',
+          thinking: 'xhigh',
+          expectedRevision: 'config-r1',
+          expectedNamespaceEpoch: 4,
+          expectedProvider: 'codex',
+          expectedRuntimeRevision: 'runtime-r1',
+          idempotencyKey: 'provider-idempotency-0001',
+        );
+
+        expect(details.control.activeModel, 'gpt-5.5');
+        expect(details.accountUsage, isNull);
+        expect(quota.windows.single.usedPct, 25);
+        expect(result.status, 'pending_restart');
+        expect(requests, [
+          '/v1/projects/proj-demo/agents/mobile/provider-control',
+          '/v1/projects/proj-demo/agents/mobile/provider-quota',
+          '/v1/projects/proj-demo/agents/mobile/provider-control',
+        ]);
+        expect(authorizations, [
+          'Bearer device-secret',
+          'Bearer device-secret',
+          'Bearer device-secret',
+        ]);
+        expect(jsonDecode(bodies.last), {
+          'model': 'gpt-5.6-sol',
+          'thinking': 'xhigh',
+          'expected_revision': 'config-r1',
+          'expected_namespace_epoch': 4,
+          'expected_provider': 'codex',
+          'expected_runtime_revision': 'runtime-r1',
+          'idempotency_key': 'provider-idempotency-0001',
+        });
+      } finally {
+        authed.close(force: true);
+      }
     },
   );
 
@@ -810,6 +876,79 @@ _GatewayResponse _payloadForRequest(
       },
     });
   }
+  if (path == '/v1/projects/proj-demo/agents/mobile/provider-control') {
+    if (authorization != 'Bearer device-secret') {
+      return _GatewayResponse({
+        'status': 'error',
+        'error': 'device scope denied',
+      }, 403);
+    }
+    if (method == 'POST') {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map ||
+          decoded['expected_namespace_epoch'] != 4 ||
+          decoded['expected_revision'] != 'config-r1' ||
+          decoded['expected_runtime_revision'] != 'runtime-r1' ||
+          decoded['idempotency_key'] != 'provider-idempotency-0001') {
+        return _GatewayResponse({
+          'status': 'error',
+          'error': 'stale provider settings',
+        }, 409);
+      }
+      return _GatewayResponse({
+        'status': 'pending_restart',
+        'agent': 'mobile',
+        'provider': 'codex',
+        'configured_model': decoded['model'],
+        'configured_thinking': decoded['thinking'],
+        'config_revision': 'config-r2',
+        'changed': true,
+        'restart_required': true,
+        'idempotency_key': decoded['idempotency_key'],
+        'namespace_epoch': 4,
+      });
+    }
+    return _GatewayResponse({
+      'project_id': 'proj-demo',
+      'agent': 'mobile',
+      'namespace_epoch': 4,
+      'config_revision': 'config-r1',
+      'provider_control': {
+        'provider': 'codex',
+        'configured_model': 'gpt-5.5',
+        'active_model': 'gpt-5.5',
+        'runtime_revision': 'runtime-r1',
+        'capabilities': {'model_select': true, 'account_quota': true},
+        'mutation_mode': 'restart_required',
+      },
+      'provider_catalog': {
+        'id': 'codex',
+        'model_shortcut': true,
+        'models': [
+          {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
+        ],
+      },
+    });
+  }
+  if (path == '/v1/projects/proj-demo/agents/mobile/provider-quota') {
+    if (authorization != 'Bearer device-secret') {
+      return _GatewayResponse({
+        'status': 'error',
+        'error': 'device scope denied',
+      }, 403);
+    }
+    return _GatewayResponse({
+      'project_id': 'proj-demo',
+      'agent': 'mobile',
+      'account_usage': {
+        'provider_id': 'codex',
+        'status': 'available',
+        'windows': [
+          {'id': 'weekly', 'label': 'Weekly', 'used_pct': 25},
+        ],
+      },
+    });
+  }
   if (method == 'POST' && path == '/v1/projects/proj-demo/lifecycle') {
     if (authorization != 'Bearer device-secret') {
       return _GatewayResponse({
@@ -900,43 +1039,43 @@ _GatewayResponse _payloadForRequest(
     '/v1/devices/me' =>
       authorization == 'Bearer device-secret'
           ? _GatewayResponse({
-              'schema_version': 1,
-              'status': 'ok',
-              'device': {
-                'device_id': 'dev-demo',
-                'name': 'Pixel Fold',
-                'project_id': 'proj-demo',
-                'pairing_id': 'pair-demo',
-                'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
-                'route_provider': 'cloudflare_tunnel',
-                'gateway_url': 'http://${host ?? "127.0.0.1:8787"}',
-                'created_at': '2026-06-18T00:00:00Z',
-                'last_seen_at': '2026-06-18T00:01:00Z',
-                'revoked': false,
-                'revoked_at': null,
-              },
-            })
+            'schema_version': 1,
+            'status': 'ok',
+            'device': {
+              'device_id': 'dev-demo',
+              'name': 'Pixel Fold',
+              'project_id': 'proj-demo',
+              'pairing_id': 'pair-demo',
+              'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
+              'route_provider': 'cloudflare_tunnel',
+              'gateway_url': 'http://${host ?? "127.0.0.1:8787"}',
+              'created_at': '2026-06-18T00:00:00Z',
+              'last_seen_at': '2026-06-18T00:01:00Z',
+              'revoked': false,
+              'revoked_at': null,
+            },
+          })
           : _GatewayResponse({
-              'schema_version': 1,
-              'status': 'error',
-              'error': 'device token required',
-            }, 401),
+            'schema_version': 1,
+            'status': 'error',
+            'error': 'device token required',
+          }, 401),
     '/v1/devices/me/presence' =>
       authorization == 'Bearer device-secret'
           ? _GatewayResponse({
-              'schema_version': 1,
-              'status': 'ok',
-              'presence': {
-                'device_id': 'dev-demo',
-                'visible': true,
-                'freshness': 'fresh',
-              },
-            })
+            'schema_version': 1,
+            'status': 'ok',
+            'presence': {
+              'device_id': 'dev-demo',
+              'visible': true,
+              'freshness': 'fresh',
+            },
+          })
           : _GatewayResponse({
-              'schema_version': 1,
-              'status': 'error',
-              'error': 'device token required',
-            }, 401),
+            'schema_version': 1,
+            'status': 'error',
+            'error': 'device token required',
+          }, 401),
     '/v1/projects' => _GatewayResponse({
       'schema_version': 1,
       'projects': [

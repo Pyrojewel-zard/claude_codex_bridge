@@ -1,3 +1,5 @@
+import 'ccb_provider_control.dart';
+
 class CcbAgent {
   const CcbAgent({
     required this.name,
@@ -14,6 +16,7 @@ class CcbAgent {
     this.activitySource,
     this.activityReason,
     this.lastProgressAt,
+    this.providerControl,
   });
 
   final String name;
@@ -30,6 +33,7 @@ class CcbAgent {
   final String? activitySource;
   final String? activityReason;
   final String? lastProgressAt;
+  final CcbProviderControl? providerControl;
 
   CcbAgent copyWith({
     String? activityState,
@@ -54,6 +58,7 @@ class CcbAgent {
       activitySource: activitySource ?? this.activitySource,
       activityReason: activityReason ?? this.activityReason,
       lastProgressAt: lastProgressAt ?? this.lastProgressAt,
+      providerControl: providerControl,
     );
   }
 
@@ -74,6 +79,13 @@ class CcbAgent {
       activitySource: _optionalText(json['activity_source']),
       activityReason: _optionalText(json['activity_reason']),
       lastProgressAt: _optionalText(json['last_progress_at']),
+      providerControl:
+          json['provider_control'] is Map
+              ? CcbProviderControl.fromJson({
+                for (final entry in (json['provider_control'] as Map).entries)
+                  entry.key.toString(): entry.value,
+              })
+              : null,
     );
   }
 }

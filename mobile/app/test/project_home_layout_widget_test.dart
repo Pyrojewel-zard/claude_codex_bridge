@@ -137,7 +137,7 @@ void main() {
       find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),
       findsOneWidget,
     );
-    expect(find.text('main / mobile'), findsOneWidget);
+    expect(find.text('main / mobile · Codex'), findsOneWidget);
 
     await tester.drag(
       find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),

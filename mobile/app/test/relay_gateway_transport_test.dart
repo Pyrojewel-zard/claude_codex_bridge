@@ -21,6 +21,25 @@ void main() {
       final device = await transport.device();
       final projects = await transport.listProjects();
       final view = await transport.getProjectView('proj-demo');
+      final provider = await transport.getAgentProviderControl(
+        projectId: 'proj-demo',
+        agentName: 'mobile',
+      );
+      final quota = await transport.getAgentProviderQuota(
+        projectId: 'proj-demo',
+        agentName: 'mobile',
+      );
+      final providerUpdate = await transport.updateAgentProviderSettings(
+        projectId: 'proj-demo',
+        agentName: 'mobile',
+        model: 'gpt-5.6-sol',
+        thinking: 'xhigh',
+        expectedRevision: 'config-r1',
+        expectedNamespaceEpoch: 4,
+        expectedProvider: 'codex',
+        expectedRuntimeRevision: 'runtime-r1',
+        idempotencyKey: 'provider-idempotency-0001',
+      );
       final focusedAgent = await transport.focusAgent(
         projectId: 'proj-demo',
         agent: 'mobile',
@@ -71,6 +90,9 @@ void main() {
       expect(health.status, 'ok');
       expect(device.routeProvider, RouteProviderKind.relay);
       expect(projects.single.id, 'proj-demo');
+      expect(provider.control.activeModel, 'gpt-5.5');
+      expect(quota.windows.single.usedPct, 25);
+      expect(providerUpdate.configuredModel, 'gpt-5.6-sol');
       expect(focusedAgent.project.id, 'proj-demo');
       expect(focusedWindow.activeWindow, 'main');
       expect(history?.blocks.single.text, 'local relay adapter smoke');
@@ -84,6 +106,9 @@ void main() {
         'device',
         'listProjects',
         'getProjectView:proj-demo',
+        'getProviderControl:proj-demo/mobile',
+        'getProviderQuota:proj-demo/mobile',
+        'updateProviderSettings:proj-demo/mobile/gpt-5.6-sol/xhigh',
         'focusAgent:proj-demo/mobile/4',
         'focusWindow:proj-demo/main/4',
         'terminalHistory:proj-demo/mobile/4/120',
@@ -100,6 +125,9 @@ void main() {
         'device',
         'list_projects',
         'get_project_view',
+        'get_agent_provider_control',
+        'get_agent_provider_quota',
+        'update_agent_provider_settings',
         'focus_agent',
         'focus_window',
         'terminal_history',
@@ -112,7 +140,7 @@ void main() {
       ]);
       expect(
         transport.sealedRequests.map((envelope) => envelope.sequence),
-        List<int>.generate(13, (index) => index + 1),
+        List<int>.generate(16, (index) => index + 1),
       );
       for (final envelope in transport.sealedRequests) {
         final json = envelope.toJson();
@@ -132,7 +160,17 @@ void main() {
       }
       expect(openedPayloads[3], containsPair('project_id', 'proj-demo'));
       expect(
-        openedPayloads[12],
+        openedPayloads[6],
+        allOf(
+          containsPair('model', 'gpt-5.6-sol'),
+          containsPair('expected_namespace_epoch', 4),
+          containsPair('expected_revision', 'config-r1'),
+          containsPair('expected_runtime_revision', 'runtime-r1'),
+          containsPair('idempotency_key', 'provider-idempotency-0001'),
+        ),
+      );
+      expect(
+        openedPayloads[15],
         containsPair('terminal_id', handle.terminalId),
       );
     },
@@ -317,7 +355,8 @@ void _expectOpaqueRelayEnvelope(Map<String, Object?> json) {
   expect(json, isNot(containsPair('token', anything)));
 }
 
-class _RecordingGatewayTransport implements GatewayTransport {
+class _RecordingGatewayTransport
+    implements GatewayTransport, GatewayProviderControlTransport {
   _RecordingGatewayTransport(this.profile);
 
   @override
@@ -380,6 +419,69 @@ class _RecordingGatewayTransport implements GatewayTransport {
   Future<CcbProjectView> getProjectView(String projectId) async {
     calls.add('getProjectView:$projectId');
     return _view();
+  }
+
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) async {
+    calls.add('getProviderControl:$projectId/$agentName');
+    return const CcbProviderControlDetails(
+      projectId: 'proj-demo',
+      agent: 'mobile',
+      namespaceEpoch: 4,
+      control: CcbProviderControl(
+        provider: 'codex',
+        activeModel: 'gpt-5.5',
+        activeThinking: 'medium',
+        runtimeRevision: 'runtime-r1',
+      ),
+      catalog: CcbProviderCatalog(provider: 'codex'),
+      configRevision: 'config-r1',
+    );
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) async {
+    calls.add('getProviderQuota:$projectId/$agentName');
+    return const CcbProviderAccountUsage(
+      provider: 'codex',
+      status: 'available',
+      windows: [
+        CcbProviderUsageWindow(id: 'weekly', label: 'Weekly', usedPct: 25),
+      ],
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) async {
+    calls.add('updateProviderSettings:$projectId/$agentName/$model/$thinking');
+    return CcbProviderSettingsResult(
+      status: 'pending_restart',
+      agent: agentName,
+      provider: expectedProvider,
+      configuredModel: model,
+      configuredThinking: thinking,
+      configRevision: 'config-r2',
+      changed: true,
+      restartRequired: true,
+      idempotencyKey: idempotencyKey,
+      namespaceEpoch: expectedNamespaceEpoch,
+    );
   }
 
   @override

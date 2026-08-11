@@ -7,6 +7,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import 'gateway_transport.dart';
 import 'route_provider.dart';
@@ -28,7 +29,8 @@ class HttpGatewayTransport
     implements
         GatewayTransport,
         GatewayFilePathUploader,
-        GatewayPresenceTransport {
+        GatewayPresenceTransport,
+        GatewayProviderControlTransport {
   HttpGatewayTransport({
     required this.profile,
     String? deviceToken,
@@ -96,9 +98,8 @@ class HttpGatewayTransport
 
   @override
   Future<List<CcbProject>> listProjects() async {
-    final attempts = _projectListWarmupMaxAttempts < 1
-        ? 1
-        : _projectListWarmupMaxAttempts;
+    final attempts =
+        _projectListWarmupMaxAttempts < 1 ? 1 : _projectListWarmupMaxAttempts;
     for (var attempt = 0; attempt < attempts; attempt += 1) {
       final json = await _getJson('/v1/projects');
       final projects = json['projects'];
@@ -129,6 +130,63 @@ class HttpGatewayTransport
     final encoded = Uri.encodeComponent(projectId);
     final json = await _getJson('/v1/projects/$encoded/view');
     return CcbProjectView.fromProjectViewPayload(json);
+  }
+
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final encodedProject = Uri.encodeComponent(projectId);
+    final encodedAgent = Uri.encodeComponent(agentName);
+    final json = await _getJson(
+      '/v1/projects/$encodedProject/agents/$encodedAgent/provider-control',
+    );
+    return CcbProviderControlDetails.fromJson(json);
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final encodedProject = Uri.encodeComponent(projectId);
+    final encodedAgent = Uri.encodeComponent(agentName);
+    final json = await _getJson(
+      '/v1/projects/$encodedProject/agents/$encodedAgent/provider-quota',
+    );
+    return CcbProviderAccountUsage.fromJson(
+      _objectMap(json['account_usage'], 'account_usage'),
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) async {
+    final encodedProject = Uri.encodeComponent(projectId);
+    final encodedAgent = Uri.encodeComponent(agentName);
+    final json = await _postJson(
+      '/v1/projects/$encodedProject/agents/$encodedAgent/provider-control',
+      {
+        'model': model,
+        if (_hasText(thinking)) 'thinking': thinking,
+        'expected_revision': expectedRevision,
+        'expected_namespace_epoch': expectedNamespaceEpoch,
+        'expected_provider': expectedProvider,
+        'expected_runtime_revision': expectedRuntimeRevision,
+        'idempotency_key': idempotencyKey,
+      },
+    );
+    return CcbProviderSettingsResult.fromJson(json);
   }
 
   @override
@@ -167,13 +225,14 @@ class HttpGatewayTransport
     int maxLines = 200,
   }) async {
     final encoded = Uri.encodeComponent(projectId);
-    final query = Uri(
-      queryParameters: {
-        'agent': agent,
-        'namespace_epoch': namespaceEpoch.toString(),
-        'max_lines': maxLines.toString(),
-      },
-    ).query;
+    final query =
+        Uri(
+          queryParameters: {
+            'agent': agent,
+            'namespace_epoch': namespaceEpoch.toString(),
+            'max_lines': maxLines.toString(),
+          },
+        ).query;
     final json = await _getJson(
       '/v1/projects/$encoded/terminal-history?$query',
     );
@@ -191,13 +250,14 @@ class HttpGatewayTransport
   }) async {
     final encodedProject = Uri.encodeComponent(projectId);
     final encodedAgent = Uri.encodeComponent(agent);
-    final query = Uri(
-      queryParameters: {
-        'namespace_epoch': namespaceEpoch.toString(),
-        'limit': limit.toString(),
-        if (_hasText(cursor)) 'cursor': cursor!,
-      },
-    ).query;
+    final query =
+        Uri(
+          queryParameters: {
+            'namespace_epoch': namespaceEpoch.toString(),
+            'limit': limit.toString(),
+            if (_hasText(cursor)) 'cursor': cursor!,
+          },
+        ).query;
     final json = await _getJson(
       '/v1/projects/$encodedProject/agents/$encodedAgent/conversation?$query',
     );
@@ -581,9 +641,10 @@ GatewayTerminalFrame _terminalFrameFromMessage(Object? message) {
   final text = switch (message) {
     final String value => value,
     final List<int> value => utf8.decode(value),
-    _ => throw FormatException(
-      'gateway terminal WebSocket sent unsupported message',
-    ),
+    _ =>
+      throw FormatException(
+        'gateway terminal WebSocket sent unsupported message',
+      ),
   };
   final decoded = jsonDecode(text);
   if (decoded is Map) {

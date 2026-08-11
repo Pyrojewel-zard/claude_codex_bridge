@@ -2,6 +2,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import '../transport/gateway_transport.dart';
 
@@ -68,5 +69,29 @@ abstract interface class MobileCcbRepositoryFileUploader {
     required String fileName,
     required String mimeType,
     required String path,
+  });
+}
+
+abstract interface class MobileCcbProviderControlRepository {
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  });
+
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  });
+
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
   });
 }

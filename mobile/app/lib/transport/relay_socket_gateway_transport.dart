@@ -10,6 +10,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import 'gateway_transport.dart';
 import 'relay_crypto.dart';
@@ -31,7 +32,8 @@ class RelayGatewayException implements Exception {
   }
 }
 
-class RelaySocketGatewayTransport implements GatewayTransport {
+class RelaySocketGatewayTransport
+    implements GatewayTransport, GatewayProviderControlTransport {
   static const _fileChunkBytes = 32 * 1024;
   static const _maxUploadBytes = 25 * 1024 * 1024;
   static const _maxDownloadBytes = 128 * 1024 * 1024;
@@ -156,6 +158,58 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       'project_id': projectId,
     });
     return CcbProjectView.fromProjectViewPayload(body);
+  }
+
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final body = await _requestBody('get_agent_provider_control', {
+      'project_id': projectId,
+      'agent': agentName,
+    });
+    return CcbProviderControlDetails.fromJson(body);
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final body = await _requestBody('get_agent_provider_quota', {
+      'project_id': projectId,
+      'agent': agentName,
+    });
+    return CcbProviderAccountUsage.fromJson(
+      _objectMap(body['account_usage'], 'account_usage'),
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) async {
+    final body = await _requestBody('update_agent_provider_settings', {
+      'project_id': projectId,
+      'agent': agentName,
+      'model': model,
+      if (_hasText(thinking)) 'thinking': thinking,
+      'expected_revision': expectedRevision,
+      'expected_namespace_epoch': expectedNamespaceEpoch,
+      'expected_provider': expectedProvider,
+      'expected_runtime_revision': expectedRuntimeRevision,
+      'idempotency_key': idempotencyKey,
+    });
+    return CcbProviderSettingsResult.fromJson(body);
   }
 
   @override

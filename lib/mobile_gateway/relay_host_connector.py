@@ -1328,6 +1328,41 @@ def _gateway_request(operation: str, payload: Mapping[str, object]) -> _GatewayR
         return _GatewayRequest('GET', '/v1/projects', {})
     if op == 'get_project_view':
         return _GatewayRequest('GET', f'/v1/projects/{_segment(payload, "project_id")}/view', {})
+    if op == 'get_agent_provider_control':
+        project = _segment(payload, 'project_id')
+        agent = _segment(payload, 'agent')
+        return _GatewayRequest(
+            'GET',
+            f'/v1/projects/{project}/agents/{agent}/provider-control',
+            {},
+        )
+    if op == 'get_agent_provider_quota':
+        project = _segment(payload, 'project_id')
+        agent = _segment(payload, 'agent')
+        return _GatewayRequest(
+            'GET',
+            f'/v1/projects/{project}/agents/{agent}/provider-quota',
+            {},
+        )
+    if op == 'update_agent_provider_settings':
+        project = _segment(payload, 'project_id')
+        agent = _segment(payload, 'agent')
+        return _json_request(
+            'POST',
+            f'/v1/projects/{project}/agents/{agent}/provider-control',
+            _only(
+                payload,
+                (
+                    'model',
+                    'thinking',
+                    'expected_revision',
+                    'expected_namespace_epoch',
+                    'expected_runtime_revision',
+                    'expected_provider',
+                    'idempotency_key',
+                ),
+            ),
+        )
     if op == 'focus_agent':
         project = _segment(payload, 'project_id')
         return _json_request('POST', f'/v1/projects/{project}/focus-agent', _only(payload, ('agent', 'namespace_epoch')))

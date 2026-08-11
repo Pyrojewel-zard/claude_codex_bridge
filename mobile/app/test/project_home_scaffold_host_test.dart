@@ -172,6 +172,48 @@ void main() {
       );
     });
 
+    testWidgets('mobile header shows provider identity and control action', (
+      tester,
+    ) async {
+      final control = CcbProviderControl(
+        provider: 'codex',
+        configuredModel: 'gpt-5.6-sol',
+        activeModel: 'gpt-5.5',
+        activeThinking: 'high',
+        pendingModel: 'gpt-5.6-sol',
+      );
+      final view = _view(providerControl: control);
+
+      await _pump(
+        tester,
+        ProjectHomeMobileChatScaffoldHost(
+          view: view,
+          selectedAgent: view.agentByName('mobile'),
+          repository: _ProviderControlRecordingRepository(),
+          terminalTransport: RecordingTerminalTransport(),
+          usePaneInputForMessages: true,
+          mobileAgentsCollapsed: false,
+          onBack: () {},
+          onOpenConnectionDetails: () {},
+          onCollapseAgents: () {},
+          onExpandAgents: () {},
+          onWindowSelected: (_) {},
+          onAgentSelected: (_) {},
+          onRefreshView: () async => null,
+          onTimelineScrollDirectionChanged: (_) {},
+        ),
+      );
+
+      expect(
+        find.text('Codex / gpt-5.5 / high · pending restart'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('agent-provider-control-action')),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('mobile host toggles terminal content from the header', (
       tester,
     ) async {
@@ -497,7 +539,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('project-chat-title')), findsOneWidget);
       expect(find.text('demo'), findsOneWidget);
-      expect(find.text('main / mobile'), findsOneWidget);
+      expect(find.text('main / mobile · Codex'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('mobile-agent-switcher-unread-star')),
         findsOneWidget,
@@ -639,7 +681,10 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
-CcbProjectView _view({int namespaceEpoch = 4}) {
+CcbProjectView _view({
+  int namespaceEpoch = 4,
+  CcbProviderControl? providerControl,
+}) {
   return CcbProjectView(
     project: CcbProject(
       id: 'proj-demo',
@@ -687,6 +732,7 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
         order: 1,
         active: true,
         queueDepth: 1,
+        providerControl: providerControl,
       ),
       CcbAgent(
         name: 'reviewer',
@@ -702,4 +748,38 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
     notifications: [],
     terminalHistories: {},
   );
+}
+
+class _ProviderControlRecordingRepository extends RecordingGatewayRepository
+    implements MobileCcbProviderControlRepository {
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) {
+    throw UnimplementedError();
+  }
 }

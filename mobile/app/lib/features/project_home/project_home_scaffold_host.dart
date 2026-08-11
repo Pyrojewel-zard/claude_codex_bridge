@@ -9,6 +9,7 @@ import '../../models/ccb_window.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/selected_agent_workspace.dart';
+import '../provider_control/provider_control_sheet.dart';
 import '../terminal/agent_terminal_workspace.dart';
 import '../../cache/mobile_snapshot_store.dart';
 import 'gateway_reconnecting_banner.dart';
@@ -302,6 +303,7 @@ class _ProjectHomeMobileChatScaffoldHostState
                   onExpandAgents: widget.onExpandAgents,
                   onRefreshConversation: _workspaceController.refreshLatest,
                   onOpenTerminal: terminalAction,
+                  onOpenProviderControl: _providerControlAction,
                   terminalMode: _terminalMode,
                   onShowChat: _showChat,
                   onOpenConnectionDetails: widget.onOpenConnectionDetails,
@@ -309,11 +311,13 @@ class _ProjectHomeMobileChatScaffoldHostState
               else ...[
                 ProjectChatHeader(
                   view: widget.view,
+                  selectedAgent: selectedAgent,
                   onBack: widget.onBack,
                   onRefreshConversation: _workspaceController.refreshLatest,
                   onOpenTerminal: terminalAction,
                   terminalMode: _terminalMode,
                   onShowChat: _showChat,
+                  onOpenProviderControl: _providerControlAction,
                   onOpenConnectionDetails: widget.onOpenConnectionDetails,
                 ),
                 const SizedBox(height: 4),
@@ -445,6 +449,31 @@ class _ProjectHomeMobileChatScaffoldHostState
     });
   }
 
+  VoidCallback? get _providerControlAction {
+    if (widget.selectedAgent == null ||
+        widget.repository is! MobileCcbProviderControlRepository) {
+      return null;
+    }
+    return _showProviderControl;
+  }
+
+  Future<void> _showProviderControl() async {
+    final agent = widget.selectedAgent;
+    final repository = widget.repository;
+    if (agent == null || repository is! MobileCcbProviderControlRepository) {
+      return;
+    }
+    final changed = await showProviderControlSheet(
+      context,
+      repository: repository as MobileCcbProviderControlRepository,
+      projectId: widget.view.project.id,
+      agent: agent,
+    );
+    if (changed) {
+      await widget.onRefreshView();
+    }
+  }
+
   void _handleWindowSelected(String windowName) {
     if (!_terminalMode) {
       widget.onWindowSelected(windowName);
@@ -471,6 +500,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     required this.onExpandAgents,
     required this.onRefreshConversation,
     required this.onOpenTerminal,
+    required this.onOpenProviderControl,
     required this.terminalMode,
     required this.onShowChat,
     required this.onOpenConnectionDetails,
@@ -483,6 +513,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
   final VoidCallback onExpandAgents;
   final VoidCallback onRefreshConversation;
   final VoidCallback? onOpenTerminal;
+  final VoidCallback? onOpenProviderControl;
   final bool terminalMode;
   final VoidCallback onShowChat;
   final VoidCallback onOpenConnectionDetails;
@@ -542,6 +573,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
                                 selectedWindow: selectedWindow,
                                 selectedAgent: selectedAgent,
                                 agentCount: view.agents.length,
+                                pendingLabel: strings.providerPendingShort,
                               ),
                               key: const ValueKey(
                                 'mobile-agent-switcher-summary',
@@ -559,6 +591,14 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
                 ),
               ),
             ),
+            if (onOpenProviderControl != null)
+              IconButton(
+                key: const ValueKey('agent-provider-control-action'),
+                tooltip: strings.providerControl,
+                visualDensity: VisualDensity.compact,
+                onPressed: onOpenProviderControl,
+                icon: const Icon(Icons.tune),
+              ),
             IconButton(
               key: const ValueKey('mobile-agent-switcher-expand-action'),
               tooltip: 'Show agents',
@@ -623,6 +663,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     required CcbWindow? selectedWindow,
     required CcbAgent? selectedAgent,
     required int agentCount,
+    required String pendingLabel,
   }) {
     final agent = selectedAgent;
     if (agent == null) {
@@ -632,7 +673,13 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     if (window == null) {
       return agent.name;
     }
-    return '${window.label} / ${agent.name}';
+    final control = agent.providerControl;
+    final provider =
+        control == null
+            ? providerLabel(agent.provider)
+            : providerIdentityText(control);
+    final pending = control?.hasPendingChange == true ? ' · $pendingLabel' : '';
+    return '${window.label} / ${agent.name} · $provider$pending';
   }
 }
 
@@ -771,6 +818,7 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                   children: [
                     ProjectChatHeader(
                       view: view,
+                      selectedAgent: selectedAgent,
                       onBack: null,
                       onOpenTerminal:
                           selectedAgent == null
@@ -779,6 +827,24 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                                 onOpenTerminal(selectedAgent!.name);
                               },
                       onOpenConnectionDetails: onOpenConnectionDetails,
+                      onOpenProviderControl:
+                          selectedAgent != null &&
+                                  repository
+                                      is MobileCcbProviderControlRepository
+                              ? () async {
+                                final changed = await showProviderControlSheet(
+                                  context,
+                                  repository:
+                                      repository
+                                          as MobileCcbProviderControlRepository,
+                                  projectId: view.project.id,
+                                  agent: selectedAgent!,
+                                );
+                                if (changed) {
+                                  await onRefreshView();
+                                }
+                              }
+                              : null,
                     ),
                     if (onRetryConnection != null) ...[
                       const SizedBox(height: 4),

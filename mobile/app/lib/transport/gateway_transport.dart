@@ -4,6 +4,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/ccb_terminal_target.dart';
 import '../models/readable_terminal_history.dart';
 import 'route_provider.dart';
@@ -102,6 +103,30 @@ abstract interface class GatewayPresenceTransport {
     String? focusedAgent,
     String? terminalId,
     bool userActivity = false,
+  });
+}
+
+abstract interface class GatewayProviderControlTransport {
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  });
+
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  });
+
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
   });
 }
 

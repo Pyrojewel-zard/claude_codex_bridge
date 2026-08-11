@@ -2,6 +2,26 @@
 
 Date: 2026-06-18
 
+## Phase 4I: Paseo-Aligned Provider Control Plane — In Progress
+
+Status: In Progress (2026-08-11).
+
+- show Provider, active model, and thinking as selected-agent identity;
+- adapt Paseo's Provider snapshot, model definition, usage, quota, and
+  confirmed-mutation semantics at pinned commit `b599d38`;
+- preserve CCB's Python gateway, Flutter app, ccbd/tmux/session authority, and
+  fail-closed device scopes;
+- persist validated Codex/Claude model and effort choices as explicit
+  restart-required configuration changes, never as guessed live commands;
+- expose bounded native-session usage and separately loaded account quota;
+- keep direct HTTP and encrypted Relay contracts equivalent;
+- require full tests/builds plus real server-wide Android Emulator evidence on
+  dedicated Codex and Claude projects before completion.
+
+Execution authority:
+[goal-provider-control-plane.md](goal-provider-control-plane.md) and
+[Decision 025](decisions/025-paseo-provider-control-alignment.md).
+
 ## Phase 4H: Paseo-Inspired Runtime And Background Hardening — In Progress
 
 Status: In Progress (2026-07-13).

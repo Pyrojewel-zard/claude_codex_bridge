@@ -1,25 +1,31 @@
 import 'package:flutter/material.dart';
 
 import '../../l10n/ccb_mobile_localizations.dart';
+import '../../models/ccb_agent.dart';
 import '../../models/ccb_project_view.dart';
+import '../provider_control/provider_control_sheet.dart';
 
 class ProjectChatHeader extends StatelessWidget {
   const ProjectChatHeader({
     required this.view,
+    required this.selectedAgent,
     required this.onBack,
     required this.onOpenTerminal,
     required this.onOpenConnectionDetails,
     this.onRefreshConversation,
     this.onShowChat,
+    this.onOpenProviderControl,
     this.terminalMode = false,
     super.key,
   });
 
   final CcbProjectView view;
+  final CcbAgent? selectedAgent;
   final VoidCallback? onBack;
   final VoidCallback? onRefreshConversation;
   final VoidCallback? onOpenTerminal;
   final VoidCallback? onShowChat;
+  final VoidCallback? onOpenProviderControl;
   final VoidCallback onOpenConnectionDetails;
   final bool terminalMode;
 
@@ -29,7 +35,7 @@ class ProjectChatHeader extends StatelessWidget {
     final strings = CcbMobileLocalizations.of(context);
     return SizedBox(
       key: const ValueKey('project-chat-header'),
-      height: 56,
+      height: 64,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Row(
@@ -44,15 +50,41 @@ class ProjectChatHeader extends StatelessWidget {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  view.project.displayName,
-                  key: const ValueKey('project-chat-title'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.titleLarge,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      view.project.displayName,
+                      key: const ValueKey('project-chat-title'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.titleMedium,
+                    ),
+                    if (selectedAgent != null)
+                      Text(
+                        _agentProviderIdentity(
+                          selectedAgent!,
+                          pendingLabel: strings.providerPendingShort,
+                        ),
+                        key: const ValueKey('agent-provider-identity'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
+            if (onOpenProviderControl != null)
+              IconButton(
+                key: const ValueKey('agent-provider-control-action'),
+                tooltip: strings.providerControl,
+                onPressed: onOpenProviderControl,
+                icon: const Icon(Icons.tune),
+              ),
             if (onRefreshConversation != null)
               IconButton(
                 key: const ValueKey('agent-conversation-refresh-action'),
@@ -84,4 +116,13 @@ class ProjectChatHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+String _agentProviderIdentity(CcbAgent agent, {required String pendingLabel}) {
+  final control = agent.providerControl;
+  if (control != null) {
+    final identity = providerIdentityText(control);
+    return control.hasPendingChange ? '$identity · $pendingLabel' : identity;
+  }
+  return providerLabel(agent.provider);
 }

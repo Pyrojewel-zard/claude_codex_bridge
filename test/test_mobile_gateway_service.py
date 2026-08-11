@@ -18,6 +18,7 @@ import pytest
 
 import mobile_gateway.pairing as pairing_module
 import mobile_gateway.service as service_module
+from provider_control import ProviderAccountQuota
 from mobile_gateway import (
     MobileGatewayError,
     MobileGatewayPairingError,
@@ -419,6 +420,7 @@ def _service(
     terminal_session_factory=None,
     terminal_history_factory=None,
     terminal_message_sender=None,
+    provider_quota_service=None,
     clock=None,
 ) -> MobileGatewayService:
     return MobileGatewayService(
@@ -431,6 +433,7 @@ def _service(
         terminal_session_factory=terminal_session_factory,
         terminal_history_factory=terminal_history_factory,
         terminal_message_sender=terminal_message_sender,
+        provider_quota_service=provider_quota_service,
     )
 
 
@@ -1160,6 +1163,325 @@ def test_project_view_rejects_unknown_project() -> None:
     with pytest.raises(MobileGatewayError, match='unknown project') as excinfo:
         _service(_FakeCcbdClient()).project_view_payload('other')
     assert excinfo.value.status_code == 404
+
+
+def test_agent_provider_control_returns_runtime_and_matching_catalog(tmp_path: Path) -> None:
+    class _ProviderControlClient(_FakeCcbdClient):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['agents'][0]['provider_control'] = {
+                'schema_version': 1,
+                'provider': 'codex',
+                'configured_model': 'gpt-5.6-sol',
+                'active_model': 'gpt-5.6-sol',
+                'mutation_mode': 'restart_required',
+                'usage': {'total_tokens': 123, 'scope': 'current_session_tail'},
+            }
+            return payload
+
+    service = _service(
+        _ProviderControlClient(),
+        project_root=tmp_path / 'project',
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code']), 'device_name': 'Provider test'},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    assert payload['provider_control']['active_model'] == 'gpt-5.6-sol'
+    assert payload['provider_control']['usage']['total_tokens'] == 123
+    assert payload['provider_catalog']['id'] == 'codex'
+    assert payload['provider_catalog']['model_shortcut'] is True
+    assert 'account_usage' not in payload
+
+
+def test_agent_provider_quota_is_loaded_on_separate_route(tmp_path: Path) -> None:
+    class _QuotaService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, str, str]] = []
+
+        def account_quota(self, *, project_root: Path, agent: str, provider: str):
+            self.calls.append((project_root, agent, provider))
+            return ProviderAccountQuota(
+                provider_id=provider,
+                display_name='Codex',
+                status='available',
+                fetched_at='2026-08-11T00:00:00Z',
+                next_refresh_at='2026-08-11T00:05:00Z',
+            )
+
+    quota = _QuotaService()
+    project_root = tmp_path / 'project'
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+        provider_quota_service=quota,
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code']), 'device_name': 'Provider quota'},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/provider-quota',
+        headers,
+    )
+
+    assert status == 200
+    assert payload['account_usage']['status'] == 'available'
+    assert quota.calls == [(project_root, 'mobile', 'codex')]
+
+
+def test_agent_provider_control_requires_view_scope(tmp_path: Path) -> None:
+    service = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+
+    with pytest.raises(MobileGatewayError) as missing_auth:
+        service.dispatch_get('/v1/projects/proj-demo/agents/mobile/provider-control')
+
+    assert missing_auth.value.status_code == 401
+
+
+def test_agent_provider_settings_are_fenced_and_idempotent(tmp_path: Path) -> None:
+    class _ProviderControlClient(_FakeCcbdClient):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['agents'][0]['provider_control'] = {
+                'provider': 'codex',
+                'active_model': 'gpt-5.5',
+                'active_thinking': 'medium',
+                'runtime_revision': 'runtime-r1',
+                'mutation_mode': 'restart_required',
+            }
+            return payload
+
+    project_root = tmp_path / 'project'
+    config = project_root / '.ccb' / 'ccb.config'
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "mobile:codex"
+
+[agents.mobile]
+model = "gpt-5.5"
+thinking = "medium"
+''',
+        encoding='utf-8',
+    )
+    service = _service(
+        _ProviderControlClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code']), 'device_name': 'Provider test'},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+    _, details = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        headers,
+    )
+    request = {
+        'model': 'gpt-5.6-sol',
+        'thinking': 'xhigh',
+        'expected_revision': details['config_revision'],
+        'expected_namespace_epoch': details['namespace_epoch'],
+        'expected_provider': 'codex',
+        'expected_runtime_revision': 'runtime-r1',
+        'idempotency_key': 'provider-change-0001',
+    }
+
+    status, first = service.dispatch_post(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        request,
+        headers,
+    )
+    replay_status, replay = service.dispatch_post(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        request,
+        headers,
+    )
+
+    assert status == replay_status == 200
+    assert replay == first
+    assert first['status'] == 'pending_restart'
+    assert first['namespace_epoch'] == 4
+    assert first['runtime_revision'] == 'runtime-r1'
+    assert 'backup_path' not in first
+    assert 'model = "gpt-5.6-sol"' in config.read_text(encoding='utf-8')
+
+    with pytest.raises(MobileGatewayError, match='another request') as reused:
+        service.dispatch_post(
+            '/v1/projects/proj-demo/agents/mobile/provider-control',
+            {**request, 'model': 'gpt-5.5'},
+            headers,
+        )
+    assert reused.value.status_code == 409
+
+
+def test_agent_provider_settings_remain_pending_when_runtime_model_is_unknown(
+    tmp_path: Path,
+) -> None:
+    class _ProviderControlClient(_FakeCcbdClient):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['agents'][0]['provider_control'] = {
+                'provider': 'codex',
+                'active_model': None,
+                'active_thinking': None,
+                'runtime_revision': None,
+                'mutation_mode': 'restart_required',
+            }
+            return payload
+
+    project_root = tmp_path / 'project'
+    config = project_root / '.ccb' / 'ccb.config'
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '''version = 2
+entry_window = "main"
+
+[windows]
+main = "mobile:codex"
+
+[agents.mobile]
+model = "gpt-5.5"
+thinking = "medium"
+''',
+        encoding='utf-8',
+    )
+    service = _service(
+        _ProviderControlClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code']), 'device_name': 'Provider test'},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+    _, before = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        headers,
+    )
+
+    service.dispatch_post(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        {
+            'model': 'gpt-5.6-sol',
+            'thinking': 'xhigh',
+            'expected_revision': before['config_revision'],
+            'expected_namespace_epoch': before['namespace_epoch'],
+            'expected_provider': 'codex',
+            'expected_runtime_revision': None,
+            'idempotency_key': 'provider-change-unknown-runtime',
+        },
+        headers,
+    )
+    _, after = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/provider-control',
+        headers,
+    )
+
+    assert after['provider_control']['active_model'] is None
+    assert after['provider_control']['restart_pending'] is True
+    assert after['provider_control']['pending_model'] == 'gpt-5.6-sol'
+    assert after['provider_control']['pending_thinking'] == 'xhigh'
+
+
+def test_agent_provider_settings_require_dedicated_scope_and_current_identity(
+    tmp_path: Path,
+) -> None:
+    class _ProviderControlClient(_FakeCcbdClient):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['agents'][0]['provider_control'] = {
+                'provider': 'codex',
+                'runtime_revision': 'runtime-r1',
+            }
+            return payload
+
+    project_root = tmp_path / 'project'
+    config = project_root / '.ccb' / 'ccb.config'
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'version = 2\nentry_window = "main"\n\n[windows]\nmain = "mobile:codex"\n',
+        encoding='utf-8',
+    )
+    service = _service(
+        _ProviderControlClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view', 'lifecycle'),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+    request = {
+        'model': 'gpt-5.6-sol',
+        'expected_revision': service_module.project_config_revision(project_root),
+        'expected_namespace_epoch': 4,
+        'expected_provider': 'codex',
+        'expected_runtime_revision': 'runtime-r1',
+        'idempotency_key': 'provider-change-0002',
+    }
+
+    with pytest.raises(MobileGatewayError) as denied:
+        service.dispatch_post(
+            '/v1/projects/proj-demo/agents/mobile/provider-control',
+            request,
+            {'Authorization': f'Bearer {claim["device_token"]}'},
+        )
+    assert denied.value.status_code == 403
+
+    allowed_pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view', 'provider_settings'),
+    )
+    _, allowed_claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(allowed_pairing['pairing_code'])},
+    )
+    allowed_headers = {'Authorization': f'Bearer {allowed_claim["device_token"]}'}
+    with pytest.raises(MobileGatewayError, match='stale project namespace') as stale:
+        service.dispatch_post(
+            '/v1/projects/proj-demo/agents/mobile/provider-control',
+            {**request, 'expected_namespace_epoch': 3},
+            allowed_headers,
+        )
+    assert stale.value.status_code == 409
+
+    with pytest.raises(MobileGatewayError, match='stale provider runtime') as stale_runtime:
+        service.dispatch_post(
+            '/v1/projects/proj-demo/agents/mobile/provider-control',
+            {
+                **request,
+                'idempotency_key': 'provider-change-0003',
+                'expected_runtime_revision': 'runtime-r0',
+            },
+            allowed_headers,
+        )
+    assert stale_runtime.value.status_code == 409
 
 
 def test_project_view_routes_to_matching_registry_project() -> None:
@@ -4006,6 +4328,7 @@ def test_pairing_claim_creates_hashed_device_records_and_audit(tmp_path: Path) -
         'lifecycle',
         'message_submit',
         'notify',
+        'provider_settings',
         'terminal_input',
         'view',
     ]

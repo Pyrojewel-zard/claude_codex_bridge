@@ -37,6 +37,7 @@ from mobile_gateway.relay_host_connector import (
     RelayHostConnector,
     RelayHostConnectorConfig,
     RelayHostConnectorError,
+    _gateway_request,
 )
 from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
 from mobile_gateway.relay_stream import (
@@ -77,6 +78,53 @@ def test_relay_host_connector_requires_safe_origins() -> None:
             host_crypto_private_key=host_crypto_key,
         )
 
+
+def test_relay_host_connector_maps_provider_control_without_proxy_escape() -> None:
+    read = _gateway_request(
+        'get_agent_provider_control',
+        {
+            'project_id': 'project/demo',
+            'agent': 'worker one',
+            'device_token': 'must-not-enter-path',
+        },
+    )
+    quota = _gateway_request(
+        'get_agent_provider_quota',
+        {'project_id': 'project/demo', 'agent': 'worker one'},
+    )
+    mutation = _gateway_request(
+        'update_agent_provider_settings',
+        {
+            'project_id': 'project/demo',
+            'agent': 'worker one',
+            'model': 'gpt-5.6-sol',
+            'thinking': 'xhigh',
+            'expected_revision': 'config-r1',
+            'expected_namespace_epoch': 7,
+            'expected_runtime_revision': 'runtime-r1',
+            'expected_provider': 'codex',
+            'idempotency_key': 'provider-idempotency-0001',
+            'device_token': 'must-not-forward',
+            'arbitrary_path': '/etc/passwd',
+        },
+    )
+
+    assert read.method == 'GET'
+    assert read.path == '/v1/projects/project%2Fdemo/agents/worker%20one/provider-control'
+    assert read.query == {}
+    assert quota.method == 'GET'
+    assert quota.path == '/v1/projects/project%2Fdemo/agents/worker%20one/provider-quota'
+    assert mutation.method == 'POST'
+    assert mutation.path == read.path
+    assert json.loads((mutation.body or b'{}').decode('utf-8')) == {
+        'expected_namespace_epoch': 7,
+        'expected_provider': 'codex',
+        'expected_revision': 'config-r1',
+        'expected_runtime_revision': 'runtime-r1',
+        'idempotency_key': 'provider-idempotency-0001',
+        'model': 'gpt-5.6-sol',
+        'thinking': 'xhigh',
+    }
 
 def test_relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path) -> None:
     asyncio.run(_relay_host_connector_proxies_encrypted_gateway_request(tmp_path))

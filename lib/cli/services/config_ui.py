@@ -44,6 +44,7 @@ from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_model_shortcuts import supported_provider_model_shortcuts
 from provider_profiles import supported_provider_api_shortcuts, validate_provider_runtime_home_uniqueness
+from provider_thinking_shortcuts import provider_thinking_levels
 
 
 DEFAULT_IDLE_TIMEOUT_S = 30 * 60
@@ -379,13 +380,48 @@ def config_ui_provider_capabilities(
     suggestions: dict[str, list[dict[str, object]]] = {
         'codex': codex_models,
         'claude': [
-            _model('claude-fable-5', 'Claude Fable 5'),
-            _model('claude-opus-4-8', 'Claude Opus 4.8'),
-            _model('claude-sonnet-5', 'Claude Sonnet 5'),
-            _model('claude-haiku-4-5', 'Claude Haiku 4.5'),
-            _model('sonnet', 'Sonnet (latest alias)'),
-            _model('opus', 'Opus (latest alias)'),
-            _model('haiku', 'Haiku (latest alias)'),
+            _model(
+                'claude-fable-5',
+                'Claude Fable 5',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
+            _model(
+                'claude-opus-4-8',
+                'Claude Opus 4.8',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
+            _model(
+                'claude-sonnet-5',
+                'Claude Sonnet 5',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
+            _model(
+                'claude-haiku-4-5',
+                'Claude Haiku 4.5',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
+            _model(
+                'sonnet',
+                'Sonnet (latest alias)',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
+            _model(
+                'opus',
+                'Opus (latest alias)',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
+            _model(
+                'haiku',
+                'Haiku (latest alias)',
+                reasoning_levels=list(provider_thinking_levels('claude')),
+                default_reasoning_level='high',
+            ),
         ],
         'gemini': [
             _model('gemini-3.5-flash', 'Gemini 3.5 Flash'),
@@ -435,7 +471,7 @@ def config_ui_provider_capabilities(
                 'model_source': source,
                 'models': suggestions.get(provider, []),
                 'custom_model': model_shortcut,
-                'static_thinking': provider in {'codex', 'deepseek'},
+                'static_thinking': bool(provider_thinking_levels(provider)),
             }
         )
     return {
@@ -479,6 +515,11 @@ def _codex_models(
                     str(item.get('display_name') or model_id),
                     reasoning_levels=levels,
                     default_reasoning_level=str(item.get('default_reasoning_level') or '').strip() or None,
+                    context_window_max_tokens=(
+                        int(item.get('context_window'))
+                        if str(item.get('context_window') or '').isdigit()
+                        else None
+                    ),
                 )
             )
         if rows:
@@ -614,12 +655,14 @@ def _model(
     *,
     reasoning_levels: list[str] | None = None,
     default_reasoning_level: str | None = None,
+    context_window_max_tokens: int | None = None,
 ) -> dict[str, object]:
     return {
         'id': model_id,
         'label': label,
         'reasoning_levels': list(reasoning_levels or []),
         'default_reasoning_level': default_reasoning_level,
+        'context_window_max_tokens': context_window_max_tokens,
     }
 
 

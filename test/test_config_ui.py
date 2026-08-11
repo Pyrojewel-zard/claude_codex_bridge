@@ -1404,6 +1404,13 @@ def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path
         'claude-sonnet-5',
         'claude-haiku-4-5',
     }
+    assert providers['claude']['models'][0]['reasoning_levels'] == [
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+    ]
     assert {model['id'] for model in providers['gemini']['models']} >= {
         'gemini-3.5-flash',
         'gemini-3.1-pro-preview',
@@ -1421,11 +1428,12 @@ def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path
     assert [model['id'] for model in providers['opencode']['models']] == ['openai/gpt-5.6-sol']
     assert [model['id'] for model in providers['mimo']['models']] == ['xiaomi/mimo-v2.5-pro']
     assert providers['codex']['static_thinking'] is True
+    assert providers['claude']['static_thinking'] is True
     assert providers['deepseek']['static_thinking'] is True
     assert all(
         provider['static_thinking'] is False
         for name, provider in providers.items()
-        if name not in {'codex', 'deepseek'}
+        if name not in {'codex', 'claude', 'deepseek'}
     )
 
 

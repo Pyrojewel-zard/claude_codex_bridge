@@ -26,9 +26,18 @@ from uuid import uuid4
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import url2pathname
 
+from agents.config_loader import load_project_config
 from ccbd.api_models import DeliveryScope, MessageEnvelope
 from platforms.windows.herdr.ccbd_surface_projection import herdr_surface_projection_passes_gate
 from ccbd.socket_client import CcbdClientError
+from cli.services.config_ui import config_ui_provider_capabilities
+from provider_control import (
+    ProviderQuotaService,
+    ProviderSettingsError,
+    ProviderSettingsStore,
+    project_config_revision,
+    provider_restart_pending_agents,
+)
 from provider_pane_status.control_messages import (
     clean_provider_local_control_message,
 )
@@ -76,6 +85,7 @@ _PAIRING_CAPABILITIES = (
     'event_cursor_resume',
     'device_presence',
     'push_notifications',
+    'provider_control',
 )
 _REDACTED_NAMESPACE_KEYS = ('socket_path', 'session_name')
 _DEFAULT_ROUTE_PROVIDER = 'lan'
@@ -98,7 +108,9 @@ _DEFAULT_PAIRING_SCOPES = (
     'notify',
     'terminal_input',
     'lifecycle',
+    'provider_settings',
 )
+_PROVIDER_MUTATION_CACHE_MAX_ENTRIES = 256
 _MAX_MOBILE_UPLOAD_FILE_BYTES = 25 * 1024 * 1024
 _MAX_MOBILE_DOWNLOAD_FILE_BYTES = 128 * 1024 * 1024
 _NOTIFICATION_STREAM_POLL_SECONDS = 1.0
@@ -489,6 +501,7 @@ class MobileGatewayService:
         push_sender_max_workers: int = 4,
         push_diagnostic: Mapping[str, object] | None = None,
         agent_activity_probe: Callable[..., MobileAgentActivityProbe] | None = None,
+        provider_quota_service: ProviderQuotaService | None = None,
     ) -> None:
         self._project_id = str(project_id)
         self._project_root = Path(project_root)
@@ -536,6 +549,12 @@ class MobileGatewayService:
         ] = OrderedDict()
         self._conversation_page_cache_bytes = 0
         self._conversation_page_cache_lock = threading.Lock()
+        self._provider_settings_store = ProviderSettingsStore()
+        self._provider_quota_service = provider_quota_service or ProviderQuotaService()
+        self._provider_mutation_lock = threading.Lock()
+        self._provider_mutation_results: OrderedDict[
+            tuple[str, str], tuple[str, dict[str, object]]
+        ] = OrderedDict()
         self._project_activity_refreshing: set[str] = set()
         self._project_activity_refresh_lock = threading.Lock()
         # One bounded watcher/cache serves every SSE client.  It tracks only
@@ -683,6 +702,254 @@ class MobileGatewayService:
         self._record_project_opened(project.project_id)
         return _redact_project_view_payload(payload)
 
+    def agent_provider_control_payload(
+        self,
+        project_id: str,
+        *,
+        agent: str,
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        self._authenticate(headers, required_scopes=('view',))
+        project = self._require_project(project_id)
+        view_payload = _redact_project_view_payload(self._request_project_view(project))
+        view = view_payload.get('view') if isinstance(view_payload.get('view'), dict) else view_payload
+        agent_record = next(
+            (
+                dict(item)
+                for item in tuple(view.get('agents') or ())
+                if isinstance(item, dict) and str(item.get('name') or '').strip() == str(agent).strip()
+            ),
+            None,
+        )
+        if agent_record is None:
+            raise MobileGatewayError('unknown agent', status_code=404)
+        provider = str(agent_record.get('provider') or '').strip().lower()
+        catalog = config_ui_provider_capabilities(project_root=project.project_root)
+        provider_entry = next(
+            (
+                dict(item)
+                for item in tuple(catalog.get('providers') or ())
+                if isinstance(item, dict) and str(item.get('id') or '').strip().lower() == provider
+            ),
+            {
+                'id': provider,
+                'model_shortcut': False,
+                'model_source': 'none',
+                'models': [],
+                'custom_model': False,
+                'static_thinking': False,
+            },
+        )
+        config_revision = project_config_revision(project.project_root)
+        try:
+            configured_spec = load_project_config(project.project_root).config.agents.get(str(agent).strip())
+        except Exception:
+            configured_spec = None
+        provider_control = dict(agent_record.get('provider_control') or {})
+        restart_pending = (
+            str(agent).strip().lower()
+            in provider_restart_pending_agents(project.project_root)
+        )
+        provider_control['restart_pending'] = restart_pending
+        if configured_spec is not None:
+            configured_model = str(getattr(configured_spec, 'model', '') or '').strip() or None
+            configured_thinking = str(getattr(configured_spec, 'thinking', '') or '').strip() or None
+            provider_control['configured_model'] = configured_model
+            provider_control['configured_thinking'] = configured_thinking
+            active_model = str(provider_control.get('active_model') or '').strip() or None
+            active_thinking = str(provider_control.get('active_thinking') or '').strip() or None
+            provider_control['pending_model'] = (
+                configured_model
+                if configured_model is not None
+                and (
+                    restart_pending
+                    or (active_model is not None and configured_model != active_model)
+                )
+                else None
+            )
+            provider_control['pending_thinking'] = (
+                configured_thinking
+                if configured_thinking is not None
+                and (
+                    restart_pending
+                    or (
+                        active_thinking is not None
+                        and configured_thinking != active_thinking
+                    )
+                )
+                else None
+            )
+        return {
+            'schema_version': 1,
+            'status': 'ok',
+            'project_id': project.project_id,
+            'agent': str(agent_record.get('name') or agent),
+            'namespace_epoch': _optional_int(
+                (view.get('namespace') or {}).get('epoch')
+                if isinstance(view.get('namespace'), dict)
+                else None
+            ),
+            'provider_control': provider_control,
+            'provider_catalog': provider_entry,
+            'config_revision': config_revision,
+        }
+
+    def agent_provider_quota_payload(
+        self,
+        project_id: str,
+        *,
+        agent: str,
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        """Load optional account quota without delaying provider controls."""
+        self._authenticate(headers, required_scopes=('view',))
+        project = self._require_project(project_id)
+        view_payload = _redact_project_view_payload(self._request_project_view(project))
+        view = view_payload.get('view') if isinstance(view_payload.get('view'), dict) else view_payload
+        agent_record = next(
+            (
+                dict(item)
+                for item in tuple(view.get('agents') or ())
+                if isinstance(item, dict)
+                and str(item.get('name') or '').strip() == str(agent).strip()
+            ),
+            None,
+        )
+        if agent_record is None:
+            raise MobileGatewayError('unknown agent', status_code=404)
+        provider = str(agent_record.get('provider') or '').strip().lower()
+        account_usage = self._provider_quota_service.account_quota(
+            project_root=project.project_root,
+            agent=str(agent_record.get('name') or agent),
+            provider=provider,
+        )
+        return {
+            'schema_version': 1,
+            'status': 'ok',
+            'project_id': project.project_id,
+            'agent': str(agent_record.get('name') or agent),
+            'account_usage': account_usage.to_record(),
+        }
+
+    def update_agent_provider_settings(
+        self,
+        project_id: str,
+        *,
+        agent: str,
+        payload: Mapping[str, object],
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        auth = self._authenticate(headers, required_scopes=('provider_settings',))
+        project = self._require_project(project_id)
+        idempotency_key = str(payload.get('idempotency_key') or '').strip()
+        if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{7,127}', idempotency_key) is None:
+            raise MobileGatewayError('valid idempotency_key is required', status_code=400)
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                dict(payload),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(',', ':'),
+            ).encode('utf-8')
+        ).hexdigest()
+        cache_key = (auth.device_id, idempotency_key)
+        with self._provider_mutation_lock:
+            cached = self._provider_mutation_results.get(cache_key)
+            if cached is not None:
+                if cached[0] != fingerprint:
+                    raise MobileGatewayError(
+                        'idempotency_key was already used for another request',
+                        status_code=409,
+                    )
+                self._provider_mutation_results.move_to_end(cache_key)
+                return dict(cached[1])
+
+            view_payload = _redact_project_view_payload(self._request_project_view(project))
+            view = view_payload.get('view') if isinstance(view_payload.get('view'), dict) else view_payload
+            namespace = view.get('namespace') if isinstance(view.get('namespace'), dict) else {}
+            current_epoch = _optional_int(namespace.get('epoch'))
+            expected_epoch = _optional_int(payload.get('expected_namespace_epoch'))
+            if current_epoch is None or expected_epoch != current_epoch:
+                raise MobileGatewayError('stale project namespace; refresh before saving', status_code=409)
+            agent_record = next(
+                (
+                    dict(item)
+                    for item in tuple(view.get('agents') or ())
+                    if isinstance(item, dict)
+                    and str(item.get('name') or '').strip() == str(agent).strip()
+                ),
+                None,
+            )
+            if agent_record is None:
+                raise MobileGatewayError('unknown agent', status_code=404)
+            provider = str(agent_record.get('provider') or '').strip().lower()
+            expected_provider = str(payload.get('expected_provider') or '').strip().lower()
+            if not expected_provider or expected_provider != provider:
+                raise MobileGatewayError('stale provider identity; refresh before saving', status_code=409)
+            provider_control = (
+                dict(agent_record.get('provider_control') or {})
+                if isinstance(agent_record.get('provider_control'), dict)
+                else {}
+            )
+            if 'expected_runtime_revision' not in payload:
+                raise MobileGatewayError('expected_runtime_revision is required', status_code=400)
+            expected_runtime_revision = _optional_text(payload.get('expected_runtime_revision'))
+            current_runtime_revision = _optional_text(provider_control.get('runtime_revision'))
+            if expected_runtime_revision != current_runtime_revision:
+                raise MobileGatewayError('stale provider runtime; refresh before saving', status_code=409)
+            catalog = config_ui_provider_capabilities(project_root=project.project_root)
+            provider_entry = next(
+                (
+                    dict(item)
+                    for item in tuple(catalog.get('providers') or ())
+                    if isinstance(item, dict)
+                    and str(item.get('id') or '').strip().lower() == provider
+                ),
+                None,
+            )
+            if not provider_entry or not provider_entry.get('model_shortcut'):
+                raise MobileGatewayError('provider model selection is unsupported', status_code=409)
+            models = {
+                str(item.get('id') or '').strip(): dict(item)
+                for item in tuple(provider_entry.get('models') or ())
+                if isinstance(item, dict) and str(item.get('id') or '').strip()
+            }
+            model = str(payload.get('model') or '').strip()
+            selected = models.get(model)
+            if selected is None:
+                raise MobileGatewayError('model is not selectable for this provider', status_code=422)
+            allowed_thinking = {
+                str(item).strip().lower()
+                for item in tuple(selected.get('reasoning_levels') or ())
+                if str(item).strip()
+            }
+            try:
+                result = self._provider_settings_store.apply(
+                    project_root=project.project_root,
+                    agent=str(agent).strip(),
+                    model=model,
+                    thinking=_optional_text(payload.get('thinking')),
+                    expected_revision=str(payload.get('expected_revision') or '').strip(),
+                    allowed_models=set(models),
+                    allowed_thinking=allowed_thinking,
+                )
+            except ProviderSettingsError as exc:
+                raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
+            record = result.to_record()
+            record.update(
+                {
+                    'idempotency_key': idempotency_key,
+                    'namespace_epoch': current_epoch,
+                    'runtime_revision': current_runtime_revision,
+                }
+            )
+            self._provider_mutation_results[cache_key] = (fingerprint, dict(record))
+            self._provider_mutation_results.move_to_end(cache_key)
+            while len(self._provider_mutation_results) > _PROVIDER_MUTATION_CACHE_MAX_ENTRIES:
+                self._provider_mutation_results.popitem(last=False)
+            self._record_project_activity(project.project_id)
+            return record
+
     def invalidation_audit_payload(self) -> dict[str, int]:
         """Test/diagnostic-only counters for proving idle stream cost."""
         with self._invalidation_watch_lock:
@@ -808,6 +1075,22 @@ class MobileGatewayService:
                 project_id,
                 agent=agent,
                 query=parse_qs(parsed.query, keep_blank_values=True),
+                headers=headers,
+            )
+        provider_control_route = _parse_project_agent_route(route, suffix='provider-control')
+        if provider_control_route is not None:
+            project_id, agent = provider_control_route
+            return 200, self.agent_provider_control_payload(
+                project_id,
+                agent=agent,
+                headers=headers,
+            )
+        provider_quota_route = _parse_project_agent_route(route, suffix='provider-quota')
+        if provider_quota_route is not None:
+            project_id, agent = provider_quota_route
+            return 200, self.agent_provider_quota_payload(
+                project_id,
+                agent=agent,
                 headers=headers,
             )
         if route == '/v1/devices/me':
@@ -1275,6 +1558,15 @@ class MobileGatewayService:
                 headers=headers,
             )
             return (409 if message_payload.get('status') == 'blocked' else 202), message_payload
+        provider_control_route = _parse_project_agent_route(route, suffix='provider-control')
+        if provider_control_route is not None:
+            project_id, agent = provider_control_route
+            return 200, self.update_agent_provider_settings(
+                project_id,
+                agent=agent,
+                payload=payload,
+                headers=headers,
+            )
         prefix = '/v1/devices/'
         suffix = '/revoke'
         if route.startswith(prefix) and route.endswith(suffix):

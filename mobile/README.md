@@ -38,6 +38,13 @@ renders agent transcripts, sends pane-native text input, opens terminal views,
 and supports image/document upload and download through the authenticated
 gateway.
 
+Selected-agent headers also expose the active Provider/model/thinking state.
+The Provider sheet uses capability-driven model and effort choices, separates
+configured/pending state from the active native session, and displays native
+session usage plus optional account quota. These semantics are directly
+aligned with pinned open-source Paseo Provider contracts; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ### LAN pairing and recovery
 
 For a LAN QR/code, connect the phone and computer to the same trusted Wi-Fi,

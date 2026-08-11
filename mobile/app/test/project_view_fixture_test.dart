@@ -184,6 +184,59 @@ void main() {
     expect(agent.lastProgressAt, '2026-06-29T10:00:00Z');
   });
 
+  test('project view maps additive provider runtime identity and usage', () {
+    final view = CcbProjectView.fromProjectViewPayload({
+      'view': {
+        'project': {
+          'id': 'proj-provider',
+          'root': '/tmp/proj-provider',
+          'display_name': 'provider',
+        },
+        'namespace': {'epoch': 7},
+        'agents': [
+          {
+            'name': 'lead',
+            'provider': 'claude',
+            'window': 'main',
+            'provider_control': {
+              'provider': 'claude',
+              'configured_model': 'opus',
+              'active_model': 'sonnet',
+              'active_thinking': 'high',
+              'pending_model': 'opus',
+              'runtime_revision': '1700000000:2048',
+              'usage': {
+                'input_tokens': 1200,
+                'cached_input_tokens': 400,
+                'output_tokens': 300,
+                'context_window_used_tokens': 1900,
+                'scope': 'current_session_tail',
+              },
+              'capabilities': {
+                'model_catalog': true,
+                'model_select': true,
+                'thinking_select': true,
+                'session_usage': true,
+                'account_quota': true,
+              },
+              'mutation_mode': 'restart_required',
+            },
+          },
+        ],
+      },
+    });
+
+    final control = view.agentByName('lead')!.providerControl!;
+    expect(control.provider, 'claude');
+    expect(control.displayModel, 'sonnet');
+    expect(control.pendingModel, 'opus');
+    expect(control.displayThinking, 'high');
+    expect(control.usage?.totalTokens, isNull);
+    expect(control.usage?.contextWindowUsedTokens, 1900);
+    expect(control.capabilities.accountQuota, isTrue);
+    expect(control.mutationMode, 'restart_required');
+  });
+
   test('project view retains cache watermark metadata', () {
     final view = CcbProjectView.fromProjectViewPayload({
       'cache': {

@@ -6,6 +6,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import 'gateway_transport.dart';
 import 'relay_crypto.dart';
@@ -126,7 +127,8 @@ class _RelayV2AeadEnvelopeCodec implements _RelayGatewayEnvelopeCodec {
   }
 }
 
-class RelayGatewayTransport implements GatewayTransport {
+class RelayGatewayTransport
+    implements GatewayTransport, GatewayProviderControlTransport {
   RelayGatewayTransport({
     required GatewayTransport inner,
     required this.sessionId,
@@ -175,6 +177,88 @@ class RelayGatewayTransport implements GatewayTransport {
     return _record('get_project_view', {'project_id': projectId}, () {
       return _inner.getProjectView(projectId);
     });
+  }
+
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) {
+    final inner = _inner;
+    if (inner is! GatewayProviderControlTransport) {
+      throw UnsupportedError('relay gateway does not support provider control');
+    }
+    return _record(
+      'get_agent_provider_control',
+      {'project_id': projectId, 'agent': agentName},
+      () => (inner as GatewayProviderControlTransport).getAgentProviderControl(
+        projectId: projectId,
+        agentName: agentName,
+      ),
+    );
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) {
+    final inner = _inner;
+    if (inner is! GatewayProviderControlTransport) {
+      throw UnsupportedError('relay gateway does not support provider quota');
+    }
+    return _record(
+      'get_agent_provider_quota',
+      {'project_id': projectId, 'agent': agentName},
+      () => (inner as GatewayProviderControlTransport).getAgentProviderQuota(
+        projectId: projectId,
+        agentName: agentName,
+      ),
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) {
+    final inner = _inner;
+    if (inner is! GatewayProviderControlTransport) {
+      throw UnsupportedError('relay gateway does not support provider control');
+    }
+    return _record(
+      'update_agent_provider_settings',
+      {
+        'project_id': projectId,
+        'agent': agentName,
+        'model': model,
+        if (_hasText(thinking)) 'thinking': thinking,
+        'expected_revision': expectedRevision,
+        'expected_namespace_epoch': expectedNamespaceEpoch,
+        'expected_provider': expectedProvider,
+        'expected_runtime_revision': expectedRuntimeRevision,
+        'idempotency_key': idempotencyKey,
+      },
+      () => (inner as GatewayProviderControlTransport)
+          .updateAgentProviderSettings(
+            projectId: projectId,
+            agentName: agentName,
+            model: model,
+            thinking: thinking,
+            expectedRevision: expectedRevision,
+            expectedNamespaceEpoch: expectedNamespaceEpoch,
+            expectedProvider: expectedProvider,
+            expectedRuntimeRevision: expectedRuntimeRevision,
+            idempotencyKey: idempotencyKey,
+          ),
+    );
   }
 
   @override

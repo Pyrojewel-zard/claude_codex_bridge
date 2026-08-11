@@ -20,6 +20,7 @@ export 'models/ccb_notification.dart';
 export 'models/ccb_project.dart';
 export 'models/ccb_project_lifecycle.dart';
 export 'models/ccb_project_view.dart';
+export 'models/ccb_provider_control.dart';
 export 'models/ccb_scope.dart';
 export 'models/ccb_terminal_target.dart';
 export 'models/ccb_window.dart';

@@ -318,6 +318,63 @@ class CcbMobileLocalizations {
 
   String get refreshConversation => isChinese ? '刷新对话' : 'Refresh conversation';
 
+  String get providerControl => isChinese ? '模型与用量' : 'Model and usage';
+
+  String get providerModel => isChinese ? '模型' : 'Model';
+
+  String get providerThinking => isChinese ? '思考强度' : 'Thinking';
+
+  String get providerSessionUsage => isChinese ? '当前会话用量' : 'Session usage';
+
+  String get providerAccountQuota => isChinese ? '账户配额' : 'Account quota';
+
+  String get providerUsageUnavailable => isChinese ? '暂不可用' : 'Unavailable';
+
+  String get providerRestartRequired =>
+      isChinese ? '重启 Agent 后生效' : 'Applies after agent restart';
+
+  String get providerPendingRestart =>
+      isChinese ? '等待 Agent 重启' : 'Pending agent restart';
+
+  String get providerPendingShort => isChinese ? '待重启' : 'pending restart';
+
+  String providerConfigured(String model) =>
+      isChinese ? '已配置：$model' : 'Configured: $model';
+
+  String providerContextUsage(String used, String maximum) =>
+      isChinese ? '$used / $maximum 上下文' : '$used / $maximum context';
+
+  String providerInputTokens(String value) =>
+      isChinese ? '输入 $value' : 'Input $value';
+
+  String providerCachedTokens(String value) =>
+      isChinese ? '缓存 $value' : 'Cached $value';
+
+  String providerOutputTokens(String value) =>
+      isChinese ? '输出 $value' : 'Output $value';
+
+  String get providerSave => isChinese ? '保存选择' : 'Save selection';
+
+  String get providerSaving => isChinese ? '正在保存' : 'Saving';
+
+  String get providerRefresh =>
+      isChinese ? '刷新模型与用量' : 'Refresh model and usage';
+
+  String get providerConfirmTitle =>
+      isChinese ? '保存模型选择？' : 'Save model selection?';
+
+  String get providerConfirmBody =>
+      isChinese
+          ? '当前任务不会中断；新设置会在 Agent 下次重启后生效。'
+          : 'The current task will not be interrupted. The new setting applies after the next agent restart.';
+
+  String get providerScopeRequired =>
+      isChinese
+          ? '当前配对未授权修改模型，请重新配对后再试。'
+          : 'This pairing cannot change models. Re-pair to grant access.';
+
+  String get searchModels => isChinese ? '搜索模型' : 'Search models';
+
   String get newMessages => isChinese ? '新消息' : 'New messages';
 
   String get communicating => isChinese ? '通讯中' : 'Communicating';
