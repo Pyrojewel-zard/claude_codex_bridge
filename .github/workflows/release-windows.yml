@@ -1,21 +1,22 @@
-name: Native Windows Prerelease
+name: Native Windows Release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Windows prerelease tag to build and publish"
+        description: "Windows release tag to build and publish"
         required: true
-        default: "v8.6.0-beta.3"
+        default: "v8.6.0"
   push:
     tags:
+      - "v*.*.*"
       - "v*-beta.*"
 
 permissions:
   contents: write
 
 concurrency:
-  group: windows-prerelease-${{ github.event.inputs.tag || github.ref_name }}
+  group: windows-release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -87,8 +88,8 @@ jobs:
           $archive = Resolve-Path dist/windows/x86_64/ccb-windows-x86_64.zip
           $checksumLine = (Get-Content dist/windows/x86_64/ccb-windows-x86_64.zip.sha256 -Raw).Trim()
           $digest = ($checksumLine -split '\s+')[0]
-          $prefix = Join-Path $env:RUNNER_TEMP "ccb-windows-beta-install"
-          $env:HOME = Join-Path $env:RUNNER_TEMP "ccb-windows-beta-home"
+          $prefix = Join-Path $env:RUNNER_TEMP "ccb-windows-release-install"
+          $env:HOME = Join-Path $env:RUNNER_TEMP "ccb-windows-release-home"
           $env:USERPROFILE = $env:HOME
           $env:CODEX_HOME = Join-Path $env:HOME ".codex"
           $env:FACTORY_HOME = Join-Path $env:HOME ".factory"
@@ -107,8 +108,8 @@ jobs:
             dist/windows/x86_64/ccb-windows-x86_64.zip.sha256
           if-no-files-found: error
 
-  publish-prerelease:
-    name: Publish Windows GitHub prerelease
+  publish-release:
+    name: Publish Windows GitHub release
     runs-on: ubuntu-latest
     needs: build-windows-x64
 
@@ -124,7 +125,7 @@ jobs:
           name: ccb-windows-x86_64
           path: dist/windows/x86_64
 
-      - name: Create or update prerelease
+      - name: Create or update release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -136,10 +137,16 @@ jobs:
           grep -Fx '## English' "$notes"
           grep -Fx '## 中文' "$notes"
           (cd dist/windows/x86_64 && sha256sum -c ccb-windows-x86_64.zip.sha256)
+          title="$TAG_NAME"
+          release_flags=(--latest)
+          if [[ "$TAG_NAME" == *-* ]]; then
+            title="$TAG_NAME Windows beta"
+            release_flags=(--prerelease)
+          fi
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --prerelease --title "$TAG_NAME Windows beta" --notes-file "$notes"
+            gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$notes" "${release_flags[@]}"
           else
-            gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "$TAG_NAME Windows beta" --notes-file "$notes"
+            gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$title" --notes-file "$notes" "${release_flags[@]}"
           fi
           gh release upload "$TAG_NAME" \
             dist/windows/x86_64/ccb-windows-x86_64.zip \

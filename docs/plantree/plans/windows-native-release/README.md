@@ -1,17 +1,18 @@
 # Native Windows Release Plan
 
-Date: 2026-08-11
+Date: 2026-08-12
 
 ## Goal
 
-Turn PR #293 into an isolated, testable native Windows x64 prerelease without
-changing the stable Linux, macOS, npm, sidebar, or Android release products.
+Ship CCB `v8.6.0` through the existing stable release products and attach an
+isolated, testable native Windows x64 artifact without claiming stable Windows
+support or mixing Windows code into Unix/npm ownership.
 
 ## Current target
 
-- Version/tag: `v8.6.0-beta.3`
-- Status: published GitHub prerelease; native build, archive install, launcher
-  smoke, upload, and downloaded-asset checksum verification passed.
+- Version/tag: `v8.6.0`
+- Status: release candidate; stable version surfaces and Windows stable-tag
+  workflow are prepared, with publication pending final gates.
 - Artifact: `ccb-windows-x86_64.zip`
 - Installer: root `install.ps1`, implemented by
   `platforms/windows/installer/install.ps1`
@@ -21,17 +22,23 @@ changing the stable Linux, macOS, npm, sidebar, or Android release products.
 ## File map
 
 - [roadmap.md](roadmap.md): gates and current status.
-- [topics/v8.6.0-beta.3.md](topics/v8.6.0-beta.3.md): current implementation
-  and verification record.
+- [topics/v8.6.0.md](topics/v8.6.0.md): stable release implementation and
+  verification record.
+- [topics/v8.6.0-beta.3.md](topics/v8.6.0-beta.3.md): published Windows beta
+  evidence used by the stable candidate.
 - [topics/v8.6.0-beta.2.md](topics/v8.6.0-beta.2.md): immutable failed-candidate
   record.
 - [topics/v8.6.0-beta.1.md](topics/v8.6.0-beta.1.md): immutable failed-candidate
   record.
 - [decisions/001-isolated-windows-prerelease.md](decisions/001-isolated-windows-prerelease.md):
   frozen isolation and publication boundaries.
+- [decisions/002-stable-ccb-with-windows-beta-asset.md](decisions/002-stable-ccb-with-windows-beta-asset.md):
+  stable tag and Windows support-tier boundary.
 
 ## Acceptance boundary
 
-The tag is a beta, not a stable-support declaration. Publication requires a
+The CCB tag is stable, but the Windows artifact remains beta. Publication
+requires the normal stable Linux, macOS, npm, Sidebar, and Android gates plus a
 native Windows x64 build, checksum, archive install, and `ccb.exe` smoke test.
-Real WezTerm/Herdr behavior remains a post-publication qualification gate.
+Real WezTerm/Herdr and provider behavior remains a post-publication Windows
+qualification gate.

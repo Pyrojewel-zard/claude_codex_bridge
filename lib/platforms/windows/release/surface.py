@@ -258,11 +258,13 @@ def windows_beta_projection(version: str) -> WindowsX64ReleaseSurfaceProjection:
         "beta_gaps": [
             "Python 3.10+ remains an external prerequisite.",
             "The native launchers are unsigned beta binaries.",
-            "Real Windows, WezTerm, and Herdr acceptance is pending prerelease testing.",
+            "Real Windows, WezTerm, and Herdr acceptance remains pending.",
         ],
         "surface_state": "degraded",
         "failure_reason": "managed-python-degraded",
-        "release_gate_detail": "The Windows x64 ZIP lane is packaged for prerelease testing only.",
+        "release_gate_detail": (
+            "The Windows x64 ZIP is attached to the stable CCB release but retains beta support status."
+        ),
         "diagnostic": "Native Windows x64 beta artifact is ready; external prerequisites still apply.",
         "next_action": "Verify the SHA256 file, reinstall with install.ps1, and report beta results.",
     }
