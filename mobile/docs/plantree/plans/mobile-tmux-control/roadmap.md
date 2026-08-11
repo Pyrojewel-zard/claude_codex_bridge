@@ -2,9 +2,9 @@
 
 Date: 2026-06-18
 
-## Phase 4I: Paseo-Aligned Provider Control Plane — In Progress
+## Phase 4I: Paseo-Aligned Provider Control Plane — Complete
 
-Status: In Progress (2026-08-11).
+Status: Complete (2026-08-12).
 
 - show Provider, active model, and thinking as selected-agent identity;
 - adapt Paseo's Provider snapshot, model definition, usage, quota, and
@@ -17,6 +17,9 @@ Status: In Progress (2026-08-11).
 - keep direct HTTP and encrypted Relay contracts equivalent;
 - require full tests/builds plus real server-wide Android Emulator evidence on
   dedicated Codex and Claude projects before completion.
+
+Accepted evidence:
+[history/provider-control-plane-acceptance-20260812.md](history/provider-control-plane-acceptance-20260812.md).
 
 Execution authority:
 [goal-provider-control-plane.md](goal-provider-control-plane.md) and

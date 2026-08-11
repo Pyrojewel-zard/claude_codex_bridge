@@ -1,7 +1,7 @@
 # CCB Mobile Provider Control Plane Goal
 
-Date: 2026-08-11
-Status: In Progress
+Date: 2026-08-12
+Status: Implemented and Accepted
 Mode: Execute
 
 ## Purpose
@@ -504,3 +504,25 @@ confirmed against actual runtime state, session usage matches native evidence,
 quota failures remain isolated, full tests/builds pass, and plan-tree landed
 evidence is updated. If Package D remains intentionally deferred, record a
 decision narrowing the completion gate before declaring the goal complete.
+
+## Completion Record
+
+Completed on 2026-08-12 against Paseo commit `b599d38`.
+
+- Packages A-D are implemented as compatible CCB-native Python/Dart contracts.
+- Codex and Claude Provider identity, configured/active/pending model state,
+  thinking options, native session identity, token/context usage, and guarded
+  restart-required configuration changes were exercised through the real
+  Android Emulator and server-wide gateway.
+- Conversation history now carries Provider-native session identity and shows
+  a presentation-only `New context` divider when `clear` starts a new session;
+  prior messages remain visible.
+- Account quota remains a separate bounded route. Where managed Provider
+  credentials do not expose authoritative quota, the UI truthfully reports
+  unavailable rather than estimating a value.
+- Provider-control endpoint p95 latency dropped from about 1.06 seconds to
+  38.6 ms for Codex and 33.2 ms for Claude by preventing unrelated optional
+  Provider CLI discovery from entering the request path.
+- Full acceptance evidence, APK hashes, test counts, and residual limits are
+  recorded in
+  [history/provider-control-plane-acceptance-20260812.md](history/provider-control-plane-acceptance-20260812.md).

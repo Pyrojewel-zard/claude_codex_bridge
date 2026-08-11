@@ -1,8 +1,8 @@
 # Mobile Tmux Control Implementation Status
 
-Date: 2026-08-02
+Date: 2026-08-12
 
-## Paseo-Aligned Provider Control Plane — In Progress
+## Paseo-Aligned Provider Control Plane — Implemented And Accepted
 
 The source and Flutter implementation now expose selected-agent Provider,
 active/configured/pending model and thinking state, bounded Codex/Claude native
@@ -14,9 +14,14 @@ active task. Direct HTTP and encrypted Relay carry the same fixed contract.
 
 Paseo alignment is pinned to `getpaseo/paseo` commit `b599d38`; provenance and
 source-to-target mapping are recorded in `mobile/THIRD_PARTY_NOTICES.md` and
-[Decision 025](decisions/025-paseo-provider-control-alignment.md). Focused
-Python/Flutter tests and Flutter analyze pass. Full suites, APK builds, and the
-real Codex/Claude server-wide Emulator matrix remain the completion gate.
+[Decision 025](decisions/025-paseo-provider-control-alignment.md). The real
+server-wide Android Emulator matrix passed for dedicated Codex and Claude
+agents, including selection, native session usage, stale-mutation rejection,
+state isolation, and a retained-history `New context` divider. Full Flutter
+tests, analyze, debug/profile APK builds, and focused Python suites pass. The
+full non-blackbox Python run passed 6657 tests; its sole unrelated two-worker
+workflow smoke race passed immediately when rerun in isolation. See
+[the acceptance record](history/provider-control-plane-acceptance-20260812.md).
 
 ## LAN Network Awareness And Recovery — Implemented, Physical Gate Pending
 
