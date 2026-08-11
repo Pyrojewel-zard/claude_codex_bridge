@@ -51,7 +51,7 @@ from storage.atomic import atomic_write_text
 from ..home_layout import ClaudeHomeLayout, claude_layout_for_home, claude_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
-_CLAUDE_RUNTIME_SETTINGS_KEYS = ('enabledPlugins', 'hooks', 'permissions')
+_CLAUDE_RUNTIME_SETTINGS_KEYS = ('hooks', 'permissions')
 _CLAUDE_CCB_PERMISSION_PREFIX = 'Bash(ccb '
 _CLAUDE_AUTH_ENV_KEYS = ('ANTHROPIC_AUTH_TOKEN',)
 _CLAUDE_API_AUTH_ENV_KEYS = ('ANTHROPIC_API_KEY',)
@@ -1195,13 +1195,6 @@ def _merge_settings_payload(
     for key in _CLAUDE_RUNTIME_SETTINGS_KEYS:
         value = existing_payload.get(key)
         if value is not None:
-            if key == 'enabledPlugins':
-                enabled_plugins = _merge_enabled_plugins_payload(projected_payload.get('enabledPlugins'), value)
-                if enabled_plugins:
-                    merged[key] = enabled_plugins
-                else:
-                    merged.pop(key, None)
-                continue
             if key == 'hooks':
                 hooks = _merge_hooks_payload(projected_payload.get('hooks'), value)
                 if hooks:
@@ -1237,18 +1230,6 @@ def _merge_settings_payload(
     if projected is not None:
         return {}
     return None
-
-
-def _merge_enabled_plugins_payload(projected: object, existing: object) -> dict[str, object]:
-    existing_plugins = _settings_mapping_copy(existing)
-    projected_plugins = _settings_mapping_copy(projected)
-    if not existing_plugins:
-        return projected_plugins
-    if not projected_plugins:
-        return existing_plugins
-    merged = dict(existing_plugins)
-    merged.update(projected_plugins)
-    return merged
 
 
 def _merge_hooks_payload(projected: object, existing: object) -> dict[str, object]:
