@@ -4100,7 +4100,7 @@ def test_codex_launcher_build_start_cmd_forks_linked_authority_generation(
     )
     monkeypatch.setattr(
         'provider_backends.codex.launcher_runtime.command.supports_managed_app_server',
-        lambda parts: False,
+        lambda parts: True,
     )
 
     command = ParsedStartCommand(
@@ -4113,6 +4113,7 @@ def test_codex_launcher_build_start_cmd_forks_linked_authority_generation(
 
     assert 'fork old-codex-session-id' in cmd
     assert 'resume old-codex-session-id' not in cmd
+    assert '--remote' not in cmd
     rewritten = json.loads(session_file.read_text(encoding='utf-8'))
     assert rewritten['old_codex_session_id'] == 'old-codex-session-id'
     assert rewritten['old_codex_session_path'] == str(old_log)

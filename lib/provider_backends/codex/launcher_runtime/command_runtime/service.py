@@ -79,6 +79,12 @@ def build_start_cmd(
         prefix_parts.append(f'export {exports}')
     managed_enabled = bool(
         not str(spec.provider_command_template or '').strip()
+        # Codex 0.145.0 advertises both `--remote` and `fork`, but combining
+        # them can open a fresh thread whose session metadata has no
+        # `forked_from_id`.  That silently drops the context while CCB records
+        # a native fork continuation.  Keep authority-changing forks on the
+        # native local CLI until the remote surface proves fork semantics.
+        and str(launch_context.get('ccb_continuation_launch_mode') or '').strip() != 'fork'
         and supports_managed_app_server_fn is not None
         and build_managed_app_server_command_fn is not None
         and supports_managed_app_server_fn(tuple(provider_start_parts))

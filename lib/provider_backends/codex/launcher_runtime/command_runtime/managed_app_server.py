@@ -107,6 +107,8 @@ def build_managed_app_server_command(
     base_args, continuation_mode, resume_id = _split_continuation(codex_args)
     if not base_args:
         raise ValueError('managed Codex app-server requires an executable')
+    if continuation_mode == 'fork':
+        raise ValueError('managed Codex app-server does not provide verified fork semantics')
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     socket_path = artifacts.app_server_socket
     socket_url = f'unix://{socket_path}'

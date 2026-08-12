@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import time
 
-from provider_backends.codex.comm_runtime.binding import extract_cwd_from_log_file, extract_session_id, is_codex_subagent_log
+from provider_backends.codex.comm_runtime.binding import (
+    extract_cwd_from_log_file,
+    extract_session_id,
+    is_codex_subagent_log,
+)
 from provider_backends.codex.comm_runtime.pathing import normalize_work_dir
 from provider_backends.codex.session_runtime.follow_policy import codex_session_root_path
 
@@ -38,12 +43,14 @@ def resolve_switch_decision(
         return _decision(STATE_MISMATCH, "missing_work_dir_or_session_root", None, evidence)
 
     running_anchors = running_request_anchors(session_file=session_file, session_data=session_data)
+    runtime_started_at = _runtime_started_at(session_data)
     candidates = _candidate_sessions(
         session_data,
         session_file=session_file,
         root=root,
         work_dir=work_dir,
         request_anchors=running_anchors,
+        runtime_started_at=runtime_started_at,
     )
     evidence = _evidence_with_candidates(evidence, candidates=candidates, running_anchors=running_anchors)
 
@@ -53,6 +60,7 @@ def resolve_switch_decision(
             session_file=session_file,
             root=root,
             work_dir=work_dir,
+            runtime_started_at=runtime_started_at,
         ):
             return _decision(STATE_SWITCHED_UNBOUND, "running_job_anchor_not_seen", None, evidence)
         return _decision(STATE_BOUND, "no_new_managed_session", None, evidence)
@@ -79,6 +87,7 @@ def _candidate_sessions(
     root: Path,
     work_dir: str,
     request_anchors: tuple[str, ...] = (),
+    runtime_started_at: float | None = None,
 ) -> tuple[SwitchCandidate, ...]:
     current_path = _normalize_path(session_data.get("codex_session_path"))
     current_id = str(session_data.get("codex_session_id") or "").strip()
@@ -105,6 +114,12 @@ def _candidate_sessions(
         if mtime is None:
             continue
         if current_mtime is not None and mtime <= current_mtime:
+            continue
+        # An idle switch is valid only when the candidate became active during
+        # the current managed runtime generation.  Merely being newer than the
+        # persisted binding is insufficient after a pane restart: a different
+        # conversation may have been active shortly before this generation.
+        if not request_anchors and runtime_started_at is not None and mtime < runtime_started_at:
             continue
         if request_anchors:
             if not _path_contains_any_exact_anchor(path, request_anchors):
@@ -273,6 +288,16 @@ def _path_contains_any_exact_anchor(path: Path, anchors: tuple[str, ...]) -> boo
     except Exception:
         return False
     return any(_path_contains_exact_anchor_text(text, anchor) for anchor in anchors)
+
+
+def _runtime_started_at(session_data: dict[str, object]) -> float | None:
+    raw = str(session_data.get("started_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        return time.mktime(time.strptime(raw, "%Y-%m-%d %H:%M:%S"))
+    except (OverflowError, ValueError):
+        return None
 
 
 def _path_contains_exact_anchor_text(text: str, anchor: str) -> bool:

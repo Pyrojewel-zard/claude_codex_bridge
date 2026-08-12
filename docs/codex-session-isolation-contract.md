@@ -268,6 +268,20 @@ When `ccb` starts a managed Codex agent:
   that command to create the linked native continuation; otherwise it starts a
   new native binding while retaining the linked transcript and must not claim
   that context import occurred
+- native `fork` continuation must use a launch surface that preserves and
+  exposes the requested parent binding; advertising `--remote` and `fork`
+  separately is not proof that their combination preserves fork semantics
+- when the installed Codex remote surface creates a thread without the
+  requested `forked_from_id`, CCB must keep linked-continuation startup on the
+  local native CLI and must not record the blank thread as a native fork
+- if legacy state already claims `native_fork_continuation` but the bound
+  rollout does not name the recorded old binding as its parent, startup must
+  reject that binding, durably record the mismatch, and recover the old
+  binding's unique managed fork-chain descendant before resume
+- before choosing a native resume/fork target, startup may repair a lagging
+  binding by following one linear `forked_from_id` chain in the same
+  agent-managed root and `work_dir`; a sibling branch is ambiguous and must
+  leave the last durable binding unchanged
 - archive/rotation is allowed only when the resolved Codex home/session root is
   outside the validated Agent-managed boundary or other ownership/path evidence
   is unsafe; authority mismatch alone is not archive authority
@@ -410,6 +424,10 @@ session-switch boundary:
   the current agent's managed home, has the same `work_dir`, is newer than the
   current binding, is the only valid candidate, and belongs to the current
   runtime generation
+- for idle discovery, belonging to the current runtime generation requires
+  candidate activity at or after the managed session file's `started_at`; a
+  conversation last active before the pane restart is stale evidence even when
+  it is newer than the persisted binding
 - when a running job is visible, auto-commit additionally requires the candidate
   log to contain that job's request anchor
 - for an active wrapped job, a unique newer top-level candidate inside the same

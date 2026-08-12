@@ -12,6 +12,8 @@ import sys
 from threading import Event, Thread
 from types import SimpleNamespace
 
+import pytest
+
 from completion.models import CompletionSourceKind
 import provider_backends.codex.app_server_followup as app_server_followup
 from provider_backends.codex.app_server_followup import steer_active_turn
@@ -409,16 +411,14 @@ def test_managed_launcher_preserves_resume_rewrites_and_fallback(tmp_path: Path)
     assert 'CCB_CODEX_MANAGED_REMOTE=1' in stripped
 
 
-def test_managed_launcher_preserves_native_fork_continuation(tmp_path: Path) -> None:
+def test_managed_launcher_rejects_unverified_remote_fork_combination(tmp_path: Path) -> None:
     session_id = '12345678-1234-1234-1234-123456789abc'
-    command, _state = build_managed_app_server_command(
-        ['codex', '--profile', 'ccb', 'fork', session_id],
-        runtime_dir=tmp_path,
-    )
 
-    assert f'codex --remote unix://{tmp_path / "app-server.sock"} --profile ccb' in command
-    assert f'fork "$CCB_CODEX_RESUME_ID"' in command
-    assert 'resume "$CCB_CODEX_RESUME_ID"' not in command
+    with pytest.raises(ValueError, match='does not provide verified fork semantics'):
+        build_managed_app_server_command(
+            ['codex', '--profile', 'ccb', 'fork', session_id],
+            runtime_dir=tmp_path,
+        )
 
 
 def test_managed_app_server_capability_probe_is_explicit(monkeypatch) -> None:
