@@ -11,6 +11,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from ccbd.control_plane_transport.endpoint import endpoint_from_record
+from ccbd.control_plane_transport.endpoint_store import write_endpoint
 from cli.services.mobile import _public_gateway_url, prepare_server_mobile_gateway
 from mobile_gateway import (
     MobileGatewayProject,
@@ -20,6 +22,12 @@ from mobile_gateway import (
     publish_mobile_gateway_project,
 )
 from project.ids import compute_project_id
+
+
+requires_af_unix = pytest.mark.skipif(
+    not hasattr(socket, 'AF_UNIX'),
+    reason='requires AF_UNIX socket support',
+)
 
 
 class _FakeCcbdClient:
@@ -84,6 +92,7 @@ def test_public_gateway_url_rejects_non_origin_url(value: str, message: str) -> 
         _public_gateway_url(value, fallback='unused')
 
 
+@requires_af_unix
 def test_host_project_registry_publish_and_loads_redacted_projects(tmp_path: Path) -> None:
     registry_path = tmp_path / 'mobile' / 'projects.json'
     project_root = tmp_path / 'one'
@@ -132,6 +141,64 @@ def test_host_project_registry_omits_stale_persisted_projects(tmp_path: Path) ->
         load_mobile_gateway_project_registry(registry_path=registry_path)
 
 
+def test_host_project_registry_loads_windows_tcp_marker_without_connecting(tmp_path: Path) -> None:
+    registry_path = tmp_path / 'mobile' / 'projects.json'
+    project_root = tmp_path / 'windows-project'
+    project_root.mkdir()
+    socket_path = project_root / '.ccb' / 'ccbd' / 'ccbd.sock'
+    socket_path.parent.mkdir(parents=True)
+    socket_path.touch()
+    write_endpoint(
+        endpoint_from_record(
+            {
+                'kind': 'tcp_loopback',
+                'host': '127.0.0.1',
+                'port': 32123,
+                'token_ref': str(socket_path.parent / 'control-plane-token-test.json'),
+                'generation': 'test',
+                'acl_status': 'windows-icacls-user-read',
+                'fingerprint': 'deadbeefcafebabe',
+            }
+        ),
+        legacy_socket_path=socket_path,
+    )
+    publish_mobile_gateway_project(
+        project_id='proj-windows',
+        project_root=project_root,
+        ccbd_socket_path=socket_path,
+        display_name='windows-project',
+        registry_path=registry_path,
+    )
+
+    registry = load_mobile_gateway_project_registry(registry_path=registry_path)
+
+    assert [project.project_id for project in registry.projects()] == ['proj-windows']
+    assert registry.default_project.public_display_name == 'windows-project'
+
+
+def test_host_project_registry_omits_windows_marker_with_invalid_endpoint(tmp_path: Path) -> None:
+    registry_path = tmp_path / 'mobile' / 'projects.json'
+    project_root = tmp_path / 'windows-project'
+    project_root.mkdir()
+    socket_path = project_root / '.ccb' / 'ccbd' / 'ccbd.sock'
+    socket_path.parent.mkdir(parents=True)
+    socket_path.touch()
+    (socket_path.parent / 'control-plane-endpoint.json').write_text(
+        '{"kind":"tcp_loopback","host":"0.0.0.0"}',
+        encoding='utf-8',
+    )
+    publish_mobile_gateway_project(
+        project_id='proj-windows-invalid',
+        project_root=project_root,
+        ccbd_socket_path=socket_path,
+        registry_path=registry_path,
+    )
+
+    with pytest.raises(ValueError, match='cannot be empty'):
+        load_mobile_gateway_project_registry(registry_path=registry_path)
+
+
+@requires_af_unix
 def test_running_project_discovery_reads_ccbd_main_project_cmdline(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'running-project'
     project_root.mkdir()
@@ -160,6 +227,7 @@ def test_running_project_discovery_reads_ccbd_main_project_cmdline(tmp_path: Pat
     assert projects[0].public_display_name == 'running-project'
 
 
+@requires_af_unix
 def test_host_project_registry_can_merge_running_projects(tmp_path: Path, monkeypatch) -> None:
     registry_path = tmp_path / 'mobile' / 'projects.json'
     persisted_root = tmp_path / 'persisted'
@@ -370,6 +438,7 @@ def test_server_cli_reuses_handoff_and_update_rotation_preserves_claimed_device(
         thread.join(timeout=2)
 
 
+@requires_af_unix
 def test_prepare_server_mobile_gateway_uses_published_registry_without_proc(
     tmp_path: Path,
     monkeypatch,

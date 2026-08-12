@@ -43,6 +43,7 @@ MOBILE_HOST_STOP_TIMEOUT_S = 2.0
 MOBILE_HOST_PORT_RELEASE_TIMEOUT_S = 3.0
 MOBILE_HOST_HEALTH_TIMEOUT_S = 10.0
 MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S = 2.0
+MOBILE_HOST_STATE_READY_TIMEOUT_S = MOBILE_HOST_HEALTH_TIMEOUT_S
 
 
 class MobileHostServiceError(RuntimeError):
@@ -274,10 +275,14 @@ def start_or_replace_mobile_host_service(
             if pid > 0:
                 _terminate_managed_mobile_host(pid, terminate_pid_tree_fn=terminate_pid_tree_fn)
             raise
-        state = _matching_spawned_state(
-            read_mobile_host_service_state(paths.state_path),
+        state = _wait_for_mobile_host_state_ready(
+            paths,
+            process=process,
             pid=pid,
             generation=generation,
+            timeout_s=MOBILE_HOST_STATE_READY_TIMEOUT_S,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
         )
         return MobileHostServiceResult(
             status='replaced' if replaced_pid is not None else 'started',
@@ -451,6 +456,9 @@ def detect_loopback_port_owner(listen: str) -> PortOwner | None:
         raise MobileHostServiceError(
             'mobile gateway listen port must be between 1 and 65535'
         )
+    owner = _detect_loopback_port_owner_netstat(host=host, port=port)
+    if owner is not None:
+        return owner
     owner = _detect_loopback_port_owner_ss(host=host, port=port)
     if owner is not None:
         return owner
@@ -459,6 +467,39 @@ def detect_loopback_port_owner(listen: str) -> PortOwner | None:
         return owner
     if _loopback_port_accepts_connection(host=host, port=port):
         return PortOwner(pid=0, command='unknown loopback listener')
+    return None
+
+
+def _detect_loopback_port_owner_netstat(*, host: str, port: int) -> PortOwner | None:
+    if os.name != 'nt':
+        return None
+    try:
+        result = subprocess.run(
+            ['netstat', '-ano', '-p', 'tcp'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in (result.stdout or '').splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[0].upper() != 'TCP':
+            continue
+        local_address = fields[1]
+        state = fields[3].upper()
+        if state != 'LISTENING':
+            continue
+        if not _listen_address_matches(local_address, host=host, port=port):
+            continue
+        try:
+            pid = int(fields[4])
+        except ValueError:
+            return PortOwner(pid=0, command='unknown loopback listener')
+        return PortOwner(pid=pid, command=_process_cmdline(pid))
     return None
 
 
@@ -617,6 +658,50 @@ def _wait_for_mobile_host_health(
     raise MobileHostServiceError(f'mobile host service did not become healthy: {local_gateway_url}/v1/health')
 
 
+def _wait_for_mobile_host_state_ready(
+    paths: MobileHostServicePaths,
+    *,
+    process: object,
+    pid: int,
+    generation: int,
+    timeout_s: float,
+    sleep_fn: Callable[[float], None],
+    monotonic_fn: Callable[[], float],
+) -> dict[str, object]:
+    deadline = monotonic_fn() + max(0.0, timeout_s)
+    last_state: dict[str, object] | None = None
+    while monotonic_fn() < deadline:
+        poll = getattr(process, 'poll', None)
+        if callable(poll):
+            exit_code = poll()
+            if exit_code is not None:
+                detail = (
+                    'mobile host service exited before publishing pairing state: '
+                    f'exit_code={exit_code}'
+                )
+                log_tail = _mobile_host_log_tail(paths.log_path)
+                if log_tail:
+                    detail += f'; log_tail={log_tail}'
+                raise MobileHostServiceError(detail)
+        state = _matching_spawned_state(
+            read_mobile_host_service_state(paths.state_path),
+            pid=pid,
+            generation=generation,
+        )
+        if state is not None:
+            last_state = state
+            if _state_pairing(state) is not None:
+                return state
+        sleep_fn(0.05)
+    if last_state is not None:
+        raise MobileHostServiceError(
+            f'mobile host service did not publish pairing state: {paths.state_path}'
+        )
+    raise MobileHostServiceError(
+        f'mobile host service did not publish matching state: {paths.state_path}'
+    )
+
+
 def _mobile_host_log_tail(path: Path, *, max_chars: int = 1200) -> str:
     try:
         text = Path(path).read_text(encoding='utf-8', errors='replace')
@@ -679,7 +764,7 @@ def _legacy_mobile_gateway_process(
 ) -> bool:
     """Recognize the pre-service foreground mobile gateway for safe takeover."""
     try:
-        tokens = shlex.split(cmdline)
+        tokens = shlex.split(cmdline, posix=os.name != 'nt')
     except ValueError:
         return False
     expected_script = str((Path(script_root) / 'ccb.py').expanduser().resolve())
@@ -707,6 +792,29 @@ def _legacy_mobile_gateway_process(
 def _process_cmdline(pid: int) -> str:
     if pid <= 0:
         return ''
+    if os.name == 'nt':
+        try:
+            command = [
+                'powershell',
+                '-NoProfile',
+                '-Command',
+                (
+                    'Get-CimInstance Win32_Process -Filter '
+                    f'"ProcessId = {pid}" | Select-Object -ExpandProperty CommandLine'
+                ),
+            ]
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=1.0,
+            )
+        except Exception:
+            return ''
+        if result.returncode != 0:
+            return ''
+        return (result.stdout or '').strip()
     proc_cmdline = Path('/proc') / str(pid) / 'cmdline'
     try:
         text = proc_cmdline.read_bytes().replace(b'\x00', b' ').decode('utf-8', errors='replace').strip()
