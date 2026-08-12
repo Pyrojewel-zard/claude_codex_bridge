@@ -42,6 +42,7 @@ fn run() -> Result<i32, String> {
         command.args(&forwarded);
         command.env("CCB_WINDOWS_LAUNCHER", &executable);
         command.env("CCB_INSTALL_PREFIX", install_root);
+        suppress_child_console(&mut command);
 
         match command.status() {
             Ok(status) => return Ok(status.code().unwrap_or(1)),
@@ -110,6 +111,19 @@ fn normalize_exit_code(code: i32) -> u8 {
         1
     }
 }
+
+#[cfg(target_os = "windows")]
+fn suppress_child_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW: without it a console-subsystem child (python.exe)
+    // spawned from a parent with no console is allocated a brand-new visible
+    // console window that flashes and then closes when the child exits.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn suppress_child_console(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
