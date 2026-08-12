@@ -290,15 +290,21 @@ def test_config_ui_capabilities_endpoint_bounds_slow_cli_model_probe(
     page = tmp_path / 'index.html'
     page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
     calls: list[str] = []
+    release_probe = threading.Event()
+    probe_started = {
+        'opencode': threading.Event(),
+        'mimo': threading.Event(),
+    }
 
     def slow_provider_cli_models(program: str, _environ: dict[str, str]) -> list[str]:
         calls.append(program)
-        time.sleep(0.08)
+        probe_started[program].set()
+        release_probe.wait()
         return [f'{program}/slow-model']
 
     monkeypatch.setattr(config_ui_module, '_provider_cli_models', slow_provider_cli_models)
     monkeypatch.setattr(config_ui_module, '_CAPABILITIES_CLI_MODELS_BUDGET_S', 0.05)
-    monkeypatch.setattr(config_ui_module, '_CAPABILITIES_CLI_MODELS_RETRY_S', 0.05)
+    monkeypatch.setattr(config_ui_module, '_CAPABILITIES_CLI_MODELS_RETRY_S', 0.0)
 
     handle = prepare_config_ui(
         _context(project_root),
@@ -320,15 +326,23 @@ def test_config_ui_capabilities_endpoint_bounds_slow_cli_model_probe(
         assert providers['opencode']['models'] == []
         assert providers['mimo']['models'] == []
         assert set(calls) == {'opencode', 'mimo'}
-        time.sleep(0.1)
-        capabilities = _get_json(handle.url, '/api/capabilities')
-        providers = {provider['id']: provider for provider in capabilities['providers']}
+        assert all(started.is_set() for started in probe_started.values())
+
+        release_probe.set()
+        deadline = time.monotonic() + 2.0
+        while True:
+            capabilities = _get_json(handle.url, '/api/capabilities')
+            providers = {provider['id']: provider for provider in capabilities['providers']}
+            if providers['opencode']['models'] and providers['mimo']['models']:
+                break
+            assert time.monotonic() < deadline
         assert [model['id'] for model in providers['opencode']['models']] == ['opencode/slow-model']
         assert [model['id'] for model in providers['mimo']['models']] == ['mimo/slow-model']
         assert set(calls) == {'opencode', 'mimo'}
         _get_json(handle.url, '/api/capabilities')
         assert set(calls) == {'opencode', 'mimo'}
     finally:
+        release_probe.set()
         handle.close()
         thread.join(timeout=2)
     assert not thread.is_alive()

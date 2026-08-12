@@ -399,12 +399,19 @@ def test_tests_workflow_runs_workflow_closure_layout_cleanup_smoke() -> None:
         assert f'"{key}",' in text
 
 
-def test_wsl_test_job_activates_python_311_venv() -> None:
-    text = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
-    step = text.split("- name: Run tests in WSL with tmux", 1)[1].split("\n      - name:", 1)[0]
+def test_real_wsl_gate_keeps_mounted_drive_startup_smoke() -> None:
+    text = Path(".github/workflows/ccbd-real-platform.yml").read_text(
+        encoding="utf-8"
+    )
+    step = text.split("- name: Smoke ccb startup from /mnt/c in WSL", 1)[1].split(
+        "- name: Lifecycle smoke in WSL",
+        1,
+    )[0]
 
-    assert 'export PATH="/tmp/ccb-ci-py311/bin:$PATH"' in step
-    assert 'python -m pytest test/' in step
+    assert 'export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python' in step
+    assert 'project="/mnt/c/Temp/ccb-wsl-mnt-smoke-' in step
+    assert "runtime_root_kind: relocated" in step
+    assert "ccbd_tmux_socket_root_kind: runtime" in step
 
 
 def _json(payload: dict[str, object]) -> str:

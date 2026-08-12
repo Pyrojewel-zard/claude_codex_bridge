@@ -676,15 +676,14 @@ def test_macos_install_smoke_uses_prebuilt_sidebar_helper() -> None:
 
 def test_wsl_workflows_pin_python_inside_wsl_shells() -> None:
     expected = 'export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python'
-    tests_workflow = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
     real_workflow = Path('.github/workflows/ccbd-real-platform.yml').read_text(
         encoding='utf-8',
     )
 
-    smoke_step = tests_workflow.split(
+    smoke_step = real_workflow.split(
         '- name: Smoke ccb startup from /mnt/c in WSL',
         1,
-    )[1].split('- name: Run tests in WSL with tmux', 1)[0]
+    )[1].split('- name: Lifecycle smoke in WSL', 1)[0]
     communication_step = real_workflow.split(
         '- name: Communication matrix in WSL mounted checkout',
         1,
