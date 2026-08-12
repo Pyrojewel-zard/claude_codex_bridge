@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -522,7 +523,7 @@ def _resolve_executable(value: str, *, cwd: Path | None) -> Path | None:
 
 def _split_cmdline(value: str) -> tuple[str, ...]:
     try:
-        return tuple(shlex.split(value))
+        return tuple(shlex.split(value, posix=os.name != "nt"))
     except ValueError:
         return ()
 
