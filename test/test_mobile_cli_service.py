@@ -21,6 +21,7 @@ from mobile_gateway import (
     load_mobile_gateway_project_registry,
     publish_mobile_gateway_project,
 )
+from mobile_gateway.project_registry import _control_plane_endpoint_is_structurally_valid
 from project.ids import compute_project_id
 
 
@@ -28,6 +29,28 @@ requires_af_unix = pytest.mark.skipif(
     not hasattr(socket, 'AF_UNIX'),
     reason='requires AF_UNIX socket support',
 )
+
+
+def _windows_tcp_loopback_endpoint(*, token_ref: str, **overrides) -> dict:
+    endpoint = {
+        'kind': 'tcp_loopback',
+        'host': '127.0.0.1',
+        'port': 32123,
+        'token_ref': token_ref,
+        'generation': 'test',
+        'acl_status': 'windows-icacls-user-read',
+        'fingerprint': 'deadbeefcafebabe',
+    }
+    endpoint.update(overrides)
+    return endpoint
+
+
+def _write_windows_tcp_marker(project_root: Path, *, endpoint: dict) -> Path:
+    socket_path = project_root / '.ccb' / 'ccbd' / 'ccbd.sock'
+    socket_path.parent.mkdir(parents=True)
+    socket_path.touch()
+    write_endpoint(endpoint_from_record(endpoint), legacy_socket_path=socket_path)
+    return socket_path
 
 
 class _FakeCcbdClient:
@@ -189,6 +212,121 @@ def test_host_project_registry_omits_windows_marker_with_invalid_endpoint(tmp_pa
     )
     publish_mobile_gateway_project(
         project_id='proj-windows-invalid',
+        project_root=project_root,
+        ccbd_socket_path=socket_path,
+        registry_path=registry_path,
+    )
+
+    with pytest.raises(ValueError, match='cannot be empty'):
+        load_mobile_gateway_project_registry(registry_path=registry_path)
+
+
+def test_windows_tcp_marker_without_endpoint_descriptor_is_invalid(tmp_path: Path) -> None:
+    socket_path = tmp_path / '.ccb' / 'ccbd' / 'ccbd.sock'
+    socket_path.parent.mkdir(parents=True)
+    socket_path.touch()
+
+    assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
+
+
+def test_windows_tcp_marker_with_unix_kind_descriptor_is_invalid(tmp_path: Path) -> None:
+    socket_path = tmp_path / '.ccb' / 'ccbd' / 'ccbd.sock'
+    socket_path.parent.mkdir(parents=True)
+    socket_path.touch()
+    (socket_path.parent / 'control-plane-endpoint.json').write_text(
+        json.dumps({'kind': 'unix_socket', 'address': str(socket_path)}),
+        encoding='utf-8',
+    )
+
+    assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
+
+
+def test_windows_tcp_marker_missing_token_ref_is_invalid(tmp_path: Path) -> None:
+    socket_path = _write_windows_tcp_marker(
+        tmp_path,
+        endpoint=_windows_tcp_loopback_endpoint(token_ref=''),
+    )
+
+    assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
+
+
+def test_windows_tcp_marker_with_off_loopback_host_is_invalid(tmp_path: Path) -> None:
+    socket_path = _write_windows_tcp_marker(
+        tmp_path,
+        endpoint=_windows_tcp_loopback_endpoint(token_ref='token', host='192.168.2.11'),
+    )
+
+    assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
+
+
+def test_windows_tcp_marker_with_valid_descriptor_is_valid(tmp_path: Path) -> None:
+    socket_path = _write_windows_tcp_marker(
+        tmp_path,
+        endpoint=_windows_tcp_loopback_endpoint(token_ref=str(tmp_path / 'token.json')),
+    )
+
+    assert _control_plane_endpoint_is_structurally_valid(socket_path) is True
+
+
+@requires_af_unix
+def test_real_unix_socket_is_valid_without_endpoint_descriptor(tmp_path: Path) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    unix_socket.bind(str(socket_path))
+    try:
+        assert _control_plane_endpoint_is_structurally_valid(socket_path) is True
+    finally:
+        unix_socket.close()
+        socket_path.unlink(missing_ok=True)
+
+
+def test_host_project_registry_omits_windows_marker_without_descriptor(tmp_path: Path) -> None:
+    registry_path = tmp_path / 'mobile' / 'projects.json'
+    project_root = tmp_path / 'windows-project'
+    project_root.mkdir()
+    socket_path = project_root / '.ccb' / 'ccbd' / 'ccbd.sock'
+    socket_path.parent.mkdir(parents=True)
+    socket_path.touch()
+    publish_mobile_gateway_project(
+        project_id='proj-windows-noendpoint',
+        project_root=project_root,
+        ccbd_socket_path=socket_path,
+        registry_path=registry_path,
+    )
+
+    with pytest.raises(ValueError, match='cannot be empty'):
+        load_mobile_gateway_project_registry(registry_path=registry_path)
+
+
+def test_host_project_registry_omits_windows_marker_without_token_ref(tmp_path: Path) -> None:
+    registry_path = tmp_path / 'mobile' / 'projects.json'
+    project_root = tmp_path / 'windows-project'
+    project_root.mkdir()
+    socket_path = _write_windows_tcp_marker(
+        project_root,
+        endpoint=_windows_tcp_loopback_endpoint(token_ref=''),
+    )
+    publish_mobile_gateway_project(
+        project_id='proj-windows-notoken',
+        project_root=project_root,
+        ccbd_socket_path=socket_path,
+        registry_path=registry_path,
+    )
+
+    with pytest.raises(ValueError, match='cannot be empty'):
+        load_mobile_gateway_project_registry(registry_path=registry_path)
+
+
+def test_host_project_registry_omits_windows_marker_with_off_loopback_host(tmp_path: Path) -> None:
+    registry_path = tmp_path / 'mobile' / 'projects.json'
+    project_root = tmp_path / 'windows-project'
+    project_root.mkdir()
+    socket_path = _write_windows_tcp_marker(
+        project_root,
+        endpoint=_windows_tcp_loopback_endpoint(token_ref='token', host='192.168.2.11'),
+    )
+    publish_mobile_gateway_project(
+        project_id='proj-windows-offloop',
         project_root=project_root,
         ccbd_socket_path=socket_path,
         registry_path=registry_path,

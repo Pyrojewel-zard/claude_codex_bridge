@@ -288,7 +288,16 @@ def _control_plane_endpoint_is_structurally_valid(socket_path: Path) -> bool:
         endpoint = read_endpoint(socket_path)
     except (OSError, ValueError):
         return False
-    return endpoint is not None and endpoint.get('kind') == 'tcp_loopback'
+    if not isinstance(endpoint, dict):
+        return False
+    if endpoint.get('kind') != 'tcp_loopback':
+        return False
+    # token 是 Windows TCP 控制平面认证的必要项，缺失则 CcbdClient 必然连不上。
+    if not str(endpoint.get('token_ref') or endpoint.get('auth_ref') or '').strip():
+        return False
+    # tcp_loopback 仅允许 127.0.0.1（与 WindowsTcpControlPlaneTransport 安全模型一致）。
+    host = str(endpoint.get('host') or '').strip() or '127.0.0.1'
+    return host == '127.0.0.1'
 
 
 __all__ = [
