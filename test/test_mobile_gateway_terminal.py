@@ -378,6 +378,42 @@ def test_terminal_control_bytes_target_pane(monkeypatch) -> None:
     ]
 
 
+def test_terminal_text_and_enter_in_one_frame_target_pane_in_order(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+
+    _send_tmux_terminal_bytes(_target(), b'test2\r')
+
+    assert calls == [
+        ['tmux', '-S', '/tmp/ccb-test/tmux.sock', 'send-keys', '-t', '%42', '-l', 'test2'],
+        ['tmux', '-S', '/tmp/ccb-test/tmux.sock', 'send-keys', '-t', '%42', 'Enter'],
+    ]
+
+
+def test_terminal_mixed_unicode_text_and_keys_preserve_frame_order(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+
+    _send_tmux_terminal_bytes(_target(), '你好\t世界\r\n'.encode('utf-8'))
+
+    assert calls == [
+        ['tmux', '-S', '/tmp/ccb-test/tmux.sock', 'send-keys', '-t', '%42', '-l', '你好'],
+        ['tmux', '-S', '/tmp/ccb-test/tmux.sock', 'send-keys', '-t', '%42', 'Tab'],
+        ['tmux', '-S', '/tmp/ccb-test/tmux.sock', 'send-keys', '-t', '%42', '-l', '世界'],
+        ['tmux', '-S', '/tmp/ccb-test/tmux.sock', 'send-keys', '-t', '%42', 'Enter'],
+    ]
+
+
 def test_terminal_navigation_bytes_target_pane(monkeypatch) -> None:
     calls: list[list[str]] = []
 
@@ -445,6 +481,21 @@ def test_terminal_unsupported_control_bytes_fail_closed(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match='unsupported terminal input bytes'):
         _send_tmux_terminal_bytes(_target(), b'\x1b[999~')
+
+    assert calls == []
+
+
+def test_terminal_mixed_frame_is_fully_validated_before_pane_input(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+
+    with pytest.raises(RuntimeError, match='unsupported terminal input bytes'):
+        _send_tmux_terminal_bytes(_target(), b'not-delivered\x1b[999~')
 
     assert calls == []
 

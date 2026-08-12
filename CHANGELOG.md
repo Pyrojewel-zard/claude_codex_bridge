@@ -12,8 +12,9 @@
 - Replaced Config UI's hard-coded Role suggestions with the complete available
   Role catalog, including `agentroles.mother` when present.
 - Preserved native-session boundaries in Mobile history, clipped wide terminal
-  snapshots to pane width, bound Provider mutation idempotency to its target,
-  and refreshed the WeChat community QR image.
+  snapshots to pane width, delivered combined text-plus-key terminal frames in
+  order, bound Provider mutation idempotency to its target, and refreshed the
+  WeChat community QR image.
 - No configuration or conversation migration is required. Windows x64 remains
   beta and Provider model/thinking changes require a managed Agent restart.
 

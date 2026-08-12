@@ -564,55 +564,98 @@ def _send_tmux_terminal_literal(target: TerminalAttachTarget, text: str) -> None
     _tmux_terminal_run(target, ['send-keys', '-t', str(target.pane_id), '-l', text])
 
 
+_TMUX_TERMINAL_KEY_NAMES = {
+    b'\r\n': 'Enter',
+    b'\r': 'Enter',
+    b'\n': 'Enter',
+    b'\t': 'Tab',
+    b'\x1b': 'Escape',
+    b'\x01': 'C-a',
+    b'\x03': 'C-c',
+    b'\x04': 'C-d',
+    b'\x05': 'C-e',
+    b'\x0b': 'C-k',
+    b'\x0c': 'C-l',
+    b'\x12': 'C-r',
+    b'\x15': 'C-u',
+    b'\x17': 'C-w',
+    b'\x1a': 'C-z',
+    b'\x7f': 'BSpace',
+    b'\b': 'BSpace',
+    b'\x1b[A': 'Up',
+    b'\x1b[B': 'Down',
+    b'\x1b[C': 'Right',
+    b'\x1b[D': 'Left',
+    b'\x1b[H': 'Home',
+    b'\x1b[F': 'End',
+    b'\x1bOH': 'Home',
+    b'\x1bOF': 'End',
+    b'\x1b[1~': 'Home',
+    b'\x1b[4~': 'End',
+    b'\x1b[3~': 'Delete',
+    b'\x1b[5~': 'PageUp',
+    b'\x1b[6~': 'PageDown',
+}
+_TMUX_TERMINAL_MULTI_BYTE_KEYS = tuple(
+    sorted(
+        (value for value in _TMUX_TERMINAL_KEY_NAMES if len(value) > 1),
+        key=len,
+        reverse=True,
+    )
+)
+
+
 def _send_tmux_terminal_bytes(target: TerminalAttachTarget, data: bytes) -> None:
-    key_names = {
-        b'\r': 'Enter',
-        b'\n': 'Enter',
-        b'\t': 'Tab',
-        b'\x1b': 'Escape',
-        b'\x01': 'C-a',
-        b'\x03': 'C-c',
-        b'\x04': 'C-d',
-        b'\x05': 'C-e',
-        b'\x0b': 'C-k',
-        b'\x0c': 'C-l',
-        b'\x12': 'C-r',
-        b'\x15': 'C-u',
-        b'\x17': 'C-w',
-        b'\x1a': 'C-z',
-        b'\x7f': 'BSpace',
-        b'\b': 'BSpace',
-        b'\x1b[A': 'Up',
-        b'\x1b[B': 'Down',
-        b'\x1b[C': 'Right',
-        b'\x1b[D': 'Left',
-        b'\x1b[H': 'Home',
-        b'\x1b[F': 'End',
-        b'\x1bOH': 'Home',
-        b'\x1bOF': 'End',
-        b'\x1b[1~': 'Home',
-        b'\x1b[4~': 'End',
-        b'\x1b[3~': 'Delete',
-        b'\x1b[5~': 'PageUp',
-        b'\x1b[6~': 'PageDown',
-    }
-    key = key_names.get(data)
-    if key is not None:
-        _tmux_terminal_run(target, ['send-keys', '-t', str(target.pane_id), key])
-        return
-    if _is_terminal_protocol_response(data):
-        return
-    if _has_control_byte(data):
-        raise RuntimeError(f'unsupported terminal input bytes for {target.terminal_id}')
+    for kind, value in _parse_tmux_terminal_input(target, data):
+        if kind == 'key':
+            _tmux_terminal_run(target, ['send-keys', '-t', str(target.pane_id), value])
+        else:
+            _send_tmux_terminal_literal(target, value)
+
+
+def _parse_tmux_terminal_input(
+    target: TerminalAttachTarget,
+    data: bytes,
+) -> tuple[tuple[str, str], ...]:
+    if not data or _is_terminal_protocol_response(data):
+        return ()
+
+    actions: list[tuple[str, str]] = []
+    literal_start = 0
+    index = 0
+    while index < len(data):
+        key_bytes = _terminal_key_at(data, index)
+        if key_bytes is None:
+            byte = data[index]
+            if byte < 0x20 or byte == 0x7F:
+                raise RuntimeError(f'unsupported terminal input bytes for {target.terminal_id}')
+            index += 1
+            continue
+        if literal_start < index:
+            actions.append(('literal', _decode_terminal_literal(target, data[literal_start:index])))
+        actions.append(('key', _TMUX_TERMINAL_KEY_NAMES[key_bytes]))
+        index += len(key_bytes)
+        literal_start = index
+    if literal_start < len(data):
+        actions.append(('literal', _decode_terminal_literal(target, data[literal_start:])))
+    return tuple(actions)
+
+
+def _terminal_key_at(data: bytes, index: int) -> bytes | None:
+    for key_bytes in _TMUX_TERMINAL_MULTI_BYTE_KEYS:
+        if data.startswith(key_bytes, index):
+            return key_bytes
+    candidate = data[index:index + 1]
+    if candidate == b'\x1b' and index + 1 < len(data):
+        return None
+    return candidate if candidate in _TMUX_TERMINAL_KEY_NAMES else None
+
+
+def _decode_terminal_literal(target: TerminalAttachTarget, data: bytes) -> str:
     try:
-        text = data.decode('utf-8')
+        return data.decode('utf-8')
     except UnicodeDecodeError:
         raise RuntimeError(f'unsupported terminal input bytes for {target.terminal_id}')
-    _send_tmux_terminal_literal(target, text)
-
-
-def _has_control_byte(data: bytes) -> bool:
-    return any(byte < 0x20 or byte == 0x7F for byte in data)
 
 
 _TERMINAL_PROTOCOL_RESPONSES = (

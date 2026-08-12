@@ -18,6 +18,7 @@ import pytest
 
 import mobile_gateway.pairing as pairing_module
 import mobile_gateway.service as service_module
+import mobile_gateway.terminal as terminal_module
 from provider_control import ProviderAccountQuota
 from mobile_gateway import (
     MobileGatewayError,
@@ -5267,6 +5268,88 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         assert str(handle['terminal_token']) not in stored_tokens
         assert '"last_input_seq": 2' in stored_tokens
         assert '"closed_reason": "replayed_sequence"' in stored_tokens
+    finally:
+        if sock is not None:
+            sock.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_terminal_websocket_delivers_text_and_enter_in_one_input_frame(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tmux_calls: list[list[str]] = []
+
+    def fake_tmux_run(command, **kwargs):
+        call = list(command)
+        tmux_calls.append(call)
+        output = b'prompt$ ' if 'capture-pane' in call else b''
+        return type('Completed', (), {'returncode': 0, 'stdout': output, 'stderr': b''})()
+
+    monkeypatch.setattr(terminal_module.subprocess, 'run', fake_tmux_run)
+    service = _service(
+        _FakeCcbdClient(),
+        mobile_dir=tmp_path / 'mobile',
+        terminal_session_factory=terminal_module.TmuxTerminalSession,
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+    _, handle = service.dispatch_post(
+        '/v1/projects/proj-demo/terminals',
+        {
+            'project_id': 'proj-demo',
+            'namespace_epoch': 4,
+            'target': {'kind': 'agent', 'agent': 'mobile', 'window': 'main'},
+        },
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    server = build_mobile_gateway_server(parse_listen_address('127.0.0.1:0'), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    sock = None
+    try:
+        thread.start()
+        host, port = server.server_address[:2]
+        sock = _websocket_connect(host, port, f'/v1/terminals/{handle["terminal_id"]}')
+        _websocket_send_json(
+            sock,
+            {
+                'type': 'open',
+                'terminal_id': handle['terminal_id'],
+                'token': handle['terminal_token'],
+            },
+        )
+        _websocket_read_until(sock, 'output')
+
+        _websocket_send_json(
+            sock,
+            {
+                'type': 'input',
+                'seq': 1,
+                'bytes_b64': base64.b64encode(b'test2\r').decode('ascii'),
+            },
+        )
+        expected = [
+            ['tmux', '-S', '/tmp/ccb-demo/tmux.sock', 'send-keys', '-t', '%2', '-l', 'test2'],
+            ['tmux', '-S', '/tmp/ccb-demo/tmux.sock', 'send-keys', '-t', '%2', 'Enter'],
+        ]
+        _wait_for(lambda: all(call in tmux_calls for call in expected))
+
+        _websocket_send_json(
+            sock,
+            {
+                'type': 'input',
+                'seq': 2,
+                'bytes_b64': base64.b64encode(b'test3\r').decode('ascii'),
+            },
+        )
+        _wait_for(
+            lambda: sum(call[-1:] == ['Enter'] for call in tmux_calls) == 2,
+        )
     finally:
         if sock is not None:
             sock.close()
