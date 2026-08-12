@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from .backend import build_backend, kill_server, remember_namespace_state_ref
+from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
+
+from .backend import kill_server, remember_namespace_state_ref
 from .records import build_destroy_summary, build_destroyed_event, build_destroyed_state
 
 
@@ -11,13 +13,12 @@ def destroy_project_namespace(controller, *, reason: str):
     occurred_at = controller._clock()
     tmux_socket_path = str(current.tmux_socket_path) if current is not None else str(controller._layout.ccbd_tmux_socket_path)
     tmux_session_name = str(current.tmux_session_name) if current is not None else controller._layout.ccbd_tmux_session_name
-    backend = build_backend(
-        controller._backend_factory,
+    backend = controller._build_backend_for_destroy(
         socket_path=tmux_socket_path,
         namespace_state=current,
     )
     remember_namespace_state_ref(backend, current)
-    destroyed = kill_server(backend)
+    destroyed = _kill_server_best_effort(backend, current)
     next_state = build_destroyed_state(
         current=current,
         project_id=controller._project_id,
@@ -64,6 +65,26 @@ def destroy_project_namespace(controller, *, reason: str):
         destroyed=destroyed,
         reason=normalized_reason,
     )
+
+
+def _kill_server_best_effort(backend, namespace_state) -> bool:
+    try:
+        return kill_server(backend)
+    except MuxCommandErrorV2 as exc:
+        if _teardown_target_is_unavailable(exc, namespace_state):
+            return False
+        raise
+
+
+def _teardown_target_is_unavailable(exc: MuxCommandErrorV2, namespace_state) -> bool:
+    backend_impl = str(getattr(namespace_state, 'backend_impl', '') or '').strip()
+    backend_family = str(getattr(namespace_state, 'namespace_backend_family', '') or '').strip()
+    if backend_impl != 'herdr' and backend_family != 'herdr-native':
+        return False
+    return exc.category in {'not-found', 'transient-unavailable'} or exc.operation in {
+        'resolve_executable',
+        'server_info',
+    }
 
 
 __all__ = ['destroy_project_namespace']

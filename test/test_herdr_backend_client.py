@@ -1672,6 +1672,8 @@ def test_terminal_api_get_backend_threads_production_herdr_wiring(monkeypatch) -
 
 def test_terminal_api_get_backend_herdr_defaults_fail_closed(monkeypatch) -> None:
     monkeypatch.setattr(terminal_api, "_backend_cache", None)
+    monkeypatch.delenv("CCB_HERDR_CAPABILITY_REPORT", raising=False)
+    monkeypatch.delenv("CCB_HERDR_SOCKET_REF", raising=False)
 
     with pytest.raises(MuxCommandErrorV2) as exc_info:
         terminal_api.get_backend("herdr")
@@ -3176,6 +3178,8 @@ def test_herdr_capability_gate_requires_facade_specific_primitives() -> None:
 
 
 def test_default_project_namespace_backend_uses_auto_selection(monkeypatch) -> None:
+    monkeypatch.delenv("CCB_HERDR_CAPABILITY_REPORT", raising=False)
+    monkeypatch.delenv("CCB_HERDR_SOCKET_REF", raising=False)
     calls: list[object] = []
 
     def resolve(terminal_type=None):
@@ -3189,6 +3193,8 @@ def test_default_project_namespace_backend_uses_auto_selection(monkeypatch) -> N
 
 
 def test_default_project_namespace_backend_retries_explicit_herdr_when_auto_returns_none(monkeypatch) -> None:
+    monkeypatch.delenv("CCB_HERDR_CAPABILITY_REPORT", raising=False)
+    monkeypatch.delenv("CCB_HERDR_SOCKET_REF", raising=False)
     calls: list[object] = []
 
     def resolve(terminal_type=None):
@@ -3216,6 +3222,96 @@ def test_default_project_namespace_backend_uses_explicit_herdr_when_runtime_conf
 
     assert namespace_controller.default_project_namespace_backend() == "herdr-backend"
     assert calls == ["herdr"]
+
+
+def test_get_backend_for_namespace_teardown_reattaches_without_selection_gate(monkeypatch) -> None:
+    monkeypatch.delenv("CCB_HERDR_CAPABILITY_REPORT", raising=False)
+    monkeypatch.delenv("CCB_HERDR_SOCKET_REF", raising=False)
+    monkeypatch.delenv("CCB_HERDR_SESSION", raising=False)
+    monkeypatch.delenv("CCB_HERDR_EXE", raising=False)
+
+    backend = terminal_api.get_backend_for_namespace_teardown(
+        {
+            "backend_family": "herdr-native",
+            "backend_impl": "herdr",
+            "namespace_id": "w-anchor",
+            "session_name": "ccb-herdr",
+            "ipc_kind": "herdr_socket",
+            "ipc_ref": "herdr://local",
+            "restore_token": "restore-token",
+        }
+    )
+
+    assert isinstance(backend, HerdrBackend)
+    assert getattr(backend, "_ccb_project_namespace_ref")["namespace_id"] == "w-anchor"
+    # Teardown operations must be permitted even without ambient capability evidence.
+    backend.capabilities()
+    backend._capability_gate.require_supported("destroy_namespace")
+    backend._capability_gate.require_supported("kill_server")
+    backend._capability_gate.require_supported("namespace_alive")
+    # The client socket ref is derived from the persisted ref, so the persisted
+    # ref passes the backend's namespace-ref validation before the destroy call.
+    assert backend._client.socket_ref == "herdr://local"
+    validated = backend._namespace_ref_from_mapping(
+        {
+            "backend_impl": "herdr",
+            "namespace_id": "w-anchor",
+            "session_name": "ccb-herdr",
+            "ipc_kind": "herdr_socket",
+            "ipc_ref": "herdr://local",
+            "restore_token": "restore-token",
+        },
+        operation="destroy_namespace",
+    )
+    assert validated["namespace_id"] == "w-anchor"
+
+
+def test_herdr_cli_resolves_common_windows_install_when_not_on_path(monkeypatch) -> None:
+    monkeypatch.setattr(herdr_cli, "_runtime_platform", lambda: "windows")
+    monkeypatch.setattr(herdr_cli, "_runtime_arch", lambda: "x64")
+    monkeypatch.delenv("CCB_HERDR_EXE", raising=False)
+    monkeypatch.setattr(
+        herdr_cli.os.path,
+        "isfile",
+        lambda path: str(path).replace("\\", "/") == "C:/Users/me/AppData/Local/Programs/Herdr/herdr.exe",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", "C:/Users/me/AppData/Local")
+    commands: list[list[str]] = []
+
+    def run_fn(command, **kwargs):
+        commands.append(list(command))
+        if command[-2:] == ["status", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"status":"ok","client":{"version":"0.8.0"}}',
+                stderr="",
+            )
+        if command[-3:] == ["api", "schema", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"status":"ok","title":"herdr-api"}',
+                stderr="",
+            )
+        if command[-1:] == ["--version"]:
+            return subprocess.CompletedProcess(command, 0, stdout="herdr 0.8.0\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    adapter = HerdrCliRequestAdapter(
+        session_name="ccb-test",
+        run_fn=run_fn,
+        which_fn=lambda name: None,
+    )
+
+    result = adapter("server_info", {})
+
+    assert result["version"] == "0.8.0"
+    assert commands
+    assert all(
+        command[0].replace("\\", "/") == "C:/Users/me/AppData/Local/Programs/Herdr/herdr.exe"
+        for command in commands
+    )
 
 
 def test_herdr_socket_client_rejects_window_root_pane_session_mismatch() -> None:

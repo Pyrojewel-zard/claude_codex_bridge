@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 
 from storage.paths import PathLayout
-from terminal_runtime import TmuxBackend, get_backend as resolve_terminal_backend
+from terminal_runtime import (
+    TmuxBackend,
+    get_backend as resolve_terminal_backend,
+    get_backend_for_namespace_teardown,
+)
 from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
 
 from ccbd.system import utc_now
@@ -55,6 +59,26 @@ def default_project_namespace_backend(*, socket_path: str | None = None, namespa
         return TmuxBackend(socket_path=socket_path)
     if backend is not None:
         return backend
+    return TmuxBackend(socket_path=socket_path)
+
+
+def backend_for_namespace_teardown(*, socket_path: str | None = None, namespace_state=None):
+    """Build a backend that can tear down an already-persisted namespace.
+
+    Unlike backend selection, teardown must not re-run the Herdr
+    capability-evidence gate: the persisted namespace state already proves Herdr
+    was validated at creation time, and teardown runs from processes (``ccb
+    kill``) that do not carry the ambient capability-evidence env.  Re-attach
+    directly from the persisted namespace ref with a teardown-only gate.
+    """
+    backend_impl = str(getattr(namespace_state, 'backend_impl', '') or '').strip()
+    backend_family = str(getattr(namespace_state, 'namespace_backend_family', '') or '').strip()
+    if (
+        namespace_state is not None
+        and (backend_family == 'herdr-native' or backend_impl == 'herdr')
+        and callable(getattr(namespace_state, 'namespace_ref', None))
+    ):
+        return get_backend_for_namespace_teardown(namespace_state.namespace_ref())
     return TmuxBackend(socket_path=socket_path)
 
 
@@ -153,6 +177,19 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
         del force
         return destroy_project_namespace(self, reason=reason)
 
+    def _build_backend_for_destroy(self, *, socket_path: str, namespace_state=None):
+        """Build the backend used to tear down this project's namespace.
+
+        Honors an injected backend factory (e.g. test doubles) unchanged, but
+        routes the default factory through the teardown path so destroy does not
+        re-run the Herdr capability-evidence selection gate on a namespace that
+        persisted state already proves is Herdr.
+        """
+        factory = self._backend_factory
+        if factory is default_project_namespace_backend:
+            return backend_for_namespace_teardown(socket_path=socket_path, namespace_state=namespace_state)
+        return build_backend(factory, socket_path=socket_path, namespace_state=namespace_state)
+
     def reflow_workspace(
         self,
         *,
@@ -242,4 +279,8 @@ class ProjectNamespaceController(ProjectNamespaceControllerStateMixin):
         return session_root_pane(backend, current.tmux_session_name, timeout_s=timeout_s)
 
 
-__all__ = ['ProjectNamespaceController', 'default_project_namespace_backend']
+__all__ = [
+    'ProjectNamespaceController',
+    'backend_for_namespace_teardown',
+    'default_project_namespace_backend',
+]
