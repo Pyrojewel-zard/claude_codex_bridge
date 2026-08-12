@@ -164,6 +164,13 @@ Out of scope:
 - `.ccb/ccb.config` is the highest-priority forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When `.ccb/ccb.config` is absent, `~/.ccb/ccb.config` is the user-level forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When both files are absent, the built-in default config is the forward authority for the desired agent mount set and foreground layout.
+- Before CLI startup performs provider/backend probing, it must inspect the two
+  project-local executable config fields defined by the layout contract and
+  obtain a matching user-state approval in an interactive terminal. ccbd is a
+  non-interactive enforcement boundary: bootstrap must reject missing or stale
+  approval before publishing runtime state or materializing the service graph.
+  Reload and the final tool/provider shell execution sinks must re-check the
+  exact current authority to close config-to-execution races.
 - The built-in default desired set contains exactly one `demo` agent in the
   `main` window. Its provider is the first locally available supported CLI in
   built-in priority order (`codex`, `claude`, `gemini`, then optional

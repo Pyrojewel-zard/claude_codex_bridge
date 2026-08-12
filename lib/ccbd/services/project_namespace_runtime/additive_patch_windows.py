@@ -13,6 +13,7 @@ from agents.models import (
 )
 from terminal_runtime.placeholders import pane_placeholder_cmd
 from terminal_runtime.tmux_theme import tmux_theme_profile
+from project_command_trust import require_project_command_approval
 
 from .backend import apply_pane_identity, create_window, respawn_pane, session_window_target, split_pane, window_root_pane
 from .sidebar_helper import SIDEBAR_HELPER_ID_OPTION, sidebar_helper_fingerprint
@@ -204,6 +205,7 @@ def _materialize_new_window_agents(
                 order_index=int(getattr(window, 'order', 0) or 0),
                 created_panes=created_panes,
                 result=result,
+                project_command_field=False,
             )
             return
         _append_unique(created_panes, pane_id)
@@ -263,6 +265,7 @@ def _materialize_new_tool_window(
         order_index=int(getattr(window, 'order', 0) or 0),
         created_panes=created_panes,
         result=result,
+        project_command_field=True,
     )
 
 
@@ -279,8 +282,15 @@ def _materialize_new_tool_pane(
     order_index: int,
     created_panes: list[str],
     result: WindowPatchResult | None,
+    project_command_field: bool,
 ) -> None:
     command = str(command or '').strip() or pane_placeholder_cmd()
+    if project_command_field:
+        require_project_command_approval(
+            controller._layout.project_root,
+            field_path=f'tool_windows.{str(tool_name).strip().lower()}.command',
+            field_value=command,
+        )
     respawn_pane(
         backend,
         pane_id=pane_id,

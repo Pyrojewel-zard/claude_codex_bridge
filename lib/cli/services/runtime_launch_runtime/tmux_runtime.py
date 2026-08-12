@@ -4,6 +4,7 @@ from pathlib import Path
 from time import monotonic_ns
 
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+from project_command_trust import require_runtime_provider_command_approval
 
 from .tmux_backend import _is_herdr_launch, create_tmux_backend, prepared_state, run_cwd
 from .pane_runtime import launch_runtime_pane, pane_runtime_id
@@ -77,6 +78,12 @@ def launch_runtime(
     launch_started_ns = monotonic_ns()
     timings_ms: dict[str, float] = {}
     try:
+        if getattr(spec, 'provider_command_template', None):
+            require_runtime_provider_command_approval(
+                context.project.project_root,
+                agent_name=spec.name,
+                template=str(spec.provider_command_template),
+            )
         stage_started_ns = monotonic_ns()
         try:
             runtime_dir = context.paths.agent_dir(spec.name) / 'provider-runtime' / spec.provider

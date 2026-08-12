@@ -19,6 +19,7 @@ from ccbd.services.project_namespace_runtime.sidebar_helper import SIDEBAR_HELPE
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from storage.paths import PathLayout
 from terminal_runtime.mux_backend_contract import make_capabilities, make_pane_ref
+from project_command_trust import approve_project_commands
 
 
 BASE_CONFIG = """version = 2
@@ -1846,9 +1847,11 @@ def test_apply_add_tool_window_creates_tool_window_sidebar_and_tool_pane(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv('CCB_TMUX_THEME_PROFILE', 'light')
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     current = _load_config(tmp_path / 'current-tool-window', BASE_CONFIG)
     new = _load_config(tmp_path / 'new-tool-window', ADD_TOOL_WINDOW_CONFIG)
-    layout = PathLayout(_project(tmp_path / 'repo-tool-window', BASE_CONFIG))
+    layout = PathLayout(_project(tmp_path / 'repo-tool-window', ADD_TOOL_WINDOW_CONFIG))
+    approve_project_commands(layout.project_root)
     backend = _PatchFakeBackend(socket_path=str(layout.ccbd_tmux_socket_path))
     backend.add_window(layout.ccbd_tmux_session_name, 'main')
     backend.sessions[layout.ccbd_tmux_session_name][0]['panes'].append('%2')

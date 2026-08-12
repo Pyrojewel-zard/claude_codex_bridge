@@ -1227,8 +1227,20 @@ def parse_doctor(tokens: list[str], *, project: str | None, error_type) -> Parse
 
 def parse_config(tokens: list[str], *, project: str | None, error_type):
     if not tokens:
-        raise error_type('config supports: validate, effective, migrate, ui, import-herdr')
+        raise error_type('config supports: validate, effective, migrate, approve-commands, ui, import-herdr')
     action = str(tokens[0]).strip().lower()
+    if action == 'approve-commands':
+        parser = argparse.ArgumentParser(prog='ccb config approve-commands', add_help=False)
+        parse_args(
+            parser,
+            tokens[1:],
+            error_message='invalid config approve-commands command',
+            error_type=error_type,
+        )
+        return ParsedConfigValidateCommand(
+            project=project,
+            action='approve-commands',
+        )
     if action in {'validate', 'effective'}:
         parser = argparse.ArgumentParser(prog=f'ccb config {action}', add_help=False)
         parser.add_argument('--json', dest='json_output', action='store_true')

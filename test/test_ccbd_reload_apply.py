@@ -18,6 +18,7 @@ from ccbd.services.project_namespace_runtime import NamespacePatchApplyResult, b
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from ccbd.start_flow_runtime import StartFlowSummary
 from cli.render import render_reload
+from project_command_trust import approve_project_commands
 
 
 BASE_CONFIG = """version = 2
@@ -488,7 +489,10 @@ def test_additive_reload_apply_add_tool_window_publishes_without_runtime_mount(
 
 def test_additive_reload_apply_remove_tool_window_publishes_without_agent_unload(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    approve_project_commands(_project(tmp_path / 'repo-remove-tool-window', ADD_TOOL_WINDOW_CONFIG))
     app = _started_app(tmp_path / 'repo-remove-tool-window', ADD_TOOL_WINDOW_CONFIG)
     old_graph = app.service_graph
     new_config = _load_config(app.project_root, BASE_CONFIG)
@@ -1227,8 +1231,10 @@ def test_project_reload_non_dry_run_add_tool_window_publishes_after_namespace_pa
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     app = _started_app(tmp_path / 'repo-add-tool-handler', BASE_CONFIG)
     _project(app.project_root, ADD_TOOL_WINDOW_CONFIG)
+    approve_project_commands(app.project_root)
     monkeypatch.setattr(
         'ccbd.reload_apply_service.apply_namespace_patch',
         lambda *_args, **_kwargs: _namespace_patch_result(
@@ -1259,6 +1265,8 @@ def test_project_reload_non_dry_run_remove_tool_window_publishes_after_namespace
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    approve_project_commands(_project(tmp_path / 'repo-remove-tool-handler', ADD_TOOL_WINDOW_CONFIG))
     app = _started_app(tmp_path / 'repo-remove-tool-handler', ADD_TOOL_WINDOW_CONFIG)
     _project(app.project_root, BASE_CONFIG)
     monkeypatch.setattr(

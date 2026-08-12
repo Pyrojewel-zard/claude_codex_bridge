@@ -33,6 +33,7 @@ to resume across agents and sessions.
 | [config-designer-ui](plans/config-designer-ui/README.md) | In progress | Add a local browser editor for `.ccb/ccb.config` and expose it through the native sidebar settings icon. |
 | [ccbd-agent-hot-reload](plans/ccbd-agent-hot-reload/README.md) | In progress | Dynamically load, unload, and later replace agents in a running daemon without breaking unrelated panes. |
 | [managed-tool-windows](plans/managed-tool-windows/README.md) | In progress | Add first-class non-agent tool windows and optional rich workbench surfaces that appear in sidebar without provider/agent rows. |
+| [project-command-trust](plans/project-command-trust/README.md) | Implemented, verified, and committed locally | Require external, exact-value user approval before project-local tool and provider command fields execute. |
 | [windows-wezterm-native](plans/windows-wezterm-native/README.md) | Planning | Evaluate and stage a Windows-native WezTerm mux backend for current CCB without tmux-based communication. |
 | [windows-native-release](plans/windows-native-release/README.md) | Published; qualification open | CCB v8.6.1 continues the stable release lanes with an isolated Windows x64 beta artifact; real Windows GUI/provider qualification remains open. |
 | [python-rust-hybrid-performance](plans/python-rust-hybrid-performance/README.md) | In progress | Stage performance-oriented Rust helpers around the current Python control plane without a full rewrite. |

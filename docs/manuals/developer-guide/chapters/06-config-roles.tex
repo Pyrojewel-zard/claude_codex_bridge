@@ -64,6 +64,8 @@ windows topology 模式声明 \src{windows}。它从 window leaves 推导 \src{d
 \end{itemize}
 
 \src{tool_windows} 用于非 agent 工具窗口。每个条目要求 \src{command}，可选 \src{label} 和 \src{show_in_sidebar}。
+项目级 \src{tool_windows.<name>.command} 和 \src{agents.<name>.provider_command_template}
+属于本地命令执行权限；CLI 批准凭据保存在仓库外，ccbd、reload 和最终执行点均须 fail closed 校验。
 
 \section{sidebar 配置}
 

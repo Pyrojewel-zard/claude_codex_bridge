@@ -517,6 +517,10 @@ def test_parse_repair_rejects_invalid_forms(parser: CliParser) -> None:
 
 def test_parse_config_validate(parser: CliParser) -> None:
     assert parser.parse(['config', 'validate']) == ParsedConfigValidateCommand(project=None)
+    assert parser.parse(['config', 'approve-commands']) == ParsedConfigValidateCommand(
+        project=None,
+        action='approve-commands',
+    )
 
 
 def test_parse_config_ui(parser: CliParser) -> None:

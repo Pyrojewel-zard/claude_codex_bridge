@@ -591,6 +591,10 @@ def test_handle_start_invokes_foreground_attach_in_interactive_terminal(monkeypa
             return True
 
     class _FakeServices:
+        def inspect_project_commands(self, context):
+            del context
+            return argparse.Namespace(required=False)
+
         def start_agents(self, context, command, terminal_size=None):
             del context, command, terminal_size
             calls.append("start_agents")

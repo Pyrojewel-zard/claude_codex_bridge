@@ -14,6 +14,7 @@ from agents.models import (
 )
 from terminal_runtime.placeholders import pane_placeholder_cmd
 from terminal_runtime.tmux_theme import tmux_theme_profile
+from project_command_trust import require_project_command_approval
 from ccbd.services.project_namespace_pane import (
     ProjectNamespacePaneRecord,
     inspect_project_namespace_pane,
@@ -664,6 +665,7 @@ def _materialize_agent_layout(
                 window_name=window.name,
                 order_index=int(getattr(window, 'order', 0) or 0),
                 epoch=epoch,
+                project_command_field=False,
             )
             return
         # 用 normalize_agent_name 统一 agent 标识（layout leaf 可能保留原始大小写如
@@ -722,6 +724,7 @@ def _materialize_tool_window(
         window_name=window.name,
         order_index=int(getattr(window, 'order', 0) or 0),
         epoch=epoch,
+        project_command_field=True,
     )
 
 
@@ -736,8 +739,15 @@ def _materialize_tool_pane(
     window_name: str,
     order_index: int,
     epoch: int,
+    project_command_field: bool,
 ) -> None:
     command = str(command or '').strip() or pane_placeholder_cmd()
+    if project_command_field:
+        require_project_command_approval(
+            controller._layout.project_root,
+            field_path=f'tool_windows.{str(tool_name).strip().lower()}.command',
+            field_value=command,
+        )
     respawn_pane(
         context.backend,
         pane_id=pane_id,

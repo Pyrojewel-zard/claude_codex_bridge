@@ -599,11 +599,12 @@ _COMMAND_HELP = {
           Legacy `ack` / `retry` / `resubmit` commands remain compatibility entrypoints.
     """,
     "config": """
-        usage: ccb config <validate|effective|migrate|ui> ...
+        usage: ccb config <validate|effective|migrate|approve-commands|ui> ...
 
         Config:
           ccb config validate [--json]                 Validate `.ccb/ccb.config` for the current project.
           ccb config effective --json                  Show sanitized effective config authority.
+          ccb config approve-commands                  Review and approve project command fields.
           ccb config migrate --to 3 --dry-run [--json] Preview V2-to-V3 mappings without writing.
           ccb config ui         Open the local-only project configuration panel.
           ccb config ui --no-open [--port PORT]

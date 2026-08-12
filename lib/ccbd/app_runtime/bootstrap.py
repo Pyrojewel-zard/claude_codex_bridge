@@ -31,6 +31,7 @@ from provider_core.catalog import build_default_provider_catalog
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionService
 from provider_execution.state_store import ExecutionStateStore
+from project_command_trust import require_project_command_approval
 from storage.paths import PathLayout
 from storage.text_artifacts import sweep_expired_text_artifacts
 from runtime_env.source_identity import current_source_runtime_identity
@@ -69,6 +70,10 @@ def initialize_app(
     keeper_startup_checkpoint=None,
 ) -> None:
     app.project_root = Path(project_root).expanduser().resolve()
+    # ccbd is non-interactive and is the authority that materializes project
+    # commands.  Refuse unapproved repository-authored command fields before
+    # creating project identity/runtime state or publishing the service graph.
+    require_project_command_approval(app.project_root)
     app.project_id = ensure_project_identity(app.project_root).project_id
     app.paths = PathLayout(app.project_root)
     app.paths.ensure_runtime_state_root()

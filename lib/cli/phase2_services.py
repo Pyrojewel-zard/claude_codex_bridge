@@ -55,6 +55,7 @@ from cli.services.compact import compact_agent_context
 from cli.services.cleanup import cleanup_project_storage
 from cli.services.config_ui import open_config_ui_url, prepare_config_ui
 from cli.services.config_validate import effective_config_context, migrate_config_context, validate_config_context
+from cli.services.project_command_approval import approve_project_commands_context, inspect_project_commands
 from cli.services.doctor import doctor_summary
 from cli.services.doctor_storage import doctor_storage_summary
 from cli.services.diagnostics import export_diagnostic_bundle
@@ -90,6 +91,7 @@ from cli.services.watch import watch_target
 def build_phase2_dispatch_services(**overrides):
     payload = dict(
         ack_reply=ack_reply,
+        approve_project_commands_context=approve_project_commands_context,
         agent_lifecycle=agent_lifecycle,
         agent_logs=agent_logs,
         arm_fault_rule=arm_fault_rule,
@@ -107,6 +109,7 @@ def build_phase2_dispatch_services(**overrides):
         export_diagnostic_bundle=export_diagnostic_bundle,
         frontdesk_intake_command=frontdesk_intake_command,
         inbox_target=inbox_target,
+        inspect_project_commands=inspect_project_commands,
         kill_project=kill_project,
         layout_command=layout_command,
         list_fault_rules=list_fault_rules,

@@ -26,6 +26,7 @@ from cli.services.compact import compact_agent_context
 from cli.services.cleanup import cleanup_project_storage
 from cli.services.config_ui import open_config_ui_url, prepare_config_ui
 from cli.services.config_validate import effective_config_context, migrate_config_context, validate_config_context
+from cli.services.project_command_approval import approve_project_commands_context, inspect_project_commands
 from cli.services.doctor import doctor_summary
 from cli.services.doctor_storage import doctor_storage_summary
 from cli.services.diagnostics import export_diagnostic_bundle
@@ -156,6 +157,7 @@ def _dispatch(context, command, out: TextIO) -> int:
 def _dispatch_services():
     return build_phase2_dispatch_services(
         ack_reply=ack_reply,
+        approve_project_commands_context=approve_project_commands_context,
         agent_logs=agent_logs,
         arm_fault_rule=arm_fault_rule,
         cancel_job=cancel_job,
@@ -172,6 +174,7 @@ def _dispatch_services():
         export_diagnostic_bundle=export_diagnostic_bundle,
         frontdesk_intake_command=frontdesk_intake_command,
         inbox_target=inbox_target,
+        inspect_project_commands=inspect_project_commands,
         kill_project=kill_project,
         list_fault_rules=list_fault_rules,
         loop_capacity=loop_capacity,

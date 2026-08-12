@@ -21,7 +21,11 @@ def _stream_is_tty(stream: object) -> bool:
 
 def handle_config_validate(context, command, out, services) -> int:
     try:
-        if command.action == 'effective':
+        if command.action == 'approve-commands':
+            approval = _approve_project_commands(context, out, services, require_output_tty=False)
+            services.write_lines(out, _render_project_command_approval(approval))
+            return 0
+        elif command.action == 'effective':
             payload = services.effective_config_context(context)
         elif command.action == 'migrate':
             payload = services.migrate_config_context(
@@ -83,6 +87,7 @@ def handle_config_ui(context, command, out, services) -> int:
 
 
 def handle_start(context, command, out, services) -> int:
+    _ensure_project_commands_approved(context, out, services)
     # When the project config selects the Herdr backend, make sure a usable
     # capability report is injected before backend selection.  The installed
     # `ccb` (source-dev-independent) entrypoint does not run
@@ -107,6 +112,64 @@ def handle_start(context, command, out, services) -> int:
         return 0
     services.write_lines(out, services.render_start(summary))
     return 0
+
+
+def _ensure_project_commands_approved(context, out, services) -> None:
+    approval = services.inspect_project_commands(context)
+    if not approval.required:
+        return
+    _approve_project_commands(context, out, services, require_output_tty=True, approval=approval)
+
+
+def _approve_project_commands(
+    context,
+    out,
+    services,
+    *,
+    require_output_tty: bool,
+    approval=None,
+):
+    approval = approval or services.inspect_project_commands(context)
+    if not approval.fields:
+        return approval
+    interactive = _stream_is_tty(sys.stdin) and (
+        _stream_is_tty(out) if require_output_tty else True
+    )
+    if not interactive:
+        raise RuntimeError(
+            'project command approval required; review and approve interactively with '
+            '`ccb config approve-commands`'
+        )
+    print('This project requests local command execution:', file=out)
+    for field in approval.fields:
+        print(
+            f'  {json.dumps(field.path, ensure_ascii=True)} = '
+            f'{json.dumps(field.value, ensure_ascii=True)}',
+            file=out,
+        )
+    print(
+        f'Approve these exact command fields for {approval.project_root}? [y/N] ',
+        end='',
+        file=out,
+        flush=True,
+    )
+    reply = sys.stdin.readline()
+    if str(reply or '').strip().lower() not in {'y', 'yes'}:
+        raise RuntimeError('project command approval cancelled')
+    return services.approve_project_commands_context(
+        context,
+        expected_digest=approval.digest,
+    )
+
+
+def _render_project_command_approval(approval) -> tuple[str, ...]:
+    return (
+        f'approval_status: {approval.status}',
+        f'project_root: {approval.project_root}',
+        f'command_authority_digest: {approval.digest}',
+        f'command_fields: {len(approval.fields)}',
+        f'receipt_path: {approval.receipt_path}',
+    )
 
 
 def _ensure_herdr_runtime_evidence(context) -> None:
