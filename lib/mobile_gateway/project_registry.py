@@ -280,8 +280,11 @@ def _ccbd_socket_path_for_project(project_root: Path) -> Path:
 
 
 def _control_plane_endpoint_is_structurally_valid(socket_path: Path) -> bool:
-    if socket_path.is_socket():
-        return True
+    # Linux, macOS, and WSL use the POSIX Unix-socket transport. Native Windows
+    # uses a regular-file marker plus a tcp_loopback descriptor. Keep those
+    # representations disjoint because CcbdClient selects transport by host OS.
+    if os.name != 'nt':
+        return socket_path.is_socket()
     if not socket_path.is_file():
         return False
     try:

@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+import mobile_gateway.project_registry as project_registry
 from ccbd.control_plane_transport.endpoint import endpoint_from_record
 from ccbd.control_plane_transport.endpoint_store import write_endpoint
 from cli.services.mobile import _public_gateway_url, prepare_server_mobile_gateway
@@ -51,6 +52,12 @@ def _write_windows_tcp_marker(project_root: Path, *, endpoint: dict) -> Path:
     socket_path.touch()
     write_endpoint(endpoint_from_record(endpoint), legacy_socket_path=socket_path)
     return socket_path
+
+
+def _patch_project_registry_os_name(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    os_proxy = SimpleNamespace(**vars(project_registry.os))
+    os_proxy.name = name
+    monkeypatch.setattr(project_registry, 'os', os_proxy)
 
 
 class _FakeCcbdClient:
@@ -164,7 +171,11 @@ def test_host_project_registry_omits_stale_persisted_projects(tmp_path: Path) ->
         load_mobile_gateway_project_registry(registry_path=registry_path)
 
 
-def test_host_project_registry_loads_windows_tcp_marker_without_connecting(tmp_path: Path) -> None:
+def test_host_project_registry_loads_windows_tcp_marker_without_connecting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     registry_path = tmp_path / 'mobile' / 'projects.json'
     project_root = tmp_path / 'windows-project'
     project_root.mkdir()
@@ -199,7 +210,11 @@ def test_host_project_registry_loads_windows_tcp_marker_without_connecting(tmp_p
     assert registry.default_project.public_display_name == 'windows-project'
 
 
-def test_host_project_registry_omits_windows_marker_with_invalid_endpoint(tmp_path: Path) -> None:
+def test_host_project_registry_omits_windows_marker_with_invalid_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     registry_path = tmp_path / 'mobile' / 'projects.json'
     project_root = tmp_path / 'windows-project'
     project_root.mkdir()
@@ -221,7 +236,11 @@ def test_host_project_registry_omits_windows_marker_with_invalid_endpoint(tmp_pa
         load_mobile_gateway_project_registry(registry_path=registry_path)
 
 
-def test_windows_tcp_marker_without_endpoint_descriptor_is_invalid(tmp_path: Path) -> None:
+def test_windows_tcp_marker_without_endpoint_descriptor_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     socket_path = tmp_path / '.ccb' / 'ccbd' / 'ccbd.sock'
     socket_path.parent.mkdir(parents=True)
     socket_path.touch()
@@ -229,7 +248,11 @@ def test_windows_tcp_marker_without_endpoint_descriptor_is_invalid(tmp_path: Pat
     assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
 
 
-def test_windows_tcp_marker_with_unix_kind_descriptor_is_invalid(tmp_path: Path) -> None:
+def test_windows_tcp_marker_with_unix_kind_descriptor_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     socket_path = tmp_path / '.ccb' / 'ccbd' / 'ccbd.sock'
     socket_path.parent.mkdir(parents=True)
     socket_path.touch()
@@ -241,7 +264,11 @@ def test_windows_tcp_marker_with_unix_kind_descriptor_is_invalid(tmp_path: Path)
     assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
 
 
-def test_windows_tcp_marker_missing_token_ref_is_invalid(tmp_path: Path) -> None:
+def test_windows_tcp_marker_missing_token_ref_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     socket_path = _write_windows_tcp_marker(
         tmp_path,
         endpoint=_windows_tcp_loopback_endpoint(token_ref=''),
@@ -250,7 +277,11 @@ def test_windows_tcp_marker_missing_token_ref_is_invalid(tmp_path: Path) -> None
     assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
 
 
-def test_windows_tcp_marker_with_off_loopback_host_is_invalid(tmp_path: Path) -> None:
+def test_windows_tcp_marker_with_off_loopback_host_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     socket_path = _write_windows_tcp_marker(
         tmp_path,
         endpoint=_windows_tcp_loopback_endpoint(token_ref='token', host='192.168.2.11'),
@@ -259,13 +290,31 @@ def test_windows_tcp_marker_with_off_loopback_host_is_invalid(tmp_path: Path) ->
     assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
 
 
-def test_windows_tcp_marker_with_valid_descriptor_is_valid(tmp_path: Path) -> None:
+def test_windows_tcp_marker_with_valid_descriptor_is_valid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     socket_path = _write_windows_tcp_marker(
         tmp_path,
         endpoint=_windows_tcp_loopback_endpoint(token_ref=str(tmp_path / 'token.json')),
     )
 
     assert _control_plane_endpoint_is_structurally_valid(socket_path) is True
+
+
+def test_posix_hosts_reject_windows_tcp_marker_even_with_valid_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Linux, macOS, and WSL all report os.name == 'posix'.
+    _patch_project_registry_os_name(monkeypatch, 'posix')
+    socket_path = _write_windows_tcp_marker(
+        tmp_path,
+        endpoint=_windows_tcp_loopback_endpoint(token_ref=str(tmp_path / 'token.json')),
+    )
+
+    assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
 
 
 @requires_af_unix
@@ -280,7 +329,27 @@ def test_real_unix_socket_is_valid_without_endpoint_descriptor(tmp_path: Path) -
         socket_path.unlink(missing_ok=True)
 
 
-def test_host_project_registry_omits_windows_marker_without_descriptor(tmp_path: Path) -> None:
+@requires_af_unix
+def test_native_windows_rejects_unix_socket_representation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
+    socket_path = tmp_path / 'ccbd.sock'
+    unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    unix_socket.bind(str(socket_path))
+    try:
+        assert _control_plane_endpoint_is_structurally_valid(socket_path) is False
+    finally:
+        unix_socket.close()
+        socket_path.unlink(missing_ok=True)
+
+
+def test_host_project_registry_omits_windows_marker_without_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     registry_path = tmp_path / 'mobile' / 'projects.json'
     project_root = tmp_path / 'windows-project'
     project_root.mkdir()
@@ -298,7 +367,11 @@ def test_host_project_registry_omits_windows_marker_without_descriptor(tmp_path:
         load_mobile_gateway_project_registry(registry_path=registry_path)
 
 
-def test_host_project_registry_omits_windows_marker_without_token_ref(tmp_path: Path) -> None:
+def test_host_project_registry_omits_windows_marker_without_token_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     registry_path = tmp_path / 'mobile' / 'projects.json'
     project_root = tmp_path / 'windows-project'
     project_root.mkdir()
@@ -317,7 +390,11 @@ def test_host_project_registry_omits_windows_marker_without_token_ref(tmp_path: 
         load_mobile_gateway_project_registry(registry_path=registry_path)
 
 
-def test_host_project_registry_omits_windows_marker_with_off_loopback_host(tmp_path: Path) -> None:
+def test_host_project_registry_omits_windows_marker_with_off_loopback_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_project_registry_os_name(monkeypatch, 'nt')
     registry_path = tmp_path / 'mobile' / 'projects.json'
     project_root = tmp_path / 'windows-project'
     project_root.mkdir()
