@@ -31,6 +31,7 @@ from ccbd.api_models import DeliveryScope, MessageEnvelope
 from platforms.windows.herdr.ccbd_surface_projection import herdr_surface_projection_passes_gate
 from ccbd.socket_client import CcbdClientError
 from cli.services.config_ui import config_ui_provider_capabilities
+from project.identity import normalize_work_dir
 from provider_control import (
     ProviderQuotaService,
     ProviderSettingsError,
@@ -3327,11 +3328,11 @@ def _agent_conversation_items(
         limit=limit,
         cursor=cursor,
     )
-    # Codex/Claude files are the authority whenever those providers are in
+    # Provider-native files are the authority whenever those providers are in
     # use, including an intentionally empty native history. Other providers do
     # not all expose a native transcript, so retain the safe structured CCB
     # records. Terminal scrollback is deliberately excluded from this path.
-    if provider_key in {'', 'codex', 'claude'} or native_items.items:
+    if provider_key in {'', 'codex', 'claude', 'pi'} or native_items.items:
         return native_items
     return _agent_structured_fallback_conversation_items(
         view_payload,
@@ -3457,8 +3458,17 @@ def _agent_native_conversation_items(
         if codex_items.items:
             return codex_items
     if provider_key in {'', 'claude'}:
+        claude_items = _claude_native_conversation_items(
+            project_root,
+            project_id=project_id,
+            agent=agent,
+            mobile_files_dir=mobile_files_dir,
+        )
+        if provider_key == 'claude' or claude_items:
+            return _ConversationItemsResult(claude_items)
+    if provider_key in {'', 'pi'}:
         return _ConversationItemsResult(
-            _claude_native_conversation_items(
+            _pi_native_conversation_items(
                 project_root,
                 project_id=project_id,
                 agent=agent,
@@ -3489,6 +3499,13 @@ def _agent_native_conversation_cache_fingerprint(
         )
         if claude_fingerprint:
             return claude_fingerprint
+    if provider_key in {'', 'pi'}:
+        pi_fingerprint = _pi_native_conversation_cache_fingerprint(
+            project_root,
+            agent=agent,
+        )
+        if pi_fingerprint:
+            return pi_fingerprint
     return ()
 
 
@@ -3527,6 +3544,209 @@ def _conversation_page_has_provider_native_items(page: dict[str, object]) -> boo
         if source.startswith('provider_native/'):
             return True
     return False
+
+
+def _pi_native_conversation_items(
+    project_root: Path,
+    *,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None = None,
+) -> list[dict[str, object]]:
+    session_paths = _pi_native_session_paths(project_root, agent=agent)
+    if not session_paths:
+        return []
+    file_roots = [
+        path
+        for path in (
+            mobile_files_dir,
+            project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+        )
+        if path is not None
+    ]
+    items: list[dict[str, object]] = []
+    for session_order, session_path in enumerate(session_paths):
+        try:
+            lines = session_path.open(encoding='utf-8-sig')
+            fallback_timestamp = f'{int(session_path.stat().st_mtime):020d}'
+        except Exception:
+            continue
+        parent_by_id: dict[str, str | None] = {}
+        visible_by_id: dict[str, dict[str, object]] = {}
+        visible_order: list[str] = []
+        latest_record_id: str | None = None
+        session_id = _native_id_part(session_path.stem, fallback='session')
+        with lines:
+            for line_number, line in enumerate(lines, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = _map(json.loads(line))
+                except Exception:
+                    continue
+                record_id = _optional_text(record.get('id'))
+                if not record_id:
+                    continue
+                latest_record_id = record_id
+                parent_by_id[record_id] = _optional_text(record.get('parentId'))
+                if record.get('type') == 'session':
+                    session_id = _native_id_part(record_id, fallback=session_id)
+                    continue
+                if record.get('type') != 'message':
+                    continue
+                message = _map(record.get('message'))
+                role = str(message.get('role') or '').strip().lower()
+                if role not in {'user', 'assistant'}:
+                    continue
+                body = _pi_message_content_text(message.get('content'))
+                body = _inject_workspace_artifacts(
+                    body,
+                    project_root=project_root,
+                    project_id=project_id,
+                    agent=agent,
+                    mobile_files_dir=mobile_files_dir,
+                )
+                body = _clean_native_message_text(body)
+                if not body:
+                    continue
+                item_id = (
+                    f'pi-{session_id}-{line_number}-'
+                    f'{_native_id_part(record_id, fallback=role)}-{role}'
+                )
+                if role == 'user':
+                    item = {
+                        'id': item_id,
+                        'agent': agent,
+                        'kind': 'user_message',
+                        'title': 'You',
+                        'body': body,
+                        'format': 'markdown',
+                        'source': 'provider_native/pi',
+                        'state': 'sent',
+                        'attachments': [],
+                    }
+                else:
+                    item = {
+                        'id': item_id,
+                        'agent': agent,
+                        'kind': 'agent_reply',
+                        'title': 'Agent reply',
+                        'body': body,
+                        'format': 'markdown',
+                        'source': 'provider_native/pi',
+                        'attachments': _artifact_link_attachments(
+                            body,
+                            file_roots=file_roots,
+                            project_id=project_id,
+                            agent=agent,
+                        ),
+                    }
+                _set_native_sort_fields(
+                    item,
+                    record,
+                    fallback_timestamp=fallback_timestamp,
+                    thread_order=session_order,
+                    line_number=line_number,
+                )
+                visible_by_id[record_id] = item
+                visible_order.append(record_id)
+        active_record_ids = _pi_active_record_ids(
+            latest_record_id,
+            parent_by_id=parent_by_id,
+        )
+        items.extend(
+            visible_by_id[record_id]
+            for record_id in visible_order
+            if record_id in active_record_ids
+        )
+    sorted_items = [
+        item
+        for _, item in sorted(
+            enumerate(items),
+            key=lambda indexed: (
+                _optional_text(indexed[1].get('_native_sort_timestamp')) or '',
+                int(indexed[1].get('_native_thread_order') or 0),
+                int(indexed[1].get('_native_line_number') or 0),
+                indexed[0],
+            ),
+        )
+    ]
+    return [
+        _without_native_sort_fields(item)
+        for item in _coalesce_pi_native_agent_replies(sorted_items)
+    ]
+
+
+def _pi_native_session_paths(project_root: Path, *, agent: str) -> list[Path]:
+    session_dir = (
+        project_root / '.ccb' / 'agents' / agent / 'provider-state' / 'pi' / 'sessions'
+    )
+    if session_dir.is_symlink() or not session_dir.is_dir():
+        return []
+    project_work_dir = normalize_work_dir(project_root)
+    candidates: list[tuple[str, str, Path]] = []
+    try:
+        for path in session_dir.glob('*.jsonl'):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                with path.open(encoding='utf-8-sig') as lines:
+                    header = _map(json.loads(lines.readline()))
+            except Exception:
+                continue
+            if header.get('type') != 'session':
+                continue
+            recorded_work_dir = _optional_text(header.get('cwd'))
+            if not recorded_work_dir or normalize_work_dir(recorded_work_dir) != project_work_dir:
+                continue
+            candidates.append((
+                _optional_text(header.get('timestamp')) or '',
+                path.name,
+                path,
+            ))
+    except Exception:
+        return []
+    return [path for _, _, path in sorted(candidates)]
+
+
+def _pi_native_conversation_cache_fingerprint(
+    project_root: Path,
+    *,
+    agent: str,
+) -> tuple[tuple[str, int, int], ...]:
+    return tuple(
+        entry
+        for path in _pi_native_session_paths(project_root, agent=agent)
+        if (entry := _conversation_file_fingerprint_entry(path)) is not None
+    )
+
+
+def _pi_active_record_ids(
+    latest_record_id: str | None,
+    *,
+    parent_by_id: Mapping[str, str | None],
+) -> set[str]:
+    active: set[str] = set()
+    current = latest_record_id
+    while current and current not in active:
+        active.add(current)
+        current = parent_by_id.get(current)
+    return active
+
+
+def _pi_message_content_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    parts: list[str] = []
+    for item in _iterable(value):
+        content = _map(item)
+        if content.get('type') != 'text':
+            continue
+        text = _optional_text(content.get('text')) or ''
+        if text:
+            parts.append(text)
+    return '\n\n'.join(parts)
 
 
 def _claude_native_conversation_items(
@@ -4573,6 +4793,15 @@ def _coalesce_claude_native_agent_replies(
     return _coalesce_provider_native_agent_replies(
         items,
         source='provider_native/claude',
+    )
+
+
+def _coalesce_pi_native_agent_replies(
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return _coalesce_provider_native_agent_replies(
+        items,
+        source='provider_native/pi',
     )
 
 
