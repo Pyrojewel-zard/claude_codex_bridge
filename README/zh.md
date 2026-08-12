@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.1-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.2-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.2 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.1/ccb-mobile-v8.6.1.apk)
+- [下载 CCB Mobile v8.6.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.2/ccb-mobile-v8.6.2.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -302,6 +302,16 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.6.2</b> - 显式命令授权、可靠会话恢复与更完整的 Mobile 终端</summary>
+
+- 项目配置中的 tool-window 命令或自定义 Provider command template 执行前，必须取得外部、精确匹配的批准；有意配置时可运行 `ccb config approve-commands`。
+- 当前 session 记录损坏时，从最近的有效 session 恢复托管 Codex 对话，不再静默清空上下文。
+- 新增 Cursor 可见 Pane 执行、Pi 原生历史恢复、OMP Provider 配置继承，并增强 Windows 进程与 namespace 清理可靠性。
+- CCB Mobile 新增主机多 session 终端、经 Relay capability 协商的 Provider 控制，以及更严格的原生 Windows readiness 校验。
+
+</details>
+
+<details>
 <summary><b>v8.6.1</b> - Mobile Provider 控制、直达终端与安全上下文压缩</summary>
 
 - CCB Mobile 显示所选 Agent 的 Provider 身份、已配置/当前/待生效模型与 thinking、Codex/Claude 原生 session 用量和可选账号额度。
