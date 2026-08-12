@@ -851,7 +851,11 @@ class MobileGatewayService:
             raise MobileGatewayError('valid idempotency_key is required', status_code=400)
         fingerprint = hashlib.sha256(
             json.dumps(
-                dict(payload),
+                {
+                    'project_id': project.project_id,
+                    'agent': str(agent).strip(),
+                    'payload': dict(payload),
+                },
                 ensure_ascii=True,
                 sort_keys=True,
                 separators=(',', ':'),

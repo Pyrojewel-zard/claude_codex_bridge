@@ -1341,6 +1341,14 @@ thinking = "medium"
     assert 'backup_path' not in first
     assert 'model = "gpt-5.6-sol"' in config.read_text(encoding='utf-8')
 
+    with pytest.raises(MobileGatewayError, match='another request') as cross_agent:
+        service.dispatch_post(
+            '/v1/projects/proj-demo/agents/other/provider-control',
+            request,
+            headers,
+        )
+    assert cross_agent.value.status_code == 409
+
     with pytest.raises(MobileGatewayError, match='another request') as reused:
         service.dispatch_post(
             '/v1/projects/proj-demo/agents/mobile/provider-control',
