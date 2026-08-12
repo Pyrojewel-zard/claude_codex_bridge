@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 
+from platforms.windows.herdr.common import resolve_herdr_executable
 from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
 
 _METADATA_SOURCE = "ccb"
@@ -1350,7 +1351,11 @@ class HerdrCliRequestAdapter:
         return bool(status.get("running") is True or status.get("status") == "running")
 
     def _resolve_executable(self) -> str:
-        executable = (self._herdr_executable or "").strip() or self._which_fn("herdr")
+        executable = (self._herdr_executable or "").strip()
+        if not executable:
+            executable = resolve_herdr_executable()
+        if not executable:
+            executable = self._which_fn("herdr")
         if executable:
             return executable
         raise MuxCommandErrorV2(

@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional, cast
 
@@ -236,6 +237,59 @@ def _herdr_backend_factory() -> HerdrBackend:
     )
 
 
+def get_backend_for_namespace_teardown(namespace_ref: Mapping[str, object]) -> HerdrBackend:
+    """Build a Herdr backend that can tear down an already-persisted namespace.
+
+    ``ccb kill`` runs in a process that does not carry the Herdr capability
+    evidence env (``CCB_HERDR_CAPABILITY_REPORT``), which CCB only injects into
+    daemon-spawned agent processes.  A persisted herdr namespace already proves
+    Herdr was validated at creation time, so teardown must not re-run the
+    backend-selection gate: re-attach directly from the persisted
+    ``namespace_ref`` with a teardown-only capability gate instead.
+    """
+    request_adapter = _herdr_request_adapter()
+    socket_ref = str(namespace_ref.get("ipc_ref") or "").strip() or request_adapter.socket_ref
+    backend = HerdrBackend(
+        client=HerdrSocketClient(
+            request_fn=request_adapter,
+            socket_ref=socket_ref,
+            allow_session_scoped_ipc_refs=bool(
+                getattr(request_adapter, "allow_session_scoped_ipc_refs", False)
+            ),
+        ),
+        capability_gate=_herdr_capability_gate(_herdr_teardown_capability_report()),
+    )
+    setattr(backend, "_ccb_project_namespace_ref", dict(namespace_ref))
+    return backend
+
+
+def _herdr_teardown_capability_report() -> dict[str, object]:
+    """Minimal capability evidence permitting teardown of a persisted namespace.
+
+    Covers the operations the destroy path performs on a re-attached herdr
+    namespace (``capabilities``, ``namespace_alive``, ``destroy_namespace`` /
+    ``kill_server``) without requiring ambient capability evidence.  Only used
+    when re-attaching to a namespace that persisted state already proves is
+    Herdr.
+    """
+    statuses = {
+        "session_attach": "supported",
+        "workspace_list": "supported",
+        "pane_list": "supported",
+        "workspace_close": "supported",
+    }
+    return {
+        "backend_impl": "herdr",
+        "command_status": dict(statuses),
+        "semantic_status": dict(statuses),
+        "blocking_gaps": [],
+        "windows_beta_gaps": [],
+        "adapter_recommendation": "continue-with-gaps",
+        "verdict": "partial",
+        "failure_class": "windows-beta-gap",
+    }
+
+
 def _herdr_capability_gate(capabilities: dict[str, object] | None) -> HerdrCapabilityGate:
     if not capabilities or capabilities.get("blocked") is True:
         return HerdrCapabilityGate(
@@ -447,6 +501,7 @@ __all__ = [
     "create_auto_layout",
     "detect_terminal",
     "get_backend",
+    "get_backend_for_namespace_teardown",
     "get_backend_for_session",
     "get_pane_id_from_session",
     "get_shell_type",
