@@ -493,8 +493,15 @@ Managed provider startup mutation rules:
   `auth.v2.key`
 - managed Cursor must set `AGENT_CLI_CREDENTIAL_STORE=file`; on macOS it may
   read Cursor's split token services and create only the private
-  `<managed-home>/.cursor/auth.json`. Managed Copilot must set
-  `COPILOT_DISABLE_KEYTAR=1`.
+  `<managed-home>/.cursor/auth.json`. New Cursor asks execute in the exact
+  managed visible pane by default so configured startup/model arguments and
+  pane continuity remain authoritative. CCB defers delivery until the pane is
+  stably idle, binds the turn to an exact `CCB_REQ_ID` in a top-level Cursor
+  transcript under that managed home, and completes only from a later matching
+  `turn_ended` record; stale and subagent transcripts are not terminal
+  authority. `CCB_CURSOR_EXECUTION_MODE=headless` is the explicit rollback
+  path, and interrupted pane jobs remain resubmit-required. Managed Copilot
+  must set `COPILOT_DISABLE_KEYTAR=1`.
 - managed Kiro may snapshot the known source SQLite database only through a
   read-only connection and retain only auth/config tables. Kiro must fail
   closed on macOS while its current CLI exposes no private credential-store
@@ -667,12 +674,16 @@ Lifecycle startup mutation rules:
   Delayed shutdown finalization must confirm that the same project still has a
   live shutdown intent and remains stopped; it is a no-op after a later start
   has cleared the intent or published a running transaction
-- keeper readiness accepts a child only when the ping comes from the exact
-  spawned PID and daemon instance and the response independently reports the
-  expected lease generation plus a matching `mounted/running` lifecycle,
-  startup id, and mounted startup stage.  The ping itself is linearly ordered
-  after the final publication gate opens; serving-process memory or a mounted
-  file observed while that gate is held is not sufficient authority
+- keeper readiness accepts a child only when the ping reports a positive
+  serving PID and a non-empty daemon instance and independently proves the
+  expected startup id and lease/lifecycle generation plus a matching
+  `mounted/running` lifecycle and mounted startup stage. The serving PID need
+  not equal the immediate `Popen.pid`: a Windows venv launcher or another
+  process wrapper may re-exec the daemon under a different PID. The startup
+  transaction identity and generation fences remain authoritative. The ping
+  itself is linearly ordered after the final publication gate opens; serving-
+  process memory or a mounted file observed while that gate is held is not
+  sufficient authority
 - if readiness waiting fails or times out, keeper must terminate and reap only
   the independently spawned child process group before recording the failed
   attempt; a late child must not remain able to publish authority

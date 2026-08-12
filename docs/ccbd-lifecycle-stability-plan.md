@@ -380,9 +380,11 @@ lease identity 与 `T0 <= T1 <= T2 <= RPC` 全部一致时把它投影为相对�
 counter 不得落盘，缺失或格式错误只降级为 observation upper bound，不能阻断启动。
 
 readiness 不能只相信 child 返回的内存身份：keeper 还必须核对响应中的当前
-`mounted/running` lifecycle、generation、startup id、mounted stage、serving PID
-与 daemon instance。等待超时或身份持续矛盾时，只终止并 reap 本次 spawn 的独立
-进程组，防止慢 child 晚到后继续发布 lease/socket。
+`mounted/running` lifecycle、generation、startup id、mounted stage、正数 serving
+PID 与非空 daemon instance。Windows venv launcher 或其他 wrapper 可能令 serving
+PID 不等于直接 `Popen.pid`，因此启动事务身份与 generation fence 才是接纳权威。
+等待超时或身份持续矛盾时，只终止并 reap 本次 spawn 的独立进程组，防止慢 child
+晚到后继续发布 lease/socket。
 
 ### 6.3 mounted 的严格含义
 

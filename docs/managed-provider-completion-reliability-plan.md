@@ -24,13 +24,16 @@ This plan applies to:
 - managed `codex`
 - managed `claude`
 - managed `gemini`
+- managed `cursor`
 - managed `pi`
 - managed `omp`
 
-in pane-backed mode. Pi asks execute in the managed visible pane and use a
-provider-local lifecycle sidecar. OMP asks use per-job structured one-shot
-subprocesses owned by their managed pane-backed agents. Pi's 8.5.0 one-shot
-path remains a persisted-job compatibility path and explicit rollback mode.
+in pane-backed mode. Cursor asks execute in the managed visible pane and use
+exact anchored top-level transcript evidence. Pi asks execute in the managed
+visible pane and use a provider-local lifecycle sidecar. OMP asks use per-job
+structured one-shot subprocesses owned by their managed pane-backed agents.
+Cursor and Pi retain explicit headless rollback paths; Pi's 8.5.0 one-shot path
+also remains a persisted-job compatibility path.
 
 This document does not replace:
 
@@ -815,7 +818,35 @@ authentication failures, non-normal result reasons, nonzero exit, and a clean
 process exit without a result envelope all fail or remain incomplete; they may
 not be returned as successful assistant text.
 
-### 10.6 Pi Visible Lifecycle And OMP Structured Streams
+### 10.6 Cursor Visible Transcript Completion
+
+New Cursor asks execute in the exact managed visible pane. The adapter must
+wait while the current pane or current-session transcript is active, require a
+new top-level `turn_ended` after an observed active turn, and then confirm a
+stable idle interval before sending exactly once. Pane text is readiness
+evidence only; it is not completion authority.
+
+Before dispatch, CCB captures transcript offsets and excludes top-level paths
+that already contain the request anchor. Because Cursor may rewrite the prior
+terminal record when appending a turn, pre-anchor discovery may rescan complete
+top-level transcripts from the beginning. It binds only to the first eligible
+user record containing the exact `CCB_REQ_ID`; subagent transcripts, malformed
+or partial records, stale anchors, assistant text before binding, and terminal
+records from other paths cannot complete the job.
+
+After binding, assistant text from that same transcript is progress and reply
+evidence. Only a later `turn_ended` from the bound transcript terminalizes:
+`status=success` requires a non-empty reply to complete, while an empty success
+or any other status closes incomplete. Readiness and run timeouts close
+incomplete without resending. Cancellation interrupts only a pane to which the
+prompt was delivered. Daemon restore cannot prove ownership of an interrupted
+in-flight Cursor turn, so it is resubmit-required.
+
+`CCB_CURSOR_EXECUTION_MODE=headless` retains the prior
+`agent --print --output-format stream-json` adapter as an explicit rollback
+path; it is not the default execution mode.
+
+### 10.7 Pi Visible Lifecycle And OMP Structured Streams
 
 The supported completion contract intentionally targets the current provider
 protocols only:
@@ -1036,7 +1067,20 @@ Add execution-layer tests for:
 - reliability timeout is provider-manifest-driven
 - degraded fallback decision is persisted and restorable
 
-### 12.7 Pi And OMP
+### 12.7 Cursor
+
+Add tests for:
+
+- visible-pane default selection and explicit headless rollback
+- exact top-level request-anchor binding, stale/subagent exclusion, and
+  transcript-tail rewrite handling
+- busy-pane deferral, new terminal evidence, stable idle confirmation, and
+  exactly-once dispatch
+- assistant progress without terminalization, successful/error/empty terminal
+  outcomes, readiness/run timeout, dead pane, reply delivery, and cancellation
+- resubmit-required daemon restore diagnostics
+
+### 12.8 Pi And OMP
 
 Add tests for:
 

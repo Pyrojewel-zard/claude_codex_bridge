@@ -206,8 +206,11 @@ Date: 2026-06-13
     stdout/stderr artifacts, structured-result parsing, stdout-on-exit
     completion, empty replies, nonzero exits, run timeouts with process
     termination, and tool/intermediate events.
-  - Qwen, Cursor, Copilot, and Pi use JSONL/stream-json result parsing; Crush
-    and Kiro use subprocess exit plus stdout.
+  - Qwen and Copilot use JSONL/stream-json subprocess result parsing; Crush and
+    Kiro use subprocess exit plus stdout. Cursor now defaults to the named
+    visible pane with exact anchored top-level transcript completion; its
+    earlier stream-json subprocess remains an explicit rollback mode. Pi also
+    uses its managed visible pane with exact lifecycle sidecar evidence.
   - Crush visible pane startup now passes `--data-dir <provider-state>/data`,
     matching the ask execution isolation boundary.
   - Qwen, Cursor, Copilot, Crush, Kiro, and Pi provider-state contents now
@@ -249,6 +252,11 @@ Date: 2026-06-13
   add-on smoke passed with `pi_run_stop`; full source test gate passed with
   `2621 passed, 2 skipped, 21 deselected`;
   `git diff --check` passed.
+- Cursor visible-pane execution landed in merge commit `7a008597`: jobs wait
+  for stable idle, dispatch exactly once to the named pane, bind the exact
+  `CCB_REQ_ID` in a top-level managed transcript, and require the matching
+  `turn_ended`; `CCB_CURSOR_EXECUTION_MODE=headless` retains rollback. The
+  Cursor/native-provider focused suite passed `119` tests on 2026-08-12.
 - Landed Kimi-only receipt and diagnostics hardening:
   - Kimi inherited ask skill projects the structured receipt contract:
     `status`, `inspected`, `exact_files`, `findings`, `reject_cases`,
@@ -353,6 +361,6 @@ Date: 2026-06-13
   key is needed.
 - Model/key/url shortcut projection after upstream config semantics are stable
   and tested.
-- Native ACP/server-mode integrations for Qwen, Copilot, or Cursor. First CCB
-  support should prefer simpler per-job subprocess execution until the provider
-  contract proves stable.
+- Native ACP/server-mode integrations for Qwen, Copilot, or Cursor remain
+  deferred. Cursor's current supported interactive path is transcript-backed
+  visible-pane execution, not ACP/server mode.

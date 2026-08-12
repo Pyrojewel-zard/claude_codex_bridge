@@ -57,6 +57,11 @@ Grok startup argument normalization for Issue #255 has landed in source.
 Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
 `--minimal` default; unrelated startup arguments retain the minimal default.
 
+Cursor visible-pane execution landed in merge commit `7a008597`. New Cursor
+jobs use the named managed pane, wait for stable idle, bind completion to the
+exact request anchor in a top-level transcript, and retain explicit headless
+rollback. Interrupted in-flight Cursor jobs remain resubmit-required.
+
 ## Last Landed
 
 - Kimi exact-session restart now binds native identity only from an observed
@@ -122,11 +127,14 @@ Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
     `qwen`/`QWEN_START_CMD`, `agent`/`CURSOR_START_CMD`,
     `copilot`/`COPILOT_START_CMD`, `crush`/`CRUSH_START_CMD`,
     `kiro-cli`/`KIRO_START_CMD`, and `pi`/`PI_START_CMD`.
-  - Visible panes use the shared simple-tmux launcher. Qwen/Cursor/Copilot ask
+  - Visible panes use the shared simple-tmux launcher. Qwen/Copilot ask
     execution uses per-job structured subprocesses and Crush/Kiro use process
-    exit plus stdout. Pi's current landing sends new asks to its visible pane
-    and observes exact `agent_settled` lifecycle sidecar evidence; its
-    structured subprocess is retained for rollback and persisted 8.5.0 jobs.
+    exit plus stdout. Cursor sends new asks to its named visible pane and
+    observes exact anchored top-level transcript evidence; its structured
+    subprocess is retained for explicit rollback. Pi sends new asks to its
+    visible pane and observes exact `agent_settled` lifecycle sidecar evidence;
+    its structured subprocess is retained for rollback and persisted 8.5.0
+    jobs.
   - Talk1 review found one release-blocking gap: Crush ask execution used
     `--data-dir`, but the visible pane did not. The shared native CLI launcher
     now supports prepared-state-derived visible arguments, and the Crush visible
@@ -195,6 +203,15 @@ Kimi hardening source work is unblocked. Remaining Kimi prompt-mode and auth
 diagnostic ideas stay deferred/open until real usage needs them.
 
 ## Last Verified
+
+Cursor visible-pane verification, 2026-08-12:
+
+- `test/test_cursor_provider.py`, `test/test_cursor_transcript.py`,
+  `test/test_native_cli_provider_execution.py`, and
+  `test/test_native_cli_providers.py`: `119 passed`.
+- Coverage includes default/rollback selection, exact anchor binding,
+  stale/subagent exclusion, transcript rewrite, stable-idle deferred delivery,
+  terminal evidence, timeout, pane death, reply delivery, and cancellation.
 
 Grok fullscreen startup regression, 2026-07-15:
 

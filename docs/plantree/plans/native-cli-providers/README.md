@@ -68,6 +68,9 @@ override the shipped contracts.
 - [topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md):
   active Pi visible-pane execution, exact `agent_settled` completion, legacy
   headless migration, timeout, restore, rollback, and test contract.
+- [../../../plans/2026-08-11-cursor-visible-pane-execution-design.md](../../../plans/2026-08-11-cursor-visible-pane-execution-design.md):
+  landed Cursor visible-pane execution, anchored transcript completion,
+  readiness fencing, timeout, cancellation, and headless rollback contract.
 - [history/next-wave-cli-lab-2026-06-13.md](history/next-wave-cli-lab-2026-06-13.md):
   local install/source lab record for Qwen, Copilot, Cursor, Kiro, and Crush.
 - [history/pi-provider-landing-2026-06-13.md](history/pi-provider-landing-2026-06-13.md):
@@ -101,6 +104,10 @@ In scope:
   provider-local lifecycle sidecar and `agent_settled` as terminal authority;
   the 8.5.0 `pi --mode json` subprocess remains the explicit rollback and
   persisted-job compatibility path.
+- Cursor ask execution in the managed visible pane by default, with stable-idle
+  delivery, exact `CCB_REQ_ID` top-level transcript binding, matching
+  `turn_ended` terminal authority, and explicit
+  `CCB_CURSOR_EXECUTION_MODE=headless` rollback.
 - AGY completion alignment to Antigravity transcript logs, so AGY no longer
   relies on `CCB_DONE` as its primary completion signal.
 - AGY prompt delivery hardening so CCB waits for an input-ready Antigravity pane

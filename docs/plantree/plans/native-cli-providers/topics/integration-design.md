@@ -47,13 +47,18 @@ These providers enter CCB as optional built-in managed providers:
 
 Most next-wave runtimes split visible pane startup from ask execution:
 
-- `qwen`, `copilot`, `cursor`, and `grok` use per-job subprocess
+- `qwen`, `copilot`, and `grok` use per-job subprocess
   execution with JSONL/stream-json parsing.
 - `crush` and `kiro` use per-job subprocess execution with process exit plus
   stdout as the completion signal.
 - Visible panes still use simple tmux launchers for user observation and
   runtime maintenance.
-- Pi is the deliberate exception: new asks execute in its managed visible
+- Cursor is a deliberate exception: new asks execute in the exact managed
+  visible pane, defer until stable idle, bind to an exact request anchor in a
+  top-level transcript, and terminalize only from the bound turn's
+  `turn_ended`. The earlier structured subprocess is an explicit headless
+  rollback path.
+- Pi is also a deliberate exception: new asks execute in its managed visible
   pane and an official Pi extension writes exact-request lifecycle evidence.
   The earlier per-job structured subprocess remains the explicit headless
   rollback and persisted `pi_run` compatibility path.
@@ -131,8 +136,10 @@ result streams:
    deterministic UUID session id. Only a non-error native `result` envelope
    with a normal stop reason completes the job; auth/error envelopes and a
    clean exit without `result` fail closed.
-10. Cursor asks parse `agent --print --output-format stream-json` envelopes and
-   terminalize from final result/completion events.
+10. Cursor asks execute in the named visible pane, bind the exact request
+   anchor in a top-level Cursor transcript, and terminalize only from a later
+   matching `turn_ended`. `agent --print --output-format stream-json` remains
+   the explicit headless rollback mode.
 11. Copilot asks parse `--output-format json` JSONL in prompt mode and
    terminalize from the final prompt-mode result event.
 11. Crush asks collect stdout from `crush run --quiet` and trust process exit;
@@ -307,7 +314,10 @@ Focused unit tests should cover:
   modern manifest/launcher/execution contracts while old protocol helpers
   remain only for compatibility tests.
 - Qwen parser handles `stream-json` assistant and result envelopes.
-- Cursor parser handles `agent --print --output-format stream-json` envelopes.
+- Cursor defaults to visible-pane execution, waits for stable idle, dispatches
+  once, excludes stale/subagent transcripts, binds the exact request anchor,
+  and requires a matching `turn_ended`; its headless rollback parser still
+  handles `agent --print --output-format stream-json` envelopes.
 - Copilot parser handles prompt-mode JSONL output.
 - Crush execution treats nonzero exit as failure and zero exit/stdout as
   completion, with empty stdout producing an empty-reply diagnostic.

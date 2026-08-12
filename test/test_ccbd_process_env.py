@@ -18,6 +18,13 @@ from ccbd.startup_fence import (
 )
 
 
+def _mock_process_background_os(monkeypatch, *, name: str) -> None:
+    """Change the module-under-test platform without mutating global ``os``."""
+    os_proxy = SimpleNamespace(**vars(process_background.os))
+    os_proxy.name = name
+    monkeypatch.setattr(process_background, 'os', os_proxy)
+
+
 def test_ccbd_env_prefers_current_worktree_tools(monkeypatch) -> None:
     monkeypatch.setenv('PATH', os.pathsep.join(['/usr/bin', '/bin']))
     monkeypatch.setenv('PYTHONPATH', '/stable/ccb/lib:/other')
@@ -106,6 +113,16 @@ def test_ready_payload_identity_does_not_require_serving_pid_equals_popen_pid() 
         expected_generation=7,
     )
     assert not _ready_payload_matches_expected(
+        {**payload, 'serving_daemon_instance_id': ''},
+        expected_startup_id='a' * 32,
+        expected_generation=7,
+    )
+    assert not _ready_payload_matches_expected(
+        {**payload, 'serving_lease_generation': 8},
+        expected_startup_id='a' * 32,
+        expected_generation=7,
+    )
+    assert not _ready_payload_matches_expected(
         {**payload, 'accepted_startup_id': 'b' * 32},
         expected_startup_id='a' * 32,
         expected_generation=7,
@@ -136,9 +153,7 @@ def test_prepend_tool_paths_deduplicates_existing_entries(tmp_path: Path) -> Non
 
 
 def test_background_process_kwargs_detaches_windows_console(monkeypatch) -> None:
-    os_proxy = SimpleNamespace(**vars(process_background.os))
-    os_proxy.name = 'nt'
-    monkeypatch.setattr(process_background, 'os', os_proxy)
+    _mock_process_background_os(monkeypatch, name='nt')
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200, raising=False)
     monkeypatch.setattr(process_background.subprocess, 'DETACHED_PROCESS', 0x00000008, raising=False)
     monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
@@ -152,7 +167,7 @@ def test_background_process_kwargs_detaches_windows_console(monkeypatch) -> None
 
 
 def test_background_spawn_off_windows_returns_sys_executable(monkeypatch) -> None:
-    monkeypatch.setattr(process_background.os, 'name', 'posix')
+    _mock_process_background_os(monkeypatch, name='posix')
 
     interpreter, extra = process_background.background_spawn()
 
@@ -163,7 +178,7 @@ def test_background_spawn_off_windows_returns_sys_executable(monkeypatch) -> Non
 def test_background_spawn_resolves_venv_base_interpreter_and_site_packages(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    _mock_process_background_os(monkeypatch, name='nt')
     venv = tmp_path / 'venv'
     (venv / 'Scripts').mkdir(parents=True)
     site_packages = venv / 'Lib' / 'site-packages'
@@ -186,7 +201,7 @@ def test_background_spawn_resolves_venv_base_interpreter_and_site_packages(
 
 
 def test_venv_base_interpreter_none_without_pyvenv_cfg(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(process_background.os, 'name', 'nt')
+    _mock_process_background_os(monkeypatch, name='nt')
     fake_exe = tmp_path / 'Scripts' / 'python.exe'
     fake_exe.parent.mkdir(parents=True)
     monkeypatch.setattr(process_background.sys, 'executable', str(fake_exe))
