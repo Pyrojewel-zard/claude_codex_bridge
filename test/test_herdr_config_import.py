@@ -10,6 +10,11 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+try:
+    import tomllib
+except ImportError:  # Python 3.10 compatibility
+    import tomli as tomllib
+
 from platforms.windows.herdr.config_import import (
     _build_ccb_config,
     _dump_toml,
@@ -83,8 +88,6 @@ class TestTomlSerialization:
 
     def test_toml_roundtrip_readable(self, tmp_path):
         """Generated TOML can be read back by tomllib."""
-        import tomllib
-
         config = {
             "version": 2,
             "windows": {"main": "agent_1:claude, agent_2:codex"},
