@@ -108,6 +108,20 @@ def test_relay_host_connector_maps_provider_control_without_proxy_escape() -> No
             'arbitrary_path': '/etc/passwd',
         },
     )
+    unbound_runtime_mutation = _gateway_request(
+        'update_agent_provider_settings',
+        {
+            'project_id': 'project/demo',
+            'agent': 'worker one',
+            'model': 'gpt-5.6-sol',
+            'thinking': 'medium',
+            'expected_revision': 'config-r2',
+            'expected_namespace_epoch': 7,
+            'expected_runtime_revision': None,
+            'expected_provider': 'codex',
+            'idempotency_key': 'provider-idempotency-0002',
+        },
+    )
 
     assert read.method == 'GET'
     assert read.path == '/v1/projects/project%2Fdemo/agents/worker%20one/provider-control'
@@ -125,6 +139,9 @@ def test_relay_host_connector_maps_provider_control_without_proxy_escape() -> No
         'model': 'gpt-5.6-sol',
         'thinking': 'xhigh',
     }
+    assert json.loads(
+        (unbound_runtime_mutation.body or b'{}').decode('utf-8')
+    )['expected_runtime_revision'] is None
 
 
 def test_relay_host_connector_maps_host_terminal_without_path_escape() -> None:
@@ -162,6 +179,7 @@ def test_relay_host_connector_maps_host_terminal_without_path_escape() -> None:
         'schema_version': 1,
         'client_session_id': 'shell-2',
     }
+
 
 def test_relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path) -> None:
     asyncio.run(_relay_host_connector_proxies_encrypted_gateway_request(tmp_path))
@@ -430,6 +448,15 @@ async def _relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path
             assert host_hello['payload']['server_fingerprint'] == host_fingerprint_for_public_key(
                 public_key_b64(host_crypto_key)
             )
+            assert (
+                'get_agent_provider_control'
+                in host_hello['payload']['unary_operations']
+            )
+            assert (
+                'update_agent_provider_settings'
+                in host_hello['payload']['unary_operations']
+            )
+            assert 'terminal' in host_hello['payload']['stream_operations']
 
             response = await _round_trip_gateway_request(
                 phone,

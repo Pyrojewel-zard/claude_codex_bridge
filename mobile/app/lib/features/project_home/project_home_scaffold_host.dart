@@ -459,6 +459,7 @@ class _ProjectHomeMobileChatScaffoldHostState
 
   VoidCallback? get _providerControlAction {
     if (widget.selectedAgent == null ||
+        widget.selectedAgent!.providerControl == null ||
         widget.repository is! MobileCcbProviderControlRepository) {
       return null;
     }
@@ -836,7 +837,7 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                               },
                       onOpenConnectionDetails: onOpenConnectionDetails,
                       onOpenProviderControl:
-                          selectedAgent != null &&
+                          selectedAgent?.providerControl != null &&
                                   repository
                                       is MobileCcbProviderControlRepository
                               ? () async {

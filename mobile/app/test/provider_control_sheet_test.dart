@@ -50,37 +50,33 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Codex / gpt-5.5 / medium'), findsOneWidget);
+      expect(find.byKey(const ValueKey('provider-model-list')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('provider-model-search')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('provider-control-save')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('provider-usage-trigger')));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('provider-session-usage')),
         findsOneWidget,
       );
-      expect(find.text('12.0K / 200.0K context'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.byKey(const ValueKey('provider-account-quota')),
-        260,
-        scrollable: find.byType(Scrollable).first,
-      );
+      expect(find.text('12.0K / 200.0K context'), findsWidgets);
       expect(
         find.byKey(const ValueKey('provider-account-quota')),
         findsOneWidget,
       );
       expect(find.text('Weekly'), findsOneWidget);
-
-      await tester.scrollUntilVisible(
-        find.byKey(const ValueKey('provider-model-option-gpt-5.6-sol')),
-        -260,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.tap(
-        find.byKey(const ValueKey('provider-model-option-gpt-5.6-sol')),
-      );
-      await tester.pump();
-      await tester.tap(
-        find.byKey(const ValueKey('provider-thinking-option-xhigh')),
-      );
-      await tester.tap(find.byKey(const ValueKey('provider-control-save')));
+      await tester.tap(find.byKey(const ValueKey('provider-usage-close')));
       await tester.pumpAndSettle();
-      expect(find.text('Save model selection?'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('provider-model-option-gpt-5.6-sol')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Apply model settings?'), findsOneWidget);
 
       await tester.tap(
         find.byKey(const ValueKey('confirm-provider-settings-save')),
@@ -92,7 +88,7 @@ void main() {
       expect(mutation['project_id'], 'proj-demo');
       expect(mutation['agent'], 'mobile');
       expect(mutation['model'], 'gpt-5.6-sol');
-      expect(mutation['thinking'], 'xhigh');
+      expect(mutation['thinking'], 'low');
       expect(mutation['expected_revision'], 'config-r1');
       expect(mutation['expected_namespace_epoch'], 4);
       expect(mutation['expected_provider'], 'codex');
@@ -101,18 +97,117 @@ void main() {
         (mutation['idempotency_key'] as String).startsWith('provider-'),
         isTrue,
       );
-      await tester.scrollUntilVisible(
-        find.byKey(const ValueKey('provider-control-pending')),
-        -260,
-        scrollable: find.byType(Scrollable).first,
-      );
       expect(
-        find.byKey(const ValueKey('provider-control-pending')),
-        findsOneWidget,
+        find.byKey(const ValueKey('provider-control-sheet')),
+        findsNothing,
       );
-      expect(find.textContaining('gpt-5.6-sol'), findsWidgets);
     },
   );
+
+  testWidgets('thinking selection uses a Paseo-style secondary picker', (
+    tester,
+  ) async {
+    final repository = _ProviderRepository(_details());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProviderControlSheet(
+          repository: repository,
+          projectId: 'proj-demo',
+          agent: CcbAgent(
+            name: 'mobile',
+            provider: 'codex',
+            window: 'main',
+            order: 0,
+            active: true,
+            queueDepth: 0,
+            providerControl: _control(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('provider-thinking-trigger')));
+    await tester.pumpAndSettle();
+    expect(find.text('Extra high'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('provider-thinking-option-xhigh')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('confirm-provider-settings-save')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(repository.mutations, hasLength(1));
+    expect(repository.mutations.single['model'], 'gpt-5.5');
+    expect(repository.mutations.single['thinking'], 'xhigh');
+  });
+
+  testWidgets('relay operation mismatch tells the user to update the host', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProviderControlSheet(
+          repository: _ProviderRepository(
+            _details(),
+            loadError: const RelayGatewayException('operation_not_allowed'),
+          ),
+          projectId: 'proj-demo',
+          agent: CcbAgent(
+            name: 'mobile',
+            provider: 'codex',
+            window: 'main',
+            order: 0,
+            active: true,
+            queueDepth: 0,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Run ccb update on the computer'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('RelayGatewayException'), findsNothing);
+  });
+
+  testWidgets('relay gateway rejection is shown without transport internals', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProviderControlSheet(
+          repository: _ProviderRepository(
+            _details(),
+            loadError: const RelayGatewayException(
+              'gateway_rejected',
+              statusCode: 400,
+            ),
+          ),
+          projectId: 'proj-demo',
+          agent: CcbAgent(
+            name: 'mobile',
+            provider: 'codex',
+            window: 'main',
+            order: 0,
+            active: true,
+            queueDepth: 0,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('The computer rejected this setting'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('RelayGatewayException'), findsNothing);
+  });
 
   testWidgets('provider sheet keeps unsupported provider read only', (
     tester,
@@ -234,10 +329,11 @@ CcbProviderControlDetails _details({bool pending = false}) {
 
 class _ProviderRepository extends FakeMobileCcbRepository
     implements MobileCcbProviderControlRepository {
-  _ProviderRepository(this.details)
+  _ProviderRepository(this.details, {this.loadError})
     : super(projectViewPayload: demoProjectViewFixture);
 
   CcbProviderControlDetails details;
+  final Object? loadError;
   final mutations = <Map<String, Object?>>[];
 
   @override
@@ -245,6 +341,9 @@ class _ProviderRepository extends FakeMobileCcbRepository
     required String projectId,
     required String agentName,
   }) async {
+    if (loadError case final error?) {
+      throw error;
+    }
     return details;
   }
 

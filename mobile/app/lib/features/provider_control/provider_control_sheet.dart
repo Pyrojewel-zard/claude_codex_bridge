@@ -8,6 +8,7 @@ import '../../models/ccb_agent.dart';
 import '../../models/ccb_provider_control.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../transport/http_gateway_transport.dart';
+import '../../transport/relay_socket_gateway_transport.dart';
 
 // Compact Provider selection and usage behavior aligns with Paseo at pinned
 // commit b599d38, adapted to Flutter and CCB's restart-required lifecycle.
@@ -51,15 +52,11 @@ class ProviderControlSheet extends StatefulWidget {
 class _ProviderControlSheetState extends State<ProviderControlSheet> {
   final _searchController = TextEditingController();
   CcbProviderControlDetails? _details;
-  CcbProviderAccountUsage? _accountUsage;
   Object? _error;
-  Object? _quotaError;
   String? _model;
   String? _thinking;
   var _loading = true;
   var _saving = false;
-  var _quotaLoading = false;
-  var _changed = false;
   var _loadGeneration = 0;
 
   @override
@@ -90,9 +87,6 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
       }
       setState(() {
         _details = details;
-        _accountUsage = details.accountUsage;
-        _quotaError = null;
-        _quotaLoading = details.control.capabilities.accountQuota;
         _model =
             details.control.configuredModel ??
             details.control.activeModel ??
@@ -105,9 +99,6 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
         _loading = false;
       });
       _normalizeThinking();
-      if (details.control.capabilities.accountQuota) {
-        unawaited(_loadQuota(generation));
-      }
     } catch (error) {
       if (!mounted || generation != _loadGeneration) {
         return;
@@ -115,31 +106,6 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
       setState(() {
         _error = error;
         _loading = false;
-      });
-    }
-  }
-
-  Future<void> _loadQuota(int generation) async {
-    try {
-      final usage = await widget.repository.getAgentProviderQuota(
-        projectId: widget.projectId,
-        agentName: widget.agent.name,
-      );
-      if (!mounted || generation != _loadGeneration) {
-        return;
-      }
-      setState(() {
-        _accountUsage = usage;
-        _quotaError = null;
-        _quotaLoading = false;
-      });
-    } catch (error) {
-      if (!mounted || generation != _loadGeneration) {
-        return;
-      }
-      setState(() {
-        _quotaError = error;
-        _quotaLoading = false;
       });
     }
   }
@@ -169,36 +135,43 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
     return null;
   }
 
-  Future<void> _save() async {
+  Future<void> _applySelection({
+    required String model,
+    required String? thinking,
+  }) async {
     final details = _details;
-    final model = _model;
     final revision = details?.configRevision;
-    if (details == null || model == null || revision == null || _saving) {
+    if (details == null || revision == null || _saving) {
+      return;
+    }
+    if (model == _model && thinking == _thinking) {
       return;
     }
     final strings = CcbMobileLocalizations.of(context);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(strings.providerConfirmTitle),
-          content: Text(strings.providerConfirmBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(strings.cancel),
-            ),
-            FilledButton(
-              key: const ValueKey('confirm-provider-settings-save'),
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(strings.providerSave),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true || !mounted) {
-      return;
+    if (details.control.mutationMode == 'restart_required') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: Text(strings.providerConfirmTitle),
+            content: Text(strings.providerConfirmBody),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(strings.cancel),
+              ),
+              FilledButton(
+                key: const ValueKey('confirm-provider-settings-save'),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(strings.providerApply),
+              ),
+            ],
+          );
+        },
+      );
+      if (confirmed != true || !mounted) {
+        return;
+      }
     }
     setState(() {
       _saving = true;
@@ -209,7 +182,7 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
         projectId: widget.projectId,
         agentName: widget.agent.name,
         model: model,
-        thinking: _thinking,
+        thinking: thinking,
         expectedRevision: revision,
         expectedNamespaceEpoch: details.namespaceEpoch,
         expectedProvider: details.control.provider,
@@ -219,8 +192,7 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
       if (!mounted) {
         return;
       }
-      _changed = true;
-      await _load();
+      Navigator.of(context).pop(true);
     } catch (error) {
       if (!mounted) {
         return;
@@ -237,56 +209,134 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
     }
   }
 
+  Future<void> _selectModel(CcbProviderModel model) async {
+    final thinking =
+        model.id == _model && model.reasoningLevels.contains(_thinking)
+            ? _thinking
+            : model.defaultReasoningLevel ??
+                (model.reasoningLevels.isEmpty
+                    ? null
+                    : model.reasoningLevels.first);
+    await _applySelection(model: model.id, thinking: thinking);
+  }
+
+  Future<void> _selectThinking() async {
+    final model = _selectedModel;
+    if (model == null || model.reasoningLevels.isEmpty || _saving) {
+      return;
+    }
+    final strings = CcbMobileLocalizations.of(context);
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    strings.providerThinking,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              for (final option in model.reasoningLevels)
+                ListTile(
+                  key: ValueKey('provider-thinking-option-$option'),
+                  leading: const Icon(Icons.psychology_alt_outlined),
+                  title: Text(strings.providerThinkingOption(option)),
+                  trailing:
+                      option == _thinking ? const Icon(Icons.check) : null,
+                  onTap: () => Navigator.of(context).pop(option),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (selected != null && mounted) {
+      await _applySelection(model: model.id, thinking: selected);
+    }
+  }
+
+  Future<void> _showUsage() {
+    final details = _details;
+    if (details == null) {
+      return Future.value();
+    }
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return _ProviderUsageSheet(
+          repository: widget.repository,
+          projectId: widget.projectId,
+          agentName: widget.agent.name,
+          details: details,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final strings = CcbMobileLocalizations.of(context);
     final media = MediaQuery.of(context);
-    return SafeArea(
-      child: SizedBox(
-        key: const ValueKey('provider-control-sheet'),
-        height: min(720, media.size.height * 0.84),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 8, 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.tune),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          strings.providerControl,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        Text(
-                          '${widget.agent.name} · ${providerLabel(widget.agent.provider)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: SafeArea(
+        child: SizedBox(
+          key: const ValueKey('provider-control-sheet'),
+          height: min(720, media.size.height * 0.84),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.tune),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            strings.providerSelectModel,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          Text(
+                            '${widget.agent.name} · ${providerLabel(widget.agent.provider)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    key: const ValueKey('provider-control-refresh'),
-                    tooltip: strings.providerRefresh,
-                    onPressed: _loading ? null : _load,
-                    icon: const Icon(Icons.refresh),
-                  ),
-                  IconButton(
-                    tooltip: strings.cancel,
-                    onPressed: () => Navigator.of(context).pop(_changed),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
+                    IconButton(
+                      key: const ValueKey('provider-control-refresh'),
+                      tooltip: strings.providerRefresh,
+                      onPressed: _loading ? null : _load,
+                      icon: const Icon(Icons.refresh),
+                    ),
+                    IconButton(
+                      tooltip: strings.cancel,
+                      onPressed: () => Navigator.of(context).pop(false),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Divider(height: 1),
-            Expanded(child: _body(strings)),
-          ],
+              const Divider(height: 1),
+              Expanded(child: _body(strings)),
+            ],
+          ),
         ),
       ),
     );
@@ -311,143 +361,136 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
             model.label.toLowerCase().contains(query))
           model,
     ];
+    final hasUsage =
+        details.control.usage != null ||
+        details.control.capabilities.accountQuota;
     return Column(
       children: [
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+        if (_saving)
+          const LinearProgressIndicator(
+            key: ValueKey('provider-control-saving'),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
+          child: Column(
             children: [
               _RuntimeIdentity(control: details.control),
               if (details.control.hasPendingChange) ...[
                 const SizedBox(height: 10),
                 _PendingRestartBanner(control: details.control),
               ],
-              if (details.catalog.modelSelectable) ...[
-                const SizedBox(height: 20),
-                Text(
-                  strings.providerModel,
-                  style: Theme.of(context).textTheme.titleSmall,
+              if (details.catalog.modelSelectable &&
+                  details.catalog.models.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey('provider-model-search'),
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: strings.searchModels,
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                  ),
+                  onChanged: (_) => setState(() {}),
                 ),
-                if (details.catalog.models.length > 5) ...[
-                  const SizedBox(height: 8),
-                  TextField(
-                    key: const ValueKey('provider-model-search'),
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: strings.searchModels,
-                      prefixIcon: const Icon(Icons.search),
-                      isDense: true,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ],
-                const SizedBox(height: 4),
-                RadioGroup<String>(
-                  groupValue: _model,
-                  onChanged: (value) {
-                    if (_saving || value == null) {
-                      return;
-                    }
-                    setState(() {
-                      _model = value;
-                      _normalizeThinking();
-                    });
-                  },
-                  child: Column(
-                    children: [
-                      for (final model in models)
-                        RadioListTile<String>(
-                          key: ValueKey('provider-model-option-${model.id}'),
-                          contentPadding: EdgeInsets.zero,
-                          value: model.id,
-                          title: Text(model.label),
-                          subtitle: _modelSubtitle(model),
-                        ),
-                    ],
-                  ),
-                ),
-                if ((_selectedModel?.reasoningLevels ?? const <String>[])
-                    .isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    strings.providerThinking,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final option in _selectedModel!.reasoningLevels)
-                        ChoiceChip(
-                          key: ValueKey('provider-thinking-option-$option'),
-                          label: Text(option),
-                          selected: _thinking == option,
-                          onSelected:
-                              _saving
-                                  ? null
-                                  : (selected) {
-                                    if (selected) {
-                                      setState(() {
-                                        _thinking = option;
-                                      });
-                                    }
-                                  },
-                        ),
-                    ],
-                  ),
-                ],
-              ],
-              if (details.control.usage != null) ...[
-                const SizedBox(height: 24),
-                _SessionUsageSection(usage: details.control.usage!),
-              ],
-              if (_quotaLoading) ...[
-                const SizedBox(height: 24),
-                _AccountQuotaLoading(),
-              ] else if (_accountUsage != null) ...[
-                const SizedBox(height: 24),
-                _AccountQuotaSection(usage: _accountUsage!),
-              ] else if (_quotaError != null) ...[
-                const SizedBox(height: 24),
-                const _AccountQuotaUnavailable(),
-              ],
-              if (_error != null) ...[
-                const SizedBox(height: 16),
-                _InlineError(error: _error!),
               ],
             ],
           ),
         ),
-        if (details.catalog.modelSelectable)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    details.control.mutationMode == 'restart_required'
-                        ? strings.providerRestartRequired
-                        : details.control.mutationMode,
-                    style: Theme.of(context).textTheme.bodySmall,
+        const Divider(height: 1),
+        Expanded(
+          child:
+              !details.catalog.modelSelectable
+                  ? const SizedBox.shrink()
+                  : models.isEmpty
+                  ? Center(child: Text(strings.providerNoModels))
+                  : ListView.separated(
+                    key: const ValueKey('provider-model-list'),
+                    itemCount: models.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final model = models[index];
+                      final selected =
+                          model.id == (details.control.activeModel ?? _model);
+                      final pending =
+                          !selected &&
+                          model.id ==
+                              (details.control.pendingModel ??
+                                  (details.control.restartPending
+                                      ? details.control.configuredModel
+                                      : null));
+                      return ListTile(
+                        key: ValueKey('provider-model-option-${model.id}'),
+                        leading: const Icon(Icons.memory_outlined),
+                        title: Text(model.label),
+                        subtitle: _modelSubtitle(model),
+                        trailing:
+                            selected
+                                ? const Icon(Icons.check)
+                                : pending
+                                ? const Icon(Icons.schedule_outlined)
+                                : null,
+                        selected: selected,
+                        enabled: !_saving,
+                        onTap: _saving ? null : () => _selectModel(model),
+                      );
+                    },
                   ),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('provider-control-save'),
-                  onPressed: _saving ? null : _save,
-                  icon:
-                      _saving
-                          ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                          : const Icon(Icons.save_outlined),
-                  label: Text(
-                    _saving ? strings.providerSaving : strings.providerSave,
-                  ),
-                ),
-              ],
+        ),
+        if ((_selectedModel?.reasoningLevels ?? const <String>[]).isNotEmpty ||
+            hasUsage ||
+            details.catalog.modelSelectable) ...[
+          const Divider(height: 1),
+          if ((_selectedModel?.reasoningLevels ?? const <String>[]).isNotEmpty)
+            ListTile(
+              key: const ValueKey('provider-thinking-trigger'),
+              leading: const Icon(Icons.psychology_alt_outlined),
+              title: Text(strings.providerThinking),
+              subtitle:
+                  _thinking == null
+                      ? null
+                      : Text(strings.providerThinkingOption(_thinking!)),
+              trailing: const Icon(Icons.chevron_right),
+              enabled: !_saving,
+              onTap: _saving ? null : _selectThinking,
             ),
+          if (hasUsage)
+            ListTile(
+              key: const ValueKey('provider-usage-trigger'),
+              leading: const Icon(Icons.data_usage_outlined),
+              title: Text(strings.providerSessionUsage),
+              subtitle: Text(
+                details.control.usage?.contextUtilization == null
+                    ? strings.providerUsageDetails
+                    : strings.providerContextUsage(
+                      formatTokenCount(
+                        details.control.usage?.contextWindowUsedTokens,
+                      ),
+                      formatTokenCount(
+                        details.control.usage?.contextWindowMaxTokens,
+                      ),
+                    ),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _showUsage,
+            ),
+          if (details.catalog.modelSelectable)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 2, 20, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  details.control.mutationMode == 'restart_required'
+                      ? strings.providerRestartRequired
+                      : details.control.mutationMode,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
+        ],
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: _InlineError(error: _error!),
           ),
       ],
     );
@@ -455,6 +498,10 @@ class _ProviderControlSheetState extends State<ProviderControlSheet> {
 
   Widget? _modelSubtitle(CcbProviderModel model) {
     final parts = <String>[];
+    final description = model.description?.trim();
+    if (description != null && description.isNotEmpty) {
+      parts.add(description);
+    }
     final context = model.contextWindowMaxTokens;
     if (context != null) {
       parts.add('${formatTokenCount(context)} context');
@@ -532,6 +579,123 @@ class _PendingRestartBanner extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ProviderUsageSheet extends StatefulWidget {
+  const _ProviderUsageSheet({
+    required this.repository,
+    required this.projectId,
+    required this.agentName,
+    required this.details,
+  });
+
+  final MobileCcbProviderControlRepository repository;
+  final String projectId;
+  final String agentName;
+  final CcbProviderControlDetails details;
+
+  @override
+  State<_ProviderUsageSheet> createState() => _ProviderUsageSheetState();
+}
+
+class _ProviderUsageSheetState extends State<_ProviderUsageSheet> {
+  CcbProviderAccountUsage? _accountUsage;
+  Object? _quotaError;
+  var _quotaLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _accountUsage = widget.details.accountUsage;
+    if (widget.details.control.capabilities.accountQuota) {
+      _quotaLoading = true;
+      unawaited(_loadQuota());
+    }
+  }
+
+  Future<void> _loadQuota() async {
+    try {
+      final usage = await widget.repository.getAgentProviderQuota(
+        projectId: widget.projectId,
+        agentName: widget.agentName,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _accountUsage = usage;
+        _quotaError = null;
+        _quotaLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _quotaError = error;
+        _quotaLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = CcbMobileLocalizations.of(context);
+    final media = MediaQuery.of(context);
+    return SafeArea(
+      child: SizedBox(
+        height: min(620, media.size.height * 0.72),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 8, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.data_usage_outlined),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      strings.providerControl,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('provider-usage-close'),
+                    tooltip: strings.cancel,
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+                children: [
+                  if (widget.details.control.usage != null)
+                    _SessionUsageSection(usage: widget.details.control.usage!)
+                  else
+                    Text(strings.providerUsageUnavailable),
+                  if (_quotaLoading) ...[
+                    const SizedBox(height: 24),
+                    _AccountQuotaLoading(),
+                  ] else if (_accountUsage != null) ...[
+                    const SizedBox(height: 24),
+                    _AccountQuotaSection(usage: _accountUsage!),
+                  ] else if (_quotaError != null ||
+                      widget.details.control.capabilities.accountQuota) ...[
+                    const SizedBox(height: 24),
+                    const _AccountQuotaUnavailable(),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -789,6 +953,18 @@ String formatTokenCount(int? value) {
 String _friendlyError(CcbMobileLocalizations strings, Object? error) {
   if (error is GatewayHttpException && error.statusCode == 403) {
     return strings.providerScopeRequired;
+  }
+  if (error is RelayGatewayException) {
+    if (error.statusCode == 403) {
+      return strings.providerScopeRequired;
+    }
+    if (error.message == 'operation_not_allowed' ||
+        error.message == 'relay_operation_not_allowed') {
+      return strings.providerHostUpdateRequired;
+    }
+    if (error.message == 'gateway_rejected') {
+      return strings.providerRequestRejected;
+    }
   }
   return error?.toString() ?? strings.providerUsageUnavailable;
 }

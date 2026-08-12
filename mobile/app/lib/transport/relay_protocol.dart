@@ -79,6 +79,8 @@ class RelayFrame {
     required String serverFingerprint,
     required String hostPublicKeyB64,
     int acceptedVersion = relayProtocolVersion,
+    Set<String> unaryOperations = const {},
+    Set<String> streamOperations = const {},
   }) {
     return RelayFrame(
       sessionId: sessionId,
@@ -89,6 +91,10 @@ class RelayFrame {
         'server_fingerprint': serverFingerprint,
         'host_pubkey_b64': hostPublicKeyB64,
         'accepted_version': acceptedVersion,
+        if (unaryOperations.isNotEmpty)
+          'unary_operations': unaryOperations.toList()..sort(),
+        if (streamOperations.isNotEmpty)
+          'stream_operations': streamOperations.toList()..sort(),
       },
     );
   }

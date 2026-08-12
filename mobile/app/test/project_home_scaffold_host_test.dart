@@ -214,6 +214,37 @@ void main() {
       );
     });
 
+    testWidgets('mobile header hides provider control for an older host', (
+      tester,
+    ) async {
+      final view = _view();
+
+      await _pump(
+        tester,
+        ProjectHomeMobileChatScaffoldHost(
+          view: view,
+          selectedAgent: view.agentByName('mobile'),
+          repository: _ProviderControlRecordingRepository(),
+          terminalTransport: RecordingTerminalTransport(),
+          usePaneInputForMessages: true,
+          mobileAgentsCollapsed: false,
+          onBack: () {},
+          onOpenConnectionDetails: () {},
+          onCollapseAgents: () {},
+          onExpandAgents: () {},
+          onWindowSelected: (_) {},
+          onAgentSelected: (_) {},
+          onRefreshView: () async => null,
+          onTimelineScrollDirectionChanged: (_) {},
+        ),
+      );
+
+      expect(
+        find.byKey(const ValueKey('agent-provider-control-action')),
+        findsNothing,
+      );
+    });
+
     testWidgets('mobile host toggles terminal content from the header', (
       tester,
     ) async {

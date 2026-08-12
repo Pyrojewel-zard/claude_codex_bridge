@@ -36,6 +36,8 @@ from .relay_stream import (
     RELAY_STREAM_INITIAL_WINDOW_BYTES,
     RELAY_STREAM_MAX_MESSAGE_BYTES,
     RELAY_STREAM_MAX_WINDOW_BYTES,
+    RELAY_STREAM_OPERATIONS,
+    RELAY_UNARY_OPERATIONS,
     RelayInnerMessage,
     RelayStreamProtocolError,
     relay_inner_payload_size,
@@ -280,6 +282,8 @@ class RelayHostConnector:
                 'server_fingerprint': self.config.host_fingerprint,
                 'host_pubkey_b64': self.config.host_public_key_b64,
                 'accepted_version': RELAY_PROTOCOL_VERSION,
+                'unary_operations': sorted(RELAY_UNARY_OPERATIONS),
+                'stream_operations': sorted(RELAY_STREAM_OPERATIONS),
             },
         )
         RelayHandshakeTranscript.negotiate(client_hello=frame, host_hello=host_hello)
@@ -1347,21 +1351,27 @@ def _gateway_request(operation: str, payload: Mapping[str, object]) -> _GatewayR
     if op == 'update_agent_provider_settings':
         project = _segment(payload, 'project_id')
         agent = _segment(payload, 'agent')
+        mutation = _only(
+            payload,
+            (
+                'model',
+                'thinking',
+                'expected_revision',
+                'expected_namespace_epoch',
+                'expected_provider',
+                'idempotency_key',
+            ),
+        )
+        # An unbound provider runtime has a real null revision. The local
+        # gateway distinguishes that from an omitted stale-write fence.
+        if 'expected_runtime_revision' in payload:
+            mutation['expected_runtime_revision'] = payload[
+                'expected_runtime_revision'
+            ]
         return _json_request(
             'POST',
             f'/v1/projects/{project}/agents/{agent}/provider-control',
-            _only(
-                payload,
-                (
-                    'model',
-                    'thinking',
-                    'expected_revision',
-                    'expected_namespace_epoch',
-                    'expected_runtime_revision',
-                    'expected_provider',
-                    'idempotency_key',
-                ),
-            ),
+            mutation,
         )
     if op == 'focus_agent':
         project = _segment(payload, 'project_id')

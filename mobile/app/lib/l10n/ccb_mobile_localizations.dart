@@ -372,6 +372,8 @@ class CcbMobileLocalizations {
 
   String get providerModel => isChinese ? '模型' : 'Model';
 
+  String get providerSelectModel => isChinese ? '选择模型' : 'Select model';
+
   String get providerThinking => isChinese ? '思考强度' : 'Thinking';
 
   String get providerSessionUsage => isChinese ? '当前会话用量' : 'Session usage';
@@ -405,13 +407,15 @@ class CcbMobileLocalizations {
 
   String get providerSave => isChinese ? '保存选择' : 'Save selection';
 
+  String get providerApply => isChinese ? '应用' : 'Apply';
+
   String get providerSaving => isChinese ? '正在保存' : 'Saving';
 
   String get providerRefresh =>
       isChinese ? '刷新模型与用量' : 'Refresh model and usage';
 
   String get providerConfirmTitle =>
-      isChinese ? '保存模型选择？' : 'Save model selection?';
+      isChinese ? '应用模型设置？' : 'Apply model settings?';
 
   String get providerConfirmBody =>
       isChinese
@@ -422,6 +426,49 @@ class CcbMobileLocalizations {
       isChinese
           ? '当前配对未授权修改模型，请重新配对后再试。'
           : 'This pairing cannot change models. Re-pair to grant access.';
+
+  String get providerHostUpdateRequired =>
+      isChinese
+          ? '电脑端 CCB 版本不支持模型控制。请在电脑执行 ccb update，然后重新连接。'
+          : 'The computer CCB version does not support model controls. Run ccb update on the computer, then reconnect.';
+
+  String get providerRequestRejected =>
+      isChinese
+          ? '电脑端拒绝了这次设置。请刷新模型状态后重试。'
+          : 'The computer rejected this setting. Refresh the model state and try again.';
+
+  String get providerNoModels => isChinese ? '没有可选模型' : 'No selectable models';
+
+  String get providerUsageDetails =>
+      isChinese ? '查看用量详情' : 'View usage details';
+
+  String providerThinkingOption(String option) {
+    final normalized = option.trim().toLowerCase();
+    if (isChinese) {
+      return switch (normalized) {
+        'off' => '关闭',
+        'minimal' => '最低',
+        'low' => '低',
+        'medium' => '中',
+        'high' => '高',
+        'xhigh' || 'extra_high' || 'extra-high' => '超高',
+        'max' => '最高',
+        'ultra' => '极致',
+        _ => option,
+      };
+    }
+    return switch (normalized) {
+      'off' => 'Off',
+      'minimal' => 'Minimal',
+      'low' => 'Low',
+      'medium' => 'Medium',
+      'high' => 'High',
+      'xhigh' || 'extra_high' || 'extra-high' => 'Extra high',
+      'max' => 'Max',
+      'ultra' => 'Ultra',
+      _ => option,
+    };
+  }
 
   String get searchModels => isChinese ? '搜索模型' : 'Search models';
 

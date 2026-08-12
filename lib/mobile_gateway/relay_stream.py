@@ -22,7 +22,7 @@ _KINDS = {
     'stream_cancel',
     'error',
 }
-_UNARY_OPERATIONS = {
+RELAY_UNARY_OPERATIONS = frozenset({
     'pair_claim',
     'health',
     'device',
@@ -40,8 +40,10 @@ _UNARY_OPERATIONS = {
     'open_terminal',
     'open_host_terminal',
     'terminate_host_terminal',
-}
-_STREAM_OPERATIONS = {'terminal', 'notifications', 'file_upload', 'file_download'}
+})
+RELAY_STREAM_OPERATIONS = frozenset(
+    {'terminal', 'notifications', 'file_upload', 'file_download'}
+)
 _SAFE_ERROR_CODES = {
     'bad_request',
     'operation_not_allowed',
@@ -145,10 +147,10 @@ class RelayInnerMessage:
             if (self.request_id is None) == (self.stream_id is None):
                 raise RelayStreamProtocolError('stream_protocol_error')
         if self.kind == 'request':
-            if self.operation not in _UNARY_OPERATIONS:
+            if self.operation not in RELAY_UNARY_OPERATIONS:
                 raise RelayStreamProtocolError('operation_not_allowed')
         elif self.kind == 'stream_open':
-            if self.operation not in _STREAM_OPERATIONS:
+            if self.operation not in RELAY_STREAM_OPERATIONS:
                 raise RelayStreamProtocolError('operation_not_allowed')
             _window(self.credit_bytes)
         elif self.kind == 'stream_window':
