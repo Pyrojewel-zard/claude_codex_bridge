@@ -4,13 +4,14 @@ Date: 2026-08-12
 
 ## Goal
 
-Ship CCB `v8.6.0` through the existing stable release products and attach an
-isolated, testable native Windows x64 artifact without claiming stable Windows
-support or mixing Windows code into Unix/npm ownership.
+Ship and maintain the CCB `v8.6` stable release line through the existing
+release products while attaching an isolated, testable native Windows x64
+artifact without claiming stable Windows support or mixing Windows code into
+Unix/npm ownership.
 
 ## Current target
 
-- Version/tag: `v8.6.0`
+- Version/tag: `v8.6.1`
 - Status: published stable CCB release; Windows artifact remains beta. All
   platform publication workflows and downloaded-asset verification passed.
 - Artifact: `ccb-windows-x86_64.zip`
@@ -22,6 +23,8 @@ support or mixing Windows code into Unix/npm ownership.
 ## File map
 
 - [roadmap.md](roadmap.md): gates and current status.
+- [topics/v8.6.1.md](topics/v8.6.1.md): current stable patch release and
+  verification record.
 - [topics/v8.6.0.md](topics/v8.6.0.md): stable release implementation and
   verification record.
 - [topics/v8.6.0-beta.3.md](topics/v8.6.0-beta.3.md): published Windows beta

@@ -39,6 +39,22 @@ Date: 2026-08-12
 - GitHub Latest, all ten published assets, their downloaded checksums, npm
   `latest`, and a clean npm-installed CLI smoke were verified after publication.
 
+## Published stable v8.6.1
+
+- Published the audited Mobile Provider controls, direct terminal and shortcut
+  controls, built-in `ccb-compact`, and the complete Config UI Role catalog.
+- Fixed Provider-mutation idempotency so cached results are bound to the exact
+  project and Agent, and fixed compound Mobile terminal input frames so text
+  and Enter reach the Pane in order.
+- Kept the isolated Windows x64 artifact at beta support tier and attached it
+  to the same stable GitHub Release without changing Unix/npm ownership.
+- Main-commit Tests, Cross-Platform, and CCBD Real Platform gates passed on the
+  exact release commit. All publication workflows passed for Linux, macOS,
+  Android, Windows, Sidebar, and npm.
+- Verified GitHub Latest, all ten downloaded assets and checksum files, the
+  Android manifest, Windows PE x86-64 launchers, npm `latest`, and a clean
+  npm-installed CLI and `ccb compact` help smoke.
+
 ## Next after stable publication
 
 1. Install the ZIP on a real user Windows x64 machine.
