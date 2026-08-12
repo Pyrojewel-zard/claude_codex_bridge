@@ -186,7 +186,8 @@ provider unauthenticated instead of attaching the global credential backend.
 | Kiro | private auth/config files and filtered SQLite snapshot | source database opened read-only; macOS fails closed while no private credential-store switch exists |
 | Qoder / QoderCN | private documented `--config-dir` and `.auth` tree | visible and headless processes use the same exact private root |
 | Kimi / DeepSeek / MiMo / Grok | provider-specific private homes | allowlisted auth/config files copied in one direction |
-| Crush / Pi / OMP / Z.ai | private HOME/XDG/provider roots | allowlisted auth records copied in one direction; unknown formats remain private-login only |
+| OMP | private `.omp/agent` selected by `PI_CODING_AGENT_DIR` | auth-capable YAML/legacy config is copied one way only when both config and auth inheritance are enabled; `agent.db` is opened read-only and rebuilt as an agent-private auth-only snapshot with cache, history, statistics, blocks, and refresh leases removed |
+| Crush / Pi / Z.ai | private HOME/XDG/provider roots | allowlisted auth records copied in one direction; unknown formats remain private-login only |
 
 New built-in providers must declare their mutable account roots and credential
 backend before they are accepted into the managed launcher registry. If a

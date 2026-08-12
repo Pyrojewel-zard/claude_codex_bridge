@@ -260,6 +260,9 @@ Examples:
 - Kimi inherited and role `skills/` directories under managed provider state
 - OpenCode generated `opencode.json` and generated ask skill instruction files
   under `.ccb/runtime/skills/<agent>/opencode/`
+- OMP `config.yml`/`config.yaml` and `models.yml`/`models.yaml` are one-way
+  managed-home projections, but storage inventory classifies them as `SECRET`
+  because both formats may contain broker tokens, provider API keys, or headers
 
 Auth, OAuth, token, and credential files are never `PROJECTED_CONFIG` even when
 they were created by a projection step. They must classify as `SECRET`.
@@ -303,6 +306,8 @@ Examples:
 - Kiro's filtered `data.sqlite3`, because it still contains auth rows
 - auth-bearing mixed records such as DeepSeek `settings.json`, Kimi
   `config.toml`, Crush `providers.json`, and Z.ai `user-settings.json`
+- OMP's filtered `.omp/agent/agent.db` auth snapshot, its WAL/SHM sidecars, and
+  auth-capable `config.yml`/`config.yaml` and `models.yml`/`models.yaml` files
 - API key material
 - OAuth credential files
 - macOS Keychain-derived Claude credentials

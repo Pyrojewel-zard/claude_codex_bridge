@@ -2127,6 +2127,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     monkeypatch.delenv('GROK_START_CMD', raising=False)
     monkeypatch.delenv('KIRO_START_CMD', raising=False)
     monkeypatch.delenv('PI_START_CMD', raising=False)
+    monkeypatch.delenv('OMP_START_CMD', raising=False)
     monkeypatch.delenv('ZAI_START_CMD', raising=False)
 
     assert runtime_launch._provider_start_parts('gemini') == ['gemini']
@@ -2144,6 +2145,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     assert runtime_launch._provider_start_parts('grok') == ['grok']
     assert runtime_launch._provider_start_parts('kiro') == ['kiro-cli']
     assert runtime_launch._provider_start_parts('pi') == ['pi']
+    assert runtime_launch._provider_start_parts('omp') == ['omp']
     assert runtime_launch._provider_start_parts('zai') == ['zai']
 
 
@@ -2159,6 +2161,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
         ('grok', 'grok', 'HOME'),
         ('kiro', 'kiro-cli', 'HOME'),
         ('pi', 'pi', None),
+        ('omp', 'omp', None),
         ('zai', 'zai', 'HOME'),
     ],
 )
@@ -2177,6 +2180,11 @@ def test_native_cli_launcher_builds_provider_state_payload(
             lambda: 'Linux',
         )
     monkeypatch.delenv(f'{provider.upper()}_START_CMD', raising=False)
+    if provider == 'omp':
+        # Never use a developer's real OMP credential database in source tests.
+        source_home = tmp_path / 'source-home'
+        source_home.mkdir()
+        monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
     project_root = tmp_path / f'repo-{provider}-launcher'
     (project_root / '.ccb').mkdir(parents=True)
     agent_name = f'{provider}1'
@@ -2294,6 +2302,17 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert extension_path.stat().st_mode & 0o077 == 0
         assert completion_event_log.stat().st_mode & 0o077 == 0
         assert dispatch_event_log.stat().st_mode & 0o077 == 0
+    elif provider == 'omp':
+        assert (
+            f'PI_CODING_AGENT_DIR={shlex.quote(str(state_dir / "home" / ".omp" / "agent"))}'
+            in start_cmd
+        )
+        assert visible_parts == [
+            default_executable,
+            '--session-dir',
+            str(state_dir / 'sessions'),
+            '--demo',
+        ]
     elif provider == 'zai':
         assert visible_parts == [
             default_executable,

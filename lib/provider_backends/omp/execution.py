@@ -21,7 +21,10 @@ def build_execution_adapter() -> NativeCliSubprocessAdapter:
             session_filename=".omp-session",
             command_builder=_build_command,
             env_builder=_build_env,
-            private_path_env_names=("PI_CODING_AGENT_SESSION_DIR",),
+            private_path_env_names=(
+                "PI_CODING_AGENT_DIR",
+                "PI_CODING_AGENT_SESSION_DIR",
+            ),
             observer=observe_omp_json_output,
             output_kind="jsonl",
             mode="omp_run",
@@ -60,8 +63,13 @@ def _build_command(request: NativeCliExecutionRequest) -> list[str]:
 
 def _build_env(request: NativeCliExecutionRequest) -> dict[str, str]:
     session_dir = _state_path(request, "omp_session_dir", fallback="sessions")
+    agent_dir = _omp_agent_dir(request)
     session_dir.mkdir(parents=True, exist_ok=True)
-    return {"PI_CODING_AGENT_SESSION_DIR": str(session_dir)}
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "PI_CODING_AGENT_SESSION_DIR": str(session_dir),
+    }
 
 
 def observe_omp_json_output(path: Path) -> NativeCliObservation:
@@ -217,6 +225,21 @@ def _state_path(request: NativeCliExecutionRequest, key: str, *, fallback: str) 
         )
     ).expanduser()
     return state_dir / fallback
+
+
+def _omp_agent_dir(request: NativeCliExecutionRequest) -> Path:
+    raw_home = str(request.session_data.get("omp_home") or "").strip()
+    if raw_home:
+        home_dir = Path(raw_home).expanduser()
+    else:
+        raw_state = str(request.session_data.get("omp_state_dir") or "").strip()
+        state_dir = (
+            Path(raw_state).expanduser()
+            if raw_state
+            else request.work_dir / ".ccb" / "omp"
+        )
+        home_dir = state_dir / "home"
+    return home_dir / ".omp" / "agent"
 
 
 def _omp_message_role(message: dict[str, Any]) -> str:

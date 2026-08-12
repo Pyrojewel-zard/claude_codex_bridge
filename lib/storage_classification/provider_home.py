@@ -58,6 +58,18 @@ _PROVIDER_MIXED_SECRET_NAMES = {
     'kiro': {'data.sqlite3'},
     'mimo': {'token.json'},
     'opencode': {'account.json'},
+    'omp': {
+        'agent.db',
+        'agent.db-shm',
+        'agent.db-wal',
+        'config.yaml',
+        'config.yml',
+        'models.json',
+        'models.yaml',
+        'models.yml',
+        'oauth.json',
+        'settings.json',
+    },
     'crush': {'hyper.json', 'providers.json'},
     'zai': {'user-settings.json'},
 }

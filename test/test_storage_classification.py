@@ -189,6 +189,7 @@ def test_provider_home_classifier_preserves_secret_precedence_and_unknowns(tmp_p
         ('kiro', ('data', 'kiro-cli', 'data.sqlite3')),
         ('mimo', ('.mimocode', 'token.json')),
         ('opencode', ('data', 'opencode', 'account.json')),
+        ('omp', ('.omp', 'agent', 'agent.db')),
         ('crush', ('data', 'providers.json')),
         ('zai', ('.zai', 'user-settings.json')),
     ),
@@ -205,6 +206,39 @@ def test_auth_bearing_mixed_provider_files_are_secret(
         f'agents/agent1/provider-state/{provider}/home/{"/".join(remainder)}',
         provider,
         'agent1',
+        remainder,
+        size=3,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == 'secret'
+    assert entry.reason == 'provider_mixed_auth_state'
+
+
+@pytest.mark.parametrize(
+    'name',
+    (
+        'agent.db-wal',
+        'agent.db-shm',
+        'config.yml',
+        'config.yaml',
+        'models.yml',
+        'models.yaml',
+        'models.json',
+        'oauth.json',
+        'settings.json',
+    ),
+)
+def test_omp_auth_capable_projection_files_are_secret(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    remainder = ('.omp', 'agent', name)
+    entry = classify_provider_home(
+        tmp_path.joinpath(*remainder),
+        f'agents/omp1/provider-state/omp/home/{"/".join(remainder)}',
+        'omp',
+        'omp1',
         remainder,
         size=3,
         root_kind='project',
