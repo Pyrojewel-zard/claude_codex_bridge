@@ -2263,6 +2263,7 @@ def test_herdr_cli_request_adapter_does_not_start_server_for_server_info() -> No
 
 def test_herdr_backend_uses_cli_adapter_envelope_contract_for_core_operations(monkeypatch) -> None:
     monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_platform", lambda: "windows")
+    monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_arch", lambda: "x64")
     commands: list[list[str]] = []
 
     def run_fn(command, **kwargs):
@@ -2329,6 +2330,7 @@ def test_herdr_backend_uses_cli_adapter_envelope_contract_for_core_operations(mo
 
 def test_herdr_backend_logical_window_facade_restores_from_root_pane_metadata(monkeypatch) -> None:
     monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_platform", lambda: "windows")
+    monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_arch", lambda: "x64")
     state: dict[str, object] = {
         "workspaces": {},
         "panes": {},
@@ -3012,6 +3014,7 @@ def test_herdr_backend_kill_window_drops_only_current_namespace_cache() -> None:
 
 def test_herdr_backend_identity_update_clears_removed_tokens_and_preserves_root_group(monkeypatch) -> None:
     monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_platform", lambda: "windows")
+    monkeypatch.setattr("platforms.windows.herdr.runtime.cli._runtime_arch", lambda: "x64")
     state: dict[str, object] = {
         "workspaces": [{"workspace_id": "w1", "focused": False}],
         "panes": {
