@@ -47,10 +47,23 @@ class _AgentTerminalPaneState extends State<AgentTerminalPane> {
     if (transport == null) {
       return _FakeTerminalPane(model: model, showHeader: widget.showHeader);
     }
-    return _LiveTerminalPane(
-      model: model,
-      transport: transport,
-      gatewayTerminal: widget.gatewayTerminal,
+    return LiveTerminalPane(
+      title: model.title,
+      subtitle: model.attachCommand,
+      sessionIdentity: _terminalTargetIdentity(widget.target),
+      openSession: (geometry) {
+        final request =
+            widget.gatewayTerminal || transport is GatewayTerminalTransport
+                ? TerminalOpenRequest.gateway(
+                  target: widget.target,
+                  geometry: geometry,
+                )
+                : TerminalOpenRequest(
+                  target: widget.target,
+                  geometry: geometry,
+                );
+        return transport.open(request);
+      },
       showHeader: widget.showHeader,
       active: widget.active,
     );
@@ -140,6 +153,7 @@ class _FakeTerminalPaneState extends State<_FakeTerminalPane> {
             key: const ValueKey('ccb-terminal-view'),
             autofocus: false,
             readOnly: true,
+            padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
           ),
         ),
       ],
@@ -147,26 +161,57 @@ class _FakeTerminalPaneState extends State<_FakeTerminalPane> {
   }
 }
 
-class _LiveTerminalPane extends StatefulWidget {
-  const _LiveTerminalPane({
-    required this.model,
-    required this.transport,
-    required this.gatewayTerminal,
-    required this.showHeader,
-    required this.active,
-  });
+typedef TerminalSessionOpener =
+    Future<TerminalSession> Function(TerminalGeometry geometry);
 
-  final AgentTerminalPaneModel model;
-  final TerminalTransport transport;
-  final bool gatewayTerminal;
-  final bool showHeader;
-  final bool active;
+class LiveTerminalPaneController {
+  _LiveTerminalPaneState? _state;
 
-  @override
-  State<_LiveTerminalPane> createState() => _LiveTerminalPaneState();
+  Future<void> closeSession() async {
+    await _state?._closeForRemoval();
+  }
+
+  void _attach(_LiveTerminalPaneState state) {
+    assert(_state == null || identical(_state, state));
+    _state = state;
+  }
+
+  void _detach(_LiveTerminalPaneState state) {
+    if (identical(_state, state)) {
+      _state = null;
+    }
+  }
 }
 
-class _LiveTerminalPaneState extends State<_LiveTerminalPane>
+class LiveTerminalPane extends StatefulWidget {
+  const LiveTerminalPane({
+    required this.title,
+    required this.subtitle,
+    required this.sessionIdentity,
+    required this.openSession,
+    required this.showHeader,
+    required this.active,
+    this.controller,
+    this.terminalViewKey = const ValueKey('ccb-live-terminal-view'),
+    this.scrollDebugLabel = 'terminal-history',
+    super.key,
+  });
+
+  final String title;
+  final String subtitle;
+  final String sessionIdentity;
+  final TerminalSessionOpener openSession;
+  final bool showHeader;
+  final bool active;
+  final LiveTerminalPaneController? controller;
+  final Key terminalViewKey;
+  final String scrollDebugLabel;
+
+  @override
+  State<LiveTerminalPane> createState() => _LiveTerminalPaneState();
+}
+
+class _LiveTerminalPaneState extends State<LiveTerminalPane>
     with WidgetsBindingObserver {
   static const _autoReconnectBackoff = <Duration>[
     Duration(seconds: 1),
@@ -179,12 +224,14 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   late final TerminalHistoryScrollController _terminalScrollController;
   final _terminalViewKey = GlobalKey<TerminalViewState>();
   Future<TerminalSession>? _sessionFuture;
+  Future<TerminalSession>? _openingFuture;
   TerminalSession? _session;
   StreamSubscription<String>? _outputSubscription;
   Timer? _autoReconnectTimer;
   var _openGeneration = 0;
   var _autoReconnectAttempt = 0;
   var _autoReconnectBlocked = false;
+  var _closingForRemoval = false;
   TerminalGeometry _lastGeometry = const TerminalGeometry(
     columns: 100,
     rows: 30,
@@ -200,9 +247,10 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(this);
     WidgetsBinding.instance.addObserver(this);
     _terminalScrollController = TerminalHistoryScrollController(
-      debugLabel: 'agent-terminal-history',
+      debugLabel: widget.scrollDebugLabel,
     )..addListener(_handleTerminalScrollChanged);
     _terminal = Terminal(
       maxLines: 4000,
@@ -230,17 +278,17 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 
   @override
-  void didUpdateWidget(covariant _LiveTerminalPane oldWidget) {
+  void didUpdateWidget(covariant LiveTerminalPane oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
     if (oldWidget.active && !widget.active) {
       _deactivateTerminalInput();
     }
-    if (oldWidget.transport != widget.transport ||
-        oldWidget.gatewayTerminal != widget.gatewayTerminal ||
-        !_sameTerminalTargetIdentity(
-          oldWidget.model.target,
-          widget.model.target,
-        )) {
+    if (oldWidget.sessionIdentity != widget.sessionIdentity) {
+      _closingForRemoval = false;
       _startSession(clearTerminal: true);
     }
   }
@@ -249,6 +297,9 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     required bool clearTerminal,
     bool resetReconnect = true,
   }) {
+    if (_closingForRemoval) {
+      return;
+    }
     _openGeneration += 1;
     final generation = _openGeneration;
     if (resetReconnect) {
@@ -258,6 +309,21 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     }
     _setControlStatus('Connecting');
     final rawFuture = _replaceSession(generation, clearTerminal: clearTerminal);
+    _openingFuture = rawFuture;
+    unawaited(
+      rawFuture.then<void>(
+        (_) {
+          if (identical(_openingFuture, rawFuture)) {
+            _openingFuture = null;
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_openingFuture, rawFuture)) {
+            _openingFuture = null;
+          }
+        },
+      ),
+    );
     final future =
         resetReconnect
             ? rawFuture
@@ -272,7 +338,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     required bool clearTerminal,
   }) async {
     await _closeCurrentSession();
-    if (!mounted || generation != _openGeneration) {
+    if (!mounted || _closingForRemoval || generation != _openGeneration) {
       throw const TerminalTransportException('stale terminal session');
     }
     if (clearTerminal) {
@@ -282,19 +348,9 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 
   Future<TerminalSession> _openSession(int generation) async {
-    final request =
-        widget.gatewayTerminal || widget.transport is GatewayTerminalTransport
-            ? TerminalOpenRequest.gateway(
-              target: widget.model.target,
-              geometry: _lastGeometry,
-            )
-            : TerminalOpenRequest(
-              target: widget.model.target,
-              geometry: _lastGeometry,
-            );
     late final TerminalSession session;
     try {
-      session = await widget.transport.open(request);
+      session = await widget.openSession(_lastGeometry);
     } catch (error) {
       if (mounted && generation == _openGeneration) {
         _terminal.write('\r\n\x1b[33m$error\x1b[0m\r\n');
@@ -302,7 +358,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
       }
       rethrow;
     }
-    if (!mounted || generation != _openGeneration) {
+    if (!mounted || _closingForRemoval || generation != _openGeneration) {
       await session.close();
       throw const TerminalTransportException('stale terminal session');
     }
@@ -339,6 +395,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     }
     if (state == AppLifecycleState.resumed &&
         _isReconnectableStatus(_controlStatus) &&
+        !_closingForRemoval &&
         !_autoReconnectBlocked) {
       unawaited(_reconnect());
     }
@@ -363,12 +420,37 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.controller?._detach(this);
     _openGeneration += 1;
+    _closingForRemoval = true;
     _cancelAutoReconnectTimer();
     unawaited(_closeCurrentSession());
     _terminalScrollController.removeListener(_handleTerminalScrollChanged);
     _terminalScrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _closeForRemoval() async {
+    if (_closingForRemoval) {
+      final pendingOpen = _openingFuture;
+      if (pendingOpen != null) {
+        await pendingOpen.then<void>((_) {}, onError: (Object _) {});
+      }
+      return;
+    }
+    _closingForRemoval = true;
+    _openGeneration += 1;
+    _autoReconnectBlocked = true;
+    _cancelAutoReconnectTimer();
+    _deactivateTerminalInput();
+    _setControlStatus('Closing');
+
+    final pendingOpen = _openingFuture;
+    await _closeCurrentSession();
+    if (pendingOpen != null) {
+      await pendingOpen.then<void>((_) {}, onError: (Object _) {});
+    }
+    await _closeCurrentSession();
   }
 
   Future<void> _closeCurrentSession() async {
@@ -502,6 +584,9 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 
   Future<void> _reconnect() async {
+    if (_closingForRemoval) {
+      return;
+    }
     _cancelAutoReconnectTimer();
     final session = _session;
     if (session == null) {
@@ -520,7 +605,10 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 
   void _scheduleAutoReconnect(int generation, {Object? error}) {
-    if (!mounted || generation != _openGeneration || _autoReconnectBlocked) {
+    if (!mounted ||
+        _closingForRemoval ||
+        generation != _openGeneration ||
+        _autoReconnectBlocked) {
       return;
     }
     final failure = error;
@@ -547,7 +635,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 
   Future<void> _runAutoReconnect(int generation) async {
-    if (!mounted || generation != _openGeneration) {
+    if (!mounted || _closingForRemoval || generation != _openGeneration) {
       return;
     }
     final session = _session;
@@ -570,7 +658,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 
   void _handleReconnectFailure(int generation, Object error) {
-    if (!mounted || generation != _openGeneration) {
+    if (!mounted || _closingForRemoval || generation != _openGeneration) {
       return;
     }
     if (_isTerminalTargetStaleError(error)) {
@@ -610,6 +698,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
 
   bool _isTerminalControlsDisabled(String status) {
     return status == 'Connecting' ||
+        status == 'Closing' ||
         status == 'Closed' ||
         status == 'Stream error' ||
         status == 'Reconnect failed' ||
@@ -667,8 +756,8 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
           children: [
             if (widget.showHeader)
               AgentTerminalHeader(
-                title: widget.model.title,
-                subtitle: widget.model.attachCommand,
+                title: widget.title,
+                subtitle: widget.subtitle,
                 trailing: status,
                 onReconnect: disconnected && canReconnect ? _reconnect : null,
               ),
@@ -679,7 +768,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
                     fit: StackFit.expand,
                     children: [
                       Listener(
-                        key: const ValueKey('ccb-live-terminal-view'),
+                        key: widget.terminalViewKey,
                         behavior: HitTestBehavior.opaque,
                         onPointerDown:
                             (event) =>
@@ -695,6 +784,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
                           autofocus: false,
                           readOnly: !connected || !_terminalInputActive,
                           scrollController: _terminalScrollController,
+                          padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
                         ),
                       ),
                       if (!widget.showHeader && disconnected)
@@ -720,10 +810,19 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
                                 _terminalScrollController.jumpToLatestOutput,
                             onEscape: () => _sendKey(const [27], 'Esc'),
                             onTab: () => _sendKey(const [9], 'Tab'),
+                            onEnter: () => _sendKey(const [13], 'Enter'),
+                            onBackspace:
+                                () => _sendKey(const [127], 'Backspace'),
+                            onCtrlA: () => _sendKey(const [1], 'Ctrl-A'),
                             onCtrlC: () => _sendKey(const [3], 'Ctrl-C'),
                             onCtrlD: () => _sendKey(const [4], 'Ctrl-D'),
+                            onCtrlE: () => _sendKey(const [5], 'Ctrl-E'),
+                            onCtrlK: () => _sendKey(const [11], 'Ctrl-K'),
                             onCtrlU: () => _sendKey(const [21], 'Ctrl-U'),
                             onCtrlL: () => _sendKey(const [12], 'Ctrl-L'),
+                            onCtrlR: () => _sendKey(const [18], 'Ctrl-R'),
+                            onCtrlW: () => _sendKey(const [23], 'Ctrl-W'),
+                            onCtrlZ: () => _sendKey(const [26], 'Ctrl-Z'),
                             onDelete:
                                 () =>
                                     _sendKey(const [27, 91, 51, 126], 'Delete'),
@@ -854,10 +953,18 @@ class TerminalControlToolbar extends StatefulWidget {
     required this.onLatestOutput,
     required this.onEscape,
     required this.onTab,
+    this.onEnter = _noopTerminalShortcut,
+    this.onBackspace = _noopTerminalShortcut,
+    this.onCtrlA = _noopTerminalShortcut,
     required this.onCtrlC,
     required this.onCtrlD,
+    this.onCtrlE = _noopTerminalShortcut,
+    this.onCtrlK = _noopTerminalShortcut,
     required this.onCtrlU,
     required this.onCtrlL,
+    this.onCtrlR = _noopTerminalShortcut,
+    this.onCtrlW = _noopTerminalShortcut,
+    this.onCtrlZ = _noopTerminalShortcut,
     required this.onDelete,
     required this.onHome,
     required this.onEnd,
@@ -874,10 +981,18 @@ class TerminalControlToolbar extends StatefulWidget {
   final VoidCallback onLatestOutput;
   final VoidCallback onEscape;
   final VoidCallback onTab;
+  final VoidCallback onEnter;
+  final VoidCallback onBackspace;
+  final VoidCallback onCtrlA;
   final VoidCallback onCtrlC;
   final VoidCallback onCtrlD;
+  final VoidCallback onCtrlE;
+  final VoidCallback onCtrlK;
   final VoidCallback onCtrlU;
   final VoidCallback onCtrlL;
+  final VoidCallback onCtrlR;
+  final VoidCallback onCtrlW;
+  final VoidCallback onCtrlZ;
   final VoidCallback onDelete;
   final VoidCallback onHome;
   final VoidCallback onEnd;
@@ -1013,10 +1128,18 @@ class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
     final callback = switch (shortcut) {
       CcbTerminalShortcut.escape => widget.onEscape,
       CcbTerminalShortcut.tab => widget.onTab,
+      CcbTerminalShortcut.enter => widget.onEnter,
+      CcbTerminalShortcut.backspace => widget.onBackspace,
+      CcbTerminalShortcut.ctrlA => widget.onCtrlA,
       CcbTerminalShortcut.ctrlC => widget.onCtrlC,
       CcbTerminalShortcut.ctrlD => widget.onCtrlD,
+      CcbTerminalShortcut.ctrlE => widget.onCtrlE,
+      CcbTerminalShortcut.ctrlK => widget.onCtrlK,
       CcbTerminalShortcut.ctrlU => widget.onCtrlU,
       CcbTerminalShortcut.ctrlL => widget.onCtrlL,
+      CcbTerminalShortcut.ctrlR => widget.onCtrlR,
+      CcbTerminalShortcut.ctrlW => widget.onCtrlW,
+      CcbTerminalShortcut.ctrlZ => widget.onCtrlZ,
       CcbTerminalShortcut.delete => widget.onDelete,
       CcbTerminalShortcut.home => widget.onHome,
       CcbTerminalShortcut.end => widget.onEnd,
@@ -1038,14 +1161,24 @@ class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
     final compactLabel = switch (shortcut) {
       CcbTerminalShortcut.ctrlC => 'C-c',
       CcbTerminalShortcut.ctrlD => 'C-d',
+      CcbTerminalShortcut.ctrlA => 'C-a',
+      CcbTerminalShortcut.ctrlE => 'C-e',
+      CcbTerminalShortcut.ctrlK => 'C-k',
       CcbTerminalShortcut.ctrlU => 'C-u',
       CcbTerminalShortcut.ctrlL => 'C-l',
+      CcbTerminalShortcut.ctrlR => 'C-r',
+      CcbTerminalShortcut.ctrlW => 'C-w',
+      CcbTerminalShortcut.ctrlZ => 'C-z',
+      CcbTerminalShortcut.backspace => 'Bksp',
+      CcbTerminalShortcut.enter => 'Enter',
       CcbTerminalShortcut.delete => 'Del',
       _ => terminalShortcutLabel(shortcut),
     };
     return _textKey(shortcut.wireName, compactLabel, callback);
   }
 }
+
+void _noopTerminalShortcut() {}
 
 class _TerminalShortcutRow extends StatelessWidget {
   const _TerminalShortcutRow({required this.children});
@@ -1120,13 +1253,15 @@ bool _sameGeometry(TerminalGeometry a, TerminalGeometry b) {
       a.pixelHeight == b.pixelHeight;
 }
 
-bool _sameTerminalTargetIdentity(CcbTerminalTarget a, CcbTerminalTarget b) {
-  return a.projectId == b.projectId &&
-      a.namespaceEpoch == b.namespaceEpoch &&
-      a.kind == b.kind &&
-      a.agent == b.agent &&
-      a.window == b.window &&
-      a.paneId == b.paneId &&
-      a.tmuxSocketPath == b.tmuxSocketPath &&
-      a.tmuxSessionName == b.tmuxSessionName;
+String _terminalTargetIdentity(CcbTerminalTarget target) {
+  return [
+    target.projectId,
+    target.namespaceEpoch,
+    target.kind.wireName,
+    target.agent,
+    target.window,
+    target.paneId,
+    target.tmuxSocketPath,
+    target.tmuxSessionName,
+  ].join('|');
 }

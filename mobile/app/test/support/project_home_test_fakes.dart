@@ -7,7 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
 
-class RecordingTerminalTransport implements TerminalTransport {
+class RecordingTerminalTransport
+    implements TerminalTransport, HostTerminalTransport {
   RecordingTerminalTransport({
     this.writeError,
     List<Object>? openErrors,
@@ -19,6 +20,9 @@ class RecordingTerminalTransport implements TerminalTransport {
   final List<Object> openErrors;
   final List<Object> reconnectErrors;
   final requests = <TerminalOpenRequest>[];
+  final hostRequests = <HostTerminalOpenRequest>[];
+  final terminatedHostSessions = <String>[];
+  final hostOperationLog = <String>[];
   final sessions = <RecordingTerminalSession>[];
 
   @override
@@ -35,6 +39,26 @@ class RecordingTerminalTransport implements TerminalTransport {
     sessions.add(session);
     return session;
   }
+
+  @override
+  Future<TerminalSession> openHostTerminal(
+    HostTerminalOpenRequest request,
+  ) async {
+    hostRequests.add(request);
+    hostOperationLog.add('open:${request.clientSessionId}');
+    final session = RecordingTerminalSession(
+      request.attachCommand,
+      onClose: () => hostOperationLog.add('close:${request.clientSessionId}'),
+    );
+    sessions.add(session);
+    return session;
+  }
+
+  @override
+  Future<void> terminateHostTerminal(String clientSessionId) async {
+    hostOperationLog.add('terminate:$clientSessionId');
+    terminatedHostSessions.add(clientSessionId);
+  }
 }
 
 class RecordingTerminalSession implements TerminalSession {
@@ -42,11 +66,13 @@ class RecordingTerminalSession implements TerminalSession {
     this.launchedCommand, {
     this.writeError,
     List<Object>? reconnectErrors,
+    this.onClose,
   }) : reconnectErrors = reconnectErrors ?? <Object>[];
 
   final _output = StreamController<Uint8List>.broadcast();
   final Object? writeError;
   final List<Object> reconnectErrors;
+  final VoidCallback? onClose;
 
   @override
   final String launchedCommand;
@@ -55,6 +81,7 @@ class RecordingTerminalSession implements TerminalSession {
   final pasted = <String>[];
   final resized = <TerminalGeometry>[];
   var reconnectCount = 0;
+  var closed = false;
 
   @override
   Stream<Uint8List> get output => _output.stream;
@@ -75,6 +102,11 @@ class RecordingTerminalSession implements TerminalSession {
 
   @override
   Future<void> close() async {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    onClose?.call();
     await _output.close();
   }
 

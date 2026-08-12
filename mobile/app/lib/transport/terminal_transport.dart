@@ -72,6 +72,37 @@ abstract interface class TerminalTransport {
   Future<TerminalSession> open(TerminalOpenRequest request);
 }
 
+class HostTerminalOpenRequest {
+  HostTerminalOpenRequest({
+    required this.clientSessionId,
+    required this.displayName,
+    this.geometry = const TerminalGeometry(),
+    this.terminalType = 'xterm-256color',
+  }) {
+    if (!RegExp(r'^shell-[1-9][0-9]*$').hasMatch(clientSessionId)) {
+      throw ArgumentError.value(
+        clientSessionId,
+        'clientSessionId',
+        'expected shell-N',
+      );
+    }
+    TerminalOpenRequest._validateTerminalType(terminalType);
+  }
+
+  final String clientSessionId;
+  final String displayName;
+  final TerminalGeometry geometry;
+  final String terminalType;
+
+  String get attachCommand => 'host shell $clientSessionId (~)';
+}
+
+abstract interface class HostTerminalTransport {
+  Future<TerminalSession> openHostTerminal(HostTerminalOpenRequest request);
+
+  Future<void> terminateHostTerminal(String clientSessionId);
+}
+
 abstract interface class TerminalSession {
   String get launchedCommand;
 

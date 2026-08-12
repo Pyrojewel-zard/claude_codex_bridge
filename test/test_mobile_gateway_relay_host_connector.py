@@ -126,6 +126,43 @@ def test_relay_host_connector_maps_provider_control_without_proxy_escape() -> No
         'thinking': 'xhigh',
     }
 
+
+def test_relay_host_connector_maps_host_terminal_without_path_escape() -> None:
+    opened = _gateway_request(
+        'open_host_terminal',
+        {
+            'schema_version': 1,
+            'client_session_id': 'shell-2',
+            'display_name': 'Shell 2',
+            'geometry': {'columns': 100, 'rows': 30},
+            'device_token': 'must-not-forward',
+            'arbitrary_path': '/etc/passwd',
+        },
+    )
+    terminated = _gateway_request(
+        'terminate_host_terminal',
+        {
+            'schema_version': 1,
+            'client_session_id': 'shell-2',
+            'arbitrary_path': '/etc/passwd',
+        },
+    )
+
+    assert opened.method == 'POST'
+    assert opened.path == '/v1/terminals'
+    assert json.loads(opened.body or b'{}') == {
+        'schema_version': 1,
+        'client_session_id': 'shell-2',
+        'display_name': 'Shell 2',
+        'geometry': {'columns': 100, 'rows': 30},
+    }
+    assert terminated.method == 'POST'
+    assert terminated.path == '/v1/terminals/terminate'
+    assert json.loads(terminated.body or b'{}') == {
+        'schema_version': 1,
+        'client_session_id': 'shell-2',
+    }
+
 def test_relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path) -> None:
     asyncio.run(_relay_host_connector_proxies_encrypted_gateway_request(tmp_path))
 

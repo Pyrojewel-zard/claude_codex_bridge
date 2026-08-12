@@ -7,7 +7,10 @@ import 'gateway_connection_outcome.dart';
 import 'terminal_transport.dart';
 
 class GatewayTerminalTransport
-    implements TerminalTransport, GatewayConnectionOutcomeReportable {
+    implements
+        TerminalTransport,
+        HostTerminalTransport,
+        GatewayConnectionOutcomeReportable {
   GatewayTerminalTransport({
     required GatewayTransport transport,
     Duration connectionTimeout = const Duration(seconds: 5),
@@ -38,8 +41,16 @@ class GatewayTerminalTransport
       );
       final session = _GatewayTerminalSession(
         transport: _transport,
-        request: request,
         handle: handle,
+        geometry: request.geometry,
+        launchedCommand: request.attachCommand,
+        handleOpener:
+            (geometry) => _transport.openTerminal(
+              GatewayTerminalOpenRequest.fromCcbTarget(
+                request.target,
+                geometry: geometry,
+              ),
+            ),
         outcomeReporter: _outcomeReporter,
         onClosed: _sessions.remove,
         connectionTimeout: _connectionTimeout,
@@ -51,23 +62,84 @@ class GatewayTerminalTransport
       rethrow;
     }
   }
+
+  @override
+  Future<TerminalSession> openHostTerminal(
+    HostTerminalOpenRequest request,
+  ) async {
+    final transport = _transport;
+    if (transport is! GatewayHostTerminalTransport) {
+      throw const TerminalTransportException(
+        'gateway does not support host terminals',
+      );
+    }
+    final hostTransport = transport as GatewayHostTerminalTransport;
+    try {
+      final handle = await hostTransport.openHostTerminal(
+        GatewayHostTerminalOpenRequest(
+          clientSessionId: request.clientSessionId,
+          displayName: request.displayName,
+          geometry: request.geometry,
+        ),
+      );
+      final session = _GatewayTerminalSession(
+        transport: _transport,
+        handle: handle,
+        geometry: request.geometry,
+        launchedCommand: request.attachCommand,
+        handleOpener:
+            (geometry) => hostTransport.openHostTerminal(
+              GatewayHostTerminalOpenRequest(
+                clientSessionId: request.clientSessionId,
+                displayName: request.displayName,
+                geometry: geometry,
+              ),
+            ),
+        outcomeReporter: _outcomeReporter,
+        onClosed: _sessions.remove,
+        connectionTimeout: _connectionTimeout,
+      );
+      _sessions.add(session);
+      return session;
+    } catch (error) {
+      _outcomeReporter?.failed(GatewayConnectionOperation.terminal, error);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> terminateHostTerminal(String clientSessionId) async {
+    final transport = _transport;
+    if (transport is! GatewayHostTerminalTransport) {
+      throw const TerminalTransportException(
+        'gateway does not support host terminals',
+      );
+    }
+    await (transport as GatewayHostTerminalTransport).terminateHostTerminal(
+      clientSessionId: clientSessionId,
+    );
+  }
 }
 
 class _GatewayTerminalSession implements TerminalSession {
   _GatewayTerminalSession({
     required GatewayTransport transport,
-    required TerminalOpenRequest request,
     required GatewayTerminalHandle handle,
+    required TerminalGeometry geometry,
+    required String launchedCommand,
+    required Future<GatewayTerminalHandle> Function(TerminalGeometry geometry)
+    handleOpener,
     GatewayConnectionOutcomeReporter? outcomeReporter,
     required void Function(_GatewayTerminalSession session) onClosed,
     required Duration connectionTimeout,
   }) : _transport = transport,
-       _request = request,
        _handle = handle,
+       _launchedCommand = launchedCommand,
+       _handleOpener = handleOpener,
        _outcomeReporter = outcomeReporter,
        _onClosed = onClosed,
        _connectionTimeout = connectionTimeout,
-       _geometry = request.geometry {
+       _geometry = geometry {
     unawaited(
       _connect().catchError((Object error, StackTrace stackTrace) {
         if (!_closed) {
@@ -78,7 +150,9 @@ class _GatewayTerminalSession implements TerminalSession {
   }
 
   final GatewayTransport _transport;
-  final TerminalOpenRequest _request;
+  final String _launchedCommand;
+  final Future<GatewayTerminalHandle> Function(TerminalGeometry geometry)
+  _handleOpener;
   GatewayTerminalHandle _handle;
   TerminalGeometry _geometry;
   final _output = StreamController<Uint8List>.broadcast();
@@ -99,7 +173,7 @@ class _GatewayTerminalSession implements TerminalSession {
   }
 
   @override
-  String get launchedCommand => _request.attachCommand;
+  String get launchedCommand => _launchedCommand;
 
   @override
   Stream<Uint8List> get output => _output.stream;
@@ -148,6 +222,7 @@ class _GatewayTerminalSession implements TerminalSession {
       return;
     }
     _closed = true;
+    final pendingRenewal = _renewal;
     Object? primaryError;
     StackTrace? primaryStackTrace;
     Object? cleanupError;
@@ -174,6 +249,14 @@ class _GatewayTerminalSession implements TerminalSession {
         } finally {
           _onClosed(this);
         }
+      }
+    }
+    if (pendingRenewal != null) {
+      try {
+        await pendingRenewal;
+      } catch (error, stackTrace) {
+        cleanupError ??= error;
+        cleanupStackTrace ??= stackTrace;
       }
     }
     if (primaryError != null) {
@@ -338,13 +421,16 @@ class _GatewayTerminalSession implements TerminalSession {
   Future<void> _doRenewTerminalHandle() async {
     _connectionGeneration += 1;
     await _cancelSubscription();
-    final handle = await _transport.openTerminal(
-      GatewayTerminalOpenRequest.fromCcbTarget(
-        _request.target,
-        geometry: _geometry,
-      ),
-    );
+    final handle = await _handleOpener(_geometry);
     if (_closed) {
+      try {
+        await _transport.sendTerminalFrame(
+          handle,
+          GatewayTerminalFrame.closed('client_closed'),
+        );
+      } catch (_) {
+        // The session is already closing; token cleanup is best effort.
+      }
       return;
     }
     _handle = handle;

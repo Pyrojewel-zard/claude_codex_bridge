@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import hashlib
 import os
+from pathlib import Path
 import re
+import shutil
 import struct
 import subprocess
+import tempfile
 import threading
 import time
 import unicodedata
@@ -19,6 +23,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on native Windows
 
 
 MOBILE_TERMINAL_INITIAL_HISTORY_LINES = 1000
+HOST_TERMINAL_MAX_SESSIONS = 6
+_HOST_TERMINAL_SLOT_RE = re.compile(r'^shell-([1-9][0-9]*)$')
 
 
 @dataclass(frozen=True)
@@ -117,6 +123,177 @@ class PaneMessageTarget:
     history_supported: bool = True
     input_supported: bool = True
     blocked_reason: str | None = None
+
+
+class HostTerminalManager:
+    """Owns persistent, device-isolated host shells for CCB Mobile."""
+
+    def __init__(
+        self,
+        state_dir: Path,
+        *,
+        home_dir: Path | None = None,
+        tmux_binary: str | None = None,
+        max_sessions: int = HOST_TERMINAL_MAX_SESSIONS,
+    ) -> None:
+        self.state_dir = Path(state_dir)
+        self.home_dir = Path(home_dir) if home_dir is not None else Path.home()
+        self.tmux_binary = str(tmux_binary or shutil.which('tmux') or 'tmux')
+        self.max_sessions = max(1, int(max_sessions))
+        self.socket_path = self._socket_path()
+        self._lock = threading.Lock()
+
+    def attach_target(
+        self,
+        *,
+        terminal_id: str,
+        device_id: str,
+        client_session_id: str,
+        display_name: str,
+        geometry: TerminalGeometry,
+        include_history: bool,
+    ) -> TerminalAttachTarget:
+        slot = self._validate_slot(client_session_id)
+        device = str(device_id or '').strip()
+        if not device:
+            raise RuntimeError('host terminal device identity is required')
+        session_name = self._session_name(device, slot)
+        with self._lock:
+            self._ensure_state_dir()
+            if not self._has_session(session_name):
+                self._create_session(session_name, geometry)
+            else:
+                self._resize_session(session_name, geometry)
+            pane_id = self._pane_id(session_name)
+        return TerminalAttachTarget(
+            terminal_id=str(terminal_id),
+            socket_path=str(self.socket_path),
+            session_name=session_name,
+            pane_id=pane_id,
+            geometry=geometry,
+            target_summary={
+                'kind': 'host_shell',
+                'project_id': '@host',
+                'client_session_id': slot,
+                'display_name': str(display_name or '').strip() or self._default_name(slot),
+                'working_directory': '~',
+            },
+            tmux_binary=self.tmux_binary,
+            include_history=include_history,
+        )
+
+    def terminate(self, *, device_id: str, client_session_id: str) -> bool:
+        slot = self._validate_slot(client_session_id)
+        device = str(device_id or '').strip()
+        if not device:
+            raise RuntimeError('host terminal device identity is required')
+        session_name = self._session_name(device, slot)
+        with self._lock:
+            self._ensure_state_dir()
+            if not self._has_session(session_name):
+                return False
+            self._run(['kill-session', '-t', session_name])
+        return True
+
+    def _validate_slot(self, value: str) -> str:
+        slot = str(value or '').strip()
+        match = _HOST_TERMINAL_SLOT_RE.fullmatch(slot)
+        if match is None or int(match.group(1)) > self.max_sessions:
+            raise RuntimeError(
+                f'host terminal slot must be shell-1 through shell-{self.max_sessions}'
+            )
+        return slot
+
+    def _socket_path(self) -> Path:
+        preferred_dir = self.state_dir / 'host-terminal'
+        preferred = preferred_dir / 'tmux.sock'
+        if len(os.fsencode(str(preferred))) < 96:
+            return preferred
+        digest = hashlib.sha256(str(self.state_dir).encode('utf-8')).hexdigest()[:16]
+        user_id = getattr(os, 'getuid', lambda: 0)()
+        return Path(tempfile.gettempdir()) / f'ccb-mobile-{user_id}-{digest}' / 'tmux.sock'
+
+    def _ensure_state_dir(self) -> None:
+        self.socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != 'nt':
+            self.socket_path.parent.chmod(0o700)
+
+    def _session_name(self, device_id: str, slot: str) -> str:
+        digest = hashlib.sha256(f'{device_id}\0{slot}'.encode('utf-8')).hexdigest()[:24]
+        return f'ccb-mobile-{digest}'
+
+    def _default_name(self, slot: str) -> str:
+        return f'Shell {int(slot.rsplit("-", 1)[1])}'
+
+    def _has_session(self, session_name: str) -> bool:
+        return self._run(['has-session', '-t', session_name], check=False).returncode == 0
+
+    def _create_session(self, session_name: str, geometry: TerminalGeometry) -> None:
+        command = [
+            'new-session',
+            '-d',
+            '-x',
+            str(max(20, int(geometry.columns))),
+            '-y',
+            str(max(5, int(geometry.rows))),
+            '-s',
+            session_name,
+            '-n',
+            'shell',
+            '-c',
+            str(self.home_dir),
+        ]
+        self._run(command, use_clean_config=True)
+
+    def _resize_session(self, session_name: str, geometry: TerminalGeometry) -> None:
+        self._run(
+            [
+                'resize-window',
+                '-t',
+                session_name,
+                '-x',
+                str(max(20, int(geometry.columns))),
+                '-y',
+                str(max(5, int(geometry.rows))),
+            ]
+        )
+
+    def _pane_id(self, session_name: str) -> str:
+        result = self._run(
+            ['display-message', '-p', '-t', f'{session_name}:0.0', '#{pane_id}']
+        )
+        pane_id = str(result.stdout or '').strip()
+        if not pane_id:
+            raise RuntimeError('host terminal pane could not be resolved')
+        return pane_id
+
+    def _run(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+        use_clean_config: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        prefix = [self.tmux_binary]
+        if use_clean_config:
+            prefix.extend(('-f', '/dev/null'))
+        prefix.extend(('-S', str(self.socket_path)))
+        try:
+            result = subprocess.run(
+                [*prefix, *args],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=3.0,
+                env=_terminal_client_env(),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f'host terminal tmux unavailable: {exc}') from exc
+        if check and result.returncode != 0:
+            message = (result.stderr or '').strip() or 'host terminal tmux command failed'
+            raise RuntimeError(message)
+        return result
 
 
 def capture_tmux_pane_text(
@@ -286,6 +463,19 @@ class TmuxTerminalSession:
         self.write(str(text).encode('utf-8'))
 
     def resize(self, geometry: TerminalGeometry) -> None:
+        if self.target.target_summary.get('kind') == 'host_shell':
+            _tmux_terminal_run(
+                self.target,
+                [
+                    'resize-window',
+                    '-t',
+                    self.target.session_name,
+                    '-x',
+                    str(max(20, int(geometry.columns))),
+                    '-y',
+                    str(max(5, int(geometry.rows))),
+                ],
+            )
         with self._state_lock:
             self._geometry = geometry
             self._last_snapshot = None

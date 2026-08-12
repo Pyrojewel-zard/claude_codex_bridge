@@ -273,6 +273,27 @@ class CcbMobileLocalizations {
 
   String get openTerminal => isChinese ? '打开终端' : 'Open Terminal';
 
+  String get computerTerminal => isChinese ? '电脑终端' : 'Computer terminal';
+
+  String get newTerminal => isChinese ? '新建终端' : 'New terminal';
+
+  String get closeTerminal => isChinese ? '关闭当前终端' : 'Close terminal';
+
+  String closeTerminalQuestion(String name) =>
+      isChinese
+          ? '终止 $name 中运行的 shell？'
+          : 'Terminate the shell running in $name?';
+
+  String shellName(int index) => isChinese ? '终端 $index' : 'Shell $index';
+
+  String get maximumTerminalsReached =>
+      isChinese ? '最多可同时打开 6 个终端' : 'Up to 6 terminals can be open';
+
+  String get hostTerminalAccessUnavailable =>
+      isChinese
+          ? '当前配对未启用电脑终端权限，请重新配对'
+          : 'Re-pair to enable computer terminal access';
+
   String get chooseTerminalProject =>
       isChinese ? '选择项目和终端' : 'Choose a project and terminal';
 
@@ -318,6 +339,8 @@ class CcbMobileLocalizations {
   String get file => isChinese ? '文件' : 'File';
 
   String get cancel => isChinese ? '取消' : 'Cancel';
+
+  String get close => isChinese ? '关闭' : 'Close';
 
   String get open => isChinese ? '打开' : 'Open';
 

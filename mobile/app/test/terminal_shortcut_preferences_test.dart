@@ -32,7 +32,7 @@ void main() {
   test('terminal shortcut preferences tolerate old and unknown values', () {
     final preferences = CcbTerminalShortcutPreferences.fromJsonString('''
       {
-        "version": 1,
+        "version": 2,
         "order": ["tab", "future-key", "tab", "escape"],
         "enabled": ["escape", "future-key"]
       }
@@ -48,6 +48,33 @@ void main() {
       CcbTerminalShortcutPreferences.fromJsonString('{not-json'),
       CcbTerminalShortcutPreferences.defaults,
     );
+  });
+
+  test('version 1 preferences enable newly introduced terminal keys', () {
+    final preferences = CcbTerminalShortcutPreferences.fromJsonString('''
+      {
+        "version": 1,
+        "order": ["tab", "escape", "ctrl-c"],
+        "enabled": ["tab", "ctrl-c"]
+      }
+    ''');
+
+    expect(
+      preferences.enabled,
+      containsAll(const [
+        CcbTerminalShortcut.tab,
+        CcbTerminalShortcut.ctrlC,
+        CcbTerminalShortcut.enter,
+        CcbTerminalShortcut.backspace,
+        CcbTerminalShortcut.ctrlA,
+        CcbTerminalShortcut.ctrlE,
+        CcbTerminalShortcut.ctrlK,
+        CcbTerminalShortcut.ctrlR,
+        CcbTerminalShortcut.ctrlW,
+        CcbTerminalShortcut.ctrlZ,
+      ]),
+    );
+    expect(preferences.enabled, isNot(contains(CcbTerminalShortcut.escape)));
   });
 
   test('terminal shortcut preferences reorder and toggle independently', () {

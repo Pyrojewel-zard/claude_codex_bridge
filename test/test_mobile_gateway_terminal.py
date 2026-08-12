@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 import os
+from pathlib import Path
+import shlex
+import shutil
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from mobile_gateway.terminal import (
+    HostTerminalManager,
     TerminalAttachTarget,
     TerminalGeometry,
     TmuxTerminalSession,
@@ -18,6 +23,86 @@ from mobile_gateway.terminal import (
     _terminal_client_env,
     resolve_tmux_binary,
 )
+
+
+@pytest.mark.skipif(
+    os.name == 'nt' or shutil.which('tmux') is None,
+    reason='host terminal requires tmux on a POSIX host',
+)
+def test_host_terminal_manager_opens_isolated_persistent_home_shells(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / 'home'
+    home.mkdir()
+    manager = HostTerminalManager(tmp_path / 'mobile', home_dir=home)
+    first = manager.attach_target(
+        terminal_id='term-1',
+        device_id='phone-a',
+        client_session_id='shell-1',
+        display_name='Shell 1',
+        geometry=TerminalGeometry(columns=90, rows=24),
+        include_history=True,
+    )
+    second = manager.attach_target(
+        terminal_id='term-2',
+        device_id='phone-a',
+        client_session_id='shell-2',
+        display_name='Shell 2',
+        geometry=TerminalGeometry(columns=100, rows=30),
+        include_history=True,
+    )
+    marker = tmp_path / 'pwd.txt'
+    try:
+        assert first.session_name != second.session_name
+        assert first.socket_path == second.socket_path
+        reopened = manager.attach_target(
+            terminal_id='term-3',
+            device_id='phone-a',
+            client_session_id='shell-1',
+            display_name='Shell 1',
+            geometry=TerminalGeometry(columns=80, rows=20),
+            include_history=False,
+        )
+        assert reopened.session_name == first.session_name
+        assert reopened.pane_id == first.pane_id
+
+        _send_tmux_terminal_literal(first, f'pwd > {shlex.quote(str(marker))}')
+        _send_tmux_terminal_bytes(first, b'\r')
+        deadline = time.monotonic() + 3
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.read_text(encoding='utf-8').strip() == str(home)
+
+        assert manager.terminate(
+            device_id='phone-a',
+            client_session_id='shell-1',
+        ) is True
+        still_open = manager.attach_target(
+            terminal_id='term-4',
+            device_id='phone-a',
+            client_session_id='shell-2',
+            display_name='Shell 2',
+            geometry=TerminalGeometry(),
+            include_history=False,
+        )
+        assert still_open.session_name == second.session_name
+    finally:
+        manager.terminate(device_id='phone-a', client_session_id='shell-1')
+        manager.terminate(device_id='phone-a', client_session_id='shell-2')
+
+
+def test_host_terminal_manager_rejects_slots_above_limit(tmp_path: Path) -> None:
+    manager = HostTerminalManager(tmp_path / 'mobile', max_sessions=2)
+
+    with pytest.raises(RuntimeError, match='shell-1 through shell-2'):
+        manager.attach_target(
+            terminal_id='term-3',
+            device_id='phone-a',
+            client_session_id='shell-3',
+            display_name='Shell 3',
+            geometry=TerminalGeometry(),
+            include_history=True,
+        )
 
 
 def _target(*, include_history: bool = True) -> TerminalAttachTarget:

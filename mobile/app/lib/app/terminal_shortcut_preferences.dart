@@ -19,12 +19,32 @@ enum CcbTerminalShortcut {
   arrowDown('arrow-down'),
   arrowRight('arrow-right'),
   pageDown('page-down'),
-  end('end');
+  end('end'),
+  enter('enter'),
+  backspace('backspace'),
+  ctrlA('ctrl-a'),
+  ctrlE('ctrl-e'),
+  ctrlK('ctrl-k'),
+  ctrlR('ctrl-r'),
+  ctrlW('ctrl-w'),
+  ctrlZ('ctrl-z');
 
   const CcbTerminalShortcut(this.wireName);
 
   final String wireName;
 }
+
+const _terminalShortcutPreferencesVersion = 2;
+const _terminalShortcutsAddedInVersion2 = <CcbTerminalShortcut>{
+  CcbTerminalShortcut.enter,
+  CcbTerminalShortcut.backspace,
+  CcbTerminalShortcut.ctrlA,
+  CcbTerminalShortcut.ctrlE,
+  CcbTerminalShortcut.ctrlK,
+  CcbTerminalShortcut.ctrlR,
+  CcbTerminalShortcut.ctrlW,
+  CcbTerminalShortcut.ctrlZ,
+};
 
 @immutable
 class CcbTerminalShortcutPreferences {
@@ -66,7 +86,7 @@ class CcbTerminalShortcutPreferences {
   }
 
   Map<String, Object> toJson() => <String, Object>{
-    'version': 1,
+    'version': _terminalShortcutPreferencesVersion,
     'order': order.map((shortcut) => shortcut.wireName).toList(),
     'enabled': enabled.map((shortcut) => shortcut.wireName).toList(),
   };
@@ -93,9 +113,15 @@ class CcbTerminalShortcutPreferences {
     final rawEnabled = json['enabled'];
     final parsedEnabled =
         rawEnabled is List<Object?> ? _parseShortcutList(rawEnabled) : null;
+    final version = json['version'] is int ? json['version'] as int : 1;
+    final migratedEnabled = parsedEnabled?.toSet();
+    if (migratedEnabled != null &&
+        version < _terminalShortcutPreferencesVersion) {
+      migratedEnabled.addAll(_terminalShortcutsAddedInVersion2);
+    }
     return CcbTerminalShortcutPreferences(
       order: parsedOrder,
-      enabled: parsedEnabled,
+      enabled: migratedEnabled,
     );
   }
 

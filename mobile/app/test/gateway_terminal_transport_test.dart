@@ -423,9 +423,70 @@ void main() {
       expect(gateway.sentFrameHandles.last.terminalId, 'term_demo_mobile_2');
     },
   );
+
+  test(
+    'host terminal opens, renews, and terminates the same shell slot',
+    () async {
+      final gateway = _FakeGatewayTransport();
+      final transport = GatewayTerminalTransport(transport: gateway);
+      final session = await transport.openHostTerminal(
+        HostTerminalOpenRequest(
+          clientSessionId: 'shell-2',
+          displayName: 'Shell 2',
+          geometry: const TerminalGeometry(columns: 90, rows: 24),
+        ),
+      );
+
+      expect(gateway.hostOpenRequests.single.clientSessionId, 'shell-2');
+      expect(session.launchedCommand, 'host shell shell-2 (~)');
+      gateway.invalidTerminalIds.add(gateway.frameHandles.last.terminalId);
+      await session.reconnect();
+      await _waitFor(() => gateway.hostOpenRequests.length == 2);
+      expect(gateway.hostOpenRequests.last.clientSessionId, 'shell-2');
+
+      await transport.terminateHostTerminal('shell-2');
+      expect(gateway.terminatedHostSessions, ['shell-2']);
+      await session.close();
+    },
+  );
+
+  test('closing host terminal drains an in-flight handle renewal', () async {
+    final gateway = _FakeGatewayTransport();
+    final transport = GatewayTerminalTransport(transport: gateway);
+    final session = await transport.openHostTerminal(
+      HostTerminalOpenRequest(
+        clientSessionId: 'shell-1',
+        displayName: 'Shell 1',
+      ),
+    );
+    gateway.invalidTerminalIds.add(gateway.frameHandles.last.terminalId);
+    final renewalGate = Completer<void>();
+    gateway.nextHostOpenGate = renewalGate;
+
+    final reconnect = session.reconnect();
+    await _waitFor(() => gateway.hostOpenRequests.length == 2);
+    final close = session.close();
+    renewalGate.complete();
+    await reconnect.catchError((_) {});
+    await close;
+    await transport.terminateHostTerminal('shell-1');
+
+    expect(gateway.hostOpenRequests, hasLength(2));
+    final closedTerminalIds = <String>[
+      for (var index = 0; index < gateway.sentFrames.length; index += 1)
+        if (gateway.sentFrames[index].type == GatewayTerminalFrameType.closed)
+          gateway.sentFrameHandles[index].terminalId,
+    ];
+    expect(
+      closedTerminalIds,
+      containsAll(<String>['term_host_1', 'term_host_2']),
+    );
+    expect(gateway.terminatedHostSessions, ['shell-1']);
+  });
 }
 
-class _FakeGatewayTransport implements GatewayTransport {
+class _FakeGatewayTransport
+    implements GatewayTransport, GatewayHostTerminalTransport {
   _FakeGatewayTransport();
 
   @override
@@ -445,6 +506,8 @@ class _FakeGatewayTransport implements GatewayTransport {
   }) => throw UnimplementedError();
 
   final openRequests = <GatewayTerminalOpenRequest>[];
+  final hostOpenRequests = <GatewayHostTerminalOpenRequest>[];
+  final terminatedHostSessions = <String>[];
   final sentFrames = <GatewayTerminalFrame>[];
   final sentFrameHandles = <GatewayTerminalHandle>[];
   final resumeCursors = <int?>[];
@@ -453,6 +516,7 @@ class _FakeGatewayTransport implements GatewayTransport {
   final handshakeClosedTerminalIds = <String>{};
   bool emitOpenFrame = true;
   bool failClosedFrame = false;
+  Completer<void>? nextHostOpenGate;
   var activeFrameSubscriptions = 0;
   final _frameControllers = <StreamController<GatewayTerminalFrame>>[];
   final _frameHandles = <GatewayTerminalHandle>[];
@@ -580,6 +644,32 @@ class _FakeGatewayTransport implements GatewayTransport {
         window: request.target.window,
       ),
     );
+  }
+
+  @override
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  ) async {
+    final sequence = hostOpenRequests.length + 1;
+    hostOpenRequests.add(request);
+    final gate = nextHostOpenGate;
+    nextHostOpenGate = null;
+    await gate?.future;
+    return GatewayTerminalHandle(
+      terminalId: 'term_host_$sequence',
+      terminalToken: 'host-terminal-secret-$sequence',
+      expiresAt: DateTime.utc(2026, 6, 18, 0, 5),
+      websocketUrl: Uri.parse(
+        'ws://127.0.0.1:8787/v1/terminals/term_host_$sequence',
+      ),
+      targetEpoch: 0,
+      targetSummary: const GatewayTerminalTargetSummary(projectId: '@host'),
+    );
+  }
+
+  @override
+  Future<void> terminateHostTerminal({required String clientSessionId}) async {
+    terminatedHostSessions.add(clientSessionId);
   }
 
   @override

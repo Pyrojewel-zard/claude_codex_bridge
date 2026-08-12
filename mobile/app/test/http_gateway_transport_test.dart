@@ -611,6 +611,42 @@ void main() {
     }
   });
 
+  test('opens and terminates a host terminal through host routes', () async {
+    final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+    final authed = HttpGatewayTransport(
+      profile: GatewayHostProfile(
+        hostId: 'host-demo',
+        deviceId: 'device-demo',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: baseUrl,
+        ),
+        scopes: {'view', 'host_terminal'},
+      ),
+      deviceToken: 'device-secret',
+    );
+    try {
+      final request = const GatewayHostTerminalOpenRequest(
+        clientSessionId: 'shell-2',
+        displayName: 'Shell 2',
+        geometry: TerminalGeometry(columns: 100, rows: 30),
+      );
+
+      final handle = await authed.openHostTerminal(request);
+      await authed.terminateHostTerminal(clientSessionId: 'shell-2');
+
+      expect(handle.targetSummary.projectId, '@host');
+      expect(requests, ['/v1/terminals', '/v1/terminals/terminate']);
+      expect(jsonDecode(bodies.first), request.toJson());
+      expect(jsonDecode(bodies.last), {
+        'schema_version': 1,
+        'client_session_id': 'shell-2',
+      });
+    } finally {
+      authed.close(force: true);
+    }
+  });
+
   test('streams terminal frames through gateway websocket', () async {
     final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
     final authed = HttpGatewayTransport(
@@ -874,6 +910,26 @@ _GatewayResponse _payloadForRequest(
         'agent': 'mobile',
         'window': 'main',
       },
+    });
+  }
+  if (method == 'POST' && path == '/v1/terminals') {
+    return _GatewayResponse({
+      'schema_version': 1,
+      'terminal_id': 'term_host_2',
+      'terminal_token': 'host-terminal-secret',
+      'expires_at': '2026-06-18T00:05:00Z',
+      'websocket_url':
+          'ws://${host ?? "127.0.0.1:8787"}/v1/terminals/term_host_2',
+      'target_epoch': 0,
+      'target_summary': {'project_id': '@host'},
+    });
+  }
+  if (method == 'POST' && path == '/v1/terminals/terminate') {
+    return _GatewayResponse({
+      'schema_version': 1,
+      'status': 'ok',
+      'client_session_id': 'shell-2',
+      'terminated': true,
     });
   }
   if (path == '/v1/projects/proj-demo/agents/mobile/provider-control') {

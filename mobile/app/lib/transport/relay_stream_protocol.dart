@@ -208,6 +208,8 @@ const _unaryOperations = {
   'submit_agent_message',
   'lifecycle',
   'open_terminal',
+  'open_host_terminal',
+  'terminate_host_terminal',
 };
 
 const _streamOperations = {

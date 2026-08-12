@@ -128,7 +128,10 @@ class _RelayV2AeadEnvelopeCodec implements _RelayGatewayEnvelopeCodec {
 }
 
 class RelayGatewayTransport
-    implements GatewayTransport, GatewayProviderControlTransport {
+    implements
+        GatewayTransport,
+        GatewayProviderControlTransport,
+        GatewayHostTerminalTransport {
   RelayGatewayTransport({
     required GatewayTransport inner,
     required this.sessionId,
@@ -392,6 +395,35 @@ class RelayGatewayTransport
     return _record('open_terminal', request.toJson(), () {
       return _inner.openTerminal(request);
     });
+  }
+
+  @override
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  ) {
+    final inner = _inner;
+    if (inner is! GatewayHostTerminalTransport) {
+      throw StateError('host terminal transport is unavailable');
+    }
+    final hostTransport = inner as GatewayHostTerminalTransport;
+    return _record('open_host_terminal', request.toJson(), () {
+      return hostTransport.openHostTerminal(request);
+    });
+  }
+
+  @override
+  Future<void> terminateHostTerminal({required String clientSessionId}) {
+    final inner = _inner;
+    if (inner is! GatewayHostTerminalTransport) {
+      throw StateError('host terminal transport is unavailable');
+    }
+    final hostTransport = inner as GatewayHostTerminalTransport;
+    return _record(
+      'terminate_host_terminal',
+      {'client_session_id': clientSessionId},
+      () =>
+          hostTransport.terminateHostTerminal(clientSessionId: clientSessionId),
+    );
   }
 
   @override

@@ -58,6 +58,7 @@ from .push import MobilePushDispatcher, PushSender
 from .project_activity import MobileGatewayProjectActivityStore
 from .project_registry import MobileGatewayProject, MobileGatewayProjectRegistry
 from .terminal import (
+    HostTerminalManager,
     TerminalAttachTarget,
     TerminalGeometry,
     TerminalHistoryTarget,
@@ -88,6 +89,7 @@ _PAIRING_CAPABILITIES = (
     'device_presence',
     'push_notifications',
     'provider_control',
+    'host_terminal',
 )
 _REDACTED_NAMESPACE_KEYS = ('socket_path', 'session_name')
 _DEFAULT_ROUTE_PROVIDER = 'lan'
@@ -109,6 +111,7 @@ _DEFAULT_PAIRING_SCOPES = (
     'file_download',
     'notify',
     'terminal_input',
+    'host_terminal',
     'lifecycle',
     'provider_settings',
 )
@@ -498,6 +501,7 @@ class MobileGatewayService:
         terminal_session_factory: Callable[[TerminalAttachTarget], object] | None = None,
         terminal_history_factory: Callable[[TerminalHistoryTarget], dict[str, object]] | None = None,
         terminal_message_sender: Callable[[PaneMessageTarget, str], dict[str, object]] | None = None,
+        host_terminal_manager: HostTerminalManager | None = None,
         push_sender: PushSender | None = None,
         push_sender_timeout_seconds: float = 2.0,
         push_sender_max_workers: int = 4,
@@ -528,6 +532,9 @@ class MobileGatewayService:
         )
         self._push_diagnostic = dict(push_diagnostic or {})
         self._mobile_dir = Path(mobile_dir) if mobile_dir is not None else None
+        self._host_terminal_manager = host_terminal_manager
+        if self._host_terminal_manager is None and self._mobile_dir is not None:
+            self._host_terminal_manager = HostTerminalManager(self._mobile_dir)
         self._pairing_store = pairing_store
         if self._pairing_store is None and mobile_dir is not None:
             self._pairing_store = MobileGatewayPairingStore(self._mobile_dir)
@@ -1533,6 +1540,10 @@ class MobileGatewayService:
             except MobileGatewayPairingError as exc:
                 raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
             return 200, {'schema_version': _SCHEMA_VERSION, 'status': 'ok', 'presence': presence}
+        if route == '/v1/terminals':
+            return 201, self._open_host_terminal(payload=payload, headers=headers)
+        if route == '/v1/terminals/terminate':
+            return 200, self._terminate_host_terminal(payload=payload, headers=headers)
         project_route = _parse_project_action_route(route)
         if project_route is not None:
             project_id, action = project_route
@@ -2078,6 +2089,68 @@ class MobileGatewayService:
         handle['websocket_url'] = _terminal_websocket_url(headers, terminal_id=terminal_id)
         return handle
 
+    def _open_host_terminal(
+        self,
+        *,
+        payload: Mapping[str, object],
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        auth = self._authenticate(headers, required_scopes=('host_terminal',))
+        client_session_id = str(payload.get('client_session_id') or '').strip()
+        display_name = str(payload.get('display_name') or '').strip()
+        geometry_payload = _map(payload.get('geometry'))
+        geometry = TerminalGeometry.from_mapping(geometry_payload)
+        try:
+            attach_target = self._require_host_terminal_manager().attach_target(
+                terminal_id='pending',
+                device_id=auth.device_id,
+                client_session_id=client_session_id,
+                display_name=display_name,
+                geometry=geometry,
+                include_history=True,
+            )
+        except RuntimeError as exc:
+            status_code = 400 if 'slot must be' in str(exc) else 503
+            raise MobileGatewayError(str(exc), status_code=status_code) from exc
+        handle = self._require_pairing_store().create_terminal_handle(
+            project_id='@host',
+            device_id=auth.device_id,
+            target_epoch=0,
+            target_summary=attach_target.target_summary,
+            geometry=geometry_payload,
+        )
+        terminal_id = str(handle.get('terminal_id') or '')
+        handle['websocket_url'] = _terminal_websocket_url(headers, terminal_id=terminal_id)
+        return handle
+
+    def _terminate_host_terminal(
+        self,
+        *,
+        payload: Mapping[str, object],
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        auth = self._authenticate(headers, required_scopes=('host_terminal',))
+        client_session_id = str(payload.get('client_session_id') or '').strip()
+        revoked_terminal_count = self._require_pairing_store().revoke_host_terminal_handles(
+            device_id=auth.device_id,
+            client_session_id=client_session_id,
+        )
+        try:
+            terminated = self._require_host_terminal_manager().terminate(
+                device_id=auth.device_id,
+                client_session_id=client_session_id,
+            )
+        except RuntimeError as exc:
+            status_code = 400 if 'slot must be' in str(exc) else 503
+            raise MobileGatewayError(str(exc), status_code=status_code) from exc
+        return {
+            'schema_version': _SCHEMA_VERSION,
+            'status': 'ok',
+            'client_session_id': client_session_id,
+            'terminated': terminated,
+            'revoked_terminal_count': revoked_terminal_count,
+        }
+
     def _focused_project_view_payload(
         self,
         project: MobileGatewayProject,
@@ -2138,6 +2211,11 @@ class MobileGatewayService:
         if self._pairing_store is None:
             raise MobileGatewayError('mobile pairing store is not configured', status_code=503)
         return self._pairing_store
+
+    def _require_host_terminal_manager(self) -> HostTerminalManager:
+        if self._host_terminal_manager is None:
+            raise MobileGatewayError('host terminal service is not configured', status_code=503)
+        return self._host_terminal_manager
 
     def _require_notification_store(self) -> MobileNotificationStore:
         if self._notification_store is None:
@@ -2477,6 +2555,19 @@ class MobileGatewayService:
         *,
         include_history: bool,
     ) -> TerminalAttachTarget:
+        target_summary = _map(record.get('target_summary'))
+        if target_summary.get('kind') == 'host_shell':
+            try:
+                return self._require_host_terminal_manager().attach_target(
+                    terminal_id=str(record.get('terminal_id') or ''),
+                    device_id=str(record.get('device_id') or ''),
+                    client_session_id=str(target_summary.get('client_session_id') or ''),
+                    display_name=str(target_summary.get('display_name') or ''),
+                    geometry=TerminalGeometry.from_mapping(record.get('geometry')),
+                    include_history=include_history,
+                )
+            except RuntimeError as exc:
+                raise MobileGatewayError(str(exc), status_code=503) from exc
         project = self._require_project(str(record.get('project_id') or ''))
         view_payload = self._request_project_view(project)
         view = _map(view_payload.get('view'))
@@ -2493,7 +2584,6 @@ class MobileGatewayService:
         )
         if blocked is not None:
             raise _TerminalBlockedError(blocked)
-        target_summary = _map(record.get('target_summary'))
         herdr_summary = _herdr_terminal_target_summary(
             view,
             agent=_optional_text(target_summary.get('agent')),
@@ -2540,7 +2630,9 @@ class MobileGatewayService:
                 sequence=seq,
             )
             session.write(data)
-            self._record_project_activity(str(record.get('project_id') or ''))
+            project_id = str(record.get('project_id') or '')
+            if project_id != '@host':
+                self._record_project_activity(project_id)
             return ''
         if frame_type == 'paste':
             seq = _required_positive_int(frame.get('seq'), 'seq')
@@ -2550,7 +2642,9 @@ class MobileGatewayService:
                 sequence=seq,
             )
             session.paste(str(frame.get('text') or ''))
-            self._record_project_activity(str(record.get('project_id') or ''))
+            project_id = str(record.get('project_id') or '')
+            if project_id != '@host':
+                self._record_project_activity(project_id)
             return ''
         if frame_type == 'resize':
             session.resize(TerminalGeometry.from_mapping(frame))

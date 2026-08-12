@@ -30,7 +30,8 @@ class HttpGatewayTransport
         GatewayTransport,
         GatewayFilePathUploader,
         GatewayPresenceTransport,
-        GatewayProviderControlTransport {
+        GatewayProviderControlTransport,
+        GatewayHostTerminalTransport {
   HttpGatewayTransport({
     required this.profile,
     String? deviceToken,
@@ -300,6 +301,22 @@ class HttpGatewayTransport
       request.toJson(),
     );
     return _terminalHandle(json);
+  }
+
+  @override
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  ) async {
+    final json = await _postJson('/v1/terminals', request.toJson());
+    return _terminalHandle(json);
+  }
+
+  @override
+  Future<void> terminateHostTerminal({required String clientSessionId}) async {
+    await _postJson('/v1/terminals/terminate', {
+      'schema_version': 1,
+      'client_session_id': clientSessionId,
+    });
   }
 
   @override

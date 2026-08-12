@@ -10,6 +10,7 @@ export 'features/agent_chat/pane_chat_controller.dart';
 export 'features/project_home/project_home_screen.dart';
 export 'features/terminal/agent_terminal_pane.dart';
 export 'features/terminal/agent_terminal_workspace.dart';
+export 'features/terminal/host_terminal_screen.dart';
 export 'fixtures/project_view_fixture.dart';
 export 'l10n/ccb_mobile_localizations.dart';
 export 'features/terminal/fake_terminal_screen.dart';

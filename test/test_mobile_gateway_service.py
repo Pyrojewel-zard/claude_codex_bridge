@@ -435,6 +435,7 @@ def _service(
     terminal_session_factory=None,
     terminal_history_factory=None,
     terminal_message_sender=None,
+    host_terminal_manager=None,
     provider_quota_service=None,
     clock=None,
 ) -> MobileGatewayService:
@@ -448,6 +449,7 @@ def _service(
         terminal_session_factory=terminal_session_factory,
         terminal_history_factory=terminal_history_factory,
         terminal_message_sender=terminal_message_sender,
+        host_terminal_manager=host_terminal_manager,
         provider_quota_service=provider_quota_service,
     )
 
@@ -4640,6 +4642,7 @@ def test_pairing_claim_creates_hashed_device_records_and_audit(tmp_path: Path) -
         'file_download',
         'file_upload',
         'focus',
+        'host_terminal',
         'lifecycle',
         'message_submit',
         'notify',
@@ -5084,6 +5087,120 @@ def test_terminal_open_requires_terminal_scope_and_mints_hashed_token(tmp_path: 
     assert str(handle['terminal_token']) not in stored_audit
     assert 'sha256:' in stored_tokens
     assert '"last_input_seq": 0' in stored_tokens
+
+
+def test_host_terminal_open_and_terminate_are_device_scoped(tmp_path: Path) -> None:
+    class RecordingHostTerminalManager:
+        def __init__(self) -> None:
+            self.attach_calls: list[dict[str, object]] = []
+            self.terminate_calls: list[dict[str, str]] = []
+
+        def attach_target(self, **kwargs):
+            self.attach_calls.append(dict(kwargs))
+            slot = str(kwargs['client_session_id'])
+            return terminal_module.TerminalAttachTarget(
+                terminal_id=str(kwargs['terminal_id']),
+                socket_path='/tmp/private-host-terminal.sock',
+                session_name=f'private-{slot}',
+                pane_id='%9',
+                geometry=kwargs['geometry'],
+                target_summary={
+                    'kind': 'host_shell',
+                    'project_id': '@host',
+                    'client_session_id': slot,
+                    'display_name': str(kwargs['display_name']),
+                    'working_directory': '~',
+                },
+                include_history=bool(kwargs['include_history']),
+            )
+
+        def terminate(self, **kwargs):
+            self.terminate_calls.append({key: str(value) for key, value in kwargs.items()})
+            return True
+
+    manager = RecordingHostTerminalManager()
+    service = _service(
+        _FakeCcbdClient(),
+        mobile_dir=tmp_path / 'mobile',
+        host_terminal_manager=manager,
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view', 'host_terminal'),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code']), 'device_name': 'Phone A'},
+    )
+    headers = {
+        'Authorization': f'Bearer {claim["device_token"]}',
+        'Host': '127.0.0.1:8787',
+    }
+
+    status, handle = service.dispatch_post(
+        '/v1/terminals',
+        {
+            'schema_version': 1,
+            'client_session_id': 'shell-2',
+            'display_name': 'Shell 2',
+            'geometry': {'columns': 100, 'rows': 30},
+        },
+        headers,
+    )
+
+    assert status == 201
+    assert handle['target_epoch'] == 0
+    assert handle['target_summary'] == {
+        'kind': 'host_shell',
+        'project_id': '@host',
+        'client_session_id': 'shell-2',
+        'display_name': 'Shell 2',
+        'working_directory': '~',
+    }
+    assert '/tmp/private-host-terminal.sock' not in json.dumps(handle)
+    assert manager.attach_calls[0]['device_id'] == claim['device']['device_id']
+
+    status, terminated = service.dispatch_post(
+        '/v1/terminals/terminate',
+        {'client_session_id': 'shell-2'},
+        headers,
+    )
+    assert status == 200
+    assert terminated['terminated'] is True
+    assert terminated['revoked_terminal_count'] == 1
+    assert manager.terminate_calls == [
+        {
+            'device_id': str(claim['device']['device_id']),
+            'client_session_id': 'shell-2',
+        }
+    ]
+    with pytest.raises(MobileGatewayPairingError) as revoked:
+        MobileGatewayPairingStore(tmp_path / 'mobile').authenticate_terminal_token(
+            terminal_id=str(handle['terminal_id']),
+            terminal_token=str(handle['terminal_token']),
+        )
+    assert revoked.value.reason == 'revoked'
+
+
+def test_host_terminal_requires_dedicated_scope(tmp_path: Path) -> None:
+    service = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view', 'terminal_input'),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    with pytest.raises(MobileGatewayError) as denied:
+        service.dispatch_post(
+            '/v1/terminals',
+            {'client_session_id': 'shell-1', 'display_name': 'Shell 1'},
+            {'Authorization': f'Bearer {claim["device_token"]}'},
+        )
+
+    assert denied.value.status_code == 403
 
 
 @pytest.mark.parametrize(

@@ -38,6 +38,8 @@ _UNARY_OPERATIONS = {
     'submit_agent_message',
     'lifecycle',
     'open_terminal',
+    'open_host_terminal',
+    'terminate_host_terminal',
 }
 _STREAM_OPERATIONS = {'terminal', 'notifications', 'file_upload', 'file_download'}
 _SAFE_ERROR_CODES = {

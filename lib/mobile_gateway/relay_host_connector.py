@@ -1403,6 +1403,18 @@ def _gateway_request(operation: str, payload: Mapping[str, object]) -> _GatewayR
             f'/v1/projects/{project}/terminals',
             _without_relay_credentials(payload),
         )
+    if op == 'open_host_terminal':
+        return _json_request(
+            'POST',
+            '/v1/terminals',
+            _only(payload, ('schema_version', 'client_session_id', 'display_name', 'geometry')),
+        )
+    if op == 'terminate_host_terminal':
+        return _json_request(
+            'POST',
+            '/v1/terminals/terminate',
+            _only(payload, ('schema_version', 'client_session_id')),
+        )
     if op == 'notification_events':
         return _GatewayRequest(
             'GET',

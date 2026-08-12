@@ -312,6 +312,40 @@ void main() {
     ]);
   });
 
+  test('host terminal open and terminate use relay unary operations', () async {
+    final hostSeed = List<int>.generate(32, (index) => index + 101);
+    final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+    final hostFingerprint = await hostFingerprintForPublicKey(hostPublicKeyB64);
+    final relay = await _RelaySocketHarness.start(
+      hostSeed: hostSeed,
+      hostFingerprint: hostFingerprint,
+    );
+    addTearDown(relay.stop);
+    final transport = RelaySocketGatewayTransport(
+      profile: await _profile(
+        relayOrigin: relay.origin,
+        hostFingerprint: hostFingerprint,
+      ),
+      deviceToken: 'device-secret',
+      allowInsecureLoopbackForTests: true,
+    );
+    addTearDown(() => transport.close(force: true));
+
+    final handle = await transport.openHostTerminal(
+      const GatewayHostTerminalOpenRequest(
+        clientSessionId: 'shell-2',
+        displayName: 'Shell 2',
+      ),
+    );
+    await transport.terminateHostTerminal(clientSessionId: 'shell-2');
+
+    expect(handle.targetSummary.projectId, '@host');
+    expect(
+      relay.requests.map((request) => request['operation']),
+      containsAllInOrder(['open_host_terminal', 'terminate_host_terminal']),
+    );
+  });
+
   test(
     'notification SSE events use a cancelable encrypted relay stream',
     () async {
@@ -843,6 +877,21 @@ class _RelaySocketHarness {
                       'agent': 'worker1',
                       'window': 'main',
                     },
+                  },
+                  'open_host_terminal' => {
+                    'terminal_id': 'terminal-host-demo',
+                    'terminal_token': 'terminal-host-token-demo',
+                    'expires_at': '2026-07-22T01:00:00Z',
+                    'websocket_url':
+                        'wss://loopback.invalid/v1/terminals/terminal-host-demo',
+                    'target_epoch': 0,
+                    'target_summary': {'project_id': '@host'},
+                  },
+                  'terminate_host_terminal' => {
+                    'schema_version': 1,
+                    'status': 'ok',
+                    'client_session_id': 'shell-2',
+                    'terminated': true,
                   },
                   'pair_claim' => {
                     'device_token': 'paired-device-secret',

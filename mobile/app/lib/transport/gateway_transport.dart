@@ -130,6 +130,14 @@ abstract interface class GatewayProviderControlTransport {
   });
 }
 
+abstract interface class GatewayHostTerminalTransport {
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  );
+
+  Future<void> terminateHostTerminal({required String clientSessionId});
+}
+
 class GatewayFileUploadResult {
   const GatewayFileUploadResult({
     required this.fileId,
@@ -287,6 +295,34 @@ class GatewayTerminalOpenRequest {
       'project_id': target.projectId,
       'namespace_epoch': target.namespaceEpoch,
       'target': target.toJson(),
+      'geometry': {
+        'columns': geometry.columns,
+        'rows': geometry.rows,
+        'pixel_width': geometry.pixelWidth,
+        'pixel_height': geometry.pixelHeight,
+      },
+    };
+  }
+}
+
+class GatewayHostTerminalOpenRequest {
+  const GatewayHostTerminalOpenRequest({
+    required this.clientSessionId,
+    required this.displayName,
+    this.geometry = const TerminalGeometry(),
+    this.schemaVersion = 1,
+  });
+
+  final String clientSessionId;
+  final String displayName;
+  final TerminalGeometry geometry;
+  final int schemaVersion;
+
+  Map<String, Object?> toJson() {
+    return {
+      'schema_version': schemaVersion,
+      'client_session_id': clientSessionId,
+      'display_name': displayName,
       'geometry': {
         'columns': geometry.columns,
         'rows': geometry.rows,

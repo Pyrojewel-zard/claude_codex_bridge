@@ -33,7 +33,10 @@ class RelayGatewayException implements Exception {
 }
 
 class RelaySocketGatewayTransport
-    implements GatewayTransport, GatewayProviderControlTransport {
+    implements
+        GatewayTransport,
+        GatewayProviderControlTransport,
+        GatewayHostTerminalTransport {
   static const _fileChunkBytes = 32 * 1024;
   static const _maxUploadBytes = 25 * 1024 * 1024;
   static const _maxDownloadBytes = 128 * 1024 * 1024;
@@ -303,6 +306,22 @@ class RelaySocketGatewayTransport
   ) async {
     final body = await _requestBody('open_terminal', request.toJson());
     return _terminalHandle(body);
+  }
+
+  @override
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  ) async {
+    final body = await _requestBody('open_host_terminal', request.toJson());
+    return _terminalHandle(body);
+  }
+
+  @override
+  Future<void> terminateHostTerminal({required String clientSessionId}) async {
+    await _requestBody('terminate_host_terminal', {
+      'schema_version': 1,
+      'client_session_id': clientSessionId,
+    });
   }
 
   @override
