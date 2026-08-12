@@ -319,10 +319,24 @@ class _FakeCcbdClientWithConversationComms(_FakeCcbdClient):
         return payload
 
 
+class _FakePiCcbdClientWithConversationComms(_FakeCcbdClientWithConversationComms):
+    def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+        payload = super().project_view(schema_version=schema_version)
+        payload['view']['agents'][0]['provider'] = 'pi'
+        return payload
+
+
 class _FakeClaudeCcbdClient(_FakeCcbdClient):
     def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
         payload = super().project_view(schema_version=schema_version)
         payload['view']['agents'][0]['provider'] = 'claude'
+        return payload
+
+
+class _FakePiCcbdClient(_FakeCcbdClient):
+    def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+        payload = super().project_view(schema_version=schema_version)
+        payload['view']['agents'][0]['provider'] = 'pi'
         return payload
 
 
@@ -2382,6 +2396,275 @@ def test_agent_conversation_completes_codex_response_assistant_from_task_marker(
     assert native_items[1]['completed_at'] == '2026-06-25T12:00:05.000Z'
     assert native_items[1]['sent_at'] == '2026-06-25T12:00:05.000Z'
     assert native_items[1]['duration_ms'] == 4000
+
+
+def test_agent_conversation_prefers_pi_native_transcript_and_refreshes_cache(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    jobs_dir = project_root / '.ccb' / 'agents' / 'mobile'
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / 'jobs.jsonl').write_text(
+        json.dumps(
+            {
+                'job_id': 'stale-pi-job',
+                'status': 'completed',
+                'agent_name': 'mobile',
+                'request': {'body': 'stale structured prompt'},
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    transcript_path = _write_pi_transcript(
+        project_root,
+        agent='mobile',
+        session_id='pi-session-native',
+        records=[
+            {
+                'type': 'model_change',
+                'id': 'pi-config',
+                'parentId': None,
+                'timestamp': '2026-06-25T12:00:00.000Z',
+            },
+            {
+                'type': 'message',
+                'id': 'pi-user-1',
+                'parentId': 'pi-config',
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'message': {
+                    'role': 'user',
+                    'content': [{'type': 'text', 'text': 'pi native question'}],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-assistant-1',
+                'parentId': 'pi-user-1',
+                'timestamp': '2026-06-25T12:00:02.000Z',
+                'message': {
+                    'role': 'assistant',
+                    'content': [
+                        {'type': 'thinking', 'thinking': 'hidden pi thinking'},
+                        {'type': 'text', 'text': 'pi native answer'},
+                        {
+                            'type': 'toolCall',
+                            'id': 'call-hidden',
+                            'name': 'bash',
+                            'arguments': {'command': 'hidden tool command'},
+                        },
+                    ],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-branch-user',
+                'parentId': 'pi-user-1',
+                'timestamp': '2026-06-25T12:00:03.000Z',
+                'message': {
+                    'role': 'user',
+                    'content': [{'type': 'text', 'text': 'inactive branch question'}],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-branch-assistant',
+                'parentId': 'pi-branch-user',
+                'timestamp': '2026-06-25T12:00:04.000Z',
+                'message': {
+                    'role': 'assistant',
+                    'content': [{'type': 'text', 'text': 'inactive branch answer'}],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-user-2',
+                'parentId': 'pi-assistant-1',
+                'timestamp': '2026-06-25T12:00:05.000Z',
+                'message': {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': (
+                                'CCB_REQ_ID: pi-request\n\n'
+                                'clean pi prompt\n\n'
+                                'CCB reply guidance:\n'
+                                '- Answer directly and concisely.\n'
+                            ),
+                        }
+                    ],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-assistant-2a',
+                'parentId': 'pi-user-2',
+                'timestamp': '2026-06-25T12:00:06.000Z',
+                'message': {
+                    'role': 'assistant',
+                    'content': [{'type': 'text', 'text': 'step one'}],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-tool-result',
+                'parentId': 'pi-assistant-2a',
+                'timestamp': '2026-06-25T12:00:07.000Z',
+                'message': {
+                    'role': 'toolResult',
+                    'content': [{'type': 'text', 'text': 'hidden tool result'}],
+                },
+            },
+            {
+                'type': 'message',
+                'id': 'pi-assistant-2b',
+                'parentId': 'pi-tool-result',
+                'timestamp': '2026-06-25T12:00:08.000Z',
+                'message': {
+                    'role': 'assistant',
+                    'content': [{'type': 'text', 'text': 'step two'}],
+                },
+            },
+        ],
+        partial_tail='{"type":"message","id":"partial"',
+    )
+    _write_pi_transcript(
+        project_root,
+        agent='mobile',
+        session_id='wrong-project',
+        cwd=tmp_path / 'other-repo',
+        records=[
+            {
+                'type': 'message',
+                'id': 'wrong-user',
+                'parentId': None,
+                'timestamp': '2026-06-25T11:00:01.000Z',
+                'message': {
+                    'role': 'user',
+                    'content': [{'type': 'text', 'text': 'wrong project history'}],
+                },
+            },
+        ],
+    )
+
+    service = _service(
+        _FakePiCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+    route = '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20'
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+
+    status, payload = service.dispatch_get(route, headers)
+
+    assert status == 200
+    items = payload['conversation']['items']
+    assert [item.get('source') for item in items] == ['provider_native/pi'] * 4
+    assert [(item['kind'], item['body']) for item in items] == [
+        ('user_message', 'pi native question'),
+        ('agent_reply', 'pi native answer'),
+        ('user_message', 'clean pi prompt'),
+        ('agent_reply', 'step one\n\nstep two'),
+    ]
+    assert items[0]['sent_at'] == '2026-06-25T12:00:01.000Z'
+    assert items[1]['completed_at'] == '2026-06-25T12:00:02.000Z'
+    public_json = json.dumps(payload)
+    for hidden in (
+        'hidden pi thinking',
+        'hidden tool command',
+        'hidden tool result',
+        'inactive branch question',
+        'inactive branch answer',
+        'wrong project history',
+        'CCB_REQ_ID',
+        'CCB reply guidance',
+        'stale structured prompt',
+    ):
+        assert hidden not in public_json
+
+    with transcript_path.open('a', encoding='utf-8') as stream:
+        stream.write('\n')
+        stream.write(json.dumps({
+            'type': 'message',
+            'id': 'pi-user-3',
+            'parentId': 'pi-assistant-2b',
+            'timestamp': '2026-06-25T12:00:09.000Z',
+            'message': {
+                'role': 'user',
+                'content': [{'type': 'text', 'text': 'new pi question'}],
+            },
+        }) + '\n')
+        stream.write(json.dumps({
+            'type': 'message',
+            'id': 'pi-assistant-3',
+            'parentId': 'pi-user-3',
+            'timestamp': '2026-06-25T12:00:10.000Z',
+            'message': {
+                'role': 'assistant',
+                'content': [{'type': 'text', 'text': 'new pi answer'}],
+            },
+        }) + '\n')
+
+    _, refreshed = service.dispatch_get(route, headers)
+    assert [(item['kind'], item['body']) for item in refreshed['conversation']['items'][-2:]] == [
+        ('user_message', 'new pi question'),
+        ('agent_reply', 'new pi answer'),
+    ]
+
+
+def test_agent_conversation_does_not_fallback_for_pi_without_native_transcript(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    snapshot_dir = project_root / '.ccb' / 'ccbd' / 'snapshots'
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / 'job_mobile_reply.json').write_text(
+        json.dumps({'latest_decision': {'reply': 'stale pi completion'}}),
+        encoding='utf-8',
+    )
+    jobs_dir = project_root / '.ccb' / 'agents' / 'mobile'
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / 'jobs.jsonl').write_text(
+        json.dumps({
+            'job_id': 'stale-pi-job',
+            'status': 'completed',
+            'agent_name': 'mobile',
+            'request': {'body': 'stale pi job prompt'},
+        }) + '\n',
+        encoding='utf-8',
+    )
+    service = _service(
+        _FakePiCcbdClientWithConversationComms(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    _, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert payload['conversation']['items'] == []
+    assert 'stale pi completion' not in json.dumps(payload)
+    assert 'stale pi job prompt' not in json.dumps(payload)
+    assert 'question from phone' not in json.dumps(payload)
 
 
 def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> None:
@@ -5898,6 +6181,37 @@ def test_http_server_exposes_g1_get_endpoints(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def _write_pi_transcript(
+    project_root: Path,
+    *,
+    agent: str,
+    session_id: str,
+    records: list[dict[str, object]],
+    cwd: Path | None = None,
+    partial_tail: str | None = None,
+) -> Path:
+    session_dir = (
+        project_root / '.ccb' / 'agents' / agent / 'provider-state' / 'pi' / 'sessions'
+    )
+    transcript_path = session_dir / f'2026-06-25T12-00-00-000Z_{session_id}.jsonl'
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    header = {
+        'type': 'session',
+        'version': 3,
+        'id': session_id,
+        'timestamp': '2026-06-25T12:00:00.000Z',
+        'cwd': str(cwd or project_root),
+    }
+    content = ''.join(
+        f'{json.dumps(record)}\n'
+        for record in (header, *records)
+    )
+    if partial_tail is not None:
+        content += partial_tail
+    transcript_path.write_text(content, encoding='utf-8')
+    return transcript_path
 
 
 def _write_codex_rollout(
