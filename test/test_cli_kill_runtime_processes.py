@@ -42,7 +42,7 @@ def test_kill_pid_tree_once_prefers_process_group_on_posix(monkeypatch) -> None:
     _patch_process_os_name(monkeypatch, 'posix')
     monkeypatch.setattr(processes, '_safe_getpgid', lambda pid: 900)
     monkeypatch.setattr(processes, '_safe_getpgrp', lambda: 901)
-    monkeypatch.setattr(processes.os, 'killpg', lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(processes.os, 'killpg', lambda pgid, sig: killed.append((pgid, sig)), raising=False)
     monkeypatch.setattr(processes, 'kill_pid', lambda pid, force=False: kill_pid_calls.append((pid, force)) or True)
 
     assert processes._kill_pid_tree_once(123, force=False) is True
@@ -149,6 +149,7 @@ def test_collect_project_process_candidates_finds_legacy_accelerator_by_exact_cw
             start_token='proc:100',
         ),
     )
+    monkeypatch.setattr('runtime_accelerator.ownership.is_pid_alive', lambda pid: pid == 707)
 
     candidates = collect_project_process_candidates(
         project_root,
