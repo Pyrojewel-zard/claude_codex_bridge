@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -240,9 +240,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.6.0 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.6.1 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.6.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.0/ccb-mobile-v8.6.0.apk)
+- [Download CCB Mobile v8.6.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.1/ccb-mobile-v8.6.1.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -313,7 +313,7 @@ Supported managed Agents receive the built-in `ask`, `ccb-clear`, `ccb-compact`,
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png?v=77e83abf" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=0a86422d" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
@@ -331,6 +331,17 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.6.1</b> - Mobile Provider controls, direct terminals, and safe context compaction</summary>
+
+- Show selected-Agent Provider identity, configured/active/pending model and thinking state, Codex/Claude native session usage, and optional account quota in CCB Mobile.
+- Persist supported model/thinking choices through guarded, restart-required host configuration without interrupting active work or exposing Provider credentials.
+- Open project-window or Agent terminals directly from Mobile home and customize terminal shortcut visibility and order.
+- Add the built-in `ccb-compact` Skill and `ccb compact` command with outstanding-work checks and fail-closed Provider command selection.
+- Populate Config UI from the complete available Role catalog, retain native-session boundaries in Mobile history, and refresh the WeChat group QR image.
+
+</details>
+
+<details>
 <summary><b>v8.5.7</b> - Built-in agent diagnosis and stuck-delivery recovery</summary>
 
 - Keep `ccb-clear` in every supported managed Agent and add the required `ccb-diagnose` Skill. Run `$ccb_diagnose &lt;agentname&gt;` to combine daemon, lineage, queue, inbox, trace, provider-log, and live Pane evidence for one Agent.

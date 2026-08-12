@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.0 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.0 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.0/ccb-mobile-v8.6.0.apk)
+- [下载 CCB Mobile v8.6.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.1/ccb-mobile-v8.6.1.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -284,7 +284,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=77e83abf" alt="CCB 微信技术群 2" width="240">
+  <img src="../assets/weixin.png?v=0a86422d" alt="CCB 微信技术群 2" width="240">
 </p>
 
 > 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
@@ -302,6 +302,17 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.6.1</b> - Mobile Provider 控制、直达终端与安全上下文压缩</summary>
+
+- CCB Mobile 显示所选 Agent 的 Provider 身份、已配置/当前/待生效模型与 thinking、Codex/Claude 原生 session 用量和可选账号额度。
+- 受支持的模型/thinking 选择通过有保护、需要重启的主机配置持久化，不中断活跃任务，也不暴露 Provider 凭据。
+- 可从 Mobile 首页直接打开项目 window 或 Agent 终端，并自定义终端快捷键的显示与顺序。
+- 新增内置 `ccb-compact` Skill 和 `ccb compact` 命令，先检查未完成工作，并对未验证的 Provider 命令保持 fail-closed。
+- Config UI 改为加载当前可用的完整 Role catalog；Mobile 历史保留原生 session 边界，并刷新微信群二维码。
+
+</details>
+
+<details>
 <summary><b>v8.5.7</b> - 内置 Agent 诊断与卡住投递恢复</summary>
 
 - 所有受支持的托管 Agent 继续内置 `ccb-clear`，并新增必装的 `ccb-diagnose` Skill。运行 `$ccb_diagnose &lt;agentname&gt;` 可联合检查单个 Agent 的 daemon、lineage、队列、inbox、trace、Provider 日志和实时 Pane 证据。

@@ -1,5 +1,22 @@
 # Changelog
 
+## v8.6.1 (2026-08-12)
+
+- Added capability-driven CCB Mobile Provider controls with explicit
+  configured/active/pending state, Codex/Claude session usage and optional
+  account quota, and guarded restart-required model/thinking changes.
+- Added a cross-project Mobile terminal launcher and customizable terminal
+  shortcut order, visibility, and defaults.
+- Added the built-in `ccb-compact` Skill and `ccb compact` command with busy
+  gating and fail-closed Provider-native command selection.
+- Replaced Config UI's hard-coded Role suggestions with the complete available
+  Role catalog, including `agentroles.mother` when present.
+- Preserved native-session boundaries in Mobile history, clipped wide terminal
+  snapshots to pane width, bound Provider mutation idempotency to its target,
+  and refreshed the WeChat community QR image.
+- No configuration or conversation migration is required. Windows x64 remains
+  beta and Provider model/thinking changes require a managed Agent restart.
+
 ## v8.6.0 (2026-08-12)
 
 - Added the first native Windows x64 distribution to the stable CCB release:

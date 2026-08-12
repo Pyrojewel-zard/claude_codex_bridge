@@ -6,7 +6,7 @@
 **Codex, Claude, Gemini 등 CLI Agent를 보이고 제어 가능하며 직접 이어받을 수 있는 워크플로로 조율**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.0-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 세부 정보, 안전 경계, 소스</b></summary>
 
-CCB 8.6.0은 Flutter CCB Mobile 소스를 [`mobile/`](../mobile/)에 포함하며 Android APK를 GitHub Releases로 배포합니다.
+CCB 8.6.1은 Flutter CCB Mobile 소스를 [`mobile/`](../mobile/)에 포함하며 Android APK를 GitHub Releases로 배포합니다.
 
-- [CCB Mobile v8.6.0 APK 다운로드](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.0/ccb-mobile-v8.6.0.apk)
+- [CCB Mobile v8.6.1 APK 다운로드](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.1/ccb-mobile-v8.6.1.apk)
 - 앱 소스: [`mobile/app`](../mobile/app)
 - 서버 gateway 소스: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -247,7 +247,7 @@ CCB는 전문 agent를 패키징하기 위한 host-neutral 명세인 [Agent Role
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=77e83abf" alt="WeChat 그룹" width="240">
+  <img src="../assets/weixin.png?v=0a86422d" alt="WeChat 그룹" width="240">
 </p>
 
 <a id="community"></a>
