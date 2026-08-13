@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import replace
 
@@ -79,6 +80,16 @@ def poll_submission(
     )
     if pane_terminal is not None:
         return _merge_poll_result_items(pane_terminal, prefix_items=dispatch_items)
+    # Bounded one-time activation retry: re-send Enter once for a prompt that was
+    # pasted but never activated (see _maybe_resend_activation_enter).
+    activation_retry = _maybe_resend_activation_enter(
+        submission,
+        prepared=prepared,
+        poll=poll,
+        now=now,
+    )
+    if activation_retry is not None:
+        submission = activation_retry
     return _merge_poll_result_items(
         finalize_poll_result(submission, poll, state=state),
         prefix_items=dispatch_items,
@@ -309,6 +320,142 @@ def _pane_observably_idle(prepared) -> bool:
     if "esc to interrupt" in text.lower():
         return False
     return _has_idle_input_box(text)
+
+
+def _activation_grace_s() -> float:
+    """Seconds to wait after dispatch before a lost Enter is retried once."""
+    try:
+        return max(0.0, float(os.environ.get("CCB_CLAUDE_ACTIVATION_GRACE_S", 6.0)))
+    except Exception:
+        return 6.0
+
+
+def _activation_retry_window() -> tuple[float, float]:
+    """Bounded retry window ``[start_s, end_s)`` measured from ``prompt_sent_at``.
+
+    The retry Enter is only eligible inside this window: not before ``start_s``
+    (the initial paste may still be inserting, so a second Enter could be eaten
+    or become a stray newline) and not after ``end_s`` (give up; an operator
+    intervenes manually). Default ``[6.0, 12.0)`` for
+    ``CCB_CLAUDE_ACTIVATION_GRACE_S=6``.
+    """
+    grace_s = _activation_grace_s()
+    return grace_s, grace_s * 2.0
+
+
+def _elapsed_since(from_at: str, now: str) -> float | None:
+    try:
+        return (parse_utc_timestamp(now) - parse_utc_timestamp(from_at)).total_seconds()
+    except Exception:
+        return None
+
+
+def _pane_holds_current_job_marker(text: str, submission: ProviderSubmission) -> bool:
+    """True when the pane text still shows a recognizable marker of *this* job.
+
+    The wrapped prompt is ``CCB_REQ_ID: <request_anchor>``; ``no_wrap`` prompts
+    carry the anchor (job id) directly. An empty composer or a different job's
+    text must not match, so a retry Enter can never submit the wrong prompt.
+    """
+    if not str(text or ""):
+        return False
+    anchor = str(
+        submission.runtime_state.get("request_anchor")
+        or submission.job_id
+        or ""
+    ).strip()
+    if not anchor:
+        return False
+    if f"CCB_REQ_ID: {anchor}" in text:
+        return True
+    if "CCB_BEGIN" in text and anchor in text:
+        return True
+    return anchor in text
+
+
+def _maybe_resend_activation_enter(
+    submission: ProviderSubmission,
+    *,
+    prepared,
+    poll,
+    now: str,
+) -> ProviderSubmission | None:
+    """Bounded one-time activation Enter re-send for a sent-but-stuck prompt.
+
+    Root cause: tmux ``paste-buffer`` returns once bytes hit the pty, but the
+    Claude TUI consumes/renders a bracketed-paste stream asynchronously. For a
+    long (often multi-KB Unicode) prompt the initial Enter, sent
+    ``CCB_TMUX_ENTER_DELAY`` later, can land while the composer is still
+    inserting and be swallowed — the prompt stays in the composer, no request
+    anchor ever appears, and the job hangs in ``delivering`` until an operator
+    presses Enter manually.
+
+    There is no paste ACK in the TUI, so the request anchor is the only real
+    activation proof. This monitor re-sends Enter **at most once**, and only
+    while every one of these holds:
+
+    * the prompt was already dispatched (``prompt_sent``) with a timestamp;
+    * the current job is not yet activated (no ``prompt_activated``/``anchor_seen``);
+    * the elapsed time since dispatch is inside the bounded grace window;
+    * the pane is not busy (no ``esc to interrupt``) and still holds this job's
+      recognizable prompt/anchor text (an empty composer cannot match);
+    * this job has not already re-sent Enter (``activation_enter_count < 1``).
+
+    Any failing guard disables the retry: activated, empty composer, busy pane,
+    text that does not belong to this job, an expired grace window, or a prior
+    re-send. On a successful ``send_key`` the runtime state bumps
+    ``activation_enter_count`` so later polls never re-send. (``_has_idle_input_box``
+    only recognizes the empty ready box and would never fire for the stuck
+    composer that still holds the prompt text, so the marker check is the
+    effective "still this job, still submittable" guard.)
+    """
+    state = submission.runtime_state
+    if not bool(state.get("prompt_sent", False)):
+        return None
+    prompt_sent_at = str(state.get("prompt_sent_at") or "").strip()
+    if not prompt_sent_at:
+        return None
+    if int(state.get("activation_enter_count", 0) or 0) >= 1:
+        return None
+    if poll is not None and (
+        bool(getattr(poll, "anchor_seen", False))
+        or bool(getattr(poll, "prompt_activated", False))
+    ):
+        return None
+    elapsed = _elapsed_since(prompt_sent_at, now)
+    if elapsed is None:
+        return None
+    grace_start, grace_end = _activation_retry_window()
+    if elapsed < grace_start or elapsed >= grace_end:
+        return None
+    pane_id = getattr(prepared, "pane_id", None)
+    backend = getattr(prepared, "backend", None)
+    get_pane_content = getattr(backend, "get_pane_content", None)
+    send_key = getattr(backend, "send_key", None)
+    if not pane_id or not callable(get_pane_content) or not callable(send_key):
+        return None
+    try:
+        pane_text = str(get_pane_content(pane_id, lines=200) or "")
+    except Exception:
+        return None
+    if "esc to interrupt" in pane_text.lower():
+        return None
+    if not _pane_holds_current_job_marker(pane_text, submission):
+        return None
+    try:
+        sent = send_key(pane_id, "Enter")
+    except Exception:
+        return None
+    if not sent:
+        return None
+    return replace(
+        submission,
+        runtime_state={
+            **state,
+            "activation_enter_count": int(state.get("activation_enter_count", 0) or 0) + 1,
+            "activation_enter_at": now,
+        },
+    )
 
 
 def _merge_poll_result_items(result: ProviderPollResult, *, prefix_items: tuple) -> ProviderPollResult:
