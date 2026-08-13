@@ -2333,6 +2333,74 @@ def test_codex_native_user_file_link_has_download_attachment(tmp_path: Path) -> 
     ]
 
 
+def test_codex_native_agent_workspace_file_link_is_downloadable(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    report_path = (
+        project_root
+        / '.ccb'
+        / 'workspaces'
+        / 'mobile'
+        / 'tmp'
+        / 'workspace-report.pdf'
+    )
+    report_path.parent.mkdir(parents=True)
+    report_path.write_bytes(b'workspace pdf body\n')
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='thread-native-workspace-file',
+        records=[
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'response_item',
+                'payload': {
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [
+                        {
+                            'type': 'output_text',
+                            'text': f'[workspace report]({report_path})',
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view', 'file_download'),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    _, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    item = payload['conversation']['items'][0]
+    assert item['kind'] == 'agent_reply'
+    assert item['body'].startswith('[workspace report](ccb-artifact://')
+    assert [attachment['file_name'] for attachment in item['attachments']] == [
+        'workspace-report.pdf',
+    ]
+    attachment = item['attachments'][0]
+    status, content, headers = service.dispatch_file_download(
+        f'/v1/projects/proj-demo/agents/mobile/files/{attachment["file_id"]}',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    assert status == 200
+    assert content == b'workspace pdf body\n'
+    assert headers['content-type'] == 'application/pdf'
+
+
 def test_agent_conversation_completes_codex_response_assistant_from_task_marker(
     tmp_path: Path,
 ) -> None:
@@ -3872,18 +3940,33 @@ def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> 
     outside_dir = tmp_path / 'downloads'
     snapshot_dir = project_root / '.ccb' / 'ccbd' / 'snapshots'
     jobs_dir = project_root / '.ccb' / 'agents' / 'mobile'
+    agent_workspace_dir = project_root / '.ccb' / 'workspaces' / 'mobile'
+    other_workspace_dir = project_root / '.ccb' / 'workspaces' / 'other'
     docs_dir = project_root / 'docs'
     snapshot_dir.mkdir(parents=True)
     jobs_dir.mkdir(parents=True)
+    agent_workspace_dir.mkdir(parents=True)
+    other_workspace_dir.mkdir(parents=True)
     docs_dir.mkdir(parents=True)
     outside_dir.mkdir()
     report_path = docs_dir / 'report.txt'
+    workspace_report_path = agent_workspace_dir / 'tmp' / 'workspace-report.pdf'
+    other_workspace_report_path = other_workspace_dir / 'tmp' / 'other-report.pdf'
+    workspace_metadata_path = agent_workspace_dir / '.git'
+    workspace_hidden_path = agent_workspace_dir / 'tmp' / '.private' / 'state.json'
     release_path = outside_dir / 'ccb-mobile-release.apk'
     notes_path = outside_dir / 'release-notes.txt'
     oversized_path = outside_dir / 'oversized.bin'
     hidden_path = project_root / '.ccb' / 'secret.txt'
     encoded_percent_path = docs_dir / 'a%2Fb.txt'
     report_path.write_text('report body\n', encoding='utf-8')
+    workspace_report_path.parent.mkdir()
+    workspace_report_path.write_bytes(b'workspace pdf body\n')
+    other_workspace_report_path.parent.mkdir()
+    other_workspace_report_path.write_bytes(b'other workspace pdf body\n')
+    workspace_metadata_path.write_text('gitdir: private\n', encoding='utf-8')
+    workspace_hidden_path.parent.mkdir()
+    workspace_hidden_path.write_text('{"secret": true}\n', encoding='utf-8')
     release_path.write_bytes(b'release apk body\n')
     notes_path.write_text('release notes\n', encoding='utf-8')
     encoded_percent_path.write_text('percent path\n', encoding='utf-8')
@@ -3909,6 +3992,10 @@ def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> 
                     'reply': (
                         'Generated files:\n'
                         '- [report](docs/report.txt)\n'
+                        f'- [workspace report]({workspace_report_path})\n'
+                        f'- [other workspace report]({other_workspace_report_path})\n'
+                        f'- [workspace metadata]({workspace_metadata_path})\n'
+                        f'- [workspace hidden state]({workspace_hidden_path})\n'
                         '- [hidden](.ccb/secret.txt)\n'
                         f'- [outside]({release_path})\n'
                         f'- [file URI]({notes_path.as_uri()})\n'
@@ -3955,15 +4042,32 @@ def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> 
     )
     assert 'ccb-artifact://' in reply['body']
     assert '[hidden](.ccb/secret.txt)' in reply['body']
+    assert f'[other workspace report]({other_workspace_report_path})' in reply['body']
+    assert f'[workspace metadata]({workspace_metadata_path})' in reply['body']
+    assert f'[workspace hidden state]({workspace_hidden_path})' in reply['body']
     assert '[directory]' in reply['body']
     assert f'[oversized]({oversized_path})' in reply['body']
     assert '[remote file URI](file://remote-host/etc/hosts)' in reply['body']
     assert [item['file_name'] for item in reply['attachments']] == [
         'report.txt',
+        'workspace-report.pdf',
         'ccb-mobile-release.apk',
         'release-notes.txt',
         'a%2Fb.txt',
     ]
+
+    workspace_report = next(
+        item
+        for item in reply['attachments']
+        if item['file_name'] == 'workspace-report.pdf'
+    )
+    status, content, headers = service.dispatch_file_download(
+        f'/v1/projects/proj-demo/agents/mobile/files/{workspace_report["file_id"]}',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    assert status == 200
+    assert content == b'workspace pdf body\n'
+    assert headers['x-ccb-file-name'] == 'workspace-report.pdf'
 
     release = next(
         item

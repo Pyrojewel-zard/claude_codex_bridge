@@ -3273,13 +3273,28 @@ def _mobile_project_upload_relative_path(*, agent: str, file_id: str, file_name:
     )
 
 
-def _workspace_artifact_relative_path_allowed(relative_path: Path) -> bool:
+def _workspace_artifact_relative_path_allowed(
+    relative_path: Path,
+    *,
+    agent: str,
+) -> bool:
     parts = relative_path.parts
     if not parts or parts[0] == '.git':
         return False
     if parts[0] != '.ccb':
         return True
-    return parts[: len(_MOBILE_PROJECT_UPLOAD_DIR)] == _MOBILE_PROJECT_UPLOAD_DIR
+    if parts[: len(_MOBILE_PROJECT_UPLOAD_DIR)] == _MOBILE_PROJECT_UPLOAD_DIR:
+        return True
+    try:
+        workspace_prefix = ('.ccb', 'workspaces', _safe_path_segment(agent))
+    except MobileGatewayError:
+        return False
+    workspace_parts = parts[len(workspace_prefix) :]
+    return (
+        parts[: len(workspace_prefix)] == workspace_prefix
+        and bool(workspace_parts)
+        and all(not part.startswith('.') for part in workspace_parts)
+    )
 
 
 def _safe_path_segment(value: object) -> str:
@@ -5116,7 +5131,10 @@ def _inject_workspace_artifacts(
                 relative_path = None
             if (
                 relative_path is not None
-                and not _workspace_artifact_relative_path_allowed(relative_path)
+                and not _workspace_artifact_relative_path_allowed(
+                    relative_path,
+                    agent=agent,
+                )
             ):
                 return match.group(0)
             target_stat = target_path.stat()
