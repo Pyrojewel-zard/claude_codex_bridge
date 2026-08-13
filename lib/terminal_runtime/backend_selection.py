@@ -10,6 +10,7 @@ from provider_runtime.session_payload import (
     backend_impl_from_session,
     namespace_ref_from_session,
     pane_id_from_session,
+    pane_ref_from_session,
 )
 from terminal_runtime.backend_resolver import resolve_mux_backend_v2
 from terminal_runtime.layouts import LayoutResult, create_tmux_auto_layout
@@ -120,7 +121,15 @@ class TerminalBackendSelection:
             backend = self.herdr_backend_factory()
             namespace_ref = namespace_ref_from_session(session_data)
             if namespace_ref is not None:
-                setattr(backend, '_ccb_project_namespace_ref', namespace_ref)
+                attach = getattr(backend, 'attach_persisted_session', None)
+                if callable(attach):
+                    attach(
+                        namespace_ref,
+                        pane_id=pane_id_from_session(session_data),
+                        pane_ref=pane_ref_from_session(session_data),
+                    )
+                else:
+                    setattr(backend, '_ccb_project_namespace_ref', namespace_ref)
             return backend
         if backend_impl not in {None, 'tmux', 'rmux', 'psmux'}:
             raise ValueError(f'unsupported session backend_impl: {backend_impl}')

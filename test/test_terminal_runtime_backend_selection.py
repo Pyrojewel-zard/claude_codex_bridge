@@ -13,6 +13,17 @@ class _FakeBackend:
         self.name = name
 
 
+class _FakeHerdrBackend(_FakeBackend):
+    def __init__(self) -> None:
+        super().__init__('herdr')
+        self.persisted_sessions: list[dict[str, object]] = []
+
+    def attach_persisted_session(self, namespace_ref, *, pane_id=None, pane_ref=None) -> None:
+        self.persisted_sessions.append(
+            {'namespace_ref': namespace_ref, 'pane_id': pane_id, 'pane_ref': pane_ref}
+        )
+
+
 def test_backend_selection_caches_detected_backend() -> None:
     calls: list[str] = []
     selection = TerminalBackendSelection(
@@ -91,6 +102,37 @@ def test_backend_selection_uses_herdr_session_payload_without_tmux_fallback() ->
     assert backend.name == 'herdr'
     assert getattr(backend, '_ccb_project_namespace_ref') == namespace_ref
     assert tmux_calls == []
+
+
+def test_backend_selection_attaches_persisted_herdr_pane_without_pane_ref() -> None:
+    namespace_ref = {
+        'backend_family': 'herdr-native',
+        'backend_impl': 'herdr',
+        'namespace_id': 'ns-1',
+        'session_name': 'ccb-demo',
+        'ipc_kind': 'herdr_socket',
+        'ipc_ref': 'herdr://local',
+    }
+    backend = _FakeHerdrBackend()
+    selection = TerminalBackendSelection(
+        detect_terminal_fn=lambda: None,
+        tmux_backend_factory=lambda: _FakeBackend('tmux'),
+        herdr_backend_factory=lambda: backend,
+    )
+
+    resolved = selection.get_backend_for_session(
+        {
+            'terminal': 'mux',
+            'backend_impl': 'herdr',
+            'namespace_ref': namespace_ref,
+            'pane_id': 'pane-1',
+        }
+    )
+
+    assert resolved is backend
+    assert backend.persisted_sessions == [
+        {'namespace_ref': namespace_ref, 'pane_id': 'pane-1', 'pane_ref': None}
+    ]
 
 
 def test_backend_selection_uses_provider_runtime_backend_ref_for_herdr_session() -> None:

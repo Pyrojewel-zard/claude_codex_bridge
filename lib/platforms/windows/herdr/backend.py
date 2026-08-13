@@ -380,6 +380,31 @@ class HerdrBackend(TerminalBackend):
         self._drop_namespace_refs(namespace_ref)
         return evidence
 
+    def attach_persisted_session(
+        self,
+        namespace: Mapping[str, object],
+        *,
+        pane_id: str | None = None,
+        pane_ref: Mapping[str, object] | None = None,
+    ) -> None:
+        namespace_ref = self._register_namespace(
+            self._namespace_ref_from_mapping(dict(namespace), operation="attach_persisted_session")
+        )
+        setattr(self, "_ccb_project_namespace_ref", namespace_ref)
+        pane_text = str((pane_ref or {}).get("pane_id") or pane_id or "").strip()
+        if not pane_text:
+            return
+        session_name = str((pane_ref or {}).get("session_name") or namespace_ref["session_name"]).strip()
+        pane = make_pane_ref(
+            backend_impl="herdr",
+            pane_id=pane_text,
+            session_name=session_name,
+            window_name=_optional_text((pane_ref or {}).get("window_name")),
+            agent_slug=_optional_text((pane_ref or {}).get("agent_slug")),
+        )
+        self._panes[pane_text] = pane
+        self._pane_namespaces[pane_text] = namespace_ref
+
     def namespace_ref(self, session_name: str, namespace_id: str) -> MuxNamespaceRefV2:
         return self._register_namespace(
             make_namespace_ref(
@@ -807,6 +832,11 @@ class HerdrBackend(TerminalBackend):
 
 def _token_value(tokens: Mapping[str, object], key: str) -> str:
     return str(tokens.get(str(key).lstrip("@")) or "").strip()
+
+
+def _optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _root_pane_from_metadata(
