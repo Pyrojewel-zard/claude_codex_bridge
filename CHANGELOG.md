@@ -1,5 +1,14 @@
 # Changelog
 
+## v8.6.3 (2026-08-13)
+
+- CCB Mobile now turns ordinary file links under the current Agent's
+  `.ccb/workspaces/<agent>/...` tree into authenticated download attachments,
+  including generated PDF reports.
+- The workspace exception remains fail-closed: other Agent workspaces, hidden
+  workspace paths, and the rest of `.ccb` runtime state are not exposed.
+- No project configuration, pairing, or stored-state migration is required.
+
 ## v8.6.2 (2026-08-13)
 
 - Added fail-closed, exact command approvals for project-local tool-window

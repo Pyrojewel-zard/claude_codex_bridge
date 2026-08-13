@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.2-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.3-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -240,9 +240,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.6.2 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.6.3 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.6.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.2/ccb-mobile-v8.6.2.apk)
+- [Download CCB Mobile v8.6.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.3/ccb-mobile-v8.6.3.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -331,6 +331,15 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.6.3</b> - Mobile access to agent workspace artifacts</summary>
+
+- Turn links to ordinary files in the current Agent's `.ccb/workspaces/&lt;agent&gt;/...` tree into authenticated Mobile download attachments.
+- Keep the boundary fail-closed: other Agent workspaces, hidden workspace paths, and all other private `.ccb` runtime state remain unavailable.
+- Preserve the existing Mobile client behavior and pairing model; no project configuration or state migration is required.
+
+</details>
+
+<details>
 <summary><b>v8.6.2</b> - Explicit command approval, resilient sessions, and broader Mobile terminals</summary>
 
 - Require exact, external approval before project configuration can execute tool-window commands or custom Provider command templates; use `ccb config approve-commands` for intentional values.
