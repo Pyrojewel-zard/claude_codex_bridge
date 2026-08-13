@@ -84,6 +84,7 @@ class ClaudeProviderAdapter:
             'prompt_sent_at': submission.runtime_state.get('prompt_sent_at'),
             'activation_enter_count': submission.runtime_state.get('activation_enter_count'),
             'activation_enter_at': submission.runtime_state.get('activation_enter_at'),
+            'activation_enter_evidence': submission.runtime_state.get('activation_enter_evidence'),
             'reply_delivery_complete_on_dispatch': submission.runtime_state.get('reply_delivery_complete_on_dispatch'),
             'reply_delivery_require_ready': submission.runtime_state.get('reply_delivery_require_ready'),
             'ready_wait_started_at': submission.runtime_state.get('ready_wait_started_at'),

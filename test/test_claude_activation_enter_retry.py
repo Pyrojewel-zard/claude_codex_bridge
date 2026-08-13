@@ -116,6 +116,7 @@ def test_long_unicode_stuck_prompt_resends_enter_exactly_once() -> None:
     assert backend.keys == [("%1", "Enter")]
     assert updated.runtime_state["activation_enter_count"] == 1
     assert updated.runtime_state["activation_enter_at"] == NOW
+    assert updated.runtime_state["activation_enter_evidence"] == "anchor_marker"
 
 
 def test_no_resend_when_anchor_already_seen() -> None:
@@ -209,16 +210,50 @@ def test_no_resend_before_grace_window() -> None:
     assert backend.keys == []
 
 
-def test_no_resend_after_grace_window_passed() -> None:
+def test_resend_after_old_tight_end_bound_within_generous_max_wait() -> None:
     submission = _submission()
     backend = _RetryBackend("CCB_REQ_ID: job_current\n❯\n")
-    late_now = "2026-07-21T08:00:15Z"  # +15s >= grace end 12s
+    # +15s was past the old [6,12)s end bound, but is inside the generous
+    # give-up cap (default 600s): the retry must still fire.
+    late_now = "2026-07-21T08:00:15Z"
 
     result = _maybe_resend_activation_enter(
         submission,
         prepared=_prepared(backend),
         poll=_poll(),
         now=late_now,
+    )
+
+    assert result is not None
+    assert backend.keys == [("%1", "Enter")]
+    assert result.runtime_state["activation_enter_evidence"] == "anchor_marker"
+
+
+def test_no_resend_beyond_max_wait_cap() -> None:
+    submission = _submission(prompt_sent_at="2026-07-21T07:50:00Z")  # 600s before NOW
+    backend = _RetryBackend("CCB_REQ_ID: job_current\n❯\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_max_wait_cap_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("CCB_CLAUDE_ACTIVATION_MAX_WAIT_S", "10")
+    submission = _submission(prompt_sent_at="2026-07-21T07:59:50Z")  # 10s before NOW
+    backend = _RetryBackend("CCB_REQ_ID: job_current\n❯\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
     )
 
     assert result is None
@@ -339,6 +374,7 @@ def test_no_wrap_raw_prompt_resends_via_anchor_fallback() -> None:
 
     assert updated is not None
     assert backend.keys == [("%1", "Enter")]
+    assert updated.runtime_state["activation_enter_evidence"] == "anchor_marker"
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +434,7 @@ def test_poll_submission_resends_once_and_persists_counter(monkeypatch) -> None:
     # finalize_poll_result 展开 runtime_state，计数跨轮持久化
     assert result.submission.runtime_state["activation_enter_count"] == 1
     assert result.submission.runtime_state["activation_enter_at"] == NOW
+    assert result.submission.runtime_state["activation_enter_evidence"] == "anchor_marker"
 
 
 def test_poll_submission_does_not_resend_when_events_show_activation(monkeypatch) -> None:
@@ -415,3 +452,175 @@ def test_poll_submission_does_not_resend_when_events_show_activation(monkeypatch
     assert isinstance(result, ProviderPollResult)
     assert result.decision is None
     assert backend.keys == []
+
+
+# ---------------------------------------------------------------------------
+# 真实折叠长粘贴（recurrence）用例：composer 显示 [Pasted text #N +M lines]
+# ---------------------------------------------------------------------------
+
+
+def test_collapsed_pasted_placeholder_resends_exactly_once() -> None:
+    # 初次 Enter 被吞：长提示被 Claude 折叠为占位符，pane 中看不到原始锚文本，
+    # 但当前 composer 行的折叠占位符证明本 job 的提示仍待提交 → 恰一次 retry。
+    submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
+    backend = _RetryBackend("会话历史…\n❯ [Pasted text #4 +11 lines]\n")
+
+    updated = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert updated is not None
+    assert backend.keys == [("%1", "Enter")]
+    assert updated.runtime_state["activation_enter_count"] == 1
+    assert updated.runtime_state["activation_enter_at"] == NOW
+    assert updated.runtime_state["activation_enter_evidence"] == "pasted_placeholder"
+
+
+def test_collapsed_placeholder_repeated_poll_never_resends() -> None:
+    submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
+    backend = _RetryBackend("会话历史…\n❯ [Pasted text #4 +11 lines]\n")
+
+    first = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+    assert first is not None
+    assert backend.keys == [("%1", "Enter")]
+
+    second = _maybe_resend_activation_enter(
+        first,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+    assert second is None
+    assert backend.keys == [("%1", "Enter")]
+
+
+def test_historical_placeholder_with_empty_composer_does_not_send() -> None:
+    # 占位符仅出现在历史输出（上一轮被折叠的粘贴），当前 composer 为空 → 不发。
+    submission = _submission()
+    backend = _RetryBackend("上一轮对话…\nuser [Pasted text #2 +5 lines]\n❯\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_placeholder_composer_busy_does_not_send() -> None:
+    submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
+    backend = _RetryBackend("❯ [Pasted text #4 +11 lines]\nesc to interrupt")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_placeholder_composer_already_activated_does_not_send() -> None:
+    submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
+    backend = _RetryBackend("会话历史…\n❯ [Pasted text #4 +11 lines]\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(prompt_activated=True),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_composer_holding_different_plaintext_does_not_send() -> None:
+    # composer 内是另一个任务的明文（无本 job 锚、非折叠占位符）→ 不发。
+    submission = _submission()
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_other 别的任务的提示词\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_placeholder_in_history_with_foreign_composer_text_does_not_send() -> None:
+    # 历史含占位符 + 当前 composer 是其他任务的明文 → 两个证据都不满足 → 不发。
+    submission = _submission()
+    backend = _RetryBackend("user [Pasted text #3 +8 lines]\n❯ 别的任务的明文\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_placeholder_marker_path_preserved_anchor_still_works() -> None:
+    # 普通（未折叠）marker 路径保持：pane 仍含本 job 原始锚文本 → 照常重发。
+    submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
+    backend = _RetryBackend(f"{LONG_UNICODE_PROMPT}\n❯\n")
+
+    updated = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
+        now=NOW,
+    )
+
+    assert updated is not None
+    assert backend.keys == [("%1", "Enter")]
+    assert updated.runtime_state["activation_enter_evidence"] == "anchor_marker"
+
+
+# ---------------------------------------------------------------------------
+# 观察者字段可见性：export_runtime_state 必须暴露新的 activation 状态
+# ---------------------------------------------------------------------------
+
+
+def test_export_runtime_state_exposes_activation_fields() -> None:
+    from provider_backends.claude.execution import ClaudeProviderAdapter
+
+    submission = _submission(
+        activation_enter_count=1,
+        activation_enter_at=NOW,
+        activation_enter_evidence="pasted_placeholder",
+    )
+    exported = ClaudeProviderAdapter().export_runtime_state(submission)
+    assert exported["activation_enter_count"] == 1
+    assert exported["activation_enter_at"] == NOW
+    assert exported["activation_enter_evidence"] == "pasted_placeholder"
+
+
+def test_export_runtime_state_absent_evidence_is_none() -> None:
+    from provider_backends.claude.execution import ClaudeProviderAdapter
+
+    submission = _submission()
+    exported = ClaudeProviderAdapter().export_runtime_state(submission)
+    assert exported["activation_enter_count"] is None
+    assert exported["activation_enter_at"] is None
+    assert exported["activation_enter_evidence"] is None

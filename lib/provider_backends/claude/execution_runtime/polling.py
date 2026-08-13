@@ -323,24 +323,32 @@ def _pane_observably_idle(prepared) -> bool:
 
 
 def _activation_grace_s() -> float:
-    """Seconds to wait after dispatch before a lost Enter is retried once."""
+    """Seconds to wait after dispatch before a lost Enter may be retried.
+
+    A retry is never sent before this grace: the initial paste may still be
+    inserting, so an earlier Enter would be eaten again (or become a stray
+    newline). Default 6s.
+    """
     try:
         return max(0.0, float(os.environ.get("CCB_CLAUDE_ACTIVATION_GRACE_S", 6.0)))
     except Exception:
         return 6.0
 
 
-def _activation_retry_window() -> tuple[float, float]:
-    """Bounded retry window ``[start_s, end_s)`` measured from ``prompt_sent_at``.
+def _activation_max_wait_s() -> float:
+    """Generous give-up bound replacing the old tight ``[grace, 2*grace)`` window.
 
-    The retry Enter is only eligible inside this window: not before ``start_s``
-    (the initial paste may still be inserting, so a second Enter could be eaten
-    or become a stray newline) and not after ``end_s`` (give up; an operator
-    intervenes manually). Default ``[6.0, 12.0)`` for
-    ``CCB_CLAUDE_ACTIVATION_GRACE_S=6``.
+    The old default 6–12s window could permanently miss a stuck prompt: a
+    multi-KB paste can keep rendering past 12s, and the polling cadence may never
+    land inside such a narrow slice. Because the retry is at-most-once and gated
+    on current-composer evidence for this job plus a non-busy pane, a wide bound
+    is still safe — it only decides how long a genuinely abandoned job remains
+    auto-recoverable before an operator must intervene. Default 600s (10 min).
     """
-    grace_s = _activation_grace_s()
-    return grace_s, grace_s * 2.0
+    try:
+        return max(0.0, float(os.environ.get("CCB_CLAUDE_ACTIVATION_MAX_WAIT_S", 600.0)))
+    except Exception:
+        return 600.0
 
 
 def _elapsed_since(from_at: str, now: str) -> float | None:
@@ -348,6 +356,50 @@ def _elapsed_since(from_at: str, now: str) -> float | None:
         return (parse_utc_timestamp(now) - parse_utc_timestamp(from_at)).total_seconds()
     except Exception:
         return None
+
+
+# Claude folds a long bracketed paste in the composer into this placeholder:
+# ``❯ [Pasted text #4 +11 lines]``. The raw prompt (and therefore the request
+# anchor) is no longer visible in the pane, so the placeholder on the *current*
+# composer row is the only evidence that this job's prompt is still pending.
+_PASTED_PLACEHOLDER_RE = re.compile(r"\[Pasted text #\d+\s+\+\s*\d+\s+lines?\]")
+
+
+def _current_composer_content(text: str) -> str | None:
+    """Content of the current Claude composer input row, decorations removed.
+
+    The composer is the bottom-most input row in the visible pane tail (arrow
+    ``❯ ...`` or boxed ``│ ... │``); hint/status lines rendered below
+    it (``? for shortcuts``, ``esc to interrupt``) are skipped. Returns ``""``
+    for an empty idle box, or ``None`` when no composer row is found. Only the
+    current input row is inspected, so a marker or placeholder in
+    scrollback/history can never match.
+    """
+    tail = text.splitlines()[-32:]
+    for raw in reversed(tail):
+        line = raw.replace("\xa0", " ").rstrip()
+        if not line.strip():
+            continue
+        arrow = re.match(r"^\s*[❯>]\s?(.*)$", line)
+        if arrow:
+            return arrow.group(1)
+        boxed = re.match(r"^\s*[│|]\s*[❯>]?\s?(.*?)\s*[│|]\s*$", line)
+        if boxed:
+            return boxed.group(1)
+    return None
+
+
+def _current_composer_holds_pasted_placeholder(text: str) -> bool:
+    """True only when the *current* composer row shows a collapsed paste.
+
+    A placeholder that merely appears in the transcript history (a previous
+    turn's folded paste) never matches, because only the bottom-most input row
+    is considered.
+    """
+    content = _current_composer_content(text)
+    if content is None:
+        return False
+    return bool(_PASTED_PLACEHOLDER_RE.search(content))
 
 
 def _pane_holds_current_job_marker(text: str, submission: ProviderSubmission) -> bool:
@@ -396,18 +448,25 @@ def _maybe_resend_activation_enter(
 
     * the prompt was already dispatched (``prompt_sent``) with a timestamp;
     * the current job is not yet activated (no ``prompt_activated``/``anchor_seen``);
-    * the elapsed time since dispatch is inside the bounded grace window;
-    * the pane is not busy (no ``esc to interrupt``) and still holds this job's
-      recognizable prompt/anchor text (an empty composer cannot match);
+    * the elapsed time since dispatch is at least the grace start and below the
+      generous give-up cap (``CCB_CLAUDE_ACTIVATION_MAX_WAIT_S``, default 600s);
+    * the pane is not busy (no ``esc to interrupt``) and the current composer
+      still holds *this* job's pending input: either the recognizable
+      prompt/anchor text, or — when the long paste has been folded by the
+      TUI — the collapsed placeholder ``[Pasted text #N +M lines]`` on the
+      current composer row (an empty composer, a different job's text, or a
+      placeholder that only appears in scrollback never matches);
     * this job has not already re-sent Enter (``activation_enter_count < 1``).
 
-    Any failing guard disables the retry: activated, empty composer, busy pane,
-    text that does not belong to this job, an expired grace window, or a prior
-    re-send. On a successful ``send_key`` the runtime state bumps
-    ``activation_enter_count`` so later polls never re-send. (``_has_idle_input_box``
-    only recognizes the empty ready box and would never fire for the stuck
-    composer that still holds the prompt text, so the marker check is the
-    effective "still this job, still submittable" guard.)
+    The old ``[grace, 2*grace)`` window (default 6–12s) is removed: a folded
+    long paste renders asynchronously for longer than that, so the retry could
+    permanently miss the whole slice. The wide give-up cap plus at-most-once
+    plus current-composer evidence is the safe replacement: it can never send
+    more than one Enter, and that one Enter only ever submits the prompt that is
+    still sitting in this job's composer. On a successful ``send_key`` the
+    runtime state bumps ``activation_enter_count``, records the evidence kind
+    (``anchor_marker`` | ``pasted_placeholder``) in ``activation_enter_evidence``,
+    and stamps ``activation_enter_at`` so later polls never re-send.
     """
     state = submission.runtime_state
     if not bool(state.get("prompt_sent", False)):
@@ -425,8 +484,9 @@ def _maybe_resend_activation_enter(
     elapsed = _elapsed_since(prompt_sent_at, now)
     if elapsed is None:
         return None
-    grace_start, grace_end = _activation_retry_window()
-    if elapsed < grace_start or elapsed >= grace_end:
+    if elapsed < _activation_grace_s():
+        return None
+    if elapsed >= _activation_max_wait_s():
         return None
     pane_id = getattr(prepared, "pane_id", None)
     backend = getattr(prepared, "backend", None)
@@ -440,8 +500,10 @@ def _maybe_resend_activation_enter(
         return None
     if "esc to interrupt" in pane_text.lower():
         return None
-    if not _pane_holds_current_job_marker(pane_text, submission):
+    has_placeholder = _current_composer_holds_pasted_placeholder(pane_text)
+    if not has_placeholder and not _pane_holds_current_job_marker(pane_text, submission):
         return None
+    evidence = "pasted_placeholder" if has_placeholder else "anchor_marker"
     try:
         sent = send_key(pane_id, "Enter")
     except Exception:
@@ -454,6 +516,7 @@ def _maybe_resend_activation_enter(
             **state,
             "activation_enter_count": int(state.get("activation_enter_count", 0) or 0) + 1,
             "activation_enter_at": now,
+            "activation_enter_evidence": evidence,
         },
     )
 
