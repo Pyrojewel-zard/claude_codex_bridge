@@ -1137,6 +1137,48 @@ def test_binding_runtime_alive_rejects_title_based_runtime_ref(monkeypatch) -> N
     assert calls == []
 
 
+def test_herdr_liveness_check_reattaches_persisted_session_without_capability_env(monkeypatch) -> None:
+    import terminal_runtime.api as terminal_api
+
+    class FakeHerdrRequestAdapter:
+        socket_ref = 'herdr://local'
+
+        def __call__(self, operation: str, payload: dict[str, object]) -> dict[str, object]:
+            if operation == 'server_info':
+                return {
+                    'version': 'herdr 0.7.5-preview',
+                    'api_schema': 'Herdr API',
+                    'platform': 'windows',
+                    'arch': 'x64',
+                }
+            if operation == 'capture_pane':
+                assert payload['pane_id'] == 'wC:p1'
+                assert payload['session_name'] == 'ccb-demo'
+                return {'status': 'ok', 'pane_id': payload['pane_id'], 'text': 'ready'}
+            raise AssertionError(f'unexpected Herdr operation: {operation}')
+
+    monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
+    monkeypatch.setattr(terminal_api, '_herdr_request_adapter', lambda: FakeHerdrRequestAdapter())
+    binding = SimpleNamespace(
+        pane_id='wC:p1',
+        session_ref={
+            'terminal': 'mux',
+            'backend_impl': 'herdr',
+            'namespace_ref': {
+                'backend_family': 'herdr-native',
+                'backend_impl': 'herdr',
+                'namespace_id': 'wC',
+                'session_name': 'ccb-demo',
+                'ipc_kind': 'herdr_socket',
+                'ipc_ref': 'herdr://local',
+            },
+            'pane_id': 'wC:p1',
+        },
+    )
+
+    assert runtime_launch._herdr_liveness_check(binding) is True
+
+
 def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-codex-resume'
     ccb_dir = project_root / '.ccb'
