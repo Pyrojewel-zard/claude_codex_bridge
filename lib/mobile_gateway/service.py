@@ -6190,13 +6190,36 @@ def _pump_terminal_output(
             if data:
                 sequence += 1
                 try:
-                    connection.send_json(
-                        {
-                            'type': 'output',
-                            'seq': sequence,
-                            'bytes_b64': base64.b64encode(data).decode('ascii'),
-                        },
-                    )
+                    payload: dict[str, object] = {
+                        'type': 'output',
+                        'seq': sequence,
+                        'bytes_b64': base64.b64encode(data).decode('ascii'),
+                    }
+                    take_projection = getattr(session, 'take_output_projection', None)
+                    projection = take_projection() if callable(take_projection) else None
+                    if isinstance(projection, Mapping):
+                        screen = projection.get('screen')
+                        history = projection.get('history')
+                        history_append = projection.get('history_append')
+                        if isinstance(screen, (bytes, bytearray)):
+                            payload.update(
+                                {
+                                    'render_mode': 'replace_snapshot',
+                                    'screen_b64': base64.b64encode(screen).decode('ascii'),
+                                    'history_reset': bool(
+                                        projection.get('history_reset', False)
+                                    ),
+                                }
+                            )
+                            if isinstance(history, (bytes, bytearray)):
+                                payload['history_b64'] = base64.b64encode(history).decode(
+                                    'ascii'
+                                )
+                            if isinstance(history_append, (bytes, bytearray)):
+                                payload['history_append_b64'] = base64.b64encode(
+                                    history_append
+                                ).decode('ascii')
+                    connection.send_json(payload)
                 except OSError:
                     close_state['reason'] = 'transport_disconnected'
                     stop.set()

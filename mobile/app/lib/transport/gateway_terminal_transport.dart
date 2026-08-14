@@ -122,7 +122,10 @@ class GatewayTerminalTransport
 }
 
 class _GatewayTerminalSession
-    implements TerminalSession, TerminalViewportSession {
+    implements
+        TerminalSession,
+        TerminalViewportSession,
+        TerminalProjectionSession {
   _GatewayTerminalSession({
     required GatewayTransport transport,
     required GatewayTerminalHandle handle,
@@ -166,6 +169,7 @@ class _GatewayTerminalSession
   TerminalViewport _viewport;
   final _output = StreamController<Uint8List>.broadcast();
   final _viewportChanges = StreamController<TerminalViewport>.broadcast();
+  final _projectionChanges = StreamController<TerminalProjection>.broadcast();
   StreamSubscription<GatewayTerminalFrame>? _subscription;
   Future<void>? _reconnection;
   Future<void>? _renewal;
@@ -174,6 +178,7 @@ class _GatewayTerminalSession
   int? _settledConnectionGeneration;
   int _nextInputSequence = 1;
   int _resumeCursor = 0;
+  TerminalProjection? _projection;
   bool _closed = false;
   GatewayConnectionOutcomeReporter? _outcomeReporter;
   final void Function(_GatewayTerminalSession session) _onClosed;
@@ -194,6 +199,12 @@ class _GatewayTerminalSession
 
   @override
   Stream<TerminalViewport> get viewportChanges => _viewportChanges.stream;
+
+  @override
+  TerminalProjection? get projection => _projection;
+
+  @override
+  Stream<TerminalProjection> get projectionChanges => _projectionChanges.stream;
 
   @override
   Future<void> writeBytes(List<int> bytes) {
@@ -371,10 +382,18 @@ class _GatewayTerminalSession
         if (sequence > _resumeCursor) {
           _resumeCursor = sequence;
         }
-        final bytes = base64Decode(
-          (frame.payload['bytes_b64'] ?? '').toString(),
-        );
-        _output.add(Uint8List.fromList(bytes));
+        final projection = _projectionFromFrame(frame, sequence);
+        if (projection != null) {
+          _projection = projection;
+          if (!_projectionChanges.isClosed) {
+            _projectionChanges.add(projection);
+          }
+        } else {
+          final bytes = base64Decode(
+            (frame.payload['bytes_b64'] ?? '').toString(),
+          );
+          _output.add(Uint8List.fromList(bytes));
+        }
       case GatewayTerminalFrameType.error:
         final code =
             (frame.payload['code'] ?? 'gateway terminal error').toString();
@@ -439,6 +458,38 @@ class _GatewayTerminalSession
             ? 'geometry_revision'
             : 'revision'],
       ),
+    );
+  }
+
+  TerminalProjection? _projectionFromFrame(
+    GatewayTerminalFrame frame,
+    int sequence,
+  ) {
+    if ((frame.payload['render_mode'] ?? '').toString() != 'replace_snapshot') {
+      return null;
+    }
+    final screenText = (frame.payload['screen_b64'] ?? '').toString().trim();
+    if (screenText.isEmpty) {
+      return null;
+    }
+    final resetHistory = frame.payload['history_reset'] == true;
+    var history =
+        resetHistory
+            ? Uint8List(0)
+            : Uint8List.fromList(_projection?.historyBytes ?? const <int>[]);
+    final historyText = (frame.payload['history_b64'] ?? '').toString().trim();
+    if (historyText.isNotEmpty) {
+      history = Uint8List.fromList(base64Decode(historyText));
+    }
+    final appendText =
+        (frame.payload['history_append_b64'] ?? '').toString().trim();
+    if (appendText.isNotEmpty) {
+      history = Uint8List.fromList([...history, ...base64Decode(appendText)]);
+    }
+    return TerminalProjection(
+      historyBytes: history,
+      screenBytes: base64Decode(screenText),
+      sequence: sequence,
     );
   }
 
@@ -575,6 +626,9 @@ class _GatewayTerminalSession
     }
     if (!_viewportChanges.isClosed) {
       await _viewportChanges.close();
+    }
+    if (!_projectionChanges.isClosed) {
+      await _projectionChanges.close();
     }
   }
 

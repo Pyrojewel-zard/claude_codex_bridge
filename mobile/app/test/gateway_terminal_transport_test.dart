@@ -165,6 +165,61 @@ void main() {
     },
   );
 
+  test(
+    'fixed source snapshots replace screen and accumulate real history',
+    () async {
+      final gateway = _FakeGatewayTransport();
+      final session = await GatewayTerminalTransport(transport: gateway).open(
+        TerminalOpenRequest.gateway(
+          target: CcbTerminalTarget.agent(
+            projectId: 'proj-demo',
+            namespaceEpoch: 4,
+            agent: 'mobile',
+            scopes: {CcbScope.view, CcbScope.terminalInput},
+          ),
+        ),
+      );
+      final projectionSession = session as TerminalProjectionSession;
+      final projections = <TerminalProjection>[];
+      final projectionSubscription = projectionSession.projectionChanges.listen(
+        projections.add,
+      );
+      final ordinaryOutput = <String>[];
+      final outputSubscription = session.output
+          .map(utf8.decode)
+          .listen(ordinaryOutput.add);
+
+      gateway.emit(
+        GatewayTerminalFrame.output(
+          sequence: 1,
+          bytes: utf8.encode('legacy repaint'),
+          projectionHistoryReset: true,
+          projectionHistoryBytes: utf8.encode('older\n'),
+          projectionScreenBytes: utf8.encode('prompt\$ xxxxx'),
+        ),
+      );
+      gateway.emit(
+        GatewayTerminalFrame.output(
+          sequence: 2,
+          bytes: utf8.encode('legacy repaint'),
+          projectionHistoryAppendBytes: utf8.encode('scrolled\n'),
+          projectionScreenBytes: utf8.encode('prompt\$ xxxx'),
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(ordinaryOutput, isEmpty);
+      expect(projections, hasLength(2));
+      expect(utf8.decode(projections.last.historyBytes), 'older\nscrolled\n');
+      expect(utf8.decode(projections.last.screenBytes), 'prompt\$ xxxx');
+      expect(projectionSession.projection?.sequence, 2);
+
+      await projectionSubscription.cancel();
+      await outputSubscription.cancel();
+      await session.close();
+    },
+  );
+
   test('gateway terminal reconnect uses latest output resume cursor', () async {
     final gateway = _FakeGatewayTransport();
     final session = await GatewayTerminalTransport(transport: gateway).open(

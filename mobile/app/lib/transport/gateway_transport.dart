@@ -511,11 +511,24 @@ class GatewayTerminalFrame {
   factory GatewayTerminalFrame.output({
     required int sequence,
     required List<int> bytes,
+    List<int>? projectionScreenBytes,
+    List<int>? projectionHistoryBytes,
+    List<int>? projectionHistoryAppendBytes,
+    bool projectionHistoryReset = false,
   }) {
     _requirePositiveSequence(sequence);
     return GatewayTerminalFrame._(GatewayTerminalFrameType.output, {
       'seq': sequence,
       'bytes_b64': base64Encode(bytes),
+      if (projectionScreenBytes != null) ...{
+        'render_mode': 'replace_snapshot',
+        'screen_b64': base64Encode(projectionScreenBytes),
+        'history_reset': projectionHistoryReset,
+      },
+      if (projectionHistoryBytes != null)
+        'history_b64': base64Encode(projectionHistoryBytes),
+      if (projectionHistoryAppendBytes != null)
+        'history_append_b64': base64Encode(projectionHistoryAppendBytes),
     });
   }
 
@@ -571,6 +584,17 @@ class GatewayTerminalFrame {
       GatewayTerminalFrameType.output => GatewayTerminalFrame.output(
         sequence: _requiredJsonInt(json['seq'], 'seq'),
         bytes: base64Decode(_requiredJsonText(json['bytes_b64'], 'bytes_b64')),
+        projectionScreenBytes:
+            _jsonText(json['render_mode']) == 'replace_snapshot'
+                ? base64Decode(
+                  _requiredJsonText(json['screen_b64'], 'screen_b64'),
+                )
+                : null,
+        projectionHistoryBytes: _optionalBase64Bytes(json['history_b64']),
+        projectionHistoryAppendBytes: _optionalBase64Bytes(
+          json['history_append_b64'],
+        ),
+        projectionHistoryReset: json['history_reset'] == true,
       ),
       GatewayTerminalFrameType.closed => GatewayTerminalFrame.closed(
         _requiredJsonText(json['reason'], 'reason'),
@@ -671,6 +695,11 @@ void _requirePositiveSequence(int sequence) {
 bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
 
 String _jsonText(Object? value) => (value ?? '').toString();
+
+List<int>? _optionalBase64Bytes(Object? value) {
+  final text = _jsonText(value).trim();
+  return text.isEmpty ? null : base64Decode(text);
+}
 
 String _requiredJsonText(Object? value, String name) {
   final text = _jsonText(value).trim();

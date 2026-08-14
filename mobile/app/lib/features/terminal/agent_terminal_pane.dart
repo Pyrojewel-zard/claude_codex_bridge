@@ -259,6 +259,7 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   TerminalSession? _session;
   StreamSubscription<String>? _outputSubscription;
   StreamSubscription<TerminalViewport>? _viewportSubscription;
+  StreamSubscription<TerminalProjection>? _projectionSubscription;
   Timer? _autoReconnectTimer;
   Timer? _resizeDebounce;
   var _openGeneration = 0;
@@ -418,6 +419,7 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     }
     _session = session;
     _observeViewport(session);
+    _observeProjection(session);
     _resetAutoReconnect();
     _setControlStatus('Connected');
     _outputSubscription = session.output
@@ -514,10 +516,13 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     _outputSubscription = null;
     final viewportSubscription = _viewportSubscription;
     _viewportSubscription = null;
+    final projectionSubscription = _projectionSubscription;
+    _projectionSubscription = null;
     final session = _session;
     _session = null;
     final cancellation = subscription?.cancel();
     final viewportCancellation = viewportSubscription?.cancel();
+    final projectionCancellation = projectionSubscription?.cancel();
     await session?.close().catchError((_) {
       // Best-effort route teardown; the gateway may already have closed.
     });
@@ -526,6 +531,9 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     }
     if (viewportCancellation != null) {
       unawaited(viewportCancellation.catchError((_) {}));
+    }
+    if (projectionCancellation != null) {
+      unawaited(projectionCancellation.catchError((_) {}));
     }
   }
 
@@ -541,6 +549,58 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
         // Output owns connection errors. Retain the last valid source grid.
       },
     );
+  }
+
+  void _observeProjection(TerminalSession session) {
+    if (session is! TerminalProjectionSession) {
+      return;
+    }
+    final projectionSession = session as TerminalProjectionSession;
+    final current = projectionSession.projection;
+    if (current != null) {
+      _applyProjection(current);
+    }
+    _projectionSubscription = projectionSession.projectionChanges.listen(
+      _applyProjection,
+      onError: (_) {
+        // The ordinary output stream owns transport errors and reconnects.
+      },
+    );
+  }
+
+  void _applyProjection(TerminalProjection projection) {
+    if (!mounted) {
+      return;
+    }
+    final followLatest =
+        !_terminalScrollController.hasClients ||
+        _terminalScrollController.isAtLatestOutput;
+    final history = _projectionText(projection.historyBytes);
+    final screen = _projectionText(projection.screenBytes);
+    final content = [
+      if (history.isNotEmpty) history,
+      if (screen.isNotEmpty) screen,
+    ].join('\r\n');
+
+    _terminal.mainBuffer.clear();
+    _terminal.altBuffer.clear();
+    _terminal.write('\x1b[?1049l\x1b[?25l\x1b[0m\x1b[H\x1b[2J$content');
+    if (followLatest) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _terminalScrollController.jumpToLatestOutput();
+        }
+      });
+    }
+  }
+
+  String _projectionText(List<int> bytes) {
+    return utf8
+        .decode(bytes, allowMalformed: true)
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .replaceFirst(RegExp(r'\n+$'), '')
+        .replaceAll('\n', '\r\n');
   }
 
   void _applyViewport(TerminalViewport viewport) {

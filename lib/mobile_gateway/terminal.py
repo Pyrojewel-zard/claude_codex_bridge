@@ -385,6 +385,7 @@ class TmuxTerminalSession:
         self._last_geometry_refresh_monotonic = 0.0
         self._state_lock = threading.Lock()
         self._geometry_refresh_lock = threading.Lock()
+        self._pending_projection: dict[str, object] | None = None
         if not target.pane_id:
             raise RuntimeError('terminal target pane evidence is required')
 
@@ -425,7 +426,12 @@ class TmuxTerminalSession:
             previous = self._last_snapshot
             snapshot_generation = self._snapshot_generation
         if initial_read:
-            if not self.target.include_history:
+            if not self._source_pane_geometry:
+                history = _capture_tmux_terminal_pane(
+                    self.target,
+                    geometry,
+                    include_history=self.target.include_history,
+                )
                 snapshot = _capture_tmux_terminal_pane(
                     self.target,
                     geometry,
@@ -435,11 +441,11 @@ class TmuxTerminalSession:
                     if self._closed:
                         return None
                     self._last_snapshot = snapshot
-                return _render_terminal_snapshot(snapshot, clear_scrollback=True)
-            history = _capture_tmux_terminal_pane(
-                self.target,
-                geometry,
-                include_history=True,
+                return _render_terminal_snapshot(history, clear_scrollback=True)
+            history = (
+                _capture_tmux_terminal_scrollback(self.target, geometry)
+                if self.target.include_history
+                else b''
             )
             snapshot = _capture_tmux_terminal_pane(
                 self.target,
@@ -450,7 +456,14 @@ class TmuxTerminalSession:
                 if self._closed:
                     return None
                 self._last_snapshot = snapshot
-            return _render_terminal_snapshot(history, clear_scrollback=True)
+                if self._source_pane_geometry:
+                    self._pending_projection = {
+                        'history_reset': True,
+                        'history': history,
+                        'screen': snapshot,
+                    }
+            rendered = _join_terminal_projection(history, snapshot)
+            return _render_terminal_snapshot(rendered, clear_scrollback=True)
         if previous is None:
             snapshot = _capture_tmux_terminal_pane(
                 self.target,
@@ -472,6 +485,8 @@ class TmuxTerminalSession:
                 return None
             if snapshot_generation != self._snapshot_generation:
                 self._last_snapshot = snapshot
+                if self._source_pane_geometry:
+                    self._pending_projection = {'screen': snapshot}
                 return _render_terminal_snapshot(snapshot)
             if snapshot == previous:
                 return b''
@@ -481,6 +496,18 @@ class TmuxTerminalSession:
                 # different column counts. Source-row cursor deltas are not
                 # valid after the phone has locally reflowed those rows, so
                 # repaint the visible snapshot without resizing tmux.
+                history_append = _terminal_projection_history_append(
+                    previous,
+                    snapshot,
+                )
+                self._pending_projection = {
+                    'screen': snapshot,
+                    **(
+                        {'history_append': history_append}
+                        if history_append
+                        else {}
+                    ),
+                }
                 return _render_terminal_snapshot(snapshot)
             return _render_terminal_delta(
                 previous,
@@ -488,6 +515,18 @@ class TmuxTerminalSession:
                 columns=geometry.columns,
                 rows=geometry.rows,
             )
+
+    def take_output_projection(self) -> dict[str, object] | None:
+        """Return structured projection metadata for the most recent read.
+
+        Agent terminals mirror a desktop-owned pane.  Their byte stream remains
+        available for older clients, while current clients replace the projected
+        screen and append only rows that actually scrolled into history.
+        """
+        with self._state_lock:
+            projection = self._pending_projection
+            self._pending_projection = None
+            return dict(projection) if projection is not None else None
 
     def write(self, data: bytes) -> None:
         if not data:
@@ -642,6 +681,8 @@ def _tmux_capture_command(
     geometry: TerminalGeometry,
     *,
     include_history: bool = True,
+    history_only: bool = False,
+    join_wrapped: bool = False,
 ) -> list[str]:
     pane_id = str(target.pane_id or '').strip()
     if not pane_id:
@@ -660,7 +701,11 @@ def _tmux_capture_command(
         '-t',
         pane_id,
     ]
-    if include_history:
+    if join_wrapped:
+        command.append('-J')
+    if history_only:
+        command.extend(('-S', f'-{history_lines}', '-E', '-1'))
+    elif include_history:
         command.extend(('-S', f'-{history_lines}'))
     return command
 
@@ -676,6 +721,7 @@ def _capture_tmux_terminal_pane(
             target,
             geometry,
             include_history=include_history,
+            join_wrapped=True,
         ),
         text=False,
         stdout=subprocess.PIPE,
@@ -688,6 +734,64 @@ def _capture_tmux_terminal_pane(
         message = (cp.stderr or b'').decode('utf-8', errors='replace').strip()
         raise RuntimeError(message or 'tmux capture-pane failed')
     return _fit_terminal_snapshot(bytes(cp.stdout or b''), geometry.columns)
+
+
+def _capture_tmux_terminal_scrollback(
+    target: TerminalAttachTarget,
+    geometry: TerminalGeometry,
+) -> bytes:
+    if _capture_tmux_terminal_history_size(target) < 1:
+        return b''
+    cp = subprocess.run(
+        _tmux_capture_command(
+            target,
+            geometry,
+            include_history=False,
+            history_only=True,
+            join_wrapped=True,
+        ),
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=2.0,
+        env=_terminal_client_env(),
+    )
+    if cp.returncode != 0:
+        message = (cp.stderr or b'').decode('utf-8', errors='replace').strip()
+        raise RuntimeError(message or 'tmux capture-pane scrollback failed')
+    return _fit_terminal_snapshot(bytes(cp.stdout or b''), geometry.columns)
+
+
+def _capture_tmux_terminal_history_size(target: TerminalAttachTarget) -> int:
+    pane_id = str(target.pane_id or '').strip()
+    if not pane_id:
+        raise RuntimeError('terminal target pane evidence is required')
+    cp = subprocess.run(
+        [
+            target.tmux_binary,
+            '-S',
+            target.socket_path,
+            'display-message',
+            '-p',
+            '-t',
+            pane_id,
+            '#{history_size}',
+        ],
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=2.0,
+        env=_terminal_client_env(),
+    )
+    if cp.returncode != 0:
+        message = (cp.stderr or b'').decode('utf-8', errors='replace').strip()
+        raise RuntimeError(message or 'tmux pane history query failed')
+    try:
+        return max(0, int((cp.stdout or b'0').decode('ascii').strip() or '0'))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError('tmux pane history query returned invalid output') from exc
 
 
 def _capture_tmux_pane_window_state(
@@ -757,7 +861,46 @@ def _fit_terminal_snapshot(snapshot: bytes, columns: int) -> bytes:
     del columns
     text = snapshot.decode('utf-8', errors='replace')
     normalized = text.replace('\r\n', '\n').replace('\r', '\n')
-    return normalized.encode('utf-8')
+    return '\n'.join(
+        _trim_terminal_line_end(line) for line in normalized.split('\n')
+    ).encode('utf-8')
+
+
+_TRAILING_TERMINAL_SPACE_RE = re.compile(
+    r'[ \t]{2,}(?=(?:\x1b\[[0-?]*[ -/]*[@-~])*$)'
+)
+
+
+def _trim_terminal_line_end(line: str) -> str:
+    return _TRAILING_TERMINAL_SPACE_RE.sub(' ', line)
+
+
+def _join_terminal_projection(history: bytes, screen: bytes) -> bytes:
+    history_text = history.decode('utf-8', errors='replace').rstrip('\n')
+    screen_text = screen.decode('utf-8', errors='replace').rstrip('\n')
+    if not history_text:
+        return screen_text.encode('utf-8')
+    if not screen_text:
+        return history_text.encode('utf-8')
+    return f'{history_text}\n{screen_text}'.encode('utf-8')
+
+
+def _terminal_projection_history_append(previous: bytes, snapshot: bytes) -> bytes:
+    """Detect rows that genuinely scrolled off the top of the source pane."""
+    previous_lines = _terminal_snapshot_lines(previous)
+    snapshot_lines = _terminal_snapshot_lines(snapshot)
+    maximum = min(len(previous_lines), len(snapshot_lines))
+    overlap = 0
+    for size in range(maximum, 0, -1):
+        if previous_lines[-size:] == snapshot_lines[:size]:
+            overlap = size
+            break
+    if overlap == 0:
+        return b''
+    dropped = previous_lines[:-overlap]
+    if not dropped:
+        return b''
+    return ('\n'.join(dropped).rstrip('\n') + '\n').encode('utf-8')
 
 
 def _render_terminal_snapshot(

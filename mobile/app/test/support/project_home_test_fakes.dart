@@ -70,7 +70,10 @@ class RecordingTerminalTransport
 }
 
 class RecordingTerminalSession
-    implements TerminalSession, TerminalViewportSession {
+    implements
+        TerminalSession,
+        TerminalViewportSession,
+        TerminalProjectionSession {
   RecordingTerminalSession(
     this.launchedCommand, {
     this.writeError,
@@ -87,7 +90,9 @@ class RecordingTerminalSession
 
   final _output = StreamController<Uint8List>.broadcast();
   final _viewportChanges = StreamController<TerminalViewport>.broadcast();
+  final _projectionChanges = StreamController<TerminalProjection>.broadcast();
   TerminalViewport _viewport;
+  TerminalProjection? _projection;
   final Object? writeError;
   final List<Object> reconnectErrors;
   final VoidCallback? onClose;
@@ -110,6 +115,12 @@ class RecordingTerminalSession
   @override
   Stream<TerminalViewport> get viewportChanges => _viewportChanges.stream;
 
+  @override
+  TerminalProjection? get projection => _projection;
+
+  @override
+  Stream<TerminalProjection> get projectionChanges => _projectionChanges.stream;
+
   void setViewport(TerminalViewport viewport) {
     _viewport = viewport;
     _viewportChanges.add(viewport);
@@ -117,6 +128,20 @@ class RecordingTerminalSession
 
   void addOutput(String text) {
     _output.add(Uint8List.fromList(utf8.encode(text)));
+  }
+
+  void addProjection({
+    String history = '',
+    required String screen,
+    int sequence = 1,
+  }) {
+    final projection = TerminalProjection(
+      historyBytes: utf8.encode(history),
+      screenBytes: utf8.encode(screen),
+      sequence: sequence,
+    );
+    _projection = projection;
+    _projectionChanges.add(projection);
   }
 
   void addOutputError(Object error) {
@@ -138,6 +163,7 @@ class RecordingTerminalSession
     onClose?.call();
     await _output.close();
     await _viewportChanges.close();
+    await _projectionChanges.close();
   }
 
   @override

@@ -46,12 +46,17 @@ Agent Terminal therefore uses a dual-geometry `fixed_source` projection:
   ignores such frames defensively if an older client sends one.
 - Geometry revisions report desktop-side source changes to the phone. They are
   observations, not ownership transfers.
-- The source pane remains a desktop-sized capture grid. Flutter's xterm model
-  independently sizes itself to the phone viewport at the persisted readable
-  font size, so captured rows wrap locally to the available device width.
-- The gateway sends a complete visible-pane repaint whenever a fixed-source
-  snapshot changes. It does not send source-row cursor deltas into the locally
-  wrapped phone grid.
+- The source pane remains a desktop-sized capture grid. The gateway captures
+  it with tmux `capture-pane -J`, joining source soft-wrap rows back into
+  logical lines before Flutter reflows them at the persisted readable font
+  size and current device width.
+- Fixed-source output uses a structured `replace_snapshot` projection. Stable
+  scrollback and the mutable visible screen are separate fields; only rows
+  proven to have scrolled off the source pane append to local history.
+- Flutter replaces the projected screen in place for every edit. It does not
+  replay source-row cursor deltas or append ANSI full-screen repaints to xterm
+  scrollback. The legacy byte repaint remains in the wire frame only for older
+  clients.
 - Local xterm resize callbacks update only the phone renderer and the geometry
   used for a future session open. They never send a tmux resize operation.
 - No visible Fit/1:1 selector or terminal-local font toolbar is added.
@@ -128,56 +133,53 @@ but the app treats it as fixed source and never sends resize frames.
 - Host Terminal still follows phone dimensions because its PTY is isolated.
 - Terminal input, Chinese text, shortcuts, history scrolling, reconnect, and
   stale-target handling remain functional.
+- Repeated Backspace edits replace the current prompt row in place; no stale
+  `xxxxx`, `xxxx`, `xxx` staircase may accumulate in local scrollback.
 - Chat mode and terminal-history bubbles remain unaffected.
 - Focused Python and Flutter tests, static analysis, APK build, and real
   server-wide Android Emulator validation pass.
 
 ## Automated Evidence
 
-Current evidence:
+Current automated evidence:
 
-- Python terminal tests: 25 passed. The real tmux test opens a two-pane window,
-  opens two mobile sessions, requests phone resizes, closes both sessions, and
-  asserts exact source window/pane/layout equality at every step.
-- Gateway, terminal, and host lifecycle integration tests: 178 passed. The
-  WebSocket contract reports `fixed_source` and ignores an incoming Agent
-  Terminal resize frame.
-- Flutter terminal transport, contract, keyboard, viewport, and reconnect
-  focused tests cover local device-width reflow and repeated snapshot
-  replacement. The broader terminal, LAN/Relay transport, navigation, layout,
-  and settings batch passed 110 tests serially. Legacy `adaptive_pane` remains
-  non-owning for source geometry.
-- Full Flutter suite: 778 passed, 1 skipped.
-- Python compile, `flutter analyze`, debug APK build, and scoped
+- `test_mobile_gateway_terminal.py` and `test_mobile_gateway_service.py`:
+  155 passed. The real tmux projection test uses a 24-column pane, verifies
+  that a 36-character wrapped input becomes one logical row, applies three
+  Backspaces, and proves both in-place replacement and exact source geometry.
+- Flutter projection/transport/pane focused batch: 34 passed. The broader
+  terminal, navigation, LAN/Relay, and settings regression batch: 118 passed.
+- `flutter analyze`, debug APK build, Python compile, and scoped
   `git diff --check`: passed.
+- The repository-wide Flutter suite passed serially: 780 passed and 1 skipped.
+  The core-probe regression now waits for the explicit `reconnecting` event
+  instead of assuming the loopback HTTP round trip finishes within 20ms.
+  Parallel execution can still make local socket-heavy tests contend, so the
+  release gate uses `--concurrency=1` for deterministic coverage.
 
-Real Android evidence used `emulator-5554`, the isolated current-source
-server-wide gateway at `127.0.0.1:8831`, and the dedicated real project
-`pr289-pi-real-smoke / main / pi1`. Evidence is outside the source tree under
-`/tmp/ccb-mobile-responsive-source-20260814/`:
+Latest real Android evidence used `emulator-5554`, the current-source
+server-wide gateway at `127.0.0.1:8832`, and the dedicated mounted project
+`test_ccb2_alpha / main / mobile_peer`. Evidence is owner-local and remains
+outside the source tree under
+`/tmp/ccb-mobile-terminal-projection-e2e/evidence/`:
 
-- A pseudo-desktop tmux client stayed attached at `160x48`; its window stayed
-  `160x47` with panes `12x46` and `147x46`.
-- The complete window/pane/layout snapshot SHA256 remained
-  `57e0010f6f402182cb8d81ad04235477ef92987d1fc98ecc98226ec4b349d212`
-  before open, after portrait rendering, after rotation, after keyboard
-  display, and after gateway restart/reconnect.
-- `04-terminal-portrait.png` shows the 160-column source content wrapped to a
-  readable portrait device width with no horizontal source-grid canvas.
-- `05-terminal-landscape.png` shows the same live source using the wider
-  landscape geometry without changing tmux.
-- `06-terminal-keyboard.png` covers terminal input focus and keyboard state.
-- `08-dynamic-input.png` proves a changed real pane snapshot appears in place
-  without leaving or reopening the terminal.
-- `09-after-gateway-reconnect.png` proves the responsive projection recovers
-  after a forced gateway restart.
+- `05-terminal-portrait-long-line-peer.png` shows the complete
+  `...RIGHT_EDGE` marker reflowed to readable portrait width.
+- `06-terminal-landscape-long-line.png` shows the same logical content using
+  fewer rows at landscape width.
+- `07-terminal-phone-input-xxxxx.png` and `08-delete-1.png` through
+  `09-delete-all.png` prove real Android keyboard input and one-at-a-time
+  deletion. The final frame has one empty `mobile$` prompt and no stale rows.
+- `tmux-layout-before.txt` and `tmux-layout-after-landscape.txt` have the same
+  SHA256 (`684eb3e622089f5a68a0f4461b39157dd3563235ce56104457706e2ca01b3b9a`),
+  proving phone reflow did not resize the desktop-owned tmux layout.
 - Installed debug APK SHA256 is
-  `ee1c05a11f69e373fe2a6433f3cb9ca816b419a2f413b6cb3afabc7dd98b3dce`;
-  filtered logcat contains no app fatal exception.
+  `79e5a04b93a9a7f1f2a7c0388735bd71b2f4f4892cf85e557d831c6836cae7bb`.
 
-The earlier adaptive-pane emulator evidence is superseded. It proved that the
-phone could resize and later restore a pane, but it did not satisfy simultaneous
-desktop usability and therefore is not acceptance evidence for this design.
+The earlier adaptive-pane and ANSI repaint evidence is superseded. Resizing a
+shared pane affected desktop clients, while appending full-screen repaints
+created stale prompt rows during edits. Neither behavior satisfies this
+design.
 
 ## Open Edges
 

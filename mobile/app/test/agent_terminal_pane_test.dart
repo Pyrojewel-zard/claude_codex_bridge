@@ -250,14 +250,14 @@ void main() {
     final transport = RecordingTerminalTransport();
     final view = _view(namespaceEpoch: 4);
 
-    Widget buildPane(double fontSize) {
+    Widget buildPane(double fontSize, {double width = 390}) {
       return CcbTerminalShortcutPreferencesScope(
         preferences: CcbTerminalShortcutPreferences(fontSize: fontSize),
         onChanged: (_) {},
         child: MaterialApp(
           home: Scaffold(
             body: SizedBox(
-              width: 390,
+              width: width,
               height: 700,
               child: AgentTerminalPane(
                 view: view,
@@ -321,8 +321,18 @@ void main() {
     );
     expect(session.resized, isEmpty);
 
-    final columnsBeforeFontChange = localColumns;
-    await tester.pumpWidget(buildPane(15));
+    await tester.pumpWidget(buildPane(13, width: 700));
+    await tester.pumpAndSettle();
+    final landscapeColumns =
+        tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .terminal
+            .viewWidth;
+    expect(landscapeColumns, greaterThan(localColumns));
+    expect(session.resized, isEmpty);
+
+    final columnsBeforeFontChange = landscapeColumns;
+    await tester.pumpWidget(buildPane(15, width: 700));
     await tester.pumpAndSettle();
     expect(
       tester.widget<TerminalView>(find.byType(TerminalView)).textStyle.fontSize,
@@ -335,6 +345,62 @@ void main() {
             .viewWidth;
     expect(columnsAfterFontChange, lessThan(columnsBeforeFontChange));
     expect(session.resized, isEmpty);
+  });
+
+  testWidgets('projected prompt deletion replaces the current input row', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 390,
+            height: 700,
+            child: AgentTerminalPane(
+              view: view,
+              target: view.terminalTargetForAgent('mobile'),
+              terminalTransport: transport,
+              gatewayTerminal: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final session = transport.sessions.single;
+
+    session.addProjection(
+      history: 'older output\n',
+      screen: 'prompt\$ xxxxx',
+      sequence: 1,
+    );
+    await tester.pump();
+    session.addProjection(
+      history: 'older output\n',
+      screen: 'prompt\$ xxxx',
+      sequence: 2,
+    );
+    await tester.pump();
+    session.addProjection(
+      history: 'older output\n',
+      screen: 'prompt\$ xxx',
+      sequence: 3,
+    );
+    await tester.pumpAndSettle();
+
+    final text =
+        tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .terminal
+            .buffer
+            .getText();
+    expect(text, contains('older output'));
+    expect(text, contains('prompt\$ xxx'));
+    expect(text, isNot(contains('prompt\$ xxxx')));
+    expect('prompt\$ '.allMatches(text), hasLength(1));
   });
 
   testWidgets('terminal gestures do not override control panel font size', (

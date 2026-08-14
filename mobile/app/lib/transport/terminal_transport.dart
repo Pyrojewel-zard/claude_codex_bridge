@@ -68,6 +68,19 @@ class TerminalViewport {
   bool get acceptsClientResize => resizePolicy == TerminalResizePolicy.client;
 }
 
+class TerminalProjection {
+  TerminalProjection({
+    required List<int> historyBytes,
+    required List<int> screenBytes,
+    required this.sequence,
+  }) : historyBytes = Uint8List.fromList(historyBytes),
+       screenBytes = Uint8List.fromList(screenBytes);
+
+  final Uint8List historyBytes;
+  final Uint8List screenBytes;
+  final int sequence;
+}
+
 class TerminalOpenRequest {
   TerminalOpenRequest({
     required this.target,
@@ -171,6 +184,12 @@ abstract interface class TerminalViewportSession {
   TerminalViewport get viewport;
 
   Stream<TerminalViewport> get viewportChanges;
+}
+
+abstract interface class TerminalProjectionSession {
+  TerminalProjection? get projection;
+
+  Stream<TerminalProjection> get projectionChanges;
 }
 
 class TerminalTransportException implements Exception {

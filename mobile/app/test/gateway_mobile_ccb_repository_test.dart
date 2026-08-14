@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -119,8 +120,15 @@ void main() {
     () async {
       failDeviceProbe = true;
       final states = <MobileConnectionState>[];
+      final reconnecting = Completer<void>();
       final supervisor = MobileConnectionSupervisor(
-        onChanged: (snapshot) => states.add(snapshot.state),
+        onChanged: (snapshot) {
+          states.add(snapshot.state);
+          if (snapshot.state == MobileConnectionState.reconnecting &&
+              !reconnecting.isCompleted) {
+            reconnecting.complete();
+          }
+        },
         initialDelay: const Duration(hours: 1),
         maxDelay: const Duration(hours: 1),
       );
@@ -136,7 +144,7 @@ void main() {
         ),
         probe: repository,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await reconnecting.future.timeout(const Duration(seconds: 2));
 
       expect(states, isNot(contains(MobileConnectionState.online)));
       expect(supervisor.snapshot.state, MobileConnectionState.reconnecting);

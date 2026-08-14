@@ -252,6 +252,17 @@ class _FakeTerminalSession:
     def __init__(self, target) -> None:
         self.target = target
         self.outputs = [b'hello']
+        self.projections = (
+            [
+                {
+                    'history_reset': True,
+                    'history': b'older history\n',
+                    'screen': b'hello',
+                }
+            ]
+            if target.target_summary.get('kind') != 'host_shell'
+            else []
+        )
         self.writes: list[bytes] = []
         self.pastes: list[str] = []
         self.resizes: list[object] = []
@@ -267,6 +278,9 @@ class _FakeTerminalSession:
 
     def write(self, data: bytes) -> None:
         self.writes.append(data)
+
+    def take_output_projection(self) -> dict[str, object] | None:
+        return self.projections.pop(0) if self.projections else None
 
     def paste(self, text: str) -> None:
         self.pastes.append(text)
@@ -5750,6 +5764,10 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         output = _websocket_read_until(sock, 'output')
         assert output['seq'] == 1
         assert base64.b64decode(str(output['bytes_b64'])) == b'hello'
+        assert output['render_mode'] == 'replace_snapshot'
+        assert output['history_reset'] is True
+        assert base64.b64decode(str(output['history_b64'])) == b'older history\n'
+        assert base64.b64decode(str(output['screen_b64'])) == b'hello'
         assert sessions
         assert sessions[0].target.socket_path == '/tmp/ccb-demo/tmux.sock'
         assert sessions[0].target.session_name == 'ccb-demo'
@@ -5890,7 +5908,11 @@ def test_terminal_websocket_delivers_text_and_enter_in_one_input_frame(
         call = list(command)
         tmux_calls.append(call)
         if 'display-message' in call:
-            output = '@0\t113\t30\t100\t30\tlayout-token'
+            output = (
+                b'0\n'
+                if '#{history_size}' in call
+                else '@0\t113\t30\t100\t30\tlayout-token'
+            )
         else:
             output = b'prompt$ ' if 'capture-pane' in call else b''
         return type('Completed', (), {'returncode': 0, 'stdout': output, 'stderr': b''})()

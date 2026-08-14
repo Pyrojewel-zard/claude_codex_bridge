@@ -140,9 +140,11 @@ def test_terminal_session_reads_selected_pane_snapshot(monkeypatch) -> None:
     def fake_run(command, **kwargs):
         calls.append(list(command))
         assert 'attach-session' not in command
+        if 'display-message' in command:
+            return SimpleNamespace(returncode=0, stdout=b'1\n', stderr=b'')
         output = (
-            b'pane history\npane only\nprompt$ '
-            if command.count('-S') > 1
+            b'pane history\n'
+            if '-E' in command
             else b'pane only\nprompt$ '
         )
         return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
@@ -161,13 +163,11 @@ def test_terminal_session_reads_selected_pane_snapshot(monkeypatch) -> None:
             'tmux',
             '-S',
             '/tmp/ccb-test/tmux.sock',
-            'capture-pane',
+            'display-message',
             '-p',
-            '-e',
             '-t',
             '%42',
-            '-S',
-            '-1000',
+            '#{history_size}',
         ],
         [
             'tmux',
@@ -178,6 +178,22 @@ def test_terminal_session_reads_selected_pane_snapshot(monkeypatch) -> None:
             '-e',
             '-t',
             '%42',
+            '-J',
+            '-S',
+            '-1000',
+            '-E',
+            '-1',
+        ],
+        [
+            'tmux',
+            '-S',
+            '/tmp/ccb-test/tmux.sock',
+            'capture-pane',
+            '-p',
+            '-e',
+            '-t',
+            '%42',
+            '-J',
         ],
     ]
 
@@ -190,8 +206,10 @@ def test_source_terminal_repaints_visible_pane_for_client_side_reflow(
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
-        if command.count('-S') > 1:
-            output = b'real history\npane only\nprompt$ '
+        if 'display-message' in command:
+            return SimpleNamespace(returncode=0, stdout=b'1\n', stderr=b'')
+        if '-E' in command:
+            output = b'real history\n'
         else:
             output = next(visible_outputs)
         return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
@@ -209,7 +227,79 @@ def test_source_terminal_repaints_visible_pane_for_client_side_reflow(
     )
     assert second == b'\x1b[?25l\x1b[H\x1b[2Jpane changed\r\nprompt$ '
     assert sum(command.count('-S') > 1 for command in calls) == 1
-    assert len(calls) == 3
+    assert len(calls) == 4
+    assert all(
+        '-J' in command for command in calls if 'capture-pane' in command
+    )
+
+
+def test_source_terminal_projection_replaces_edits_and_appends_only_scrolled_rows(
+    monkeypatch,
+) -> None:
+    visible_outputs = iter(
+        (
+            b'line one\nline two\nprompt$ xxxxx',
+            b'line one\nline two\nprompt$ xxxx',
+            b'line two\nprompt$ xxxx\nnew output',
+        )
+    )
+
+    def fake_run(command, **kwargs):
+        if 'display-message' in command:
+            return SimpleNamespace(returncode=0, stdout=b'1\n', stderr=b'')
+        output = b'older history\n' if '-E' in command else next(visible_outputs)
+        return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+    session = TmuxTerminalSession(_target())
+
+    session.read(0)
+    assert session.take_output_projection() == {
+        'history_reset': True,
+        'history': b'older history\n',
+        'screen': b'line one\nline two\nprompt$ xxxxx',
+    }
+
+    session.read(0)
+    assert session.take_output_projection() == {
+        'screen': b'line one\nline two\nprompt$ xxxx',
+    }
+
+    session.read(0)
+    assert session.take_output_projection() == {
+        'screen': b'line two\nprompt$ xxxx\nnew output',
+        'history_append': b'line one\n',
+    }
+
+
+def test_source_terminal_projection_does_not_duplicate_screen_without_history(
+    monkeypatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if 'display-message' in command:
+            return SimpleNamespace(returncode=0, stdout=b'0\n', stderr=b'')
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b'prompt$ abc',
+            stderr=b'',
+        )
+
+    monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
+    session = TmuxTerminalSession(_target())
+
+    rendered = session.read(0)
+
+    assert rendered is not None
+    assert rendered.count(b'prompt$ abc') == 1
+    assert session.take_output_projection() == {
+        'history_reset': True,
+        'history': b'',
+        'screen': b'prompt$ abc',
+    }
+    assert sum('capture-pane' in command for command in calls) == 1
 
 
 def test_terminal_delta_preserves_complete_source_rows(monkeypatch) -> None:
@@ -285,6 +375,14 @@ def test_terminal_snapshot_normalization_preserves_ansi_and_wide_characters() ->
     fitted = _fit_terminal_snapshot(snapshot, 9)
 
     assert fitted == snapshot
+
+
+def test_terminal_snapshot_trims_join_padding_but_keeps_prompt_cursor_space() -> None:
+    snapshot = b'joined row   \x1b[0m\nprompt$ '
+
+    assert _fit_terminal_snapshot(snapshot, 80) == (
+        b'joined row \x1b[0m\nprompt$ '
+    )
 
 
 def test_terminal_resumed_session_repaints_visible_pane_without_history(monkeypatch) -> None:
@@ -421,6 +519,113 @@ def test_agent_terminal_never_changes_desktop_layout(
     finally:
         if second_terminal_session is not None:
             second_terminal_session.close()
+        if terminal_session is not None:
+            terminal_session.close()
+        subprocess.run(
+            [tmux, '-S', str(socket_path), 'kill-server'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=3,
+            env=_terminal_client_env(),
+        )
+
+
+@pytest.mark.skipif(
+    os.name == 'nt' or shutil.which('tmux') is None,
+    reason='terminal projection requires tmux on a POSIX host',
+)
+def test_agent_terminal_projection_joins_wraps_and_replaces_prompt_edits(
+    tmp_path: Path,
+) -> None:
+    tmux = str(shutil.which('tmux'))
+    socket_path = tmp_path / 'projection-source.sock'
+    session_name = 'projection-source-mobile'
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [tmux, '-S', str(socket_path), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=3,
+            env=_terminal_client_env(),
+        )
+
+    run(
+        'new-session',
+        '-d',
+        '-s',
+        session_name,
+        '-x',
+        '24',
+        '-y',
+        '8',
+        "env PS1='probe$ ' bash --noprofile --norc -i",
+    )
+    terminal_session = None
+    try:
+        pane_id = run(
+            'display-message',
+            '-p',
+            '-t',
+            session_name,
+            '#{pane_id}',
+        ).stdout.strip()
+        time.sleep(0.15)
+        before = run(
+            'display-message',
+            '-p',
+            '-t',
+            pane_id,
+            '#{pane_width}x#{pane_height}:#{window_layout}',
+        ).stdout.strip()
+        target = TerminalAttachTarget(
+            terminal_id='projection-source-real',
+            socket_path=str(socket_path),
+            session_name=session_name,
+            pane_id=pane_id,
+            geometry=TerminalGeometry(columns=24, rows=8),
+            target_summary={
+                'project_id': 'proj-test',
+                'agent': 'lead',
+                'pane_id': pane_id,
+            },
+            tmux_binary=tmux,
+            include_history=True,
+        )
+        terminal_session = TmuxTerminalSession(target)
+        terminal_session.viewport_state()
+
+        run('send-keys', '-t', pane_id, '-l', 'abcdefghijklmnopqrstuvwxyz0123456789')
+        time.sleep(0.15)
+        terminal_session.read(0)
+        initial = terminal_session.take_output_projection()
+
+        assert initial is not None
+        assert initial['history'] == b''
+        assert b'probe$ abcdefghijklmnopqrstuvwxyz0123456789' in initial['screen']
+        assert bytes(initial['screen']).count(b'probe$ ') == 1
+
+        run('send-keys', '-t', pane_id, 'BSpace', 'BSpace', 'BSpace')
+        time.sleep(0.15)
+        terminal_session.read(0)
+        edited = terminal_session.take_output_projection()
+
+        assert edited is not None
+        assert 'history_append' not in edited
+        assert b'probe$ abcdefghijklmnopqrstuvwxyz0123456' in edited['screen']
+        assert b'0123456789' not in edited['screen']
+        after = run(
+            'display-message',
+            '-p',
+            '-t',
+            pane_id,
+            '#{pane_width}x#{pane_height}:#{window_layout}',
+        ).stdout.strip()
+        assert after == before
+    finally:
         if terminal_session is not None:
             terminal_session.close()
         subprocess.run(
