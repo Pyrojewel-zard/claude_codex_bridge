@@ -227,6 +227,7 @@ def _materialize_provider_home(
             workspace_path=workspace_path,
             auto_permission=auto_permission,
             command_policy=command_policy,
+            extra_env=dict(getattr(spec, 'env', {}) or {}),
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=Path(runtime_dir) / 'claude-memory-projection.json',
         )
