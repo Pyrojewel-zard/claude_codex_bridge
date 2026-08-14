@@ -11,10 +11,12 @@ from agents.models import (
     ToolWindowSpec,
     WindowSpec,
     is_layout_tool_alias,
+    is_native_windows_only_layout_tool_alias,
     normalize_agent_name,
     normalize_layout_tool_alias,
     parse_layout_spec,
 )
+from platforms.windows.os_platform import is_native_windows
 
 from ..common import ConfigValidationError
 
@@ -112,6 +114,10 @@ def parse_topology_windows(raw_windows: Any) -> tuple[WindowSpec, ...] | None:
                     if leaf.provider is not None:
                         raise ConfigValidationError(
                             f'windows.{raw_name}: tool alias {leaf.name!r} must not declare a provider'
+                        )
+                    if is_native_windows_only_layout_tool_alias(leaf.name) and not is_native_windows():
+                        raise ConfigValidationError(
+                            f'windows.{raw_name}: tool alias {leaf.name!r} is only available on native Windows'
                         )
                     try:
                         normalized_tool = normalize_layout_tool_alias(leaf.name)
