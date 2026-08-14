@@ -102,6 +102,137 @@ def test_prepare_start_agents_skips_provider_preparation_for_reused_binding(
     assert prepared[0].effective_command is None
 
 
+def test_prepare_start_agents_restarts_reused_binding_when_provider_profile_drifts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-start-prep-profile-drift'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        '\n'.join(
+            [
+                'agent1:claude',
+                '',
+                '[agents.agent1.provider_profile.env]',
+                'ANTHROPIC_AUTH_TOKEN = "token-new"',
+                'ANTHROPIC_BASE_URL = "https://example.test"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    bootstrap_project(project_root)
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+    config = load_project_config(project_root).config
+    paths = PathLayout(project_root)
+    runtime_dir = paths.agent_provider_runtime_dir('agent1', 'claude')
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / 'provider-profile.json').write_text(
+        json.dumps(
+            {
+                'provider': 'claude',
+                'agent_name': 'agent1',
+                'mode': 'inherit',
+                'profile_root': str(paths.provider_profiles_dir / 'agent1' / 'claude'),
+                'runtime_home': None,
+                'env': {},
+                'inherit_api': True,
+                'inherit_auth': True,
+                'inherit_config': True,
+                'inherit_skills': True,
+                'inherit_commands': True,
+                'inherit_memory': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    binding = SimpleNamespace(runtime_ref='mux:w1:p1')
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path=None,
+        tmux_session_name=None,
+        workspace_window_id=None,
+        resolve_agent_binding_fn=lambda **kwargs: binding,
+        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert [call['agent_name'] for call in calls] == ['agent1']
+    assert calls[0]['refresh_profile'] is True
+    assert prepared[0].binding is None
+    assert prepared[0].raw_binding is binding
+    assert prepared[0].stale_binding is True
+    assert prepared[0].provider_prepared is True
+    assert prepared[0].binding_reject_reason == 'provider_profile_changed'
+
+
+def test_provider_profile_reject_reason_accepts_agent_env_api_credentials(
+    tmp_path: Path,
+) -> None:
+    from ccbd.start_preparation import _provider_profile_reject_reason
+
+    spec = SimpleNamespace(
+        provider='claude',
+        env={'ANTHROPIC_API_KEY': 'sk-agent-level'},
+        provider_profile=SimpleNamespace(
+            mode='inherit',
+            home=None,
+            env={},
+            mcp_servers={},
+            plugins={},
+            inherit_api=True,
+            inherit_auth=True,
+            inherit_config=True,
+            inherit_skills=True,
+            inherit_commands=True,
+            inherit_memory=True,
+            inherited_skill_include=(),
+            inherited_skill_exclude=(),
+            skill_overlays={},
+        ),
+    )
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / 'provider-profile.json').write_text(
+        json.dumps(
+            {
+                'provider': 'claude',
+                'agent_name': 'agent1',
+                'mode': 'inherit',
+                'profile_root': None,
+                'runtime_home': None,
+                'env': {'ANTHROPIC_API_KEY': 'sk-agent-level'},
+                'inherit_api': True,
+                'inherit_auth': True,
+                'inherit_config': True,
+                'inherit_skills': True,
+                'inherit_commands': True,
+                'inherit_memory': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    paths = SimpleNamespace(agent_provider_runtime_dir=lambda agent_name, provider: runtime_dir)
+
+    assert _provider_profile_reject_reason(paths=paths, spec=spec, agent_name='agent1') is None
+
+
 def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
     monkeypatch,
     tmp_path: Path,
