@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.4-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.3 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.4 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.3/ccb-mobile-v8.6.3.apk)
+- [下载 CCB Mobile v8.6.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.4/ccb-mobile-v8.6.4.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -302,6 +302,15 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.6.4</b> - 自适应且更可靠的 Mobile 终端</summary>
+
+- Agent 终端快照会按手机视口重新排版，同时保持电脑端 tmux pane 尺寸不变。
+- 改进 LAN 与 Relay 路由下的终端输入和重连稳定性，并在 gateway 退出时可靠关闭活跃 session。
+- 终端字号与快捷键顺序统一放入终端设置；手机和宽屏布局均可使用全宽内嵌终端模式。
+
+</details>
+
+<details>
 <summary><b>v8.6.3</b> - 手机端访问 Agent workspace 产物</summary>
 
 - 当前 Agent 在 `.ccb/workspaces/&lt;agent&gt;/...` 中引用的普通文件，会转换为经过认证的 Mobile 下载附件。

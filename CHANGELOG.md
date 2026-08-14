@@ -1,5 +1,18 @@
 # Changelog
 
+## v8.6.4 (2026-08-14)
+
+- Reworked CCB Mobile Agent terminals as responsive local projections: phone
+  columns now follow the device viewport while the desktop tmux pane retains
+  its authoritative geometry.
+- Added inline full-width Agent terminal mode, persisted terminal font sizing,
+  and configurable shortcut ordering without cluttering the terminal surface.
+- Hardened LAN and Relay terminal lifecycle handling, including reconnect
+  coalescing, stale socket/stream cleanup, source-geometry notifications, and
+  clean gateway shutdown of active sessions.
+- Existing pairing data requires no migration. Upgrade the CCB host and Mobile
+  APK together to use the complete terminal viewport protocol.
+
 ## v8.6.3 (2026-08-13)
 
 - CCB Mobile now turns ordinary file links under the current Agent's
