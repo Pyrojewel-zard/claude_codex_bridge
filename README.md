@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.4-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.5-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -240,9 +240,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.6.4 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.6.5 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.6.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.4/ccb-mobile-v8.6.4.apk)
+- [Download CCB Mobile v8.6.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.5/ccb-mobile-v8.6.5.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -331,7 +331,7 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
-<summary><b>v8.6.4</b> - Responsive and reliable Mobile terminals</summary>
+<summary><b>v8.6.5</b> - Responsive and reliable Mobile terminals</summary>
 
 - Reflow Agent terminal snapshots to the phone viewport while preserving the desktop tmux pane geometry.
 - Keep terminal input and reconnection stable across LAN and Relay routes, and close active sessions cleanly during gateway shutdown.

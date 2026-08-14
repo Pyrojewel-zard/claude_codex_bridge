@@ -1,5 +1,18 @@
 # Changelog
 
+## v8.6.5 (2026-08-14)
+
+- Reconstructed wrapped Agent terminal rows as logical lines before local
+  mobile reflow, so portrait and landscape widths use the device viewport
+  without resizing the desktop-owned tmux pane.
+- Replaced append-only full-screen terminal repaints with structured history
+  and mutable-screen projections. Prompt edits and Backspace now replace the
+  active row in place instead of accumulating stale lines in scrollback.
+- Kept backward-compatible terminal bytes on the wire while allowing current
+  Android clients to distinguish real scroll history from screen replacement.
+- Existing pairing and project state require no migration. Upgrade both the
+  CCB host and Mobile APK to activate the corrected projection protocol.
+
 ## v8.6.4 (2026-08-14)
 
 - Reworked CCB Mobile Agent terminals as responsive local projections: phone
