@@ -30,10 +30,12 @@ def resolve_backend_for_session(
     session_data: dict,
     detect_terminal_fn,
     tmux_backend_factory,
+    herdr_backend_factory=None,
 ):
     return TerminalBackendSelection(
         detect_terminal_fn=detect_terminal_fn,
         tmux_backend_factory=tmux_backend_factory,
+        herdr_backend_factory=herdr_backend_factory,
     ).get_backend_for_session(session_data)
 
 

@@ -1670,6 +1670,69 @@ def test_terminal_api_get_backend_threads_production_herdr_wiring(monkeypatch) -
     assert isinstance(backend, HerdrBackend)
 
 
+def test_terminal_api_get_backend_for_session_reattaches_persisted_herdr_pane_without_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CCB_HERDR_CAPABILITY_REPORT", raising=False)
+    monkeypatch.setattr(terminal_api, "_herdr_request_adapter", lambda: _FakeRequestAdapter())
+
+    backend = terminal_api.get_backend_for_session(
+        {
+            "terminal": "mux",
+            "backend_impl": "herdr",
+            "namespace_ref": {
+                "backend_family": "herdr-native",
+                "backend_impl": "herdr",
+                "namespace_id": "wC",
+                "session_name": "ccb-demo",
+                "ipc_kind": "herdr_socket",
+                "ipc_ref": "herdr://local",
+            },
+            "pane_id": "wC:p1",
+        }
+    )
+
+    assert isinstance(backend, HerdrBackend)
+    assert backend.is_alive("wC:p1") is True
+    backend.send_text("wC:p1", "secret typed text")
+    assert getattr(backend, "_ccb_project_namespace_ref")["namespace_id"] == "wC"
+    backend._capability_gate.require_supported("capture_pane")
+    backend._capability_gate.require_supported("send_text")
+
+
+def test_terminal_api_get_backend_for_session_preserves_stricter_live_capability_report(
+    monkeypatch,
+) -> None:
+    capabilities = dict(_supported_gate().capabilities or {})
+    capabilities["command_status"] = dict(capabilities["command_status"])
+    capabilities["semantic_status"] = dict(capabilities["semantic_status"])
+    capabilities["command_status"]["send_input"] = "unsupported"
+    capabilities["semantic_status"]["send_input"] = "unsupported"
+    monkeypatch.setattr(terminal_api, "_herdr_capability_report", lambda: capabilities)
+    monkeypatch.setattr(terminal_api, "_herdr_request_adapter", lambda: _FakeRequestAdapter())
+
+    backend = terminal_api.get_backend_for_session(
+        {
+            "terminal": "mux",
+            "backend_impl": "herdr",
+            "namespace_ref": {
+                "backend_family": "herdr-native",
+                "backend_impl": "herdr",
+                "namespace_id": "wC",
+                "session_name": "ccb-demo",
+                "ipc_kind": "herdr_socket",
+                "ipc_ref": "herdr://local",
+            },
+            "pane_id": "wC:p1",
+        }
+    )
+
+    with pytest.raises(MuxCommandErrorV2) as exc_info:
+        backend.send_text("wC:p1", "secret typed text")
+
+    assert exc_info.value.category == "unsupported"
+
+
 def test_terminal_api_get_backend_herdr_defaults_fail_closed(monkeypatch) -> None:
     monkeypatch.setattr(terminal_api, "_backend_cache", None)
     monkeypatch.delenv("CCB_HERDR_CAPABILITY_REPORT", raising=False)

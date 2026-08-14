@@ -191,6 +191,7 @@ def get_backend_for_session(session_data: dict) -> Optional[TerminalBackend]:
         session_data=session_data,
         detect_terminal_fn=detect_terminal,
         tmux_backend_factory=TmuxBackend,
+        herdr_backend_factory=_herdr_backend_for_persisted_session_factory,
     )
 
 
@@ -237,6 +238,21 @@ def _herdr_backend_factory() -> HerdrBackend:
     )
 
 
+def _herdr_backend_for_persisted_session_factory() -> HerdrBackend:
+    capabilities = _herdr_persisted_session_capability_report()
+    request_adapter = _herdr_request_adapter()
+    return HerdrBackend(
+        client=HerdrSocketClient(
+            request_fn=request_adapter,
+            socket_ref=request_adapter.socket_ref,
+            allow_session_scoped_ipc_refs=bool(
+                getattr(request_adapter, "allow_session_scoped_ipc_refs", False)
+            ),
+        ),
+        capability_gate=_herdr_capability_gate(capabilities),
+    )
+
+
 def get_backend_for_namespace_teardown(namespace_ref: Mapping[str, object]) -> HerdrBackend:
     """Build a Herdr backend that can tear down an already-persisted namespace.
 
@@ -261,6 +277,93 @@ def get_backend_for_namespace_teardown(namespace_ref: Mapping[str, object]) -> H
     )
     setattr(backend, "_ccb_project_namespace_ref", dict(namespace_ref))
     return backend
+
+
+def _herdr_persisted_session_capability_report() -> dict[str, object]:
+    """Capability evidence for re-attaching to an already persisted Herdr session."""
+    statuses = {
+        "session_attach": "supported",
+        "pane_spawn": "supported",
+        "send_input": "supported",
+        "read_output": "supported",
+        "kill_pane": "supported",
+        "workspace_create": "supported",
+        "workspace_list": "supported",
+        "workspace_focus": "supported",
+        "workspace_close": "supported",
+        "workspace_metadata": "supported",
+        "pane_metadata": "supported",
+        "pane_list": "supported",
+        "pane_split": "supported",
+        "pane_run": "supported",
+    }
+    report: dict[str, object] = {
+        "backend_impl": "herdr",
+        "command_status": dict(statuses),
+        "semantic_status": dict(statuses),
+        "blocking_gaps": [],
+        "windows_beta_gaps": [],
+        "adapter_recommendation": "continue-with-gaps",
+        "verdict": "partial",
+        "failure_class": "windows-beta-gap",
+        "source_ref": "persisted-session",
+    }
+    live_report = _herdr_capability_report()
+    if live_report is None:
+        return report
+    if live_report.get("blocked") is True:
+        return dict(live_report)
+    return _intersect_herdr_capability_reports(report, live_report)
+
+
+def _intersect_herdr_capability_reports(
+    persisted_report: dict[str, object],
+    live_report: Mapping[str, object],
+) -> dict[str, object]:
+    merged = dict(persisted_report)
+    merged["source_ref"] = (
+        str(live_report.get("source_ref") or "").strip()
+        or str(persisted_report.get("source_ref") or "").strip()
+    )
+    for key in ("command_status", "semantic_status"):
+        persisted_status = persisted_report.get(key)
+        live_status = live_report.get(key)
+        if not isinstance(persisted_status, Mapping) or not isinstance(live_status, Mapping):
+            merged[key] = {}
+            continue
+        merged[key] = {
+            str(name): (
+                "supported"
+                if status == "supported" and live_status.get(name) == "supported"
+                else str(live_status.get(name) or "unsupported")
+            )
+            for name, status in persisted_status.items()
+        }
+    merged["blocking_gaps"] = sorted(
+        {
+            str(item)
+            for item in _list_items(persisted_report.get("blocking_gaps"))
+            + _list_items(live_report.get("blocking_gaps"))
+            if str(item).strip()
+        }
+    )
+    merged["windows_beta_gaps"] = sorted(
+        {
+            str(item)
+            for item in _list_items(persisted_report.get("windows_beta_gaps"))
+            + _list_items(live_report.get("windows_beta_gaps"))
+            if str(item).strip()
+        }
+    )
+    for key in ("adapter_recommendation", "verdict", "failure_class"):
+        value = live_report.get(key)
+        if isinstance(value, str) and value.strip():
+            merged[key] = value
+    return {str(key): value for key, value in merged.items()}
+
+
+def _list_items(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
 
 
 def _herdr_teardown_capability_report() -> dict[str, object]:
