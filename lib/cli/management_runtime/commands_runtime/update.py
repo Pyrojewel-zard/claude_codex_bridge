@@ -15,7 +15,10 @@ import zipfile
 from release_artifacts import release_artifact_name
 from platforms.windows.release.surface import load_windows_x64_release_surface_projection
 from cli.roles_runtime.commands import cmd_roles
-from cli.services.mobile_host import start_or_replace_mobile_host_service
+from cli.services.mobile_host import (
+    restart_running_mobile_host_service,
+    start_or_replace_mobile_host_service,
+)
 from cli.services.mobile_update import (
     DEFAULT_MOBILE_GATEWAY_LISTEN,
     run_mobile_cloudflare_onboarding,
@@ -712,6 +715,7 @@ def _run_post_update_with_new_entrypoint(
     env["CCB_PROVIDER_UPDATE_MODE"] = _normalized_provider_update_mode(provider_mode)
     env['CCB_POST_UPDATE_CACHE_CLEANUP_FLOW'] = '1'
     env['CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED'] = '1' if cache_cleanup_enabled else '0'
+    env['CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW'] = '1'
     if not cache_cleanup_enabled:
         command.append('--no-cache-cleanup')
     timeout = _post_update_timeout_seconds(
@@ -898,6 +902,26 @@ def _run_post_update_provisioning(
                 '⚠️  Post-update legacy cache migration failed; '
                 f'the core update is unaffected: {type(exc).__name__}: {exc}'
             )
+    if (
+        _truthy_env('CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW')
+        and not (failures and _post_update_failure_is_required())
+    ):
+        try:
+            refreshed_host = restart_running_mobile_host_service(
+                script_root=install_dir,
+            )
+        except Exception as exc:
+            print(
+                '⚠️  Mobile Host post-update refresh failed; '
+                f'the core update is unaffected: {type(exc).__name__}: {exc}'
+            )
+            print('   Run `ccb update mobile` to restart it with the installed version.')
+        else:
+            if refreshed_host is not None:
+                print(
+                    '✅ Mobile Host refreshed with the installed CCB version: '
+                    f'pid={refreshed_host.pid} route={refreshed_host.route_provider}'
+                )
     return 1 if failures else 0
 
 

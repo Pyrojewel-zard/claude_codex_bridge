@@ -77,6 +77,30 @@ no desktop provider pane shares it.
 The retired `adaptive_pane` value remains decode-compatible for older gateways,
 but the app treats it as fixed source and never sends resize frames.
 
+## App And Host Runtime Compatibility
+
+The APK and the computer-side Mobile Host are separate runtime surfaces. An
+updated APK does not replace an already-running Host process. A fixed-source
+terminal requires the Host to emit `replace_snapshot`; an older Host emits only
+the legacy append stream, which causes both clipped desktop-width rendering and
+stale prompt rows during Backspace edits.
+
+The core `ccb update` post-update entrypoint must therefore restart an active
+managed Mobile Host with the newly installed code. The restart contract is:
+
+- restart only a live service whose recorded entrypoint belongs to the updated
+  installation;
+- leave an intentionally stopped service stopped;
+- leave a Host launched from a source/development checkout untouched;
+- preserve listen address, route provider, host identity, pairing handoff, and
+  paired-device tokens;
+- do not rotate access merely because the executable changed;
+- report a non-blocking warning and the `ccb update mobile` recovery command if
+  service replacement fails.
+
+This lifecycle rule prevents a new App from silently falling back to the old
+append protocol after a successful computer-side update.
+
 ## Viewport And Font UI
 
 - The terminal has one readable font size, defaulting to 13pt and bounded to
@@ -135,6 +159,9 @@ but the app treats it as fixed source and never sends resize frames.
   stale-target handling remain functional.
 - Repeated Backspace edits replace the current prompt row in place; no stale
   `xxxxx`, `xxxx`, `xxx` staircase may accumulate in local scrollback.
+- Updating CCB while a managed Mobile Host is active replaces its PID and
+  increments its generation without changing route/listen or revoking an
+  already-paired device token.
 - Chat mode and terminal-history bubbles remain unaffected.
 - Focused Python and Flutter tests, static analysis, APK build, and real
   server-wide Android Emulator validation pass.
@@ -180,6 +207,25 @@ The earlier adaptive-pane and ANSI repaint evidence is superseded. Resizing a
 shared pane affected desktop clients, while appending full-screen repaints
 created stale prompt rows during edits. Neither behavior satisfies this
 design.
+
+The signed v8.6.5 compatibility investigation used the public Relay and a real
+Codex pane in the dedicated
+`test_ccb2/mobile-terminal-v865-real-provider` project. Owner-local evidence is
+outside the source tree under `/home/bfly/.cache/ccb-emulator/final-v865/`:
+
+- `real-relay-provider-keycode-xxxxx.png` and
+  `real-relay-provider-keycode-delete-1.png` through `delete-5.png` show one
+  prompt row changing from `xxxxx` to empty with no stale-row staircase;
+- `current.png` and `real-relay-provider-landscape.png` show the same
+  187-column provider pane reflowing at readable size in portrait and expanding
+  to the landscape width;
+- the installed package reports `versionName=8.6.5` and
+  `versionCode=8060005`.
+
+The process-level update fixture is recorded outside the source tree at
+`/home/bfly/.cache/ccb-host-refresh-e2e/result.json`. It proves PID replacement,
+generation increment, unchanged route/listen and pairing code, and successful
+authentication with the pre-restart device token.
 
 ## Open Edges
 

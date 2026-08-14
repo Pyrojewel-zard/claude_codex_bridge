@@ -126,6 +126,7 @@ def start_or_replace_mobile_host_service(
     monotonic_fn: Callable[[], float] = time.monotonic,
     lock_wait_timeout_s: float = MOBILE_HOST_LOCK_WAIT_TIMEOUT_S,
     rotate_pairing: bool = False,
+    force_restart: bool = False,
 ) -> MobileHostServiceResult:
     try:
         parsed_listen = parse_listen_address(
@@ -166,7 +167,7 @@ def start_or_replace_mobile_host_service(
                 state_dir=paths.state_dir,
                 process_cmdline_fn=process_cmdline_fn,
             ):
-                if _mobile_host_state_matches_request(
+                if not force_restart and _mobile_host_state_matches_request(
                     state,
                     listen=listen,
                     public_url=public_url,
@@ -307,6 +308,61 @@ def start_or_replace_mobile_host_service(
         _release_mobile_host_lock(paths.lock_path, lock_fd)
 
 
+def restart_running_mobile_host_service(
+    *,
+    script_root: Path,
+    state_dir: Path | None = None,
+    process_exists_fn: Callable[[int], bool] = is_pid_alive,
+    process_cmdline_fn: Callable[[int], str] | None = None,
+    terminate_pid_tree_fn: Callable[..., bool] = terminate_pid_tree,
+    port_owner_fn: Callable[[str], PortOwner | None] | None = None,
+    spawn_fn: Callable[..., object] | None = None,
+    health_check_fn: Callable[[str], bool] | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> MobileHostServiceResult | None:
+    """Restart an active Host owned by this installation without rotating access."""
+    paths = mobile_host_service_paths(state_dir)
+    state = read_mobile_host_service_state(paths.state_path)
+    pid = _state_pid(state)
+    if pid is None or not process_exists_fn(pid):
+        return None
+    if not _mobile_host_process_uses_script_root(
+        pid,
+        state,
+        script_root=script_root,
+        process_cmdline_fn=process_cmdline_fn,
+    ):
+        return None
+
+    listen = _state_listen(state, listen='')
+    route_provider = _state_route_provider(state, fallback='')
+    if not listen or not route_provider:
+        raise MobileHostServiceError(
+            f'active mobile host service state is incomplete: {paths.state_path}'
+        )
+    public_url = _state_restart_public_url(state, route_provider=route_provider)
+    host_id = str((state or {}).get('host_id') or '').strip() or None
+    return start_or_replace_mobile_host_service(
+        script_root=script_root,
+        listen=listen,
+        public_url=public_url,
+        route_provider=route_provider,
+        state_dir=paths.state_dir,
+        host_id=host_id,
+        process_exists_fn=process_exists_fn,
+        process_cmdline_fn=process_cmdline_fn,
+        terminate_pid_tree_fn=terminate_pid_tree_fn,
+        port_owner_fn=port_owner_fn,
+        spawn_fn=spawn_fn,
+        health_check_fn=health_check_fn,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        rotate_pairing=False,
+        force_restart=True,
+    )
+
+
 def maybe_handle_mobile_host_serve_command(tokens: list[str], *, script_root: Path) -> int | None:
     if list(tokens[:1]) != [MOBILE_HOST_SERVE_COMMAND]:
         return None
@@ -378,6 +434,11 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
                 'local_gateway_url': str(summary.get('local_gateway_url') or _local_gateway_url(str(args.listen))),
                 'gateway_url': str(summary.get('gateway_url') or summary.get('local_gateway_url') or ''),
                 'route_provider': str(summary.get('route_provider') or args.route_provider or 'tailnet'),
+                **(
+                    {'public_url': str(args.public_url).strip()}
+                    if args.public_url
+                    else {}
+                ),
                 **(
                     {'relay_mode': relay_credentials.relay_mode}
                     if relay_credentials is not None
@@ -870,6 +931,36 @@ def _process_cmdline(pid: int) -> str:
     return (result.stdout or '').strip()
 
 
+def _mobile_host_process_uses_script_root(
+    pid: int,
+    state: dict[str, object] | None,
+    *,
+    script_root: Path,
+    process_cmdline_fn: Callable[[int], str] | None,
+) -> bool:
+    expected_entrypoint = (Path(script_root).expanduser() / 'ccb.py').resolve()
+    recorded_entrypoint = str((state or {}).get('entrypoint') or '').strip()
+    if recorded_entrypoint:
+        try:
+            return Path(recorded_entrypoint).expanduser().resolve() == expected_entrypoint
+        except OSError:
+            return False
+
+    cmdline = (process_cmdline_fn or _process_cmdline)(pid)
+    try:
+        tokens = shlex.split(cmdline, posix=os.name != 'nt')
+    except ValueError:
+        return False
+    for token in tokens:
+        if not token.endswith('ccb.py'):
+            continue
+        try:
+            return Path(token).expanduser().resolve() == expected_entrypoint
+        except OSError:
+            return False
+    return False
+
+
 def _acquire_mobile_host_lock(
     lock_path: Path,
     *,
@@ -1191,6 +1282,26 @@ def _state_route_provider(state: dict[str, object] | None, *, fallback: str) -> 
     return value or str(fallback)
 
 
+def _state_restart_public_url(
+    state: dict[str, object] | None,
+    *,
+    route_provider: str,
+) -> str | None:
+    if str(route_provider).strip().lower() == 'relay':
+        return None
+    recorded = str((state or {}).get('public_url') or '').strip()
+    if recorded:
+        return recorded
+    gateway_url = _state_gateway_url(state, fallback='')
+    local_gateway_url = _state_local_gateway_url(
+        state,
+        listen=_state_listen(state, listen=''),
+    )
+    if gateway_url and gateway_url.rstrip('/') != local_gateway_url.rstrip('/'):
+        return gateway_url
+    return None
+
+
 def _state_pairing(state: dict[str, object] | None) -> dict[str, object] | None:
     pairing = (state or {}).get('pairing')
     if not isinstance(pairing, dict):
@@ -1280,6 +1391,7 @@ __all__ = [
     'mobile_host_service_paths',
     'read_mobile_host_service_state',
     'remove_mobile_host_service_state',
+    'restart_running_mobile_host_service',
     'run_mobile_host_serve_command',
     'start_or_replace_mobile_host_service',
     'write_mobile_host_service_state',
