@@ -364,6 +364,33 @@ def _elapsed_since(from_at: str, now: str) -> float | None:
 # composer row is the only evidence that this job's prompt is still pending.
 _PASTED_PLACEHOLDER_RE = re.compile(r"\[Pasted text #\d+\s+\+\s*\d+\s+lines?\]")
 
+# --- Prompt-tail fingerprint (third activation evidence) ---------------------
+# A long pasted prompt whose head (and request anchor) scrolled out of the pane
+# capture leaves only its *tail* visible in the expanded multi-line composer.
+# The tail of the submitted prompt — not the anchor and not the folded
+# placeholder — is then the only remaining proof that *this* job's input is
+# still pending. Generic control lines never form the fingerprint, and only the
+# current composer block is inspected, so a matching tail in scrollback/history
+# can never trigger.
+_GENERIC_CONTROL_LINE_RE = re.compile(
+    r"\b(?:CCB_REQ_ID|CCB_REPLY_MODE|CCB_BEGIN|CCB_END)\b",
+    re.IGNORECASE,
+)
+_TAIL_FRAGMENT_CHARS = 48        # tail fragment contributed per business line
+_TAIL_FINGERPRINT_MAX_LINES = 3  # last up-to-3 business lines
+_TAIL_MIN_LINE_CHARS = 10        # a business line must be this long to count as "long enough"
+_TAIL_MIN_TOTAL_CHARS = 28       # combined tail specificity floor
+_TAIL_MIN_MATCH = 2              # at least this many fragments must land, in order
+
+# Composer block boundaries: hint/status rows are never part of the input.
+_STATUS_HINT_RE = re.compile(
+    r"for shortcuts|esc to interrupt|type your message|for commands",
+    re.IGNORECASE,
+)
+_ARROW_ROW_RE = re.compile(r"^\s*[❯>]\s?(.*)$")
+_BOXED_ROW_RE = re.compile(r"^\s*[│|]\s*[❯>]?\s?(.*?)\s*[│|]\s*$")
+_TRANSCRIPT_ROLE_RE = re.compile(r"^\s*(?:user|assistant|system)\b", re.IGNORECASE)
+
 
 def _current_composer_content(text: str) -> str | None:
     """Content of the current Claude composer input row, decorations removed.
@@ -425,6 +452,175 @@ def _pane_holds_current_job_marker(text: str, submission: ProviderSubmission) ->
     return anchor in text
 
 
+def _collapse_whitespace(text: str) -> str:
+    """Collapse any whitespace run (incl. ``\\xa0``) to a single space."""
+    return " ".join(str(text).replace("\xa0", " ").split())
+
+
+def _strip_all_whitespace(text: str) -> str:
+    """Remove *all* whitespace — used for wrap-tolerant fingerprint matching.
+
+    A TUI-wrapped prompt line renders as several visual rows; stripping every
+    whitespace char on both sides lets a single logical line still match across
+    the wrap boundary (and across composer indentation).
+    """
+    return "".join(str(text).replace("\xa0", " ").split())
+
+
+def _prompt_tail_fingerprint(prompt_text: str) -> tuple[str, ...] | None:
+    """Stable, non-generic tail fingerprint of a submitted prompt.
+
+    Returns the tail fragments of the last 2-3 non-blank, non-control business
+    lines (``CCB_REQ_ID:`` / ``CCB_REPLY_MODE:`` / ``CCB_BEGIN`` / ``CCB_END``
+    are excluded). A line longer than ``_TAIL_FRAGMENT_CHARS`` contributes only
+    its trailing fragment, because an expanded composer shows the *tail* of a
+    long pasted prompt. Returns ``None`` when fewer than two usable lines remain
+    or the combined tail is too short to be specific.
+    """
+    business: list[str] = []
+    for raw in (prompt_text or "").splitlines():
+        line = _collapse_whitespace(raw)
+        if not line:
+            continue
+        if _GENERIC_CONTROL_LINE_RE.search(line):
+            continue
+        business.append(line)
+    if len(business) < 2:
+        return None
+    # Prefer the last up-to-3 business lines that are each long enough to be
+    # specific; otherwise fall back to the last business lines so a short final
+    # line can still anchor the tail.
+    long_lines = [line for line in business if len(line) >= _TAIL_MIN_LINE_CHARS]
+    tail = (
+        long_lines[-_TAIL_FINGERPRINT_MAX_LINES:]
+        if len(long_lines) >= 2
+        else business[-_TAIL_FINGERPRINT_MAX_LINES:]
+    )
+    fragments = tuple(
+        line[-_TAIL_FRAGMENT_CHARS:] if len(line) > _TAIL_FRAGMENT_CHARS else line
+        for line in tail
+    )
+    if len("".join(fragments)) < _TAIL_MIN_TOTAL_CHARS:
+        return None
+    return fragments
+
+
+def _composer_row_content(line: str) -> str:
+    """Content of a composer row with arrow/box decoration removed."""
+    arrow = _ARROW_ROW_RE.match(line)
+    if arrow:
+        return arrow.group(1)
+    boxed = _BOXED_ROW_RE.match(line)
+    if boxed:
+        return boxed.group(1)
+    return line
+
+
+def _is_composer_anchor_row(line: str) -> bool:
+    return bool(_ARROW_ROW_RE.match(line)) or bool(_BOXED_ROW_RE.match(line))
+
+
+def _is_input_block_boundary(line: str) -> bool:
+    """True when a row above/below the anchor is *not* part of this composer.
+
+    Boxed rows (``│ … │``) are always input; indented arrow-style continuation
+    rows are input; blank lines, hint/status rows, transcript-turn rows, and
+    col-0 (non-boxed) history lines are boundaries.
+    """
+    if not line.strip():
+        return True
+    if _is_composer_anchor_row(line):
+        return True  # a different (empty) composer row
+    if _BOXED_ROW_RE.match(line):
+        return False  # boxed rows are input, never a boundary
+    if _STATUS_HINT_RE.search(line):
+        return True
+    if _TRANSCRIPT_ROLE_RE.match(line):
+        return True
+    if not line[0].isspace():
+        return True  # col-0 non-boxed line = transcript/history boundary
+    return False
+
+
+def _current_composer_block(text: str) -> str | None:
+    """Full text of the *current* composer input block, decorations removed.
+
+    Supports the expanded multi-line composer and TUI-wrapped rows: the block is
+    the bottom-most composer anchor (``❯ ...`` / boxed ``│ ... │``) plus every
+    contiguous input row above and below it, stopping at the first boundary
+    (blank line, hint/status row, a transcript-turn row, or another composer
+    anchor). Returns ``None`` when no composer input is visible. Only the
+    current input region is inspected, so a marker, placeholder, or prompt tail
+    in scrollback/history can never match.
+    """
+    tail = text.splitlines()[-64:]
+    anchor = None
+    for i in range(len(tail) - 1, -1, -1):
+        line = tail[i].replace("\xa0", " ").rstrip()
+        if _is_composer_anchor_row(line):
+            anchor = i
+            break
+    if anchor is None:
+        return None
+    rows: list[str] = []
+    j = anchor - 1
+    while j >= 0:
+        line = tail[j].replace("\xa0", " ").rstrip()
+        if _is_input_block_boundary(line):
+            break
+        rows.insert(0, _composer_row_content(line))
+        j -= 1
+    rows.append(_composer_row_content(tail[anchor]))
+    k = anchor + 1
+    while k < len(tail):
+        line = tail[k].replace("\xa0", " ").rstrip()
+        if _is_input_block_boundary(line):
+            break
+        rows.append(_composer_row_content(line))
+        k += 1
+    return "\n".join(rows)
+
+
+def _wrap_tolerant_match(block: str, fingerprint: tuple[str, ...]) -> bool:
+    """Ordered, wrap-tolerant containment of the fingerprint in a composer block.
+
+    All whitespace is removed on both sides so a TUI-wrap newline or indentation
+    cannot break a fragment. At least ``_TAIL_MIN_MATCH`` fragments must appear
+    in prompt order (a single short line is not enough).
+    """
+    block_key = _strip_all_whitespace(block)
+    pos = 0
+    matched = 0
+    for frag in fingerprint:
+        key = _strip_all_whitespace(frag)
+        if not key:
+            continue
+        idx = block_key.find(key, pos)
+        if idx < 0:
+            continue
+        pos = idx + len(key)
+        matched += 1
+        if matched >= _TAIL_MIN_MATCH:
+            return True
+    return matched >= _TAIL_MIN_MATCH
+
+
+def _composer_holds_prompt_tail(text: str, prompt_text: str) -> bool:
+    """True when the *current* composer block holds this job's prompt tail.
+
+    The prompt-tail fingerprint must hit the current composer block; a tail that
+    only appears in scrollback/history can never match, and generic control lines
+    never form the fingerprint.
+    """
+    block = _current_composer_block(text)
+    if block is None:
+        return False
+    fingerprint = _prompt_tail_fingerprint(prompt_text)
+    if not fingerprint:
+        return False
+    return _wrap_tolerant_match(block, fingerprint)
+
+
 def _maybe_resend_activation_enter(
     submission: ProviderSubmission,
     *,
@@ -451,11 +647,18 @@ def _maybe_resend_activation_enter(
     * the elapsed time since dispatch is at least the grace start and below the
       generous give-up cap (``CCB_CLAUDE_ACTIVATION_MAX_WAIT_S``, default 600s);
     * the pane is not busy (no ``esc to interrupt``) and the current composer
-      still holds *this* job's pending input: either the recognizable
-      prompt/anchor text, or — when the long paste has been folded by the
-      TUI — the collapsed placeholder ``[Pasted text #N +M lines]`` on the
-      current composer row (an empty composer, a different job's text, or a
-      placeholder that only appears in scrollback never matches);
+      still holds *this* job's pending input — any one of three pieces of
+      evidence:
+        * the recognizable prompt/anchor text;
+        * when the long paste has been folded by the TUI, the collapsed
+          placeholder ``[Pasted text #N +M lines]`` on the current composer row;
+        * when the prompt's head (and anchor) has scrolled out of the capture,
+          a wrap-tolerant match of the submitted prompt's tail fingerprint
+          against the current composer block (expanded multi-line / TUI-wrapped
+          rows) — generic control lines never form the fingerprint, and a tail
+          only present in scrollback/history never matches;
+      (an empty composer, a different job's text, or a placeholder / tail that
+      only appears in scrollback never matches);
     * this job has not already re-sent Enter (``activation_enter_count < 1``).
 
     The old ``[grace, 2*grace)`` window (default 6–12s) is removed: a folded
@@ -465,8 +668,9 @@ def _maybe_resend_activation_enter(
     more than one Enter, and that one Enter only ever submits the prompt that is
     still sitting in this job's composer. On a successful ``send_key`` the
     runtime state bumps ``activation_enter_count``, records the evidence kind
-    (``anchor_marker`` | ``pasted_placeholder``) in ``activation_enter_evidence``,
-    and stamps ``activation_enter_at`` so later polls never re-send.
+    (``anchor_marker`` | ``pasted_placeholder`` | ``prompt_tail``) in
+    ``activation_enter_evidence``, and stamps ``activation_enter_at`` so later
+    polls never re-send.
     """
     state = submission.runtime_state
     if not bool(state.get("prompt_sent", False)):
@@ -501,9 +705,16 @@ def _maybe_resend_activation_enter(
     if "esc to interrupt" in pane_text.lower():
         return None
     has_placeholder = _current_composer_holds_pasted_placeholder(pane_text)
-    if not has_placeholder and not _pane_holds_current_job_marker(pane_text, submission):
+    has_anchor = _pane_holds_current_job_marker(pane_text, submission)
+    has_tail = _composer_holds_prompt_tail(pane_text, str(state.get("prompt_text") or ""))
+    if not (has_placeholder or has_anchor or has_tail):
         return None
-    evidence = "pasted_placeholder" if has_placeholder else "anchor_marker"
+    if has_placeholder:
+        evidence = "pasted_placeholder"
+    elif has_anchor:
+        evidence = "anchor_marker"
+    else:
+        evidence = "prompt_tail"
     try:
         sent = send_key(pane_id, "Enter")
     except Exception:
