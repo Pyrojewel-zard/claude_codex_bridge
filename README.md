@@ -336,6 +336,7 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 - Reflow Agent terminal snapshots to the phone viewport while preserving the desktop tmux pane geometry.
 - Keep terminal input and reconnection stable across LAN and Relay routes, and close active sessions cleanly during gateway shutdown.
 - Keep terminal font size and shortcut order in the shared Terminal settings panel, with full-width inline terminal mode on phones and wide layouts.
+- Reattach persisted Windows Herdr namespace and pane references with fail-closed capability checks (PR #304).
 
 </details>
 

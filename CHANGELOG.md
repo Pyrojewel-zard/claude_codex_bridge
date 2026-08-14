@@ -10,6 +10,9 @@
 - Hardened LAN and Relay terminal lifecycle handling, including reconnect
   coalescing, stale socket/stream cleanup, source-geometry notifications, and
   clean gateway shutdown of active sessions.
+- Added fail-closed reattachment of persisted Windows Herdr namespace and pane
+  references, including capability intersection with stricter live evidence
+  (PR #304).
 - Existing pairing data requires no migration. Upgrade the CCB host and Mobile
   APK together to use the complete terminal viewport protocol.
 

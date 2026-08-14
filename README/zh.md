@@ -307,6 +307,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - Agent 终端快照会按手机视口重新排版，同时保持电脑端 tmux pane 尺寸不变。
 - 改进 LAN 与 Relay 路由下的终端输入和重连稳定性，并在 gateway 退出时可靠关闭活跃 session。
 - 终端字号与快捷键顺序统一放入终端设置；手机和宽屏布局均可使用全宽内嵌终端模式。
+- Windows Herdr 可重新挂接已持久化的 namespace 与 pane 引用，并保持 fail-closed 能力检查（PR #304）。
 
 </details>
 
