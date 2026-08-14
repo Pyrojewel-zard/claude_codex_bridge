@@ -121,7 +121,8 @@ class GatewayTerminalTransport
   }
 }
 
-class _GatewayTerminalSession implements TerminalSession {
+class _GatewayTerminalSession
+    implements TerminalSession, TerminalViewportSession {
   _GatewayTerminalSession({
     required GatewayTransport transport,
     required GatewayTerminalHandle handle,
@@ -139,7 +140,14 @@ class _GatewayTerminalSession implements TerminalSession {
        _outcomeReporter = outcomeReporter,
        _onClosed = onClosed,
        _connectionTimeout = connectionTimeout,
-       _geometry = geometry {
+       _geometry = geometry,
+       _viewport = TerminalViewport(
+         geometry: geometry,
+         resizePolicy:
+             handle.targetSummary.projectId == '@host'
+                 ? TerminalResizePolicy.client
+                 : TerminalResizePolicy.fixedSource,
+       ) {
     unawaited(
       _connect().catchError((Object error, StackTrace stackTrace) {
         if (!_closed) {
@@ -155,8 +163,11 @@ class _GatewayTerminalSession implements TerminalSession {
   _handleOpener;
   GatewayTerminalHandle _handle;
   TerminalGeometry _geometry;
+  TerminalViewport _viewport;
   final _output = StreamController<Uint8List>.broadcast();
+  final _viewportChanges = StreamController<TerminalViewport>.broadcast();
   StreamSubscription<GatewayTerminalFrame>? _subscription;
+  Future<void>? _reconnection;
   Future<void>? _renewal;
   Completer<void>? _connectionReady;
   var _connectionGeneration = 0;
@@ -179,6 +190,12 @@ class _GatewayTerminalSession implements TerminalSession {
   Stream<Uint8List> get output => _output.stream;
 
   @override
+  TerminalViewport get viewport => _viewport;
+
+  @override
+  Stream<TerminalViewport> get viewportChanges => _viewportChanges.stream;
+
+  @override
   Future<void> writeBytes(List<int> bytes) {
     return _sendSequenced(
       GatewayTerminalFrame.input(
@@ -197,15 +214,42 @@ class _GatewayTerminalSession implements TerminalSession {
 
   @override
   Future<void> resize(TerminalGeometry geometry) {
+    if (!_viewport.acceptsClientResize) {
+      return Future<void>.value();
+    }
     _geometry = geometry;
+    _applyViewport(
+      TerminalViewport(
+        geometry: geometry,
+        resizePolicy: _viewport.resizePolicy,
+        revision: _viewport.revision + 1,
+      ),
+    );
     return _sendMutation(GatewayTerminalFrame.resize(geometry));
   }
 
   @override
-  Future<void> reconnect() async {
+  Future<void> reconnect() {
     if (_closed) {
-      throw const TerminalTransportException('gateway terminal is closed');
+      return Future<void>.error(
+        const TerminalTransportException('gateway terminal is closed'),
+      );
     }
+    final existing = _reconnection;
+    if (existing != null) {
+      return existing;
+    }
+    late final Future<void> operation;
+    operation = _performReconnect().whenComplete(() {
+      if (identical(_reconnection, operation)) {
+        _reconnection = null;
+      }
+    });
+    _reconnection = operation;
+    return operation;
+  }
+
+  Future<void> _performReconnect() async {
     final renewal = _renewal;
     if (renewal != null) {
       await renewal;
@@ -347,6 +391,10 @@ class _GatewayTerminalSession implements TerminalSession {
         );
         _closeOutput();
       case GatewayTerminalFrameType.open:
+        final viewport = _viewportFromFrame(frame);
+        if (viewport != null) {
+          _applyViewport(viewport);
+        }
         final sequence = _int(frame.payload['last_input_seq']);
         if (sequence >= _nextInputSequence) {
           _nextInputSequence = sequence + 1;
@@ -355,6 +403,55 @@ class _GatewayTerminalSession implements TerminalSession {
       case GatewayTerminalFrameType.input:
       case GatewayTerminalFrameType.paste:
       case GatewayTerminalFrameType.resize:
+      case GatewayTerminalFrameType.geometry:
+        final viewport = _viewportFromFrame(frame);
+        if (viewport != null) {
+          _applyViewport(viewport);
+        }
+    }
+  }
+
+  TerminalViewport? _viewportFromFrame(GatewayTerminalFrame frame) {
+    final geometryValue = frame.payload['geometry'];
+    final geometryPayload =
+        geometryValue is Map
+            ? {
+              for (final entry in geometryValue.entries)
+                entry.key.toString(): entry.value,
+            }
+            : frame.payload;
+    final policy = (frame.payload['resize_policy'] ?? '').toString().trim();
+    if (policy.isEmpty ||
+        geometryPayload['columns'] == null ||
+        geometryPayload['rows'] == null) {
+      return null;
+    }
+    return TerminalViewport(
+      geometry: TerminalGeometry(
+        columns: _int(geometryPayload['columns']),
+        rows: _int(geometryPayload['rows']),
+        pixelWidth: _int(geometryPayload['pixel_width']),
+        pixelHeight: _int(geometryPayload['pixel_height']),
+      ),
+      resizePolicy: TerminalResizePolicy.fromWireName(policy),
+      revision: _int(
+        frame.payload[frame.type == GatewayTerminalFrameType.open
+            ? 'geometry_revision'
+            : 'revision'],
+      ),
+    );
+  }
+
+  void _applyViewport(TerminalViewport viewport) {
+    if (_viewport.geometry == viewport.geometry &&
+        _viewport.resizePolicy == viewport.resizePolicy &&
+        _viewport.revision == viewport.revision) {
+      return;
+    }
+    _viewport = viewport;
+    _geometry = viewport.geometry;
+    if (!_viewportChanges.isClosed) {
+      _viewportChanges.add(viewport);
     }
   }
 
@@ -475,6 +572,9 @@ class _GatewayTerminalSession implements TerminalSession {
   Future<void> _closeOutput() async {
     if (!_output.isClosed) {
       await _output.close();
+    }
+    if (!_viewportChanges.isClosed) {
+      await _viewportChanges.close();
     }
   }
 

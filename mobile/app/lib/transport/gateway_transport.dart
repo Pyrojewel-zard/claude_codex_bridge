@@ -454,12 +454,18 @@ class GatewayTerminalFrame {
     required String token,
     int? resumeCursor,
     int? lastInputSequence,
+    TerminalViewport? viewport,
   }) {
     return GatewayTerminalFrame._(GatewayTerminalFrameType.open, {
       'terminal_id': terminalId,
       'token': token,
       if (resumeCursor != null) 'resume_cursor': resumeCursor,
       if (lastInputSequence != null) 'last_input_seq': lastInputSequence,
+      if (viewport != null) ...{
+        'geometry': _terminalGeometryJson(viewport.geometry),
+        'resize_policy': viewport.resizePolicy.wireName,
+        'geometry_revision': viewport.revision,
+      },
     });
   }
 
@@ -491,6 +497,14 @@ class GatewayTerminalFrame {
       'rows': geometry.rows,
       'pixel_width': geometry.pixelWidth,
       'pixel_height': geometry.pixelHeight,
+    });
+  }
+
+  factory GatewayTerminalFrame.geometry(TerminalViewport viewport) {
+    return GatewayTerminalFrame._(GatewayTerminalFrameType.geometry, {
+      ..._terminalGeometryJson(viewport.geometry),
+      'resize_policy': viewport.resizePolicy.wireName,
+      'revision': viewport.revision,
     });
   }
 
@@ -529,6 +543,11 @@ class GatewayTerminalFrame {
         token: _jsonText(json['token']),
         resumeCursor: _jsonOptionalInt(json['resume_cursor']),
         lastInputSequence: _jsonOptionalInt(json['last_input_seq']),
+        viewport: _optionalTerminalViewport(
+          json,
+          geometryKey: 'geometry',
+          revisionKey: 'geometry_revision',
+        ),
       ),
       GatewayTerminalFrameType.input => GatewayTerminalFrame.input(
         sequence: _requiredJsonInt(json['seq'], 'seq'),
@@ -545,6 +564,9 @@ class GatewayTerminalFrame {
           pixelWidth: _jsonInt(json['pixel_width']),
           pixelHeight: _jsonInt(json['pixel_height']),
         ),
+      ),
+      GatewayTerminalFrameType.geometry => GatewayTerminalFrame.geometry(
+        _requiredTerminalViewport(json),
       ),
       GatewayTerminalFrameType.output => GatewayTerminalFrame.output(
         sequence: _requiredJsonInt(json['seq'], 'seq'),
@@ -569,6 +591,7 @@ enum GatewayTerminalFrameType {
   input('input'),
   paste('paste'),
   resize('resize'),
+  geometry('geometry'),
   output('output'),
   closed('closed'),
   error('error');
@@ -585,6 +608,52 @@ enum GatewayTerminalFrameType {
     }
     throw FormatException('unknown gateway terminal frame type: $value');
   }
+}
+
+Map<String, Object?> _terminalGeometryJson(TerminalGeometry geometry) {
+  return {
+    'columns': geometry.columns,
+    'rows': geometry.rows,
+    'pixel_width': geometry.pixelWidth,
+    'pixel_height': geometry.pixelHeight,
+  };
+}
+
+TerminalViewport? _optionalTerminalViewport(
+  Map<String, Object?> json, {
+  String? geometryKey,
+  String revisionKey = 'revision',
+}) {
+  final geometryValue = geometryKey == null ? json : json[geometryKey];
+  if (geometryValue == null || geometryValue is! Map) {
+    return null;
+  }
+  final geometry = {
+    for (final entry in geometryValue.entries)
+      entry.key.toString(): entry.value,
+  };
+  final policyText = _jsonText(json['resize_policy']).trim();
+  if (policyText.isEmpty) {
+    return null;
+  }
+  return TerminalViewport(
+    geometry: TerminalGeometry(
+      columns: _requiredJsonInt(geometry['columns'], 'columns'),
+      rows: _requiredJsonInt(geometry['rows'], 'rows'),
+      pixelWidth: _jsonInt(geometry['pixel_width']),
+      pixelHeight: _jsonInt(geometry['pixel_height']),
+    ),
+    resizePolicy: TerminalResizePolicy.fromWireName(policyText),
+    revision: _jsonInt(json[revisionKey]),
+  );
+}
+
+TerminalViewport _requiredTerminalViewport(Map<String, Object?> json) {
+  final viewport = _optionalTerminalViewport(json);
+  if (viewport == null) {
+    throw const FormatException('gateway terminal geometry frame is invalid');
+  }
+  return viewport;
 }
 
 void _requireText(String? value, String name) {

@@ -16,6 +16,7 @@ void main() {
   final fileNameHeaders = <String?>[];
   final contentTypes = <String?>[];
   final terminalMessages = <Map<String, Object?>>[];
+  final terminalConnectionMessages = <List<Map<String, Object?>>>[];
   final projectListPayloads = <Map<String, Object?>>[];
 
   setUp(() async {
@@ -27,6 +28,7 @@ void main() {
     fileNameHeaders.clear();
     contentTypes.clear();
     terminalMessages.clear();
+    terminalConnectionMessages.clear();
     projectListPayloads.clear();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
@@ -42,13 +44,17 @@ void main() {
       if (request.uri.path == '/v1/terminals/term_demo_mobile') {
         bodies.add('');
         final socket = await WebSocketTransformer.upgrade(request);
+        final connectionMessages = <Map<String, Object?>>[];
+        terminalConnectionMessages.add(connectionMessages);
         socket.listen((message) {
           final decoded = jsonDecode(message.toString());
           if (decoded is Map) {
-            terminalMessages.add({
+            final parsed = {
               for (final entry in decoded.entries)
                 entry.key.toString(): entry.value,
-            });
+            };
+            terminalMessages.add(parsed);
+            connectionMessages.add(parsed);
           }
           if (decoded is Map && decoded['type'] == 'open') {
             socket.add(
@@ -800,6 +806,77 @@ void main() {
       authed.close(force: true);
     }
   });
+
+  test(
+    'canceling a superseded terminal stream keeps the current socket',
+    () async {
+      final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+      final authed = HttpGatewayTransport(
+        profile: GatewayHostProfile(
+          hostId: 'host-demo',
+          deviceId: 'device-demo',
+          routeProvider: RouteProvider(
+            kind: RouteProviderKind.lan,
+            gatewayUrl: baseUrl,
+          ),
+          scopes: {'view', 'focus', 'terminal_input'},
+        ),
+        deviceToken: 'device-secret',
+      );
+      StreamSubscription<GatewayTerminalFrame>? firstSubscription;
+      StreamSubscription<GatewayTerminalFrame>? secondSubscription;
+      try {
+        final handle = await authed.openTerminal(
+          GatewayTerminalOpenRequest(
+            target: GatewayTerminalTarget(
+              projectId: 'proj-demo',
+              namespaceEpoch: 4,
+              kind: CcbTerminalTargetKind.agent,
+              agent: 'mobile',
+              window: 'main',
+            ),
+          ),
+        );
+        firstSubscription = authed.terminalFrames(handle).listen((_) {});
+        await _waitFor(
+          () =>
+              terminalConnectionMessages.length == 1 &&
+              terminalConnectionMessages.first.isNotEmpty,
+        );
+
+        secondSubscription = authed
+            .terminalFrames(handle, resumeCursor: 1)
+            .listen((_) {});
+        await _waitFor(
+          () =>
+              terminalConnectionMessages.length == 2 &&
+              terminalConnectionMessages.last.isNotEmpty,
+        );
+
+        await firstSubscription.cancel();
+        firstSubscription = null;
+        await authed.sendTerminalFrame(
+          handle,
+          GatewayTerminalFrame.input(sequence: 9, bytes: [0x78]),
+        );
+        await _waitFor(
+          () => terminalConnectionMessages.last.any(
+            (message) => message['type'] == 'input' && message['seq'] == 9,
+          ),
+        );
+
+        expect(terminalConnectionMessages.last.last, {
+          'type': 'input',
+          'seq': 9,
+          'bytes_b64': base64Encode([0x78]),
+        });
+      } finally {
+        await firstSubscription?.cancel();
+        await secondSubscription?.cancel();
+        authed.close(force: true);
+      }
+    },
+  );
 
   test(
     'fails closed for missing routes and disconnected terminal sends',

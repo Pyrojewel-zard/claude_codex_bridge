@@ -34,7 +34,11 @@ enum CcbTerminalShortcut {
   final String wireName;
 }
 
-const _terminalShortcutPreferencesVersion = 2;
+const ccbTerminalMinimumFontSize = 10.0;
+const ccbTerminalMaximumFontSize = 22.0;
+const ccbTerminalDefaultFontSize = 13.0;
+const _terminalShortcutPreferencesVersion = 3;
+const _terminalExpandedShortcutsVersion = 2;
 const _terminalShortcutsAddedInVersion2 = <CcbTerminalShortcut>{
   CcbTerminalShortcut.enter,
   CcbTerminalShortcut.backspace,
@@ -51,13 +55,16 @@ class CcbTerminalShortcutPreferences {
   CcbTerminalShortcutPreferences({
     Iterable<CcbTerminalShortcut>? order,
     Iterable<CcbTerminalShortcut>? enabled,
+    double fontSize = ccbTerminalDefaultFontSize,
   }) : order = List.unmodifiable(_normalizeOrder(order)),
-       enabled = Set.unmodifiable(enabled ?? CcbTerminalShortcut.values);
+       enabled = Set.unmodifiable(enabled ?? CcbTerminalShortcut.values),
+       fontSize = _normalizeFontSize(fontSize);
 
   static final defaults = CcbTerminalShortcutPreferences();
 
   final List<CcbTerminalShortcut> order;
   final Set<CcbTerminalShortcut> enabled;
+  final double fontSize;
 
   List<CcbTerminalShortcut> get enabledInOrder =>
       List.unmodifiable(order.where(enabled.contains));
@@ -72,7 +79,11 @@ class CcbTerminalShortcutPreferences {
     } else {
       nextEnabled.remove(shortcut);
     }
-    return CcbTerminalShortcutPreferences(order: order, enabled: nextEnabled);
+    return CcbTerminalShortcutPreferences(
+      order: order,
+      enabled: nextEnabled,
+      fontSize: fontSize,
+    );
   }
 
   CcbTerminalShortcutPreferences reordered(int oldIndex, int newIndex) {
@@ -82,13 +93,26 @@ class CcbTerminalShortcutPreferences {
     final nextOrder = order.toList();
     final shortcut = nextOrder.removeAt(oldIndex);
     nextOrder.insert(newIndex.clamp(0, nextOrder.length), shortcut);
-    return CcbTerminalShortcutPreferences(order: nextOrder, enabled: enabled);
+    return CcbTerminalShortcutPreferences(
+      order: nextOrder,
+      enabled: enabled,
+      fontSize: fontSize,
+    );
+  }
+
+  CcbTerminalShortcutPreferences withFontSize(double value) {
+    return CcbTerminalShortcutPreferences(
+      order: order,
+      enabled: enabled,
+      fontSize: value,
+    );
   }
 
   Map<String, Object> toJson() => <String, Object>{
     'version': _terminalShortcutPreferencesVersion,
     'order': order.map((shortcut) => shortcut.wireName).toList(),
     'enabled': enabled.map((shortcut) => shortcut.wireName).toList(),
+    'font_size': fontSize,
   };
 
   String toJsonString() => jsonEncode(toJson());
@@ -116,13 +140,26 @@ class CcbTerminalShortcutPreferences {
     final version = json['version'] is int ? json['version'] as int : 1;
     final migratedEnabled = parsedEnabled?.toSet();
     if (migratedEnabled != null &&
-        version < _terminalShortcutPreferencesVersion) {
+        version < _terminalExpandedShortcutsVersion) {
       migratedEnabled.addAll(_terminalShortcutsAddedInVersion2);
     }
     return CcbTerminalShortcutPreferences(
       order: parsedOrder,
       enabled: migratedEnabled,
+      fontSize:
+          json['font_size'] is num
+              ? (json['font_size'] as num).toDouble()
+              : ccbTerminalDefaultFontSize,
     );
+  }
+
+  static double _normalizeFontSize(double value) {
+    if (!value.isFinite) {
+      return ccbTerminalDefaultFontSize;
+    }
+    return value
+        .clamp(ccbTerminalMinimumFontSize, ccbTerminalMaximumFontSize)
+        .toDouble();
   }
 
   static List<CcbTerminalShortcut> _normalizeOrder(
@@ -162,12 +199,16 @@ class CcbTerminalShortcutPreferences {
   bool operator ==(Object other) {
     return other is CcbTerminalShortcutPreferences &&
         listEquals(order, other.order) &&
-        setEquals(enabled, other.enabled);
+        setEquals(enabled, other.enabled) &&
+        fontSize == other.fontSize;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(Object.hashAll(order), Object.hashAllUnordered(enabled));
+  int get hashCode => Object.hash(
+    Object.hashAll(order),
+    Object.hashAllUnordered(enabled),
+    fontSize,
+  );
 }
 
 abstract class CcbTerminalShortcutPreferenceStore {

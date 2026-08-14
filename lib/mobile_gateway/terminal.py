@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import struct
 import subprocess
 import tempfile
 import threading
@@ -14,15 +13,8 @@ import time
 import unicodedata
 from typing import Mapping
 
-try:
-    import fcntl  # type: ignore
-    import termios  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - exercised on native Windows
-    fcntl = None
-    termios = None
-
-
 MOBILE_TERMINAL_INITIAL_HISTORY_LINES = 1000
+MOBILE_TERMINAL_GEOMETRY_REFRESH_SECONDS = 0.75
 HOST_TERMINAL_MAX_SESSIONS = 6
 _HOST_TERMINAL_SLOT_RE = re.compile(r'^shell-([1-9][0-9]*)$')
 
@@ -43,6 +35,14 @@ class TerminalGeometry:
             pixel_width=max(0, _int(payload.get('pixel_width'), 0)),
             pixel_height=max(0, _int(payload.get('pixel_height'), 0)),
         )
+
+    def to_mapping(self) -> dict[str, int]:
+        return {
+            'columns': self.columns,
+            'rows': self.rows,
+            'pixel_width': self.pixel_width,
+            'pixel_height': self.pixel_height,
+        }
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,16 @@ class TerminalAttachTarget:
         if self.backend_impl != 'tmux':
             raise RuntimeError(f'terminal command is not available for {self.backend_impl}')
         return _tmux_capture_command(self, self.geometry)
+
+
+@dataclass(frozen=True)
+class _TmuxPaneWindowState:
+    window_id: str
+    window_columns: int
+    window_rows: int
+    pane_columns: int
+    pane_rows: int
+    window_layout: str
 
 
 @dataclass(frozen=True)
@@ -365,15 +375,40 @@ class TmuxTerminalSession:
     def __init__(self, target: TerminalAttachTarget) -> None:
         self.target = target
         self._geometry = target.geometry
+        self._source_pane_geometry = target.target_summary.get('kind') != 'host_shell'
         self._closed = False
         self._last_snapshot: bytes | None = None
         self._initial_read_complete = False
         self._snapshot_generation = 0
+        self._geometry_revision = 0
+        self._source_geometry_initialized = False
+        self._last_geometry_refresh_monotonic = 0.0
         self._state_lock = threading.Lock()
+        self._geometry_refresh_lock = threading.Lock()
         if not target.pane_id:
             raise RuntimeError('terminal target pane evidence is required')
 
+    def viewport_state(self) -> dict[str, object]:
+        if self._source_pane_geometry:
+            self._refresh_source_geometry(force=True)
+        with self._state_lock:
+            return {
+                'revision': self._geometry_revision,
+                'geometry': self._geometry.to_mapping(),
+                'resize_policy': (
+                    'fixed_source' if self._source_pane_geometry else 'client'
+                ),
+            }
+
     def read(self, timeout_seconds: float = 0.1) -> bytes | None:
+        if self._source_pane_geometry and self._source_geometry_initialized:
+            try:
+                self._refresh_source_geometry(force=False)
+            except RuntimeError:
+                # A transient geometry probe failure must not tear down an
+                # otherwise healthy pane stream. The last authoritative grid
+                # remains valid until a later probe succeeds.
+                pass
         with self._state_lock:
             if self._closed:
                 return None
@@ -441,6 +476,12 @@ class TmuxTerminalSession:
             if snapshot == previous:
                 return b''
             self._last_snapshot = snapshot
+            if self._source_pane_geometry:
+                # A fixed source pane and its phone renderer intentionally use
+                # different column counts. Source-row cursor deltas are not
+                # valid after the phone has locally reflowed those rows, so
+                # repaint the visible snapshot without resizing tmux.
+                return _render_terminal_snapshot(snapshot)
             return _render_terminal_delta(
                 previous,
                 snapshot,
@@ -463,38 +504,55 @@ class TmuxTerminalSession:
         self.write(str(text).encode('utf-8'))
 
     def resize(self, geometry: TerminalGeometry) -> None:
-        if self.target.target_summary.get('kind') == 'host_shell':
-            _tmux_terminal_run(
-                self.target,
-                [
-                    'resize-window',
-                    '-t',
-                    self.target.session_name,
-                    '-x',
-                    str(max(20, int(geometry.columns))),
-                    '-y',
-                    str(max(5, int(geometry.rows))),
-                ],
-            )
+        if self._source_pane_geometry:
+            # Agent panes belong to the desktop CCB tmux namespace. A phone is
+            # a viewport over that source grid, never a geometry owner.
+            return
+        _tmux_terminal_run(
+            self.target,
+            [
+                'resize-window',
+                '-t',
+                self.target.session_name,
+                '-x',
+                str(max(20, int(geometry.columns))),
+                '-y',
+                str(max(5, int(geometry.rows))),
+            ],
+        )
         with self._state_lock:
             self._geometry = geometry
             self._last_snapshot = None
             self._snapshot_generation += 1
+            self._geometry_revision += 1
+
+    def _refresh_source_geometry(self, *, force: bool) -> None:
+        now = time.monotonic()
+        with self._state_lock:
+            if (
+                not force
+                and now - self._last_geometry_refresh_monotonic
+                < MOBILE_TERMINAL_GEOMETRY_REFRESH_SECONDS
+            ):
+                return
+            self._last_geometry_refresh_monotonic = now
+        with self._geometry_refresh_lock:
+            geometry = _capture_tmux_pane_geometry(self.target)
+        with self._state_lock:
+            initialized = self._source_geometry_initialized
+            self._source_geometry_initialized = True
+            if geometry == self._geometry and initialized:
+                return
+            self._geometry = geometry
+            self._last_snapshot = None
+            self._snapshot_generation += 1
+            self._geometry_revision += 1
 
     def close(self) -> None:
         with self._state_lock:
+            if self._closed:
+                return
             self._closed = True
-
-    def _resize(self, geometry: TerminalGeometry) -> None:
-        if fcntl is None or termios is None:
-            raise RuntimeError('terminal resize ioctl is not available on this platform')
-        rows = max(1, int(geometry.rows))
-        columns = max(1, int(geometry.columns))
-        pixels_y = max(0, int(geometry.pixel_height))
-        pixels_x = max(0, int(geometry.pixel_width))
-        packed = struct.pack('HHHH', rows, columns, pixels_y, pixels_x)
-        fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, packed)
-
 
 def create_tmux_terminal_session(target: TerminalAttachTarget) -> TmuxTerminalSession:
     return TmuxTerminalSession(_with_compatible_tmux(target))
@@ -632,39 +690,74 @@ def _capture_tmux_terminal_pane(
     return _fit_terminal_snapshot(bytes(cp.stdout or b''), geometry.columns)
 
 
+def _capture_tmux_pane_window_state(
+    target: TerminalAttachTarget,
+) -> _TmuxPaneWindowState:
+    pane_id = str(target.pane_id or '').strip()
+    if not pane_id:
+        raise RuntimeError('terminal target pane evidence is required')
+    cp = subprocess.run(
+        [
+            target.tmux_binary,
+            '-S',
+            target.socket_path,
+            'display-message',
+            '-p',
+            '-t',
+            pane_id,
+            '#{window_id}\t#{window_width}\t#{window_height}\t'
+            '#{pane_width}\t#{pane_height}\t#{window_layout}',
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=2.0,
+        env=_terminal_client_env(),
+    )
+    if cp.returncode != 0:
+        message = (cp.stderr or '').strip() or 'tmux pane geometry query failed'
+        raise RuntimeError(message)
+    values = str(cp.stdout or '').strip().split('\t', 5)
+    if len(values) != 6:
+        raise RuntimeError('tmux pane/window geometry query returned invalid output')
+    window_id = values[0].strip()
+    window_layout = values[5].strip()
+    if not window_id or not window_layout:
+        raise RuntimeError('tmux pane/window geometry query returned invalid output')
+    try:
+        window_columns, window_rows, pane_columns, pane_rows = (
+            int(value) for value in values[1:5]
+        )
+    except ValueError as exc:
+        raise RuntimeError('tmux pane/window geometry query returned invalid output') from exc
+    if min(window_columns, window_rows, pane_columns, pane_rows) < 1:
+        raise RuntimeError('tmux pane/window geometry query returned invalid dimensions')
+    return _TmuxPaneWindowState(
+        window_id=window_id,
+        window_columns=window_columns,
+        window_rows=window_rows,
+        pane_columns=pane_columns,
+        pane_rows=pane_rows,
+        window_layout=window_layout,
+    )
+
+
+def _capture_tmux_pane_geometry(target: TerminalAttachTarget) -> TerminalGeometry:
+    state = _capture_tmux_pane_window_state(target)
+    return TerminalGeometry(columns=state.pane_columns, rows=state.pane_rows)
+
+
 def _fit_terminal_snapshot(snapshot: bytes, columns: int) -> bytes:
-    """Keep a wide tmux pane from wrapping into unrelated mobile rows."""
+    """Normalize line endings without discarding source-pane columns.
+
+    ``columns`` remains in the signature for compatibility with older callers.
+    The phone viewport must fit or pan the source grid instead of clipping it.
+    """
+    del columns
     text = snapshot.decode('utf-8', errors='replace')
     normalized = text.replace('\r\n', '\n').replace('\r', '\n')
-    return '\n'.join(
-        _clip_terminal_line(line, columns) for line in normalized.split('\n')
-    ).encode('utf-8')
-
-
-def _clip_terminal_line(line: str, columns: int) -> str:
-    width_limit = max(1, int(columns))
-    rendered_width = 0
-    output: list[str] = []
-    index = 0
-    clipped = False
-    while index < len(line):
-        if line[index] == '\x1b' and index + 1 < len(line) and line[index + 1] == '[':
-            match = re.match(r'\x1b\[[0-?]*[ -/]*[@-~]', line[index:])
-            if match is not None:
-                output.append(match.group(0))
-                index += len(match.group(0))
-                continue
-        character = line[index]
-        character_width = _terminal_character_width(character)
-        if rendered_width + character_width > width_limit:
-            clipped = True
-            break
-        output.append(character)
-        rendered_width += character_width
-        index += 1
-    if clipped:
-        output.append('\x1b[0m')
-    return ''.join(output)
+    return normalized.encode('utf-8')
 
 
 def _render_terminal_snapshot(

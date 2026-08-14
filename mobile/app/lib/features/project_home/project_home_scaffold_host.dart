@@ -228,6 +228,8 @@ class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
     this.conversationRefreshToken = 0,
     this.reconnectRetryIn,
     this.onRetryConnection,
+    this.terminalMode,
+    this.onTerminalModeChanged,
     super.key,
   });
 
@@ -254,6 +256,8 @@ class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
   final int conversationRefreshToken;
   final Duration? reconnectRetryIn;
   final VoidCallback? onRetryConnection;
+  final bool? terminalMode;
+  final ValueChanged<bool>? onTerminalModeChanged;
 
   @override
   State<ProjectHomeMobileChatScaffoldHost> createState() =>
@@ -264,16 +268,16 @@ class _ProjectHomeMobileChatScaffoldHostState
     extends State<ProjectHomeMobileChatScaffoldHost> {
   final SelectedAgentWorkspaceController _workspaceController =
       SelectedAgentWorkspaceController();
-  var _terminalMode = false;
-  var _terminalActivated = false;
+  var _localTerminalMode = false;
+
+  bool get _terminalMode => widget.terminalMode ?? _localTerminalMode;
 
   @override
   void didUpdateWidget(covariant ProjectHomeMobileChatScaffoldHost oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.view.project.id != widget.view.project.id ||
         widget.selectedAgent == null) {
-      _terminalMode = false;
-      _terminalActivated = false;
+      _localTerminalMode = false;
     }
     if (oldWidget.conversationRefreshToken != widget.conversationRefreshToken) {
       _workspaceController.refreshLatest();
@@ -388,7 +392,7 @@ class _ProjectHomeMobileChatScaffoldHostState
                     TickerMode(
                       enabled: _terminalMode,
                       child:
-                          _terminalActivated && selectedAgent != null
+                          _terminalMode && selectedAgent != null
                               ? AgentTerminalWorkspace(
                                 key: const ValueKey(
                                   'project-agent-terminal-mode',
@@ -399,6 +403,8 @@ class _ProjectHomeMobileChatScaffoldHostState
                                 terminalTransport: widget.terminalTransport,
                                 gatewayTerminal: widget.usePaneInputForMessages,
                                 active: _terminalMode,
+                                onUserScrollDirectionChanged:
+                                    widget.onTimelineScrollDirectionChanged,
                               )
                               : const SizedBox.shrink(),
                     ),
@@ -442,18 +448,25 @@ class _ProjectHomeMobileChatScaffoldHostState
       );
       return;
     }
-    setState(() {
-      _terminalActivated = true;
-      _terminalMode = true;
-    });
+    _setTerminalMode(true);
+    widget.onCollapseAgents();
   }
 
   void _showChat() {
     if (!_terminalMode) {
       return;
     }
+    _setTerminalMode(false);
+  }
+
+  void _setTerminalMode(bool value) {
+    final callback = widget.onTerminalModeChanged;
+    if (callback != null) {
+      callback(value);
+      return;
+    }
     setState(() {
-      _terminalMode = false;
+      _localTerminalMode = value;
     });
   }
 
@@ -722,6 +735,8 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
     this.conversationRefreshToken = 0,
     this.reconnectRetryIn,
     this.onRetryConnection,
+    this.terminalMode = false,
+    this.onShowChat,
     super.key,
   });
 
@@ -753,72 +768,80 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
   final int conversationRefreshToken;
   final Duration? reconnectRetryIn;
   final VoidCallback? onRetryConnection;
+  final bool terminalMode;
+  final VoidCallback? onShowChat;
 
   @override
   Widget build(BuildContext context) {
-    final sidebars = switch (sidebarState) {
-      WideSidebarState.expanded => <Widget>[
-        SizedBox(
-          width: projectHomeWideProjectColumnWidth,
-          child: WideProjectColumn(
-            view: view,
-            selectedAgent: selectedAgent,
-            onProjectSelected: onOpenProject,
-            onOpenNotifications: onOpenNotifications,
-            onOpenConnectionDetails: onOpenConnectionDetails,
-            hasUnreadTaskCompletion: hasUnreadTaskCompletion,
-            hasWorkingAgents: hasWorkingAgents,
-          ),
-        ),
-        const VerticalDivider(width: 1),
-        SizedBox(
-          width: projectHomeWideAgentColumnWidth,
-          child: WideAgentColumn(
-            view: view,
-            selectedAgentName: selectedAgent?.name,
-            unreadAgentNames: unreadAgentNames,
-            onAgentSelected: onAgentSelected,
-          ),
-        ),
-      ],
-      WideSidebarState.projectCollapsed => <Widget>[
-        SizedBox(
-          width: projectHomeWideAgentColumnWidth,
-          child: WideAgentColumn(
-            view: view,
-            selectedAgentName: selectedAgent?.name,
-            unreadAgentNames: unreadAgentNames,
-            onShowProjects: onShowProjects,
-            onAgentSelected: onAgentSelected,
-          ),
-        ),
-      ],
-      WideSidebarState.allCollapsed => <Widget>[
-        SizedBox(
-          width: projectHomeWideCollapsedSidebarWidth,
-          child: WideCollapsedSidebarRail(
-            view: view,
-            selectedAgent: selectedAgent,
-            onExpand: onShowProjects,
-            onOpenNotifications: onOpenNotifications,
-            onOpenConnectionDetails: onOpenConnectionDetails,
-          ),
-        ),
-      ],
-    };
+    final activeAgent = selectedAgent;
+    final terminalUsesFullWidth = terminalMode && activeAgent != null;
+    final sidebars =
+        terminalUsesFullWidth
+            ? const <Widget>[]
+            : switch (sidebarState) {
+              WideSidebarState.expanded => <Widget>[
+                SizedBox(
+                  width: projectHomeWideProjectColumnWidth,
+                  child: WideProjectColumn(
+                    view: view,
+                    selectedAgent: selectedAgent,
+                    onProjectSelected: onOpenProject,
+                    onOpenNotifications: onOpenNotifications,
+                    onOpenConnectionDetails: onOpenConnectionDetails,
+                    hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+                    hasWorkingAgents: hasWorkingAgents,
+                  ),
+                ),
+                const VerticalDivider(width: 1),
+                SizedBox(
+                  width: projectHomeWideAgentColumnWidth,
+                  child: WideAgentColumn(
+                    view: view,
+                    selectedAgentName: selectedAgent?.name,
+                    unreadAgentNames: unreadAgentNames,
+                    onAgentSelected: onAgentSelected,
+                  ),
+                ),
+              ],
+              WideSidebarState.projectCollapsed => <Widget>[
+                SizedBox(
+                  width: projectHomeWideAgentColumnWidth,
+                  child: WideAgentColumn(
+                    view: view,
+                    selectedAgentName: selectedAgent?.name,
+                    unreadAgentNames: unreadAgentNames,
+                    onShowProjects: onShowProjects,
+                    onAgentSelected: onAgentSelected,
+                  ),
+                ),
+              ],
+              WideSidebarState.allCollapsed => <Widget>[
+                SizedBox(
+                  width: projectHomeWideCollapsedSidebarWidth,
+                  child: WideCollapsedSidebarRail(
+                    view: view,
+                    selectedAgent: selectedAgent,
+                    onExpand: onShowProjects,
+                    onOpenNotifications: onOpenNotifications,
+                    onOpenConnectionDetails: onOpenConnectionDetails,
+                  ),
+                ),
+              ],
+            };
     return Scaffold(
       body: SafeArea(
         child: Row(
           key: const ValueKey('wide-project-workspace'),
           children: [
             ...sidebars,
-            WideSidebarDragHandle(
-              sidebarState: sidebarState,
-              onToggle: onToggleSidebar,
-              onHorizontalDragStart: onHorizontalDragStart,
-              onHorizontalDragUpdate: onHorizontalDragUpdate,
-              onHorizontalDragEnd: onHorizontalDragEnd,
-            ),
+            if (!terminalUsesFullWidth)
+              WideSidebarDragHandle(
+                sidebarState: sidebarState,
+                onToggle: onToggleSidebar,
+                onHorizontalDragStart: onHorizontalDragStart,
+                onHorizontalDragUpdate: onHorizontalDragUpdate,
+                onHorizontalDragEnd: onHorizontalDragEnd,
+              ),
             Expanded(
               child: Padding(
                 key: const ValueKey('wide-project-chat-screen'),
@@ -829,8 +852,10 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                       view: view,
                       selectedAgent: selectedAgent,
                       onBack: null,
+                      terminalMode: terminalMode,
+                      onShowChat: onShowChat,
                       onOpenTerminal:
-                          selectedAgent == null
+                          selectedAgent == null || terminalMode
                               ? null
                               : () {
                                 onOpenTerminal(selectedAgent!.name);
@@ -865,22 +890,36 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                     ],
                     const SizedBox(height: 4),
                     Expanded(
-                      child: SelectedAgentWorkspace(
-                        repository: repository,
-                        terminalTransport: terminalTransport,
-                        usePaneInputForMessages: usePaneInputForMessages,
-                        view: view,
-                        agent: selectedAgent,
-                        enableComposerCollapse: false,
-                        onRefreshView: onRefreshView,
-                        onUserScrollDirectionChanged: null,
-                        onProjectActivity: onProjectActivity,
-                        snapshotStore: snapshotStore,
-                        snapshotNamespace: snapshotNamespace,
-                        sendEnabled: sendEnabled,
-                        sendDisabledReason: sendDisabledReason,
-                        refreshToken: conversationRefreshToken,
-                      ),
+                      child:
+                          terminalMode && activeAgent != null
+                              ? AgentTerminalWorkspace(
+                                key: const ValueKey(
+                                  'wide-project-agent-terminal-mode',
+                                ),
+                                repository: repository,
+                                view: view,
+                                agent: activeAgent,
+                                terminalTransport: terminalTransport,
+                                gatewayTerminal: usePaneInputForMessages,
+                                active: true,
+                              )
+                              : SelectedAgentWorkspace(
+                                repository: repository,
+                                terminalTransport: terminalTransport,
+                                usePaneInputForMessages:
+                                    usePaneInputForMessages,
+                                view: view,
+                                agent: selectedAgent,
+                                enableComposerCollapse: false,
+                                onRefreshView: onRefreshView,
+                                onUserScrollDirectionChanged: null,
+                                onProjectActivity: onProjectActivity,
+                                snapshotStore: snapshotStore,
+                                snapshotNamespace: snapshotNamespace,
+                                sendEnabled: sendEnabled,
+                                sendDisabledReason: sendDisabledReason,
+                                refreshToken: conversationRefreshToken,
+                              ),
                     ),
                   ],
                 ),

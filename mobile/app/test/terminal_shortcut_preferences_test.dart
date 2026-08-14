@@ -27,6 +27,7 @@ void main() {
       CcbTerminalShortcut.ctrlC,
       CcbTerminalShortcut.tab,
     ]);
+    expect(decoded.fontSize, ccbTerminalDefaultFontSize);
   });
 
   test('terminal shortcut preferences tolerate old and unknown values', () {
@@ -44,6 +45,7 @@ void main() {
     ]);
     expect(preferences.order.toSet(), CcbTerminalShortcut.values.toSet());
     expect(preferences.enabled, const {CcbTerminalShortcut.escape});
+    expect(preferences.fontSize, ccbTerminalDefaultFontSize);
     expect(
       CcbTerminalShortcutPreferences.fromJsonString('{not-json'),
       CcbTerminalShortcutPreferences.defaults,
@@ -89,5 +91,26 @@ void main() {
     ]);
     expect(disabled.enabled, isNot(contains(CcbTerminalShortcut.tab)));
     expect(disabled.order, reordered.order);
+  });
+
+  test('terminal font preference persists and clamps to readable bounds', () {
+    final preferences = CcbTerminalShortcutPreferences(fontSize: 17);
+    final decoded = CcbTerminalShortcutPreferences.fromJsonString(
+      preferences.toJsonString(),
+    );
+
+    expect(decoded.fontSize, 17);
+    expect(
+      CcbTerminalShortcutPreferences(fontSize: 2).fontSize,
+      ccbTerminalMinimumFontSize,
+    );
+    expect(
+      CcbTerminalShortcutPreferences(fontSize: 50).fontSize,
+      ccbTerminalMaximumFontSize,
+    );
+    expect(
+      CcbTerminalShortcutPreferences(fontSize: double.nan).fontSize,
+      ccbTerminalDefaultFontSize,
+    );
   });
 }

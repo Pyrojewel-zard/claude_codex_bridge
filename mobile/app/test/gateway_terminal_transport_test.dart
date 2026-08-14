@@ -113,6 +113,25 @@ void main() {
         session.launchedCommand,
         'gateway terminal stream proj-demo/mobile',
       );
+      final viewportSession = session as TerminalViewportSession;
+      final viewportChanges = <TerminalViewport>[];
+      final viewportSubscription = viewportSession.viewportChanges.listen(
+        viewportChanges.add,
+      );
+      await pumpEventQueue();
+      gateway.emit(
+        GatewayTerminalFrame.geometry(
+          const TerminalViewport(
+            geometry: TerminalGeometry(columns: 164, rows: 47),
+            resizePolicy: TerminalResizePolicy.fixedSource,
+            revision: 1,
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      expect(viewportSession.viewport.geometry.columns, 164);
+      expect(viewportSession.viewport.geometry.rows, 47);
+      expect(viewportChanges, hasLength(1));
 
       final output = <String>[];
       final subscription = session.output.map(utf8.decode).listen(output.add);
@@ -127,6 +146,11 @@ void main() {
       await session.resize(const TerminalGeometry(columns: 120, rows: 36));
       await session.close();
 
+      expect(
+        viewportSession.viewport.resizePolicy,
+        TerminalResizePolicy.fixedSource,
+      );
+
       expect(gateway.sentFrames.map((frame) => frame.toJson()), [
         {
           'type': 'input',
@@ -134,15 +158,9 @@ void main() {
           'bytes_b64': base64Encode([0x61]),
         },
         {'type': 'paste', 'seq': 2, 'text': 'paste me'},
-        {
-          'type': 'resize',
-          'columns': 120,
-          'rows': 36,
-          'pixel_width': 0,
-          'pixel_height': 0,
-        },
         {'type': 'closed', 'reason': 'client_closed'},
       ]);
+      await viewportSubscription.cancel();
       await subscription.cancel();
     },
   );
@@ -168,6 +186,29 @@ void main() {
     await session.reconnect();
 
     expect(gateway.resumeCursors, [null, 7]);
+  });
+
+  test('gateway terminal coalesces concurrent reconnect requests', () async {
+    final gateway = _FakeGatewayTransport();
+    final session = await GatewayTerminalTransport(transport: gateway).open(
+      TerminalOpenRequest.gateway(
+        target: CcbTerminalTarget.agent(
+          projectId: 'proj-demo',
+          namespaceEpoch: 4,
+          agent: 'mobile',
+          scopes: {CcbScope.view, CcbScope.terminalInput},
+        ),
+      ),
+    );
+    await _waitFor(() => gateway.resumeCursors.length == 1);
+
+    final firstReconnect = session.reconnect();
+    final secondReconnect = session.reconnect();
+
+    expect(identical(firstReconnect, secondReconnect), isTrue);
+    await Future.wait([firstReconnect, secondReconnect]);
+    expect(gateway.resumeCursors, [null, 0]);
+    expect(gateway.activeFrameSubscriptions, 1);
   });
 
   test('gateway terminal reconnects after stream disconnect', () async {
@@ -226,59 +267,63 @@ void main() {
     await subscription.cancel();
   });
 
-  test('gateway terminal renews handle when token expires', () async {
-    final gateway = _FakeGatewayTransport();
-    final session = await GatewayTerminalTransport(transport: gateway).open(
-      TerminalOpenRequest.gateway(
-        target: CcbTerminalTarget.agent(
-          projectId: 'proj-demo',
-          namespaceEpoch: 4,
-          agent: 'mobile',
-          scopes: {CcbScope.view, CcbScope.terminalInput},
+  test(
+    'fixed source terminal renewal ignores phone viewport geometry',
+    () async {
+      final gateway = _FakeGatewayTransport();
+      final session = await GatewayTerminalTransport(transport: gateway).open(
+        TerminalOpenRequest.gateway(
+          target: CcbTerminalTarget.agent(
+            projectId: 'proj-demo',
+            namespaceEpoch: 4,
+            agent: 'mobile',
+            scopes: {CcbScope.view, CcbScope.terminalInput},
+          ),
         ),
-      ),
-    );
-    final output = <String>[];
-    final errors = <Object>[];
-    final subscription = session.output
-        .map(utf8.decode)
-        .listen(output.add, onError: errors.add);
+      );
+      final output = <String>[];
+      final errors = <Object>[];
+      final subscription = session.output
+          .map(utf8.decode)
+          .listen(output.add, onError: errors.add);
 
-    gateway.emit(
-      GatewayTerminalFrame.output(sequence: 7, bytes: utf8.encode('before')),
-    );
-    await pumpEventQueue();
-    await session.resize(
-      const TerminalGeometry(
-        columns: 132,
-        rows: 43,
-        pixelWidth: 1000,
-        pixelHeight: 700,
-      ),
-    );
+      gateway.emit(
+        GatewayTerminalFrame.output(sequence: 7, bytes: utf8.encode('before')),
+      );
+      await pumpEventQueue();
+      await session.resize(
+        const TerminalGeometry(
+          columns: 132,
+          rows: 43,
+          pixelWidth: 1000,
+          pixelHeight: 700,
+        ),
+      );
 
-    gateway.emit(GatewayTerminalFrame.error('expired'));
-    await _waitFor(
-      () =>
-          gateway.openRequests.length == 2 && gateway.resumeCursors.length == 2,
-    );
+      gateway.emit(GatewayTerminalFrame.error('expired'));
+      await _waitFor(
+        () =>
+            gateway.openRequests.length == 2 &&
+            gateway.resumeCursors.length == 2,
+      );
 
-    expect(gateway.resumeCursors, [null, null]);
-    expect(gateway.rejectedResumeCursors, isEmpty);
-    expect(gateway.openRequests.last.geometry.columns, 132);
-    expect(gateway.openRequests.last.geometry.rows, 43);
-    expect(gateway.openRequests.last.geometry.pixelWidth, 1000);
-    expect(gateway.openRequests.last.geometry.pixelHeight, 700);
+      expect(gateway.resumeCursors, [null, null]);
+      expect(gateway.rejectedResumeCursors, isEmpty);
+      expect(gateway.openRequests.last.geometry.columns, 80);
+      expect(gateway.openRequests.last.geometry.rows, 24);
+      expect(gateway.openRequests.last.geometry.pixelWidth, 0);
+      expect(gateway.openRequests.last.geometry.pixelHeight, 0);
 
-    gateway.emit(
-      GatewayTerminalFrame.output(sequence: 1, bytes: utf8.encode('after')),
-    );
-    await pumpEventQueue();
+      gateway.emit(
+        GatewayTerminalFrame.output(sequence: 1, bytes: utf8.encode('after')),
+      );
+      await pumpEventQueue();
 
-    expect(output, ['before', 'after']);
-    expect(errors, isEmpty);
-    await subscription.cancel();
-  });
+      expect(output, ['before', 'after']);
+      expect(errors, isEmpty);
+      await subscription.cancel();
+    },
+  );
 
   test(
     'gateway terminal renews handle after terminal output failure',
@@ -439,10 +484,20 @@ void main() {
 
       expect(gateway.hostOpenRequests.single.clientSessionId, 'shell-2');
       expect(session.launchedCommand, 'host shell shell-2 (~)');
+      await session.resize(const TerminalGeometry(columns: 112, rows: 38));
+      expect(gateway.sentFrames.last.toJson(), {
+        'type': 'resize',
+        'columns': 112,
+        'rows': 38,
+        'pixel_width': 0,
+        'pixel_height': 0,
+      });
       gateway.invalidTerminalIds.add(gateway.frameHandles.last.terminalId);
       await session.reconnect();
       await _waitFor(() => gateway.hostOpenRequests.length == 2);
       expect(gateway.hostOpenRequests.last.clientSessionId, 'shell-2');
+      expect(gateway.hostOpenRequests.last.geometry.columns, 112);
+      expect(gateway.hostOpenRequests.last.geometry.rows, 38);
 
       await transport.terminateHostTerminal('shell-2');
       expect(gateway.terminatedHostSessions, ['shell-2']);

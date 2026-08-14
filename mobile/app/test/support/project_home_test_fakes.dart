@@ -35,6 +35,10 @@ class RecordingTerminalTransport
       request.attachCommand,
       writeError: writeError,
       reconnectErrors: reconnectErrors,
+      viewport: TerminalViewport(
+        geometry: request.geometry,
+        resizePolicy: TerminalResizePolicy.fixedSource,
+      ),
     );
     sessions.add(session);
     return session;
@@ -49,6 +53,10 @@ class RecordingTerminalTransport
     final session = RecordingTerminalSession(
       request.attachCommand,
       onClose: () => hostOperationLog.add('close:${request.clientSessionId}'),
+      viewport: TerminalViewport(
+        geometry: request.geometry,
+        resizePolicy: TerminalResizePolicy.client,
+      ),
     );
     sessions.add(session);
     return session;
@@ -61,15 +69,25 @@ class RecordingTerminalTransport
   }
 }
 
-class RecordingTerminalSession implements TerminalSession {
+class RecordingTerminalSession
+    implements TerminalSession, TerminalViewportSession {
   RecordingTerminalSession(
     this.launchedCommand, {
     this.writeError,
     List<Object>? reconnectErrors,
     this.onClose,
-  }) : reconnectErrors = reconnectErrors ?? <Object>[];
+    TerminalViewport? viewport,
+  }) : reconnectErrors = reconnectErrors ?? <Object>[],
+       _viewport =
+           viewport ??
+           const TerminalViewport(
+             geometry: TerminalGeometry(),
+             resizePolicy: TerminalResizePolicy.fixedSource,
+           );
 
   final _output = StreamController<Uint8List>.broadcast();
+  final _viewportChanges = StreamController<TerminalViewport>.broadcast();
+  TerminalViewport _viewport;
   final Object? writeError;
   final List<Object> reconnectErrors;
   final VoidCallback? onClose;
@@ -85,6 +103,17 @@ class RecordingTerminalSession implements TerminalSession {
 
   @override
   Stream<Uint8List> get output => _output.stream;
+
+  @override
+  TerminalViewport get viewport => _viewport;
+
+  @override
+  Stream<TerminalViewport> get viewportChanges => _viewportChanges.stream;
+
+  void setViewport(TerminalViewport viewport) {
+    _viewport = viewport;
+    _viewportChanges.add(viewport);
+  }
 
   void addOutput(String text) {
     _output.add(Uint8List.fromList(utf8.encode(text)));
@@ -108,6 +137,7 @@ class RecordingTerminalSession implements TerminalSession {
     closed = true;
     onClose?.call();
     await _output.close();
+    await _viewportChanges.close();
   }
 
   @override
@@ -126,6 +156,11 @@ class RecordingTerminalSession implements TerminalSession {
   @override
   Future<void> resize(TerminalGeometry geometry) async {
     resized.add(geometry);
+    _viewport = TerminalViewport(
+      geometry: geometry,
+      resizePolicy: _viewport.resizePolicy,
+      revision: _viewport.revision + 1,
+    );
   }
 
   @override

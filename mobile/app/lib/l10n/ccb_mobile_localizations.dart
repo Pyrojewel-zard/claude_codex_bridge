@@ -159,6 +159,10 @@ class CcbMobileLocalizations {
 
   String get terminalShortcuts => isChinese ? '终端快捷键' : 'Terminal shortcuts';
 
+  String get terminalSettings => isChinese ? '终端设置' : 'Terminal settings';
+
+  String get terminalTextSize => isChinese ? '终端字体' : 'Terminal text size';
+
   String get restoreDefaults => isChinese ? '恢复默认' : 'Restore defaults';
 
   String get reorder => isChinese ? '调整顺序' : 'Reorder';

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
-import threading
+import subprocess
 import time
 from types import SimpleNamespace
 
@@ -16,6 +16,7 @@ from mobile_gateway.terminal import (
     TerminalAttachTarget,
     TerminalGeometry,
     TmuxTerminalSession,
+    _capture_tmux_pane_window_state,
     _fit_terminal_snapshot,
     _send_tmux_terminal_bytes,
     _send_tmux_terminal_literal,
@@ -181,7 +182,7 @@ def test_terminal_session_reads_selected_pane_snapshot(monkeypatch) -> None:
     ]
 
 
-def test_terminal_session_repaints_visible_pane_without_reappending_history(
+def test_source_terminal_repaints_visible_pane_for_client_side_reflow(
     monkeypatch,
 ) -> None:
     calls: list[list[str]] = []
@@ -206,17 +207,12 @@ def test_terminal_session_repaints_visible_pane_without_reappending_history(
         b'\x1b[?25l\x1b[3J\x1b[H\x1b[2J'
         b'real history\r\npane only\r\nprompt$ '
     )
-    assert second == (
-        b'\x1b[?25l\x1b[0m'
-        b'\x1b[1;1H\x1b[0Jpane changed\r\nprompt$ '
-        b'\x1b[0m'
-    )
-    assert b'\x1b[2J' not in second
+    assert second == b'\x1b[?25l\x1b[H\x1b[2Jpane changed\r\nprompt$ '
     assert sum(command.count('-S') > 1 for command in calls) == 1
     assert len(calls) == 3
 
 
-def test_terminal_snapshot_clips_wide_rows_instead_of_wrapping_them(monkeypatch) -> None:
+def test_terminal_delta_preserves_complete_source_rows(monkeypatch) -> None:
     visible_outputs = iter(
         (
             b'12345678\nbefore',
@@ -235,17 +231,18 @@ def test_terminal_snapshot_clips_wide_rows_instead_of_wrapping_them(monkeypatch)
     monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
     target = replace(
         _target(),
-        geometry=TerminalGeometry(columns=4, rows=10),
+        geometry=TerminalGeometry(columns=8, rows=10),
+        target_summary={'kind': 'host_shell', 'project_id': '@host'},
     )
     session = TmuxTerminalSession(target)
 
     session.read(0)
     output = session.read(0)
 
-    assert output == b'\x1b[?25l\x1b[0m\x1b[2;1H\x1b[0Jafte\x1b[0m\x1b[0m'
+    assert output == b'\x1b[?25l\x1b[0m\x1b[2;1H\x1b[0Jafter\x1b[0m'
 
 
-def test_terminal_delta_keeps_clipped_rows_within_viewport(
+def test_terminal_delta_repaints_when_source_rows_exceed_source_viewport(
     monkeypatch,
 ) -> None:
     visible_outputs = iter(
@@ -267,16 +264,19 @@ def test_terminal_delta_keeps_clipped_rows_within_viewport(
     target = replace(
         _target(),
         geometry=TerminalGeometry(columns=4, rows=2),
+        target_summary={'kind': 'host_shell', 'project_id': '@host'},
     )
     session = TmuxTerminalSession(target)
 
     session.read(0)
     output = session.read(0)
 
-    assert output == b'\x1b[?25l\x1b[0m\x1b[2;1H\x1b[0Jafte\x1b[0m\x1b[0m'
+    assert output == (
+        b'\x1b[?25l\x1b[3J\x1b[H\x1b[2J12345678\r\nafter'
+    )
 
 
-def test_terminal_snapshot_clipping_preserves_ansi_and_wide_characters() -> None:
+def test_terminal_snapshot_normalization_preserves_ansi_and_wide_characters() -> None:
     snapshot = (
         '\x1b[36m状态 OK and trailing text\x1b[0m\n'
         'short'
@@ -284,7 +284,7 @@ def test_terminal_snapshot_clipping_preserves_ansi_and_wide_characters() -> None
 
     fitted = _fit_terminal_snapshot(snapshot, 9)
 
-    assert fitted == '\x1b[36m状态 OK a\x1b[0m\nshort'.encode()
+    assert fitted == snapshot
 
 
 def test_terminal_resumed_session_repaints_visible_pane_without_history(monkeypatch) -> None:
@@ -303,74 +303,166 @@ def test_terminal_resumed_session_repaints_visible_pane_without_history(monkeypa
     assert calls[0].count('-S') == 1
 
 
-def test_terminal_resize_repaints_visible_pane_without_replaying_history(monkeypatch) -> None:
+def test_agent_terminal_reports_fixed_source_geometry_and_ignores_resize(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        'mobile_gateway.terminal._capture_tmux_pane_geometry',
+        lambda target: TerminalGeometry(columns=164, rows=47),
+    )
+    session = TmuxTerminalSession(
+        replace(_target(), geometry=TerminalGeometry(columns=42, rows=20))
+    )
+
+    assert session.viewport_state() == {
+        'revision': 1,
+        'geometry': {
+            'columns': 164,
+            'rows': 47,
+            'pixel_width': 0,
+            'pixel_height': 0,
+        },
+        'resize_policy': 'fixed_source',
+    }
+
+    session.resize(TerminalGeometry(columns=36, rows=16))
+    assert session.viewport_state()['geometry'] == {
+        'columns': 164,
+        'rows': 47,
+        'pixel_width': 0,
+        'pixel_height': 0,
+    }
+
+
+@pytest.mark.skipif(
+    os.name == 'nt' or shutil.which('tmux') is None,
+    reason='fixed source pane geometry requires tmux on a POSIX host',
+)
+def test_agent_terminal_never_changes_desktop_layout(
+    tmp_path: Path,
+) -> None:
+    tmux = str(shutil.which('tmux'))
+    socket_path = tmp_path / 'fixed-source.sock'
+    session_name = 'fixed-source-mobile'
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [tmux, '-S', str(socket_path), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=3,
+            env=_terminal_client_env(),
+        )
+
+    run('new-session', '-d', '-s', session_name, '-x', '120', '-y', '40')
+    terminal_session = None
+    second_terminal_session = None
+    try:
+        run('split-window', '-h', '-l', '12', '-t', session_name)
+        panes = run(
+            'list-panes',
+            '-t',
+            session_name,
+            '-F',
+            '#{pane_id}\t#{pane_width}',
+        ).stdout.splitlines()
+        pane_id = max(panes, key=lambda value: int(value.split('\t')[1])).split(
+            '\t',
+        )[0]
+        target = TerminalAttachTarget(
+            terminal_id='fixed-source-real',
+            socket_path=str(socket_path),
+            session_name=session_name,
+            pane_id=pane_id,
+            geometry=TerminalGeometry(columns=51, rows=24),
+            target_summary={
+                'project_id': 'proj-test',
+                'agent': 'lead',
+                'pane_id': pane_id,
+            },
+            tmux_binary=tmux,
+            include_history=False,
+        )
+        before = _capture_tmux_pane_window_state(target)
+        terminal_session = TmuxTerminalSession(target)
+
+        opened = terminal_session.viewport_state()
+        assert opened['resize_policy'] == 'fixed_source'
+        assert opened['geometry']['columns'] == before.pane_columns
+        assert opened['geometry']['rows'] == before.pane_rows
+
+        terminal_session.resize(TerminalGeometry(columns=72, rows=20))
+        while_open = _capture_tmux_pane_window_state(target)
+        assert while_open == before
+
+        second_terminal_session = TmuxTerminalSession(
+            replace(
+                target,
+                terminal_id='fixed-source-real-second',
+                geometry=TerminalGeometry(columns=44, rows=18),
+            )
+        )
+        second_viewport = second_terminal_session.viewport_state()
+        assert second_viewport['resize_policy'] == 'fixed_source'
+        second_active = _capture_tmux_pane_window_state(target)
+        assert second_active == before
+
+        second_terminal_session.close()
+        second_terminal_session = None
+        after_second_close = _capture_tmux_pane_window_state(target)
+        assert after_second_close == before
+
+        terminal_session.close()
+        terminal_session = None
+        restored = _capture_tmux_pane_window_state(target)
+        assert restored == before
+    finally:
+        if second_terminal_session is not None:
+            second_terminal_session.close()
+        if terminal_session is not None:
+            terminal_session.close()
+        subprocess.run(
+            [tmux, '-S', str(socket_path), 'kill-server'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=3,
+            env=_terminal_client_env(),
+        )
+
+
+def test_host_terminal_resize_updates_owned_tmux_session(monkeypatch) -> None:
     calls: list[list[str]] = []
-    visible_outputs = iter((b'pane before\nprompt$ ', b'pane after\nprompt$ '))
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
-        output = (
-            b'history\npane before\nprompt$ '
-            if command.count('-S') > 1
-            else next(visible_outputs)
-        )
-        return SimpleNamespace(returncode=0, stdout=output, stderr=b'')
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
 
     monkeypatch.setattr('mobile_gateway.terminal.subprocess.run', fake_run)
-    session = TmuxTerminalSession(_target())
-
-    session.read(0)
-    session.resize(TerminalGeometry(columns=100, rows=30))
-    output = session.read(0)
-
-    assert output == b'\x1b[?25l\x1b[H\x1b[2Jpane after\r\nprompt$ '
-    assert sum(command.count('-S') > 1 for command in calls) == 1
-    assert len(calls) == 3
-
-
-def test_terminal_resize_during_capture_repaints_without_snapshot_race(
-    monkeypatch,
-) -> None:
-    capture_started = threading.Event()
-    release_capture = threading.Event()
-    visible_reads = iter((b'pane before\nprompt$ ', b'pane after\nprompt$ '))
-
-    def fake_capture(target, geometry, *, include_history):
-        if include_history:
-            return b'history\npane before\nprompt$ '
-        output = next(visible_reads)
-        if output.startswith(b'pane after'):
-            capture_started.set()
-            assert release_capture.wait(timeout=2)
-        return output
-
-    monkeypatch.setattr(
-        'mobile_gateway.terminal._capture_tmux_terminal_pane',
-        fake_capture,
+    target = replace(
+        _target(),
+        target_summary={'kind': 'host_shell', 'project_id': '@host'},
     )
-    session = TmuxTerminalSession(_target())
-    session.read(0)
-    result: dict[str, object] = {}
+    session = TmuxTerminalSession(target)
 
-    def read_after_resize() -> None:
-        try:
-            result['output'] = session.read(0)
-        except Exception as exc:  # pragma: no cover - assertion reports detail
-            result['error'] = exc
+    session.resize(TerminalGeometry(columns=92, rows=31))
 
-    reader = threading.Thread(target=read_after_resize)
-    reader.start()
-    assert capture_started.wait(timeout=2)
-
-    session.resize(TerminalGeometry(columns=100, rows=30))
-    release_capture.set()
-    reader.join(timeout=2)
-
-    assert reader.is_alive() is False
-    assert result.get('error') is None
-    assert result.get('output') == (
-        b'\x1b[?25l\x1b[H\x1b[2Jpane after\r\nprompt$ '
-    )
+    assert calls == [[
+        'tmux',
+        '-S',
+        '/tmp/ccb-test/tmux.sock',
+        'resize-window',
+        '-t',
+        'ccb-test',
+        '-x',
+        '92',
+        '-y',
+        '31',
+    ]]
+    assert session.viewport_state()['resize_policy'] == 'client'
+    assert session.viewport_state()['geometry']['columns'] == 92
 
 
 def test_terminal_open_selects_target_pane_before_attach(monkeypatch) -> None:

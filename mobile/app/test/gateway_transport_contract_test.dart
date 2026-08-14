@@ -4,6 +4,16 @@ import 'package:ccb_mobile/ccb_mobile.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('legacy adaptive pane policy is treated as a fixed source viewport', () {
+    const viewport = TerminalViewport(
+      geometry: TerminalGeometry(columns: 164, rows: 47),
+      resizePolicy: TerminalResizePolicy.adaptivePane,
+    );
+
+    expect(viewport.hasFixedSourceGeometry, isTrue);
+    expect(viewport.acceptsClientResize, isFalse);
+  });
+
   test('route provider serializes only pairing route metadata', () {
     final route = RouteProvider(
       kind: RouteProviderKind.cloudflareTunnel,
@@ -122,6 +132,13 @@ void main() {
       GatewayTerminalFrame.resize(
         const TerminalGeometry(columns: 120, rows: 36),
       ),
+      GatewayTerminalFrame.geometry(
+        const TerminalViewport(
+          geometry: TerminalGeometry(columns: 164, rows: 47),
+          resizePolicy: TerminalResizePolicy.fixedSource,
+          revision: 2,
+        ),
+      ),
       GatewayTerminalFrame.output(sequence: 3, bytes: [0x62]),
       GatewayTerminalFrame.closed('client_closed'),
       GatewayTerminalFrame.error('stale_namespace_epoch'),
@@ -132,6 +149,7 @@ void main() {
       'input',
       'paste',
       'resize',
+      'geometry',
       'output',
       'closed',
       'error',
@@ -141,7 +159,16 @@ void main() {
       expect(frame.toJson().toString(), isNot(contains('cloudflare')));
     }
     expect(frames[1].toJson(), containsPair('seq', 1));
-    expect(frames[4].toJson(), containsPair('seq', 3));
+    expect(frames[4].toJson(), {
+      'type': 'geometry',
+      'columns': 164,
+      'rows': 47,
+      'pixel_width': 0,
+      'pixel_height': 0,
+      'resize_policy': 'fixed_source',
+      'revision': 2,
+    });
+    expect(frames[5].toJson(), containsPair('seq', 3));
   });
 
   test('terminal frame parser drops unexpected route metadata', () {

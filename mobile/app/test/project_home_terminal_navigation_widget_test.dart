@@ -37,6 +37,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('agent-lead')));
     await tester.pumpAndSettle();
     expect(
+      find.byKey(const ValueKey('mobile-agent-switcher-expanded')),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(const ValueKey('agent-workspace-mode-switch')),
       findsNothing,
     );
@@ -48,6 +52,14 @@ void main() {
     expect(
       find.byKey(const ValueKey('ccb-live-terminal-view')),
       findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mobile-agent-switcher-expanded')),
+      findsNothing,
     );
     expect(terminalTransport.requests, hasLength(1));
     expect(terminalTransport.requests.single.target.projectId, 'proj-demo');

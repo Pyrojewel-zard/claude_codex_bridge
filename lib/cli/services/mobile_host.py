@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import signal
 import shlex
 import shutil
 import socket
@@ -47,6 +48,10 @@ MOBILE_HOST_STATE_READY_TIMEOUT_S = MOBILE_HOST_HEALTH_TIMEOUT_S
 
 
 class MobileHostServiceError(RuntimeError):
+    pass
+
+
+class _MobileHostShutdown(RuntimeError):
     pass
 
 
@@ -396,9 +401,17 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
             relay_runtime.stop()
         handle.close()
         return 1
+    previous_sigterm_handler = _install_mobile_host_sigterm_handler()
+    exit_code = 0
     try:
-        handle.serve_forever()
+        try:
+            handle.serve_forever()
+        except _MobileHostShutdown:
+            pass
+        except KeyboardInterrupt:
+            exit_code = 130
     finally:
+        _restore_mobile_host_sigterm_handler(previous_sigterm_handler)
         _remove_mobile_host_service_state_if_current(
             paths.state_path,
             pid=os.getpid(),
@@ -407,7 +420,29 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
         if relay_runtime is not None:
             relay_runtime.stop()
         handle.close()
-    return 0
+    return exit_code
+
+
+def _install_mobile_host_sigterm_handler():
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _raise_mobile_host_shutdown)
+    except (AttributeError, ValueError):
+        return None
+    return previous
+
+
+def _restore_mobile_host_sigterm_handler(previous) -> None:
+    if previous is None:
+        return
+    try:
+        signal.signal(signal.SIGTERM, previous)
+    except (AttributeError, ValueError):
+        pass
+
+
+def _raise_mobile_host_shutdown(_signum, _frame) -> None:
+    raise _MobileHostShutdown()
 
 
 def mobile_host_service_paths(state_dir: Path | None = None) -> MobileHostServicePaths:

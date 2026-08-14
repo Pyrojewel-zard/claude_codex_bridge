@@ -59,7 +59,7 @@ class HttpGatewayTransport
   final Duration? terminalPingInterval;
   final Duration _projectListWarmupRetryDelay;
   final int _projectListWarmupMaxAttempts;
-  final Map<String, Future<WebSocket>> _terminalSockets = {};
+  final Map<String, _TerminalSocketConnection> _terminalSockets = {};
 
   Uri get _baseUrl => profile.routeProvider.gatewayUrl;
 
@@ -325,6 +325,7 @@ class HttpGatewayTransport
     int? resumeCursor,
   }) {
     late StreamController<GatewayTerminalFrame> controller;
+    late _TerminalSocketConnection connection;
     controller = StreamController<GatewayTerminalFrame>(
       onListen: () async {
         try {
@@ -332,7 +333,8 @@ class HttpGatewayTransport
             handle.websocketUrl.toString(),
             customClient: _httpClient,
           ).timeout(_timeout);
-          _terminalSockets[handle.terminalId] = socketFuture;
+          connection = _TerminalSocketConnection(socketFuture);
+          _terminalSockets[handle.terminalId] = connection;
           final socket = await socketFuture;
           // dart:io closes the WebSocket when a ping is not answered within
           // one interval. That turns silent Wi-Fi half-open connections into
@@ -358,7 +360,7 @@ class HttpGatewayTransport
             },
             onError: controller.addError,
             onDone: () {
-              _terminalSockets.remove(handle.terminalId);
+              _forgetTerminalSocket(handle.terminalId, connection);
               if (!controller.isClosed) {
                 controller.close();
               }
@@ -366,14 +368,15 @@ class HttpGatewayTransport
             cancelOnError: false,
           );
         } catch (error, stackTrace) {
-          _terminalSockets.remove(handle.terminalId);
+          _forgetTerminalSocket(handle.terminalId, connection);
           controller.addError(error, stackTrace);
           await controller.close();
         }
       },
       onCancel: () async {
-        final socket = await _terminalSockets.remove(handle.terminalId);
-        await socket?.close();
+        _forgetTerminalSocket(handle.terminalId, connection);
+        final socket = await connection.socket;
+        await socket.close();
       },
     );
     return controller.stream;
@@ -384,12 +387,21 @@ class HttpGatewayTransport
     GatewayTerminalHandle handle,
     GatewayTerminalFrame frame,
   ) async {
-    final socketFuture = _terminalSockets[handle.terminalId];
-    if (socketFuture == null) {
+    final connection = _terminalSockets[handle.terminalId];
+    if (connection == null) {
       throw StateError('gateway terminal WebSocket is not connected');
     }
-    final socket = await socketFuture.timeout(_timeout);
+    final socket = await connection.socket.timeout(_timeout);
     socket.add(jsonEncode(frame.toJson()));
+  }
+
+  void _forgetTerminalSocket(
+    String terminalId,
+    _TerminalSocketConnection connection,
+  ) {
+    if (identical(_terminalSockets[terminalId], connection)) {
+      _terminalSockets.remove(terminalId);
+    }
   }
 
   @override
@@ -506,8 +518,8 @@ class HttpGatewayTransport
   }
 
   void close({bool force = false}) {
-    for (final socketFuture in _terminalSockets.values) {
-      socketFuture.then((socket) => socket.close()).ignore();
+    for (final connection in _terminalSockets.values) {
+      connection.socket.then((socket) => socket.close()).ignore();
     }
     _terminalSockets.clear();
     _httpClient.close(force: force);
@@ -564,6 +576,12 @@ class HttpGatewayTransport
       );
     }
   }
+}
+
+class _TerminalSocketConnection {
+  const _TerminalSocketConnection(this.socket);
+
+  final Future<WebSocket> socket;
 }
 
 DateTime _dateTime(Object? value) {

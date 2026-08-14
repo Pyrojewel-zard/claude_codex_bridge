@@ -832,9 +832,7 @@ class RelaySocketGatewayTransport
       return stream;
     } catch (_) {
       session.streams.remove(streamId);
-      if (terminalId != null) {
-        session.terminalStreams.remove(terminalId);
-      }
+      _forgetTerminalStream(session, stream);
       await stream.close();
       rethrow;
     }
@@ -869,9 +867,7 @@ class RelaySocketGatewayTransport
     if (session != null &&
         identical(session.streams[stream.streamId], stream)) {
       session.streams.remove(stream.streamId);
-      if (stream.terminalId != null) {
-        session.terminalStreams.remove(stream.terminalId);
-      }
+      _forgetTerminalStream(session, stream);
       if (!session.closed) {
         try {
           await _sendInner(
@@ -986,9 +982,7 @@ class RelaySocketGatewayTransport
       case RelayInnerKind.streamClose:
       case RelayInnerKind.streamCancel:
         session.streams.remove(streamId);
-        if (stream.terminalId != null) {
-          session.terminalStreams.remove(stream.terminalId);
-        }
+        _forgetTerminalStream(session, stream);
         await stream.close();
       case RelayInnerKind.request:
       case RelayInnerKind.response:
@@ -1043,6 +1037,17 @@ class RelaySocketGatewayTransport
       );
     }
     _httpClient.close(force: force);
+  }
+
+  void _forgetTerminalStream(
+    _RelaySocketSession session,
+    _RelayClientStream stream,
+  ) {
+    final terminalId = stream.terminalId;
+    if (terminalId != null &&
+        identical(session.terminalStreams[terminalId], stream)) {
+      session.terminalStreams.remove(terminalId);
+    }
   }
 
   String _identifier(String prefix) {

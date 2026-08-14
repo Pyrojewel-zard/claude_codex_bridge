@@ -1,10 +1,16 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 
 /// Keeps xterm's implicit input/focus scrolls from overriding history reading.
 class TerminalHistoryScrollController extends ScrollController {
-  TerminalHistoryScrollController({super.debugLabel});
+  TerminalHistoryScrollController({
+    super.debugLabel,
+    this.onUserScrollDirectionChanged,
+  });
 
   static const _latestTolerance = 8.0;
+
+  final ValueChanged<ScrollDirection>? onUserScrollDirectionChanged;
 
   bool _isReadingHistory = false;
 
@@ -45,6 +51,14 @@ class TerminalHistoryScrollController extends ScrollController {
     _isReadingHistory = position.extentAfter > _latestTolerance;
   }
 
+  void _recordUserOffset(double delta) {
+    if (delta < 0) {
+      onUserScrollDirectionChanged?.call(ScrollDirection.reverse);
+    } else if (delta > 0) {
+      onUserScrollDirectionChanged?.call(ScrollDirection.forward);
+    }
+  }
+
   bool _shouldSuppressImplicitLatestJump(
     ScrollPosition position,
     double value,
@@ -77,6 +91,7 @@ class _TerminalHistoryScrollPosition extends ScrollPositionWithSingleContext {
   void applyUserOffset(double delta) {
     super.applyUserOffset(delta);
     owner._recordUserPosition(this);
+    owner._recordUserOffset(delta);
   }
 
   @override

@@ -380,6 +380,83 @@ void main() {
     ]);
   });
 
+  test(
+    'canceling a superseded relay terminal stream keeps the current stream',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+      );
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+      final handle = await transport.openTerminal(
+        GatewayTerminalOpenRequest(
+          target: GatewayTerminalTarget(
+            projectId: 'proj-demo',
+            namespaceEpoch: 7,
+            kind: CcbTerminalTargetKind.agent,
+            agent: 'worker1',
+            window: 'main',
+            paneId: '%7',
+          ),
+        ),
+      );
+      final first = transport.terminalFrames(handle).listen((_) {});
+      addTearDown(first.cancel);
+      await _waitFor(
+        () =>
+            relay.streamOpens
+                .where((item) => item['operation'] == 'terminal')
+                .length ==
+            1,
+      );
+      final second = transport
+          .terminalFrames(handle, resumeCursor: 1)
+          .listen((_) {});
+      addTearDown(second.cancel);
+      await _waitFor(
+        () =>
+            relay.streamOpens
+                .where((item) => item['operation'] == 'terminal')
+                .length ==
+            2,
+      );
+
+      await first.cancel();
+      await transport.sendTerminalFrame(
+        handle,
+        GatewayTerminalFrame.input(
+          sequence: 9,
+          bytes: utf8.encode('current-relay-stream'),
+        ),
+      );
+      await _waitFor(
+        () => relay.terminalFrames.any(
+          (frame) => frame['type'] == 'input' && frame['seq'] == 9,
+        ),
+      );
+
+      expect(relay.terminalFrames.last, {
+        'type': 'input',
+        'seq': 9,
+        'bytes_b64': base64Encode(utf8.encode('current-relay-stream')),
+      });
+    },
+  );
+
   test('host terminal open and terminate use relay unary operations', () async {
     final hostSeed = List<int>.generate(32, (index) => index + 101);
     final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
@@ -1269,6 +1346,19 @@ Future<void> _verifyPhoneProof(
     ),
     isTrue,
   );
+}
+
+Future<void> _waitFor(
+  bool Function() predicate, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!predicate()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('condition was not met', timeout);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
 }
 
 Future<String> _publicKeyB64(List<int> privateKeyBytes) async {

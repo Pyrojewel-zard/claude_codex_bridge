@@ -968,6 +968,52 @@ def test_mobile_host_serve_removes_current_state_after_server_exits(
     assert not paths.state_path.exists()
 
 
+def test_mobile_host_serve_closes_gateway_on_sigterm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile'
+    closed: list[bool] = []
+
+    class _Handle:
+        summary = {
+            'host_id': 'desktop',
+            'listen': '127.0.0.1:8787',
+            'local_gateway_url': 'http://127.0.0.1:8787',
+            'gateway_url': 'http://127.0.0.1:8787',
+            'route_provider': 'lan',
+            'pairing': _pairing_payload(),
+        }
+
+        def serve_forever(self) -> None:
+            mobile_host._raise_mobile_host_shutdown(None, None)
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        mobile_host,
+        'prepare_server_mobile_gateway',
+        lambda *_args, **_kwargs: _Handle(),
+    )
+
+    code = run_mobile_host_serve_command(
+        SimpleNamespace(
+            listen='127.0.0.1:8787',
+            public_url=None,
+            route_provider='lan',
+            state_dir=str(state_dir),
+            generation=7,
+            host_id='desktop',
+        ),
+        script_root=tmp_path / 'source',
+    )
+
+    assert code == 0
+    assert closed == [True]
+    assert not mobile_host_service_paths(state_dir).state_path.exists()
+
+
 def test_mobile_host_serve_runs_relay_connector_with_activated_identity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

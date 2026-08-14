@@ -524,6 +524,8 @@ class MobileGatewayService:
         self._background_executor = background_executor
         self._owns_background_executor = False
         self._closed = False
+        self._terminal_sessions_lock = threading.Lock()
+        self._terminal_sessions: dict[int, object] = {}
         self._terminal_session_factory = terminal_session_factory or _default_terminal_session_factory
         self._terminal_history_factory = terminal_history_factory or _default_terminal_history_factory
         self._terminal_message_sender = terminal_message_sender or _default_terminal_message_sender
@@ -1842,12 +1844,17 @@ class MobileGatewayService:
                 include_history=resume_cursor is None,
             )
             session = self._terminal_session_factory(attach_target)
+            self._register_terminal_session(session)
+            viewport = _terminal_viewport_state(session, fallback=attach_target)
             connection.send_json(
                 {
                     'type': 'open',
                     'terminal_id': terminal_id,
                     'resume_cursor': _int(record.get('last_output_seq'), 0),
                     'last_input_seq': _int(record.get('last_input_seq'), 0),
+                    'geometry': viewport['geometry'],
+                    'resize_policy': viewport['resize_policy'],
+                    'geometry_revision': viewport['revision'],
                 }
             )
             output_thread = threading.Thread(
@@ -1861,6 +1868,7 @@ class MobileGatewayService:
                     terminal_id,
                     terminal_token,
                     _int(record.get('last_output_seq'), 0),
+                    _int(viewport.get('revision'), 0),
                 ),
                 daemon=True,
             )
@@ -1918,6 +1926,7 @@ class MobileGatewayService:
                 except MobileGatewayPairingError:
                     pass
             if session is not None:
+                self._unregister_terminal_session(session)
                 try:
                     session.close()
                 except Exception:
@@ -2162,9 +2171,19 @@ class MobileGatewayService:
         return redacted
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._terminal_sessions_lock:
+            if self._closed:
+                return
+            self._closed = True
+            terminal_sessions = tuple(self._terminal_sessions.values())
+            self._terminal_sessions.clear()
+        for session in terminal_sessions:
+            close = getattr(session, 'close', None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
         if self._project_health_cache is not None:
             self._project_health_cache.close()
         if self._push_dispatcher is not None:
@@ -2173,6 +2192,23 @@ class MobileGatewayService:
             close = getattr(self._background_executor, 'close', None)
             if callable(close):
                 close()
+
+    def _register_terminal_session(self, session: object) -> None:
+        with self._terminal_sessions_lock:
+            if not self._closed:
+                self._terminal_sessions[id(session)] = session
+                return
+        close = getattr(session, 'close', None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        raise MobileGatewayError('mobile gateway is shutting down', status_code=503)
+
+    def _unregister_terminal_session(self, session: object) -> None:
+        with self._terminal_sessions_lock:
+            self._terminal_sessions.pop(id(session), None)
 
     def _registry_projects(self, *, refresh: bool = False) -> tuple[MobileGatewayProject, ...]:
         if refresh and self._project_registry_provider is not None:
@@ -2647,6 +2683,9 @@ class MobileGatewayService:
                 self._record_project_activity(project_id)
             return ''
         if frame_type == 'resize':
+            viewport = _terminal_viewport_state(session)
+            if viewport is not None and viewport.get('resize_policy') != 'client':
+                return ''
             session.resize(TerminalGeometry.from_mapping(frame))
             return ''
         if frame_type == 'closed':
@@ -6124,6 +6163,7 @@ def _pump_terminal_output(
     terminal_id: str,
     terminal_token: str,
     sequence: int,
+    geometry_revision: int,
 ) -> None:
     try:
         while not stop.is_set():
@@ -6133,6 +6173,20 @@ def _pump_terminal_output(
                 _safe_send_json(connection, {'type': 'closed', 'reason': 'pty_closed'})
                 stop.set()
                 return
+            viewport = _terminal_viewport_state(session)
+            if viewport is not None:
+                next_revision = _int(viewport.get('revision'), geometry_revision)
+                if next_revision != geometry_revision:
+                    geometry_revision = next_revision
+                    geometry = _map(viewport.get('geometry'))
+                    connection.send_json(
+                        {
+                            'type': 'geometry',
+                            **geometry,
+                            'resize_policy': viewport['resize_policy'],
+                            'revision': geometry_revision,
+                        }
+                    )
             if data:
                 sequence += 1
                 try:
@@ -6156,6 +6210,37 @@ def _pump_terminal_output(
         close_state['reason'] = 'terminal_output_error'
         _safe_send_json(connection, {'type': 'error', 'code': 'terminal_output_error', 'message': _error_text(exc)})
         stop.set()
+
+
+def _terminal_viewport_state(
+    session,
+    *,
+    fallback: TerminalAttachTarget | None = None,
+) -> dict[str, object] | None:
+    viewport_state = getattr(session, 'viewport_state', None)
+    if callable(viewport_state):
+        payload = viewport_state()
+        if isinstance(payload, Mapping):
+            geometry = TerminalGeometry.from_mapping(payload.get('geometry'))
+            policy = str(payload.get('resize_policy') or '').strip()
+            if policy not in {'adaptive_pane', 'fixed_source', 'client'}:
+                raise RuntimeError('terminal viewport resize policy is invalid')
+            return {
+                'revision': max(0, _int(payload.get('revision'), 0)),
+                'geometry': geometry.to_mapping(),
+                'resize_policy': policy,
+            }
+    if fallback is None:
+        return None
+    return {
+        'revision': 0,
+        'geometry': fallback.geometry.to_mapping(),
+        'resize_policy': (
+            'client'
+            if fallback.target_summary.get('kind') == 'host_shell'
+            else 'fixed_source'
+        ),
+    }
 
 
 def _safe_send_json(connection: WebSocketConnection, payload: Mapping[str, object]) -> None:

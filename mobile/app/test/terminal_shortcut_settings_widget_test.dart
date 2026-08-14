@@ -28,6 +28,13 @@ void main() {
     await tester.tap(entry);
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const ValueKey('terminal-font-size-value')), findsOne);
+    await tester.tap(
+      find.byKey(const ValueKey('terminal-settings-font-increase')),
+    );
+    await tester.pump();
+    expect(store.value.fontSize, 14);
+
     final escapeSetting = find.byKey(
       const ValueKey('terminal-shortcut-setting-escape'),
     );
@@ -48,6 +55,7 @@ void main() {
       CcbTerminalShortcut.ctrlC,
       CcbTerminalShortcut.escape,
     ]);
+    expect(store.value.fontSize, 14);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpWidget(
@@ -73,6 +81,7 @@ void main() {
       ),
     );
     expect(restoredEscape.value, isFalse);
+    expect(find.text('14 pt'), findsOneWidget);
     final tabTop = tester.getTopLeft(
       find.byKey(const ValueKey('terminal-shortcut-setting-tab')),
     );
@@ -86,6 +95,7 @@ void main() {
     );
     await tester.pump();
     expect(store.value, CcbTerminalShortcutPreferences.defaults);
+    expect(find.text('13 pt'), findsOneWidget);
   });
 
   testWidgets('terminal toolbar follows configured enabled order', (

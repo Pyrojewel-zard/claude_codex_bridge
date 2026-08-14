@@ -256,6 +256,8 @@ class _FakeTerminalSession:
         self.pastes: list[str] = []
         self.resizes: list[object] = []
         self.closed = False
+        self.viewport_geometry = target.geometry
+        self.viewport_revision = 0
 
     def read(self, timeout_seconds: float = 0.1) -> bytes | None:
         if self.outputs:
@@ -274,6 +276,17 @@ class _FakeTerminalSession:
 
     def close(self) -> None:
         self.closed = True
+
+    def viewport_state(self) -> dict[str, object]:
+        return {
+            'revision': self.viewport_revision,
+            'geometry': self.viewport_geometry.to_mapping(),
+            'resize_policy': (
+                'client'
+                if self.target.target_summary.get('kind') == 'host_shell'
+                else 'fixed_source'
+            ),
+        }
 
 
 class _FakeCcbdClientWithConversationComms(_FakeCcbdClient):
@@ -5726,6 +5739,14 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
             },
         )
 
+        open_ack = _websocket_read_until(sock, 'open')
+        assert open_ack['geometry'] == {
+            'columns': 100,
+            'rows': 30,
+            'pixel_width': 0,
+            'pixel_height': 0,
+        }
+        assert open_ack['resize_policy'] == 'fixed_source'
         output = _websocket_read_until(sock, 'output')
         assert output['seq'] == 1
         assert base64.b64decode(str(output['bytes_b64'])) == b'hello'
@@ -5750,6 +5771,22 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         assert sessions[0].target.geometry.rows == 30
         assert sessions[0].target.include_history is True
 
+        sessions[0].viewport_geometry = terminal_module.TerminalGeometry(
+            columns=164,
+            rows=47,
+        )
+        sessions[0].viewport_revision += 1
+        geometry = _websocket_read_until(sock, 'geometry')
+        assert geometry == {
+            'type': 'geometry',
+            'columns': 164,
+            'rows': 47,
+            'pixel_width': 0,
+            'pixel_height': 0,
+            'resize_policy': 'fixed_source',
+            'revision': 1,
+        }
+
         _websocket_send_json(sock, {'type': 'input', 'seq': 1, 'bytes_b64': base64.b64encode(b'a').decode('ascii')})
         _wait_for(lambda: sessions[0].writes == [b'a'])
         _websocket_send_json(sock, {'type': 'paste', 'seq': 2, 'text': 'hello paste'})
@@ -5757,9 +5794,8 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         projects = service.projects_payload()
         assert projects['projects'][0]['last_activity_at'] == '2026-06-18T00:00:00Z'
         _websocket_send_json(sock, {'type': 'resize', 'columns': 120, 'rows': 36})
-        _wait_for(lambda: len(sessions[0].resizes) == 1)
-        assert sessions[0].resizes[0].columns == 120
-        assert sessions[0].resizes[0].rows == 36
+        time.sleep(0.05)
+        assert sessions[0].resizes == []
 
         _websocket_send_json(sock, {'type': 'input', 'seq': 2, 'bytes_b64': base64.b64encode(b'b').decode('ascii')})
         error = _websocket_read_until(sock, 'error')
@@ -5780,6 +5816,70 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         thread.join(timeout=2)
 
 
+def test_gateway_close_closes_active_terminal_sessions(tmp_path: Path) -> None:
+    sessions: list[_FakeTerminalSession] = []
+
+    def session_factory(target):
+        session = _FakeTerminalSession(target)
+        sessions.append(session)
+        return session
+
+    service = _service(
+        _FakeCcbdClient(),
+        mobile_dir=tmp_path / 'mobile',
+        terminal_session_factory=session_factory,
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {
+            'pairing_code': str(pairing['pairing_code']),
+            'device_name': 'Pixel Fold',
+        },
+    )
+    _, handle = service.dispatch_post(
+        '/v1/projects/proj-demo/terminals',
+        {
+            'project_id': 'proj-demo',
+            'namespace_epoch': 4,
+            'target': {
+                'kind': 'agent',
+                'agent': 'mobile',
+                'window': 'main',
+            },
+            'geometry': {'columns': 100, 'rows': 30},
+        },
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    server = build_mobile_gateway_server(parse_listen_address('127.0.0.1:0'), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    sock = None
+    try:
+        thread.start()
+        host, port = server.server_address[:2]
+        sock = _websocket_connect(host, port, f'/v1/terminals/{handle["terminal_id"]}')
+        _websocket_send_json(
+            sock,
+            {
+                'type': 'open',
+                'terminal_id': handle['terminal_id'],
+                'token': handle['terminal_token'],
+            },
+        )
+        _websocket_read_until(sock, 'open')
+        _wait_for(lambda: bool(sessions))
+
+        service.close()
+
+        _wait_for(lambda: sessions[0].closed)
+    finally:
+        if sock is not None:
+            sock.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_terminal_websocket_delivers_text_and_enter_in_one_input_frame(
     tmp_path: Path,
     monkeypatch,
@@ -5789,7 +5889,10 @@ def test_terminal_websocket_delivers_text_and_enter_in_one_input_frame(
     def fake_tmux_run(command, **kwargs):
         call = list(command)
         tmux_calls.append(call)
-        output = b'prompt$ ' if 'capture-pane' in call else b''
+        if 'display-message' in call:
+            output = '@0\t113\t30\t100\t30\tlayout-token'
+        else:
+            output = b'prompt$ ' if 'capture-pane' in call else b''
         return type('Completed', (), {'returncode': 0, 'stdout': output, 'stderr': b''})()
 
     monkeypatch.setattr(terminal_module.subprocess, 'run', fake_tmux_run)

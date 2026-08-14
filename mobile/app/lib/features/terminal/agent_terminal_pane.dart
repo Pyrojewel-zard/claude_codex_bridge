@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:xterm/xterm.dart';
 
 import '../../app/terminal_shortcut_preferences.dart';
@@ -22,6 +23,7 @@ class AgentTerminalPane extends StatefulWidget {
     this.gatewayTerminal = false,
     this.showHeader = true,
     this.active = true,
+    this.onUserScrollDirectionChanged,
     super.key,
   });
 
@@ -31,6 +33,7 @@ class AgentTerminalPane extends StatefulWidget {
   final bool gatewayTerminal;
   final bool showHeader;
   final bool active;
+  final ValueChanged<ScrollDirection>? onUserScrollDirectionChanged;
 
   @override
   State<AgentTerminalPane> createState() => _AgentTerminalPaneState();
@@ -45,7 +48,11 @@ class _AgentTerminalPaneState extends State<AgentTerminalPane> {
     );
     final transport = widget.terminalTransport;
     if (transport == null) {
-      return _FakeTerminalPane(model: model, showHeader: widget.showHeader);
+      return _FakeTerminalPane(
+        model: model,
+        showHeader: widget.showHeader,
+        onUserScrollDirectionChanged: widget.onUserScrollDirectionChanged,
+      );
     }
     return LiveTerminalPane(
       title: model.title,
@@ -66,6 +73,8 @@ class _AgentTerminalPaneState extends State<AgentTerminalPane> {
       },
       showHeader: widget.showHeader,
       active: widget.active,
+      sourcePaneMirror: true,
+      onUserScrollDirectionChanged: widget.onUserScrollDirectionChanged,
     );
   }
 }
@@ -104,10 +113,15 @@ class AgentTerminalPaneModel {
 }
 
 class _FakeTerminalPane extends StatefulWidget {
-  const _FakeTerminalPane({required this.model, required this.showHeader});
+  const _FakeTerminalPane({
+    required this.model,
+    required this.showHeader,
+    this.onUserScrollDirectionChanged,
+  });
 
   final AgentTerminalPaneModel model;
   final bool showHeader;
+  final ValueChanged<ScrollDirection>? onUserScrollDirectionChanged;
 
   @override
   State<_FakeTerminalPane> createState() => _FakeTerminalPaneState();
@@ -115,12 +129,23 @@ class _FakeTerminalPane extends StatefulWidget {
 
 class _FakeTerminalPaneState extends State<_FakeTerminalPane> {
   late final Terminal _terminal;
+  late final TerminalHistoryScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
+    _scrollController = TerminalHistoryScrollController(
+      debugLabel: 'fake-terminal-history',
+      onUserScrollDirectionChanged: widget.onUserScrollDirectionChanged,
+    );
     _terminal = Terminal(maxLines: 2000);
     _writeTranscript();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   void _writeTranscript() {
@@ -153,6 +178,7 @@ class _FakeTerminalPaneState extends State<_FakeTerminalPane> {
             key: const ValueKey('ccb-terminal-view'),
             autofocus: false,
             readOnly: true,
+            scrollController: _scrollController,
             padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
           ),
         ),
@@ -191,6 +217,8 @@ class LiveTerminalPane extends StatefulWidget {
     required this.openSession,
     required this.showHeader,
     required this.active,
+    this.sourcePaneMirror = false,
+    this.onUserScrollDirectionChanged,
     this.controller,
     this.terminalViewKey = const ValueKey('ccb-live-terminal-view'),
     this.scrollDebugLabel = 'terminal-history',
@@ -203,6 +231,8 @@ class LiveTerminalPane extends StatefulWidget {
   final TerminalSessionOpener openSession;
   final bool showHeader;
   final bool active;
+  final bool sourcePaneMirror;
+  final ValueChanged<ScrollDirection>? onUserScrollDirectionChanged;
   final LiveTerminalPaneController? controller;
   final Key terminalViewKey;
   final String scrollDebugLabel;
@@ -213,6 +243,7 @@ class LiveTerminalPane extends StatefulWidget {
 
 class _LiveTerminalPaneState extends State<LiveTerminalPane>
     with WidgetsBindingObserver {
+  static const _terminalPadding = EdgeInsets.fromLTRB(6, 4, 6, 4);
   static const _autoReconnectBackoff = <Duration>[
     Duration(seconds: 1),
     Duration(seconds: 2),
@@ -227,7 +258,9 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   Future<TerminalSession>? _openingFuture;
   TerminalSession? _session;
   StreamSubscription<String>? _outputSubscription;
+  StreamSubscription<TerminalViewport>? _viewportSubscription;
   Timer? _autoReconnectTimer;
+  Timer? _resizeDebounce;
   var _openGeneration = 0;
   var _autoReconnectAttempt = 0;
   var _autoReconnectBlocked = false;
@@ -238,6 +271,12 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     pixelWidth: 960,
     pixelHeight: 640,
   );
+  TerminalViewport _viewport = const TerminalViewport(
+    geometry: TerminalGeometry(columns: 100, rows: 30),
+    resizePolicy: TerminalResizePolicy.fixedSource,
+  );
+  double _readableFontSize = ccbTerminalDefaultFontSize;
+  final Set<int> _activePointers = <int>{};
   String _controlStatus = 'Connecting';
   bool _terminalInputActive = false;
   bool _terminalKeyboardWasVisible = false;
@@ -251,7 +290,15 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     WidgetsBinding.instance.addObserver(this);
     _terminalScrollController = TerminalHistoryScrollController(
       debugLabel: widget.scrollDebugLabel,
+      onUserScrollDirectionChanged: widget.onUserScrollDirectionChanged,
     )..addListener(_handleTerminalScrollChanged);
+    _viewport = TerminalViewport(
+      geometry: _lastGeometry,
+      resizePolicy:
+          widget.sourcePaneMirror
+              ? TerminalResizePolicy.fixedSource
+              : TerminalResizePolicy.client,
+    );
     _terminal = Terminal(
       maxLines: 4000,
       onOutput: (data) {
@@ -261,20 +308,27 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
         _writeTerminalBytes(utf8.encode(data));
       },
       onResize: (width, height, pixelWidth, pixelHeight) {
-        final geometry = TerminalGeometry(
-          columns: width,
-          rows: height,
-          pixelWidth: pixelWidth,
-          pixelHeight: pixelHeight,
+        _handleTerminalResize(
+          TerminalGeometry(
+            columns: width,
+            rows: height,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+          ),
         );
-        if (_sameGeometry(_lastGeometry, geometry)) {
-          return;
-        }
-        _lastGeometry = geometry;
-        _session?.resize(geometry);
       },
     );
     _startSession(clearTerminal: false);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _readableFontSize =
+        CcbTerminalShortcutPreferencesScope.maybeOf(
+          context,
+        )?.preferences.fontSize ??
+        ccbTerminalDefaultFontSize;
   }
 
   @override
@@ -363,6 +417,7 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
       throw const TerminalTransportException('stale terminal session');
     }
     _session = session;
+    _observeViewport(session);
     _resetAutoReconnect();
     _setControlStatus('Connected');
     _outputSubscription = session.output
@@ -424,6 +479,7 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     _openGeneration += 1;
     _closingForRemoval = true;
     _cancelAutoReconnectTimer();
+    _resizeDebounce?.cancel();
     unawaited(_closeCurrentSession());
     _terminalScrollController.removeListener(_handleTerminalScrollChanged);
     _terminalScrollController.dispose();
@@ -456,15 +512,69 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   Future<void> _closeCurrentSession() async {
     final subscription = _outputSubscription;
     _outputSubscription = null;
+    final viewportSubscription = _viewportSubscription;
+    _viewportSubscription = null;
     final session = _session;
     _session = null;
     final cancellation = subscription?.cancel();
+    final viewportCancellation = viewportSubscription?.cancel();
     await session?.close().catchError((_) {
       // Best-effort route teardown; the gateway may already have closed.
     });
     if (cancellation != null) {
       unawaited(cancellation.catchError((_) {}));
     }
+    if (viewportCancellation != null) {
+      unawaited(viewportCancellation.catchError((_) {}));
+    }
+  }
+
+  void _observeViewport(TerminalSession session) {
+    if (session is! TerminalViewportSession) {
+      return;
+    }
+    final viewportSession = session as TerminalViewportSession;
+    _applyViewport(viewportSession.viewport);
+    _viewportSubscription = viewportSession.viewportChanges.listen(
+      _applyViewport,
+      onError: (_) {
+        // Output owns connection errors. Retain the last valid source grid.
+      },
+    );
+  }
+
+  void _applyViewport(TerminalViewport viewport) {
+    if (!mounted) {
+      return;
+    }
+    _viewport = viewport;
+    setState(() {});
+  }
+
+  void _handleTerminalResize(TerminalGeometry geometry) {
+    if (_sameGeometry(_lastGeometry, geometry)) {
+      return;
+    }
+    _lastGeometry = geometry;
+    if (!_viewport.acceptsClientResize) {
+      // Agent Terminal owns only its local render geometry. The source tmux
+      // pane keeps the desktop geometry reported by the gateway.
+      return;
+    }
+    _viewport = TerminalViewport(
+      geometry: geometry,
+      resizePolicy: _viewport.resizePolicy,
+      revision: _viewport.revision + 1,
+    );
+    _resizeDebounce?.cancel();
+    _resizeDebounce = Timer(const Duration(milliseconds: 140), () {
+      _session?.resize(geometry);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   void _writeTerminalBytes(List<int> bytes) {
@@ -497,6 +607,11 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   }
 
   void _handleTerminalPointerDown(PointerDownEvent event, bool connected) {
+    _activePointers.add(event.pointer);
+    if (_activePointers.length > 1) {
+      _resetTerminalTap();
+      return;
+    }
     if (!connected || !_terminalScrollController.isAtLatestOutput) {
       _resetTerminalTap();
       return;
@@ -506,6 +621,10 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   }
 
   void _handleTerminalPointerMove(PointerMoveEvent event) {
+    if (_activePointers.length >= 2) {
+      _resetTerminalTap();
+      return;
+    }
     if (_terminalTapPointer != event.pointer || _terminalTapOrigin == null) {
       return;
     }
@@ -515,13 +634,18 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   }
 
   void _handleTerminalPointerUp(PointerUpEvent event, bool connected) {
-    if (_terminalTapPointer == event.pointer && _terminalTapOrigin != null) {
+    final hadMultiplePointers = _activePointers.length > 1;
+    _activePointers.remove(event.pointer);
+    if (!hadMultiplePointers &&
+        _terminalTapPointer == event.pointer &&
+        _terminalTapOrigin != null) {
       _activateTerminalInput(connected);
     }
     _resetTerminalTap();
   }
 
   void _handleTerminalPointerCancel(PointerCancelEvent event) {
+    _activePointers.remove(event.pointer);
     if (_terminalTapPointer == event.pointer) {
       _resetTerminalTap();
     }
@@ -552,21 +676,37 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
   }
 
   static bool _isTerminalAutoReportReply(String data) {
-    if (data == '\x1b[?1;2c' ||
-        data == '\x1b[0n' ||
-        data == '\x1bP!|00000000\x1b\\') {
-      return true;
+    if (data.isEmpty) {
+      return false;
     }
-    return _secondaryDeviceAttributesPattern.hasMatch(data) ||
-        _cursorPositionReportPattern.hasMatch(data) ||
-        _windowSizeReportPattern.hasMatch(data);
+    var offset = 0;
+    while (offset < data.length) {
+      Match? report;
+      for (final pattern in _terminalAutoReportPatterns) {
+        report = pattern.matchAsPrefix(data, offset);
+        if (report != null) {
+          break;
+        }
+      }
+      if (report == null) {
+        return false;
+      }
+      offset = report.end;
+    }
+    return true;
   }
 
-  static final _secondaryDeviceAttributesPattern = RegExp(
-    r'^\x1B\[>\d+;\d+;\d+c$',
-  );
-  static final _cursorPositionReportPattern = RegExp(r'^\x1B\[\d+;\d+R$');
-  static final _windowSizeReportPattern = RegExp(r'^\x1B\[8;\d+;\d+t$');
+  static final _terminalAutoReportPatterns = <RegExp>[
+    RegExp(r'\x1B\[\?[0-9;]*c'),
+    RegExp(r'\x1B\[>[0-9;]*c'),
+    RegExp(r'\x1BP!\|[0-9A-Fa-f]*\x1B\\'),
+    RegExp(r'\x1B\[0n'),
+    RegExp(r'\x1B\[[0-9;]*R'),
+    RegExp(r'\x1B\[8;[0-9]+;[0-9]+t'),
+    RegExp(r'\x1B\[[IO]'),
+    RegExp(r'\x1B\[<[0-9;]+[mM]'),
+    RegExp(r'\x1B\]1[01];(?:rgb:)?[0-9A-Fa-f/]+(?:\x07|\x1B\\)'),
+  ];
 
   Future<void> _sendKey(List<int> bytes, String status) async {
     final session = _session;
@@ -733,6 +873,29 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
     });
   }
 
+  Widget _terminalSurface({required bool connected}) {
+    final terminalView = TerminalView(
+      _terminal,
+      key: _terminalViewKey,
+      autofocus: false,
+      readOnly: !connected || !_terminalInputActive,
+      scrollController: _terminalScrollController,
+      autoResize: true,
+      textStyle: TerminalStyle(fontSize: _readableFontSize),
+      padding: _terminalPadding,
+    );
+
+    return Listener(
+      key: widget.terminalViewKey,
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (event) => _handleTerminalPointerDown(event, connected),
+      onPointerMove: _handleTerminalPointerMove,
+      onPointerUp: (event) => _handleTerminalPointerUp(event, connected),
+      onPointerCancel: _handleTerminalPointerCancel,
+      child: terminalView,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<TerminalSession>(
@@ -767,26 +930,7 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
                   return Stack(
                     fit: StackFit.expand,
                     children: [
-                      Listener(
-                        key: widget.terminalViewKey,
-                        behavior: HitTestBehavior.opaque,
-                        onPointerDown:
-                            (event) =>
-                                _handleTerminalPointerDown(event, connected),
-                        onPointerMove: _handleTerminalPointerMove,
-                        onPointerUp:
-                            (event) =>
-                                _handleTerminalPointerUp(event, connected),
-                        onPointerCancel: _handleTerminalPointerCancel,
-                        child: TerminalView(
-                          _terminal,
-                          key: _terminalViewKey,
-                          autofocus: false,
-                          readOnly: !connected || !_terminalInputActive,
-                          scrollController: _terminalScrollController,
-                          padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-                        ),
-                      ),
+                      _terminalSurface(connected: connected),
                       if (!widget.showHeader && disconnected)
                         Positioned(
                           top: 8,

@@ -18,6 +18,54 @@ class TerminalGeometry {
   final int rows;
   final int pixelWidth;
   final int pixelHeight;
+
+  @override
+  bool operator ==(Object other) {
+    return other is TerminalGeometry &&
+        other.columns == columns &&
+        other.rows == rows &&
+        other.pixelWidth == pixelWidth &&
+        other.pixelHeight == pixelHeight;
+  }
+
+  @override
+  int get hashCode => Object.hash(columns, rows, pixelWidth, pixelHeight);
+}
+
+enum TerminalResizePolicy {
+  adaptivePane('adaptive_pane'),
+  fixedSource('fixed_source'),
+  client('client');
+
+  const TerminalResizePolicy(this.wireName);
+
+  final String wireName;
+
+  static TerminalResizePolicy fromWireName(String value) {
+    return values.firstWhere(
+      (candidate) => candidate.wireName == value,
+      orElse:
+          () => throw FormatException('unknown terminal resize policy: $value'),
+    );
+  }
+}
+
+class TerminalViewport {
+  const TerminalViewport({
+    required this.geometry,
+    required this.resizePolicy,
+    this.revision = 0,
+  }) : assert(revision >= 0);
+
+  final TerminalGeometry geometry;
+  final TerminalResizePolicy resizePolicy;
+  final int revision;
+
+  bool get hasFixedSourceGeometry =>
+      resizePolicy == TerminalResizePolicy.fixedSource ||
+      resizePolicy == TerminalResizePolicy.adaptivePane;
+
+  bool get acceptsClientResize => resizePolicy == TerminalResizePolicy.client;
 }
 
 class TerminalOpenRequest {
@@ -117,6 +165,12 @@ abstract interface class TerminalSession {
   Future<void> reconnect();
 
   Future<void> close();
+}
+
+abstract interface class TerminalViewportSession {
+  TerminalViewport get viewport;
+
+  Stream<TerminalViewport> get viewportChanges;
 }
 
 class TerminalTransportException implements Exception {
