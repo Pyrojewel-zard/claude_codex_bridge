@@ -16,7 +16,11 @@ from ccbd.start_runtime.binding_runtime.common import (
     runtime_ref_backend,
 )
 from provider_backends.codex.session_runtime.live_identity import process_parent_snapshot
-from provider_profiles import validate_provider_runtime_home_uniqueness
+from provider_profiles import (
+    load_resolved_provider_profile,
+    provider_api_env_keys,
+    validate_provider_runtime_home_uniqueness,
+)
 from runtime_observability import record_startup_operation, startup_operation_scope
 from workspace.binding import WorkspaceBindingStore
 from workspace.materializer import WorkspaceMaterializer
@@ -145,6 +149,15 @@ def prepare_start_agents(
             force_restart = agent_name in forced_restarts
             if force_restart:
                 binding = None
+            profile_reject_reason = None
+            if binding is not None:
+                profile_reject_reason = _provider_profile_reject_reason(
+                    paths=paths,
+                    spec=spec,
+                    agent_name=agent_name,
+                )
+                if profile_reject_reason is not None:
+                    binding = None
 
             if restore_store.load(agent_name) is None:
                 restore_store.save(agent_name, restore_state_builder(policy.restore_mode.value))
@@ -169,8 +182,10 @@ def prepare_start_agents(
                         window_name=binding_window_name,
                         namespace_epoch=namespace_epoch,
                         assigned_pane_id=(namespace_agent_panes or {}).get(agent_name),
-                        namespace_pane_records=namespace_pane_records,
-                    ) if not force_restart else 'manual_restart',
+                    namespace_pane_records=namespace_pane_records,
+                    ) if not force_restart and profile_reject_reason is None else (
+                        'manual_restart' if force_restart else profile_reject_reason
+                    ),
                 )
             )
 
@@ -218,6 +233,85 @@ def _prepare_provider_launch_set(prepared, *, paths, context) -> tuple[PreparedS
             )
         )
     return tuple(finalized)
+
+
+def _provider_profile_reject_reason(*, paths, spec, agent_name: str) -> str | None:
+    runtime_dir = paths.agent_provider_runtime_dir(agent_name, spec.provider)
+    current = load_resolved_provider_profile(runtime_dir)
+    if current is None:
+        return None
+    if str(getattr(current, 'provider', '') or '').strip().lower() != str(spec.provider).strip().lower():
+        return 'provider_profile_changed'
+    if str(getattr(current, 'agent_name', '') or '').strip().lower() != str(agent_name).strip().lower():
+        return 'provider_profile_changed'
+    desired = _provider_profile_signature(spec)
+    actual = _resolved_provider_profile_signature(current, desired_home=desired['home'])
+    return None if actual == desired else 'provider_profile_changed'
+
+
+def _provider_profile_signature(spec) -> dict[str, object]:
+    profile = spec.provider_profile
+    return {
+        'mode': str(getattr(profile, 'mode', 'inherit') or 'inherit').strip().lower(),
+        'home': str(getattr(profile, 'home', '') or '').strip() or None,
+        'env': _desired_provider_profile_env(spec),
+        'mcp_servers': dict(getattr(profile, 'mcp_servers', {}) or {}),
+        'plugins': dict(getattr(profile, 'plugins', {}) or {}),
+        'inherit_api': bool(getattr(profile, 'inherit_api', True)),
+        'inherit_auth': bool(getattr(profile, 'inherit_auth', True)),
+        'inherit_config': bool(getattr(profile, 'inherit_config', True)),
+        'inherit_skills': bool(getattr(profile, 'inherit_skills', True)),
+        'inherit_commands': bool(getattr(profile, 'inherit_commands', True)),
+        'inherit_memory': bool(getattr(profile, 'inherit_memory', True)),
+        'inherited_skill_include': tuple(getattr(profile, 'inherited_skill_include', ()) or ()),
+        'inherited_skill_exclude': tuple(getattr(profile, 'inherited_skill_exclude', ()) or ()),
+        'skill_overlays': _skill_overlay_signature(getattr(profile, 'skill_overlays', {}) or {}),
+    }
+
+
+def _resolved_provider_profile_signature(profile, *, desired_home: str | None) -> dict[str, object]:
+    return {
+        'mode': str(getattr(profile, 'mode', 'inherit') or 'inherit').strip().lower(),
+        'home': (
+            str(getattr(profile, 'runtime_home', None) or getattr(profile, 'profile_root', '') or '').strip() or None
+        ) if desired_home is not None else None,
+        'env': dict(getattr(profile, 'env', {}) or {}),
+        'mcp_servers': dict(getattr(profile, 'mcp_servers', {}) or {}),
+        'plugins': dict(getattr(profile, 'plugins', {}) or {}),
+        'inherit_api': bool(getattr(profile, 'inherit_api', True)),
+        'inherit_auth': bool(getattr(profile, 'inherit_auth', True)),
+        'inherit_config': bool(getattr(profile, 'inherit_config', True)),
+        'inherit_skills': bool(getattr(profile, 'inherit_skills', True)),
+        'inherit_commands': bool(getattr(profile, 'inherit_commands', True)),
+        'inherit_memory': bool(getattr(profile, 'inherit_memory', True)),
+        'inherited_skill_include': tuple(getattr(profile, 'inherited_skill_include', ()) or ()),
+        'inherited_skill_exclude': tuple(getattr(profile, 'inherited_skill_exclude', ()) or ()),
+        'skill_overlays': _skill_overlay_signature(getattr(profile, 'skill_overlays', {}) or {}),
+    }
+
+
+def _desired_provider_profile_env(spec) -> dict[str, str]:
+    profile = spec.provider_profile
+    api_keys = provider_api_env_keys(str(spec.provider))
+    env = dict(getattr(profile, 'env', {}) or {})
+    # `agents.<name>.env` takes precedence over `provider_profile.env` for API
+    # credentials, mirroring `_profile_spec_with_agent_api_env` in the
+    # materializer so drift detection resolves the same values home projection
+    # does.
+    for key, value in dict(getattr(spec, 'env', {}) or {}).items():
+        if str(key) in api_keys and str(value).strip():
+            env[str(key)] = str(value)
+    if str(getattr(profile, 'mode', 'inherit') or 'inherit').strip().lower() != 'inherit':
+        return {str(key): str(value) for key, value in env.items()}
+    return {str(key): str(value) for key, value in env.items() if str(key) in api_keys}
+
+
+def _skill_overlay_signature(overlays: dict[str, object]) -> dict[str, object]:
+    signature: dict[str, object] = {}
+    for name, overlay in dict(overlays).items():
+        to_record = getattr(overlay, 'to_record', None)
+        signature[str(name)] = to_record() if callable(to_record) else overlay
+    return signature
 
 
 def _binding_reject_reason(

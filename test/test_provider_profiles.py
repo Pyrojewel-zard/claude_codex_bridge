@@ -2457,6 +2457,78 @@ def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path
     assert trust['customApiKeyResponses']['approved'] == ['system-api-key']
 
 
+def test_materialize_claude_home_config_drops_inherited_base_url_when_profile_sets_its_own(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'system-token',
+                    'ANTHROPIC_BASE_URL': 'https://system.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    profile = ProviderProfileSpec(
+        env={
+            'ANTHROPIC_AUTH_TOKEN': 'agent-token',
+            'ANTHROPIC_BASE_URL': 'https://agent.example.test',
+        },
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home, profile=profile)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'ANTHROPIC_BASE_URL' not in payload.get('env', {})
+    assert 'ANTHROPIC_AUTH_TOKEN' not in payload.get('env', {})
+    assert payload.get('theme') == 'light'
+
+
+def test_materialize_claude_home_config_drops_inherited_env_when_agent_sets_its_own(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_MODEL': 'deepseek-v4-pro[1M]',
+                    'ANTHROPIC_DEFAULT_OPUS_MODEL': 'deepseek-v4-pro[1M]',
+                    'MCP_TIMEOUT': '30000',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    extra_env = {
+        'ANTHROPIC_MODEL': 'claude-opus-4-8[1M]',
+        'ANTHROPIC_DEFAULT_OPUS_MODEL': 'claude-opus-4-8[1M]',
+    }
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home, extra_env=extra_env)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'ANTHROPIC_MODEL' not in payload.get('env', {})
+    assert 'ANTHROPIC_DEFAULT_OPUS_MODEL' not in payload.get('env', {})
+    assert payload.get('env', {}).get('MCP_TIMEOUT') == '30000'
+    assert payload.get('theme') == 'light'
+
+
 def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(
     monkeypatch,
     tmp_path: Path,

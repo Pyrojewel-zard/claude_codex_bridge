@@ -3624,7 +3624,7 @@ def test_herdr_cli_request_adapter_waits_for_pane_before_metadata_report() -> No
     assert pane_list_calls == 2
 
 
-def test_herdr_cli_request_adapter_splits_from_workspace_root_when_parent_is_non_root() -> None:
+def test_herdr_cli_request_adapter_splits_from_requested_parent_when_parent_is_non_root() -> None:
     split_commands: list[list[str]] = []
 
     def run_fn(command, **kwargs):
@@ -3658,7 +3658,7 @@ def test_herdr_cli_request_adapter_splits_from_workspace_root_when_parent_is_non
     )
 
     assert pane["pane_id"] == "w1:p3"
-    assert split_commands[0][split_commands[0].index("split") + 1] == "w1:p1"
+    assert split_commands[0][split_commands[0].index("split") + 1] == "w1:p2"
 
 
 def test_herdr_cli_request_adapter_focuses_workspace_for_attach_namespace() -> None:
@@ -3792,6 +3792,57 @@ def test_herdr_cli_request_adapter_maps_ccbd_bottom_direction_to_herdr_down() ->
     )
 
     assert split_commands[0][split_commands[0].index("--direction") + 1] == "down"
+
+
+def test_herdr_cli_request_adapter_honors_non_root_parent_pane() -> None:
+    split_commands: list[list[str]] = []
+
+    def run_fn(command, **kwargs):
+        joined = " ".join(command)
+        if "pane list" in joined:
+            return _completed(
+                json.dumps(
+                    {
+                        "result": {
+                            "panes": [
+                                {
+                                    "pane_id": "w1:p1",
+                                    "workspace_id": "w1",
+                                    "tokens": {"ccb_root_pane": "1"},
+                                },
+                                {
+                                    "pane_id": "w1:p2",
+                                    "workspace_id": "w1",
+                                    "tokens": {"ccb_role": "agent"},
+                                },
+                            ]
+                        }
+                    }
+                )
+            )
+        if "pane split" in joined:
+            split_commands.append(command)
+            return _completed('{"result":{"pane":{"pane_id":"w1:p3","workspace_id":"w1"}}}')
+        raise AssertionError(joined)
+
+    adapter = HerdrCliRequestAdapter(
+        session_name="ccb-demo",
+        herdr_executable="herdr",
+        run_fn=run_fn,
+        which_fn=lambda name: "herdr",
+    )
+
+    adapter(
+        "create_pane",
+        {
+            "namespace_id": "w1",
+            "session_name": "ccb-demo",
+            "direction": "bottom",
+            "parent_pane": "w1:p2",
+        },
+    )
+
+    assert "w1:p2" in split_commands[0]
 
 
 @pytest.mark.parametrize("direction", ["left", "up", "sideways"])

@@ -453,13 +453,6 @@ class HerdrCliRequestAdapter:
                         f"unknown Herdr parent pane {parent!r}",
                         session_name=session_name,
                     )
-            if str(_pane_tokens(parent_record).get(_ROOT_PANE_TOKEN) or "").strip() != "1":
-                root_parent = self._root_pane_for_workspace(
-                    parent_workspace_id or namespace_id,
-                    session_name=session_name,
-                )
-                if root_parent:
-                    parent = root_parent
         else:
             parent = self._first_pane(namespace_id, session_name=session_name)
             parent_record = self._pane_by_id(parent, session_name=session_name)

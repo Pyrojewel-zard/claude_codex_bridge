@@ -267,6 +267,7 @@ def materialize_claude_home_config(
     workspace_path: Path | None = None,
     auto_permission: bool = False,
     command_policy=None,
+    extra_env: dict[str, str] | None = None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
 ) -> ClaudeHomeLayout:
@@ -281,6 +282,7 @@ def materialize_claude_home_config(
         workspace_path=workspace_path,
         auto_permission=auto_permission,
         command_policy=command_policy,
+        extra_env=extra_env,
     )
     record_memory_projection_event(
         memory_result,
@@ -349,6 +351,7 @@ def _prepare_managed_home(
     workspace_path: Path | None,
     auto_permission: bool,
     command_policy,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, object]:
     ensure_private_inheritance_directory(target_layout.home_root, source_home)
     ensure_private_descendant_directory(target_layout.home_root, Path('.claude'))
@@ -362,6 +365,7 @@ def _prepare_managed_home(
         profile=profile,
         auto_permission=auto_permission,
         command_policy=command_policy,
+        extra_env=extra_env,
     )
     _materialize_macos_keychain_preferences(source_home, target_layout, profile=profile)
     _materialize_auth(source_home, target_layout, profile=profile)
@@ -531,8 +535,13 @@ def _materialize_settings(
     profile,
     auto_permission: bool = False,
     command_policy=None,
+    extra_env: dict[str, str] | None = None,
 ) -> None:
-    payload = _projected_settings_payload(source_home / '.claude' / 'settings.json', profile=profile)
+    payload = _projected_settings_payload(
+        source_home / '.claude' / 'settings.json',
+        profile=profile,
+        extra_env=extra_env,
+    )
     existing = _read_json_object(target_layout.settings_path)
     previous_projection = _read_claude_auth_projection(target_layout)
     merged = _merge_settings_payload(
@@ -1148,18 +1157,35 @@ def _remove_managed_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None
         pass
 
 
-def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
+def _projected_settings_payload(
+    source_settings_path: Path,
+    *,
+    profile,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, object] | None:
     source_payload = _read_source_json_object(source_settings_path, label='Claude settings')
     if not source_payload:
         return {} if _needs_settings_stub(profile) else None
 
     env_payload = dict(source_payload.get('env') or {}) if isinstance(source_payload.get('env'), dict) else {}
+    # Explicit `agents.<name>.env` keys are exported separately through the
+    # launcher shell prefix, so they must not be shadowed by the inherited
+    # settings.json env block.
+    for key in (extra_env or {}):
+        if str(key).strip():
+            env_payload.pop(str(key), None)
     if not _inherits_api(profile):
         for key in provider_api_env_keys('claude'):
             env_payload.pop(key, None)
     elif not _inherits_external_auth(profile):
         env_payload.pop('ANTHROPIC_AUTH_TOKEN', None)
         env_payload.pop('ANTHROPIC_API_KEY', None)
+        # When the agent owns an explicit base URL, the inherited host route must
+        # not win over it: the shell env already exports the agent's resolved
+        # profile env, so drop the host's route key instead of shadowing it.
+        profile_env = dict(getattr(profile, 'env', {}) or {})
+        if _env_value_present(profile_env.get('ANTHROPIC_BASE_URL')):
+            env_payload.pop('ANTHROPIC_BASE_URL', None)
 
     include_config = _inherits_config(profile)
     payload: dict[str, object] = {}
