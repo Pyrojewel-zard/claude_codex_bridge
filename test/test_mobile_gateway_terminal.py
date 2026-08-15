@@ -562,7 +562,10 @@ def test_agent_terminal_projection_joins_wraps_and_replaces_prompt_edits(
         '24',
         '-y',
         '8',
-        "env PS1='probe$ ' bash --noprofile --norc -i",
+        (
+            "env BASH_SILENCE_DEPRECATION_WARNING=1 "
+            "PS1='probe$ ' bash --noprofile --norc -i"
+        ),
     )
     terminal_session = None
     try:
