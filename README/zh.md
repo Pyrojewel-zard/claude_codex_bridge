@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.5-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.5 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.6 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.5/ccb-mobile-v8.6.5.apk)
+- [下载 CCB Mobile v8.6.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -302,6 +302,16 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.6.6</b> - Mobile 连续性与 Provider 安全恢复</summary>
+
+- `ccb update` 后自动重启正在运行的已安装版 Mobile Host，保留配对信息；同时避免合法的大型 Relay 终端历史快照在首次额度更新前卡住。
+- 仅当当前输入框仍包含本任务的精确证据时，才为首次 Enter 丢失的 Claude 提示补发一次 Enter；Pane 历史不会触发补发（PR #305）。
+- 显式 Agent 环境变量和 Provider 路由优先于继承的 Claude settings；Provider profile 变化时重建复用绑定，但不清除对话历史（PR #307、#308）。
+- Herdr 严格按指定的非根父 Pane 分割；原生 Windows 新增 `pwsh`、`powershell`、`bash`、`wincmd` shell Pane，同时保留带 Provider 后缀的同名 Agent（PR #309、#310）。
+
+</details>
+
+<details>
 <summary><b>v8.6.5</b> - 自适应且更可靠的 Mobile 终端</summary>
 
 - Agent 终端快照会按手机视口重新排版，同时保持电脑端 tmux pane 尺寸不变。

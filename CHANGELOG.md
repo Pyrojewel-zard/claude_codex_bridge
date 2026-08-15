@@ -1,5 +1,27 @@
 # Changelog
 
+## v8.6.6 (2026-08-15)
+
+- Restarted an already-running installed Mobile Host after a successful
+  `ccb update`, preserving its route, host identity, and pairing instead of
+  leaving the old gateway process on stale code. Stopped and source-owned
+  Mobile Hosts remain untouched.
+- Raised the Relay stream's initial receive credit to the maximum valid
+  message size on both host and Flutter client, preventing large but valid
+  terminal-history snapshots from blocking before the first credit update.
+- Added one bounded Claude `Enter` retry when the current composer still holds
+  the exact dispatched prompt evidence, without treating pane history or the
+  retry itself as activation (PR #305).
+- Kept explicit Agent environment and Provider routing above inherited Claude
+  settings, and rebuilt reused bindings when the normalized Provider profile
+  changes without clearing conversation history (PRs #307 and #308).
+- Honored non-root Herdr split parents and added native-Windows `pwsh`,
+  `powershell`, `bash`, and `wincmd` shell panes while preserving the same
+  provider-qualified names as Agents (PRs #309 and #310).
+- No configuration, pairing, or conversation migration is required. Upgrade
+  both the CCB host and Mobile APK for the Relay terminal fix. Native Windows
+  x64 remains beta.
+
 ## v8.6.5 (2026-08-14)
 
 - Reconstructed wrapped Agent terminal rows as logical lines before local
