@@ -135,6 +135,13 @@ Explicit API keys, URLs, profiles, or provider routes remain agent-local
 authority. They must not rewrite global login files and must not be shadowed by
 an inherited global credential copy.
 
+For managed Claude, any key exported by `agents.<name>.env` must be removed
+from the inherited `~/.claude/settings.json` `env` projection before launch.
+An explicit Agent or Provider-profile `ANTHROPIC_BASE_URL` likewise suppresses
+the inherited settings route. This prevents Claude's settings layer from
+shadowing the higher-priority CCB authority while leaving unrelated inherited
+settings intact.
+
 A user-authored provider command wrapper that resets a protected root or
 credential-store switch after CCB constructs the command is an explicit escape
 from managed isolation. CCB must not add such an escape itself, and diagnostics

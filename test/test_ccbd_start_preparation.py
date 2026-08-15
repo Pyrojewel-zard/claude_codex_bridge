@@ -233,6 +233,63 @@ def test_provider_profile_reject_reason_accepts_agent_env_api_credentials(
     assert _provider_profile_reject_reason(paths=paths, spec=spec, agent_name='agent1') is None
 
 
+def test_provider_profile_reject_reason_normalizes_relative_runtime_home(
+    tmp_path: Path,
+) -> None:
+    from ccbd.start_preparation import _provider_profile_reject_reason
+
+    project_root = tmp_path / 'repo-relative-profile-home'
+    paths = PathLayout(project_root)
+    runtime_dir = paths.agent_provider_runtime_dir('agent1', 'codex')
+    runtime_dir.mkdir(parents=True)
+    resolved_home = (project_root / 'profiles' / 'agent1-codex').resolve()
+    spec = SimpleNamespace(
+        provider='codex',
+        env={},
+        provider_profile=SimpleNamespace(
+            mode='isolated',
+            home='profiles/agent1-codex',
+            env={},
+            mcp_servers={},
+            plugins={},
+            inherit_api=True,
+            inherit_auth=True,
+            inherit_config=True,
+            inherit_skills=True,
+            inherit_commands=True,
+            inherit_memory=True,
+            inherited_skill_include=(),
+            inherited_skill_exclude=(),
+            skill_overlays={},
+        ),
+    )
+    (runtime_dir / 'provider-profile.json').write_text(
+        json.dumps(
+            {
+                'provider': 'codex',
+                'agent_name': 'agent1',
+                'mode': 'isolated',
+                'profile_root': str(resolved_home),
+                'runtime_home': str(resolved_home),
+                'env': {},
+                'inherit_api': True,
+                'inherit_auth': True,
+                'inherit_config': True,
+                'inherit_skills': True,
+                'inherit_commands': True,
+                'inherit_memory': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    assert _provider_profile_reject_reason(
+        paths=paths,
+        spec=spec,
+        agent_name='agent1',
+    ) is None
+
+
 def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
     monkeypatch,
     tmp_path: Path,

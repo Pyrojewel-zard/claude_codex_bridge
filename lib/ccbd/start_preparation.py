@@ -244,16 +244,16 @@ def _provider_profile_reject_reason(*, paths, spec, agent_name: str) -> str | No
         return 'provider_profile_changed'
     if str(getattr(current, 'agent_name', '') or '').strip().lower() != str(agent_name).strip().lower():
         return 'provider_profile_changed'
-    desired = _provider_profile_signature(spec)
+    desired = _provider_profile_signature(spec, paths=paths)
     actual = _resolved_provider_profile_signature(current, desired_home=desired['home'])
     return None if actual == desired else 'provider_profile_changed'
 
 
-def _provider_profile_signature(spec) -> dict[str, object]:
+def _provider_profile_signature(spec, *, paths) -> dict[str, object]:
     profile = spec.provider_profile
     return {
         'mode': str(getattr(profile, 'mode', 'inherit') or 'inherit').strip().lower(),
-        'home': str(getattr(profile, 'home', '') or '').strip() or None,
+        'home': _normalized_desired_profile_home(paths=paths, profile=profile),
         'env': _desired_provider_profile_env(spec),
         'mcp_servers': dict(getattr(profile, 'mcp_servers', {}) or {}),
         'plugins': dict(getattr(profile, 'plugins', {}) or {}),
@@ -267,6 +267,16 @@ def _provider_profile_signature(spec) -> dict[str, object]:
         'inherited_skill_exclude': tuple(getattr(profile, 'inherited_skill_exclude', ()) or ()),
         'skill_overlays': _skill_overlay_signature(getattr(profile, 'skill_overlays', {}) or {}),
     }
+
+
+def _normalized_desired_profile_home(*, paths, profile) -> str | None:
+    raw_home = str(getattr(profile, 'home', '') or '').strip()
+    if not raw_home:
+        return None
+    path = Path(raw_home).expanduser()
+    if not path.is_absolute():
+        path = Path(paths.project_root) / path
+    return str(path.resolve())
 
 
 def _resolved_provider_profile_signature(profile, *, desired_home: str | None) -> dict[str, object]:

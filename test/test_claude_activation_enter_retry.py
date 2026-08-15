@@ -106,7 +106,7 @@ def _poll(*, anchor_seen: bool = False, prompt_activated: bool = False) -> Simpl
 
 def test_long_unicode_stuck_prompt_resends_enter_exactly_once() -> None:
     submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
-    backend = _RetryBackend(f"{LONG_UNICODE_PROMPT}\n❯\n")
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_current 长提示仍在输入框\n")
 
     updated = _maybe_resend_activation_enter(
         submission,
@@ -145,6 +145,21 @@ def test_no_resend_when_prompt_activated() -> None:
         submission,
         prepared=_prepared(backend),
         poll=_poll(prompt_activated=True),
+        now=NOW,
+    )
+
+    assert result is None
+    assert backend.keys == []
+
+
+def test_marker_in_history_with_empty_composer_does_not_send() -> None:
+    submission = _submission()
+    backend = _RetryBackend("CCB_REQ_ID: job_current\n上一轮历史输出\n❯\n")
+
+    result = _maybe_resend_activation_enter(
+        submission,
+        prepared=_prepared(backend),
+        poll=_poll(),
         now=NOW,
     )
 
@@ -215,7 +230,7 @@ def test_no_resend_before_grace_window() -> None:
 
 def test_resend_after_old_tight_end_bound_within_generous_max_wait() -> None:
     submission = _submission()
-    backend = _RetryBackend("CCB_REQ_ID: job_current\n❯\n")
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_current 当前任务仍在输入框\n")
     # +15s was past the old [6,12)s end bound, but is inside the generous
     # give-up cap (default 600s): the retry must still fire.
     late_now = "2026-07-21T08:00:15Z"
@@ -266,7 +281,7 @@ def test_max_wait_cap_env_override(monkeypatch) -> None:
 def test_env_grace_override_shrinks_window(monkeypatch) -> None:
     monkeypatch.setenv("CCB_CLAUDE_ACTIVATION_GRACE_S", "2")
     submission = _submission()
-    backend = _RetryBackend("CCB_REQ_ID: job_current\n❯\n")
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_current 当前任务仍在输入框\n")
     # +3s → inside [2,4) with grace=2
     now_3s = "2026-07-21T07:59:56Z"
 
@@ -298,7 +313,7 @@ def test_no_resend_after_prior_retry() -> None:
 
 def test_repeated_polling_never_exceeds_one_send() -> None:
     submission = _submission()
-    backend = _RetryBackend("CCB_REQ_ID: job_current\n❯\n")
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_current 当前任务仍在输入框\n")
 
     first = _maybe_resend_activation_enter(
         submission,
@@ -366,7 +381,7 @@ def test_no_wrap_raw_prompt_resends_via_anchor_fallback() -> None:
         prompt_text="raw task body without wrap",
         request_anchor="job_current",
     )
-    backend = _RetryBackend("job_current\nraw task body\n❯\n")
+    backend = _RetryBackend("❯ job_current raw task body\n")
 
     updated = _maybe_resend_activation_enter(
         submission,
@@ -427,7 +442,7 @@ def _wired_poll_submission(
 
 def test_poll_submission_resends_once_and_persists_counter(monkeypatch) -> None:
     submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
-    backend = _RetryBackend(f"{LONG_UNICODE_PROMPT}\n❯\n")
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_current 长提示仍在输入框\n")
 
     result = _wired_poll_submission(submission, backend, monkeypatch=monkeypatch)
 
@@ -586,7 +601,7 @@ def test_placeholder_in_history_with_foreign_composer_text_does_not_send() -> No
 def test_placeholder_marker_path_preserved_anchor_still_works() -> None:
     # 普通（未折叠）marker 路径保持：pane 仍含本 job 原始锚文本 → 照常重发。
     submission = _submission(prompt_text=LONG_UNICODE_PROMPT)
-    backend = _RetryBackend(f"{LONG_UNICODE_PROMPT}\n❯\n")
+    backend = _RetryBackend("❯ CCB_REQ_ID: job_current 长提示仍在输入框\n")
 
     updated = _maybe_resend_activation_enter(
         submission,

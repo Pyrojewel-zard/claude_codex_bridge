@@ -430,13 +430,16 @@ def _current_composer_holds_pasted_placeholder(text: str) -> bool:
 
 
 def _pane_holds_current_job_marker(text: str, submission: ProviderSubmission) -> bool:
-    """True when the pane text still shows a recognizable marker of *this* job.
+    """True when the current composer still shows a marker of *this* job.
 
     The wrapped prompt is ``CCB_REQ_ID: <request_anchor>``; ``no_wrap`` prompts
-    carry the anchor (job id) directly. An empty composer or a different job's
-    text must not match, so a retry Enter can never submit the wrong prompt.
+    carry the anchor (job id) directly. The marker must be inside the current
+    composer block, never merely in transcript history. An empty composer or a
+    different job's text must not match, so a retry Enter cannot submit stale
+    history as if it were pending input.
     """
-    if not str(text or ""):
+    composer = _current_composer_block(str(text or ""))
+    if not composer:
         return False
     anchor = str(
         submission.runtime_state.get("request_anchor")
@@ -445,11 +448,11 @@ def _pane_holds_current_job_marker(text: str, submission: ProviderSubmission) ->
     ).strip()
     if not anchor:
         return False
-    if f"CCB_REQ_ID: {anchor}" in text:
+    if f"CCB_REQ_ID: {anchor}" in composer:
         return True
-    if "CCB_BEGIN" in text and anchor in text:
+    if "CCB_BEGIN" in composer and anchor in composer:
         return True
-    return anchor in text
+    return anchor in composer
 
 
 def _collapse_whitespace(text: str) -> str:

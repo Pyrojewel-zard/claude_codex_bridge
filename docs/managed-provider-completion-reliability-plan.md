@@ -714,6 +714,17 @@ facts and requires activation in the new top-level session. Pane dispatch,
 elapsed time, apparent FIFO order, or an idle prompt may not substitute for
 exact queued-command identity.
 
+If a dispatched Claude prompt remains visibly staged in the current composer
+without exact activation, the polling layer may retry `Enter` at most once.
+That recovery is allowed only after the configured grace period, before the
+bounded give-up deadline, while the pane is not busy, and while the current
+composer—not transcript history—contains the current request marker, the
+submitted prompt-tail fingerprint, or Claude's collapsed-paste placeholder.
+The retry state and evidence kind are persisted for diagnostics. Sending
+`Enter` remains input-delivery recovery only: it must never synthesize
+`prompt_activated`, `anchor_seen`, completion, or reply ownership; the exact
+Claude transcript records above remain the sole activation authority.
+
 Claude session-name `slug` is display metadata, not subagent identity.
 Top-level records with `isSidechain=false` remain eligible for request-anchor
 tracking; real sidechains are fenced by `isSidechain=true` or explicit

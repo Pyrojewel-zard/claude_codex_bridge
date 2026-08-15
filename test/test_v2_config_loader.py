@@ -2124,6 +2124,33 @@ main = "agent1:codex, {alias}"
         load_project_config(project_root)
 
 
+@pytest.mark.parametrize('alias', ['pwsh', 'powershell', 'bash', 'wincmd'])
+def test_native_windows_shell_alias_with_provider_remains_an_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    monkeypatch.setattr(
+        'agents.config_loader_runtime.parsing_runtime.topology.is_native_windows',
+        lambda: False,
+    )
+    project_root = tmp_path / f'repo-native-shell-agent-{alias}'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        f'''version = 2
+
+[windows]
+main = "{alias}:codex"
+''',
+    )
+
+    result = load_project_config(project_root)
+
+    assert set(result.config.agents) == {alias}
+    assert result.config.windows[0].agent_names == (alias,)
+    assert result.config.windows[0].tool_names == ()
+
+
 def test_load_project_config_tool_windows_affect_topology_identity(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-tool-window-identity'
     config_path = project_root / '.ccb' / 'ccb.config'

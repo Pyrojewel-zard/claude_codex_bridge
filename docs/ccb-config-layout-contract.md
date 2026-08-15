@@ -278,6 +278,13 @@ Contract:
 - Each `[windows]` value uses the compact layout grammar, but `cmd` is not supported in windows topology.
 - Every agent leaf in `[windows]` must declare a provider.
 - Each configured agent is an agent leaf referenced by `[windows]` and must appear in exactly one window layout.
+- On native Windows, provider-less `pwsh`, `powershell`, `bash`, and `wincmd`
+  leaves are built-in interactive shell tool aliases. They create managed tool
+  panes without coding-provider runtimes; `wincmd` is the spelling for
+  `cmd.exe` because `cmd` remains reserved. These provider-less aliases fail
+  config validation on WSL, Linux, and macOS. A provider suffix disambiguates
+  the same text as an Agent name, so `bash:codex` remains an Agent rather than
+  a shell tool pane.
 - `[tool_windows.<name>]` may declare a managed non-agent tmux window. Tool
   windows are part of managed topology but not part of the configured agent
   set. The built-in supported file/workbench surface is the `rich` layout alias;

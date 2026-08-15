@@ -951,6 +951,14 @@ Project namespace compatibility:
 - `cmd` bootstrap must directly `exec` the resolved user shell and must not depend on shell-language-specific inline bootstrap snippets that assume the wrapper shell is POSIX-compatible
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - provider-specific live runtime identity proof may further narrow that reuse gate
+- a persisted resolved Provider profile further narrows binding reuse:
+  - if its provider, Agent identity, normalized explicit runtime home, API/env
+    authority, MCP/plugin projection, inheritance flags, inherited-skill
+    filters, or skill overlays differ from the current desired profile,
+    startup must reject the reused binding and run normal managed Provider
+    preparation before relaunch
+  - rejecting a binding for profile drift must preserve restore policy and
+    conversation history; it is not conversation clear authority
 - for project-namespace reuse, exact membership means:
   - same project-owned tmux socket
   - same authoritative tmux session
@@ -975,6 +983,10 @@ Project namespace compatibility:
   - if provider live-identity proof is merely unavailable or `unknown`, startup may still reuse that legacy instance-scoped binding
   - if provider live-identity proof is explicitly `mismatch`, startup must reject it and relaunch
   - inferred default-server socket facts must not override an otherwise valid instance-scoped legacy binding
+- native Herdr layout materialization must split from the exact requested
+  `parent_pane`, including a non-root parent; redirecting a requested child
+  split back to the workspace root changes the declared topology and is not a
+  valid compatibility fallback
 
 ### 5.6 Runtime Supervision Is A Daemon Responsibility
 

@@ -110,12 +110,16 @@ def parse_topology_windows(raw_windows: Any) -> tuple[WindowSpec, ...] | None:
             for leaf in leaves:
                 if leaf.name.strip().lower() == 'cmd':
                     raise ConfigValidationError('cmd is not supported in windows topology')
-                if is_layout_tool_alias(leaf.name):
+                native_shell_alias = is_native_windows_only_layout_tool_alias(leaf.name)
+                # A provider suffix unambiguously denotes an Agent. Preserve
+                # existing Agent names such as ``bash:codex`` while keeping the
+                # provider-less ``bash`` spelling as a native-Windows tool pane.
+                if _leaf_is_tool_alias(leaf):
                     if leaf.provider is not None:
                         raise ConfigValidationError(
                             f'windows.{raw_name}: tool alias {leaf.name!r} must not declare a provider'
                         )
-                    if is_native_windows_only_layout_tool_alias(leaf.name) and not is_native_windows():
+                    if native_shell_alias and not is_native_windows():
                         raise ConfigValidationError(
                             f'windows.{raw_name}: tool alias {leaf.name!r} is only available on native Windows'
                         )
@@ -224,7 +228,7 @@ def agents_from_topology_windows(
     for window in windows:
         layout = parse_layout_spec(window.layout_spec)
         for leaf in layout.iter_leaves():
-            if is_layout_tool_alias(leaf.name):
+            if _leaf_is_tool_alias(leaf):
                 continue
             name = normalize_agent_name(leaf.name)
             raw_spec = _merge_topology_agent_overlay(
@@ -234,6 +238,14 @@ def agents_from_topology_windows(
             _validate_topology_overlay_provider(name, raw_spec=raw_spec, leaf_provider=leaf.provider)
             agents[name] = build_agent_spec(name, raw_spec)
     return agents
+
+
+def _leaf_is_tool_alias(leaf: object) -> bool:
+    name = getattr(leaf, 'name', '')
+    provider = getattr(leaf, 'provider', None)
+    return is_layout_tool_alias(name) and not (
+        is_native_windows_only_layout_tool_alias(name) and provider is not None
+    )
 
 
 def _topology_agent_overlays(
