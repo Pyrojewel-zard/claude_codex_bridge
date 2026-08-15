@@ -1,9 +1,9 @@
 import 'dart:convert';
 
 const relayInnerProtocolVersion = 1;
-const relayStreamInitialWindowBytes = 256 * 1024;
-const relayStreamMaxWindowBytes = 2 * 1024 * 1024;
 const relayStreamMaxMessageBytes = 512 * 1024;
+const relayStreamInitialWindowBytes = relayStreamMaxMessageBytes;
+const relayStreamMaxWindowBytes = 2 * 1024 * 1024;
 
 enum RelayInnerKind {
   request('request'),

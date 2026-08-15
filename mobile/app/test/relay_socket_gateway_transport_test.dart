@@ -368,6 +368,10 @@ void main() {
     expect(frames.first.type, GatewayTerminalFrameType.open);
     expect(frames.last.type, GatewayTerminalFrameType.output);
     expect(
+      relay.streamOpens.single['credit_bytes'],
+      relayStreamMaxMessageBytes,
+    );
+    expect(
       utf8.decode(base64Decode(frames.last.payload['bytes_b64']! as String)),
       'relay-input',
     );
@@ -1083,6 +1087,7 @@ class _RelaySocketHarness {
           streamOpens.add({
             'stream_id': message.streamId,
             'operation': message.operation,
+            'credit_bytes': message.creditBytes,
             'payload': message.payload,
           });
           await sendInner(

@@ -122,4 +122,18 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('default receive window accepts every valid single message', () {
+    final opened = RelayInnerMessage.streamOpen(
+      streamId: 'stream-demo-0001',
+      operation: 'terminal',
+      payload: const {},
+    );
+
+    expect(
+      relayStreamInitialWindowBytes,
+      greaterThanOrEqualTo(relayStreamMaxMessageBytes),
+    );
+    expect(opened.creditBytes, relayStreamInitialWindowBytes);
+  });
 }

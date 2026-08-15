@@ -236,3 +236,20 @@ authentication with the pre-restart device token.
   wheel routing remain a separate pointer-input package.
 - Snapshot polling remains the transport baseline; tmux control-mode pane
   output is a future latency improvement after equivalent replay tests exist.
+
+## Relay Initial History Flow Control
+
+Agent Terminal's first fixed-source projection may contain up to 1000 lines of
+scrollback. The projection frame intentionally carries both the structured
+snapshot and legacy terminal bytes, so a normal provider pane can exceed the
+old 256 KiB Relay receive window while remaining below the valid 512 KiB Relay
+message limit. Waiting for additional credit cannot make progress because the
+phone replenishes credit only after it receives that first frame.
+
+The Relay inner protocol therefore requires the initial receive window to be
+at least the maximum valid single-message size. Python Host/reference-client
+and Flutter phone constants stay identical. Regression coverage sends an
+encrypted terminal frame above 256 KiB through the real Host-Relay-phone test
+harness and requires delivery before the stream write timeout. This preserves
+the full initial terminal history instead of hiding the bug by reducing the
+history line count.

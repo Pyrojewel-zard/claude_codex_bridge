@@ -42,6 +42,7 @@ from mobile_gateway.relay_host_connector import (
 from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
 from mobile_gateway.relay_stream import (
     RELAY_STREAM_INITIAL_WINDOW_BYTES,
+    RELAY_STREAM_MAX_MESSAGE_BYTES,
     RelayInnerMessage,
     relay_inner_payload_size,
 )
@@ -878,6 +879,76 @@ def test_relay_host_connector_streams_terminal_without_replaying_input(tmp_path:
     asyncio.run(_relay_host_connector_streams_terminal_without_replaying_input(tmp_path))
 
 
+def test_relay_host_connector_streams_terminal_frame_above_legacy_window(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _relay_host_connector_streams_terminal_frame_above_legacy_window(tmp_path)
+    )
+
+
+async def _relay_host_connector_streams_terminal_frame_above_legacy_window(
+    tmp_path: Path,
+) -> None:
+    relay, issued = await _started_relay(tmp_path)
+    gateway = await _started_gateway(terminal_output_bytes=220 * 1024)
+    connector = RelayHostConnector(
+        RelayHostConnectorConfig(
+            relay_origin=_relay_origin(relay),
+            gateway_origin=gateway.origin,
+            host_id=issued.host_id,
+            host_signing_key=issued.private_key,
+            host_crypto_private_key=key_pair_from_private_bytes(bytes(range(101, 133))),
+            tls_context=_client_ssl(),
+            request_timeout_seconds=1.0,
+            stream_write_timeout_seconds=0.5,
+        )
+    )
+    task = asyncio.create_task(connector.connect_once())
+    try:
+        await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
+        async with aiohttp.ClientSession(raise_for_status=True) as client:
+            phone = await client.ws_connect(relay.url('/v2/phone'), ssl=_client_ssl())
+            phone_crypto, _ = await _open_phone_session(
+                phone,
+                issued=issued,
+                relay_origin=issued.relay_audience,
+                expected_host_public_key=public_key_b64(
+                    connector.config.host_crypto_private_key
+                ),
+            )
+            stream_id = 'terminal-large-history-1'
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=2,
+                message=RelayInnerMessage(
+                    kind='stream_open',
+                    stream_id=stream_id,
+                    operation='terminal',
+                    credit_bytes=RELAY_STREAM_INITIAL_WINDOW_BYTES,
+                    payload={
+                        'terminal_id': 'term-demo',
+                        'terminal_token': 'terminal-token-demo',
+                    },
+                ),
+            )
+
+            opening = await _receive_until_kind(phone, phone_crypto, 'stream_data')
+            output = await _receive_until_kind(phone, phone_crypto, 'stream_data')
+            assert opening.payload['frame']['type'] == 'open'
+            assert output.payload['frame']['type'] == 'output'
+            output_size = relay_inner_payload_size(output.payload)
+            assert output_size > 256 * 1024
+            assert output_size <= RELAY_STREAM_MAX_MESSAGE_BYTES
+            assert len(_b64decode(str(output.payload['frame']['bytes_b64']))) == 220 * 1024
+    finally:
+        connector.stop()
+        await asyncio.wait_for(task, timeout=2)
+        await gateway.stop()
+        await relay.stop()
+
+
 async def _relay_host_connector_streams_terminal_without_replaying_input(tmp_path: Path) -> None:
     relay, issued = await _started_relay(tmp_path)
     gateway = await _started_gateway()
@@ -1539,7 +1610,11 @@ class _GatewayStub:
         await self.runner.cleanup()
 
 
-async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
+async def _started_gateway(
+    *,
+    project_view_bytes: int = 0,
+    terminal_output_bytes: int = 0,
+) -> _GatewayStub:
     requests: list[tuple[str, str]] = []
     request_bodies: list[dict[str, object]] = []
     terminal_inputs: list[dict[str, object]] = []
@@ -1655,6 +1730,14 @@ async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
                 'last_input_seq': 0,
             }
         )
+        if terminal_output_bytes > 0:
+            await websocket.send_json(
+                {
+                    'type': 'output',
+                    'seq': 1,
+                    'bytes_b64': _b64(b'h' * terminal_output_bytes),
+                }
+            )
         async for incoming in websocket:
             if incoming.type != aiohttp.WSMsgType.TEXT:
                 continue

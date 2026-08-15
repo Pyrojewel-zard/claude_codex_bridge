@@ -153,6 +153,10 @@ def test_relay_inner_protocol_rejects_oversized_and_non_object_payloads() -> Non
         RelayInnerMessage.from_bytes(json.dumps(['not', 'an', 'object']).encode())
 
 
+def test_relay_initial_window_can_accept_every_valid_single_message() -> None:
+    assert RELAY_STREAM_INITIAL_WINDOW_BYTES >= RELAY_STREAM_MAX_MESSAGE_BYTES
+
+
 def test_relay_inner_error_codes_are_fixed_and_redacted() -> None:
     with pytest.raises(RelayStreamProtocolError, match='stream_protocol_error'):
         RelayInnerMessage.from_json(
