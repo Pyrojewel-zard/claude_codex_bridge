@@ -157,6 +157,33 @@ class CcbMobileLocalizations {
 
   String get themeDark => isChinese ? '深色' : 'Dark';
 
+  String get chatBackground => isChinese ? '工作区背景' : 'Workspace background';
+
+  String get chatBackgroundDescription =>
+      isChinese
+          ? '选择一张本机图片作为聊天和终端的全屏背景。图片只保存在此设备，不会上传到 CCB。'
+          : 'Choose a local image as the full-screen background for chats and terminals. It stays on this device and is never uploaded to CCB.';
+
+  String get chooseChatBackground => isChinese ? '选择图片' : 'Choose image';
+
+  String get replaceChatBackground => isChinese ? '更换图片' : 'Replace image';
+
+  String get removeChatBackground =>
+      isChinese ? '移除工作区背景' : 'Remove workspace background';
+
+  String get chatBackgroundTooLarge =>
+      isChinese ? '图片不能超过 20 MB。' : 'The image must be 20 MB or smaller.';
+
+  String get chatBackgroundUnsupported =>
+      isChinese
+          ? '请选择 PNG、JPEG、GIF、WebP 或 BMP 图片。'
+          : 'Choose a PNG, JPEG, GIF, WebP, or BMP image.';
+
+  String get chatBackgroundCouldNotSave =>
+      isChinese
+          ? '无法保存工作区背景图片。'
+          : 'Could not save the workspace background image.';
+
   String get terminalShortcuts => isChinese ? '终端快捷键' : 'Terminal shortcuts';
 
   String get terminalSettings => isChinese ? '终端设置' : 'Terminal settings';

@@ -11,6 +11,7 @@ import '../repository/fake_mobile_ccb_repository.dart';
 import 'app_theme.dart';
 import 'app_update.dart';
 import 'background_connection.dart';
+import 'chat_background.dart';
 import 'mobile_network_status.dart';
 import 'terminal_shortcut_preferences.dart';
 
@@ -20,6 +21,8 @@ class CcbMobileApp extends StatefulWidget {
     this.themePreferenceStore,
     this.backgroundConnectionPreferenceStore,
     this.backgroundConnectionPlatform,
+    this.chatBackgroundStore,
+    this.chatBackgroundPicker = pickCcbChatBackgroundImage,
     this.terminalShortcutPreferenceStore,
     this.mobileNetworkStatusPlatform,
     this.profileStore,
@@ -35,6 +38,8 @@ class CcbMobileApp extends StatefulWidget {
   final CcbBackgroundConnectionPreferenceStore?
   backgroundConnectionPreferenceStore;
   final BackgroundConnectionPlatform? backgroundConnectionPlatform;
+  final CcbChatBackgroundStore? chatBackgroundStore;
+  final CcbChatBackgroundPicker chatBackgroundPicker;
   final CcbTerminalShortcutPreferenceStore? terminalShortcutPreferenceStore;
   final MobileNetworkStatusPlatform? mobileNetworkStatusPlatform;
   final GatewayHostProfileStore? profileStore;
@@ -59,7 +64,10 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
   _terminalShortcutPreferenceStore =
       widget.terminalShortcutPreferenceStore ??
       FlutterCcbTerminalShortcutPreferenceStore();
+  late final CcbChatBackgroundStore _chatBackgroundStore =
+      widget.chatBackgroundStore ?? FlutterCcbChatBackgroundStore();
   CcbThemePreference _themePreference = CcbThemePreference.system;
+  CcbChatBackgroundPreference? _chatBackgroundPreference;
   CcbTerminalShortcutPreferences _terminalShortcutPreferences =
       CcbTerminalShortcutPreferences.defaults;
   Future<void> _terminalShortcutPreferenceWrite = Future<void>.value();
@@ -71,6 +79,7 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
   void initState() {
     super.initState();
     _loadThemePreference();
+    _loadChatBackgroundPreference();
     _loadBackgroundConnectionPreference();
     _loadTerminalShortcutPreferences();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -182,6 +191,45 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
     unawaited(_themePreferenceStore.write(preference));
   }
 
+  Future<void> _loadChatBackgroundPreference() async {
+    CcbChatBackgroundPreference? preference;
+    try {
+      preference = await _chatBackgroundStore.read();
+    } catch (_) {
+      preference = null;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatBackgroundPreference = preference;
+    });
+  }
+
+  Future<void> _chooseChatBackground() async {
+    final selection = await widget.chatBackgroundPicker();
+    if (selection == null) {
+      return;
+    }
+    final preference = await _chatBackgroundStore.save(selection);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatBackgroundPreference = preference;
+    });
+  }
+
+  Future<void> _clearChatBackground() async {
+    await _chatBackgroundStore.clear();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatBackgroundPreference = null;
+    });
+  }
+
   Future<void> _loadBackgroundConnectionPreference() async {
     final enabled = await _backgroundConnectionPreferenceStore.read();
     if (!mounted) {
@@ -233,10 +281,15 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
     final repository = FakeMobileCcbRepository.demo();
     return MaterialApp(
       navigatorKey: _navigatorKey,
-      builder: (context, child) => CcbTerminalShortcutPreferencesScope(
-        preferences: _terminalShortcutPreferences,
-        onChanged: _setTerminalShortcutPreferences,
-        child: child ?? const SizedBox.shrink(),
+      builder: (context, child) => CcbChatBackgroundScope(
+        preference: _chatBackgroundPreference,
+        onChoose: _chooseChatBackground,
+        onClear: _clearChatBackground,
+        child: CcbTerminalShortcutPreferencesScope(
+          preferences: _terminalShortcutPreferences,
+          onChanged: _setTerminalShortcutPreferences,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       onGenerateTitle: (context) => CcbMobileLocalizations.of(context).appTitle,
       localizationsDelegates: GlobalMaterialLocalizations.delegates,

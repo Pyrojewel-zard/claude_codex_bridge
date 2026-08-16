@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 
+import '../../app/chat_background.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
 import '../../models/ccb_agent.dart';
 import '../../models/ccb_project.dart';
@@ -299,7 +300,9 @@ class _ProjectHomeMobileChatScaffoldHostState
             : _terminalMode
             ? _showChat
             : _showTerminal;
-    return Scaffold(
+    final hasBackground = ccbWorkspaceBackgroundEnabled(context);
+    final scaffold = Scaffold(
+      backgroundColor: hasBackground ? Colors.transparent : null,
       body: SafeArea(
         child: Padding(
           key: const ValueKey('project-chat-screen'),
@@ -416,6 +419,7 @@ class _ProjectHomeMobileChatScaffoldHostState
         ),
       ),
     );
+    return CcbWorkspaceBackground(terminal: _terminalMode, child: scaffold);
   }
 
   void _showTerminal() {
@@ -828,7 +832,9 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                 ),
               ],
             };
-    return Scaffold(
+    final hasBackground = ccbWorkspaceBackgroundEnabled(context);
+    final scaffold = Scaffold(
+      backgroundColor: hasBackground ? Colors.transparent : null,
       body: SafeArea(
         child: Row(
           key: const ValueKey('wide-project-workspace'),
@@ -929,5 +935,6 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
         ),
       ),
     );
+    return CcbWorkspaceBackground(terminal: terminalMode, child: scaffold);
   }
 }

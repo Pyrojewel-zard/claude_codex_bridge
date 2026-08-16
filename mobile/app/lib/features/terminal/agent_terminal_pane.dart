@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:xterm/xterm.dart';
 
+import '../../app/chat_background.dart';
 import '../../app/terminal_shortcut_preferences.dart';
 import '../../models/ccb_project_view.dart';
 import '../../models/ccb_terminal_target.dart';
@@ -179,6 +180,7 @@ class _FakeTerminalPaneState extends State<_FakeTerminalPane> {
             autofocus: false,
             readOnly: true,
             scrollController: _scrollController,
+            backgroundOpacity: ccbWorkspaceBackgroundEnabled(context) ? 0 : 1,
             padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
           ),
         ),
@@ -942,6 +944,7 @@ class _LiveTerminalPaneState extends State<LiveTerminalPane>
       scrollController: _terminalScrollController,
       autoResize: true,
       textStyle: TerminalStyle(fontSize: _readableFontSize),
+      backgroundOpacity: ccbWorkspaceBackgroundEnabled(context) ? 0 : 1,
       padding: _terminalPadding,
     );
 

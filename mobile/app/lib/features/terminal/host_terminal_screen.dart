@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app/chat_background.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
 import '../../transport/terminal_transport.dart';
 import 'agent_terminal_pane.dart';
@@ -138,9 +139,15 @@ class _HostTerminalScreenState extends State<HostTerminalScreen>
   @override
   Widget build(BuildContext context) {
     final strings = CcbMobileLocalizations.of(context);
-    return Scaffold(
+    final hasBackground = ccbWorkspaceBackgroundEnabled(context);
+    final scaffold = Scaffold(
       key: const ValueKey('host-terminal-screen'),
+      backgroundColor: hasBackground ? Colors.transparent : null,
       appBar: AppBar(
+        backgroundColor:
+            hasBackground
+                ? Theme.of(context).colorScheme.surface.withValues(alpha: 0.86)
+                : null,
         title: Text(strings.computerTerminal),
         actions: [
           IconButton(
@@ -200,6 +207,7 @@ class _HostTerminalScreenState extends State<HostTerminalScreen>
         ],
       ),
     );
+    return CcbWorkspaceBackground(terminal: true, child: scaffold);
   }
 }
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v8.6.7 (2026-08-16)
+
+- Added local CCB Mobile workspace background customization across project
+  chrome, agent chat, Agent Terminal, and standalone Computer Terminal.
+- Added private-storage image validation, replacement/removal cleanup, and
+  terminal readability scrims without uploading the selected image.
+- No pairing, conversation, or project migration is required.
+
 ## v8.6.6 (2026-08-15)
 
 - Restarted an already-running installed Mobile Host after a successful

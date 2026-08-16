@@ -210,6 +210,9 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
 - [topics/product-requirements.md](topics/product-requirements.md) captures the
   core mobile/iPad requirements around projects, agents, lifecycle,
   notifications, and Markdown/math display.
+- [topics/chat-background-customization.md](topics/chat-background-customization.md)
+  defines local-only chat wallpaper selection, persistence, readability, and
+  chat-versus-terminal acceptance boundaries.
 - [topics/ccb-mobile-control-architecture.md](topics/ccb-mobile-control-architecture.md)
   defines the recommended CCB-specific architecture.
 - [topics/mobile-api-contract.md](topics/mobile-api-contract.md) sketches the
