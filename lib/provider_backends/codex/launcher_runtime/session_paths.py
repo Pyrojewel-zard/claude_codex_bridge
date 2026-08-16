@@ -5,6 +5,7 @@ from pathlib import Path
 
 from provider_core.pathing import session_filename_for_agent
 from provider_backends.codex.session_authority import resume_authority_matches
+from provider_profiles.codex_home_config import codex_api_authority
 from storage.path_helpers import runtime_project_anchor_from_path
 
 from ..start_cmd import extract_resume_session_id
@@ -32,6 +33,8 @@ def load_resume_session_id(
     ):
         return None
     if not _resume_session_binding_is_usable(data):
+        return None
+    if not _resume_session_provider_is_compatible(data, runtime_dir=runtime_dir, profile=profile):
         return None
     return payload_resume_session_id(data)
 
@@ -130,6 +133,87 @@ def _resume_session_binding_is_usable(data: dict) -> bool:
     if session_root is not None and not _is_within(session_path, session_root):
         return False
     return True
+
+
+def _resume_session_provider_is_compatible(data: dict, *, runtime_dir: Path, profile=None) -> bool:
+    """Resume a session only when its recorded provider matches the provider codex
+    will actually use for this launch.
+
+    Sessions created under the official OpenAI login (``model_provider = openai``)
+    are incompatible with a custom proxy provider such as packyapi: codex resumes
+    the session-scoped provider, which then attempts an OpenAI login token refresh
+    that has long expired.  Official-to-official and proxy-to-proxy resumes keep
+    working because the provider matches.
+    """
+    session_path = _path_or_none(data.get('codex_session_path'))
+    if session_path is None or not session_path.is_file():
+        return True  # rollout missing/unreadable; keep legacy resume behavior
+    session_provider = _read_rollout_model_provider(session_path)
+    if session_provider is None:
+        return True  # no provider recorded; cannot judge compatibility
+    current_provider = _managed_home_model_provider(runtime_dir, profile=profile)
+    if current_provider is None:
+        return True  # no configured provider; keep legacy resume behavior
+    return current_provider == session_provider
+
+
+def _read_rollout_model_provider(rollout_path: Path) -> str | None:
+    try:
+        with rollout_path.open('r', encoding='utf-8') as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    continue
+                if record.get('type') != 'session_meta':
+                    continue
+                payload = record.get('payload') or {}
+                provider = str(payload.get('model_provider') or '').strip()
+                return provider or None
+    except Exception:
+        return None
+    return None
+
+
+def _managed_home_model_provider(runtime_dir: Path, *, profile=None) -> str | None:
+    authority = codex_api_authority(profile)
+    if authority is not None:
+        return authority.provider_id
+    state_dir = state_dir_for_runtime_dir(runtime_dir)
+    if state_dir is None:
+        return None
+    config_path = state_dir / 'home' / 'config.toml'
+    if not config_path.is_file():
+        return None
+    provider = _read_root_model_provider(config_path)
+    return provider or 'openai'
+
+
+def _read_root_model_provider(config_path: Path) -> str | None:
+    try:
+        import tomllib
+    except Exception:
+        tomllib = None
+    try:
+        text = config_path.read_text(encoding='utf-8')
+    except Exception:
+        return None
+    if tomllib is not None:
+        try:
+            payload = tomllib.loads(text)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            provider = str(payload.get('model_provider') or '').strip()
+            return provider or None
+    for raw in text.splitlines():
+        line = raw.split('#', 1)[0].strip()
+        if line.startswith('model_provider'):
+            return line.split('=', 1)[1].strip().strip('"').strip("'") or None
+    return None
 
 
 def _path_or_none(value: object) -> Path | None:

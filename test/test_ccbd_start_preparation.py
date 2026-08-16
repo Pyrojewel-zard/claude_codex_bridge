@@ -29,6 +29,28 @@ def _single_codex_project(tmp_path: Path, name: str):
     return project_root, context, load_project_config(project_root).config, PathLayout(project_root)
 
 
+def _single_claude_project(tmp_path: Path, name: str):
+    project_root = tmp_path / name
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        """version = 2
+default_agents = ["agent1"]
+
+[agents.agent1]
+provider = "claude"
+target = "."
+workspace_mode = "inplace"
+restore = "auto"
+permission = "manual"
+""",
+        encoding='utf-8',
+    )
+    bootstrap_project(project_root)
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+    return project_root, context, load_project_config(project_root).config, PathLayout(project_root)
+
+
 def test_prepare_start_agents_rejects_git_worktree_for_non_git_project(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-start-prep-non-git-worktree'
     (project_root / '.ccb').mkdir(parents=True)
@@ -59,11 +81,52 @@ def test_prepare_start_agents_rejects_git_worktree_for_non_git_project(tmp_path:
     assert paths.workspace_path('agent1').exists() is False
 
 
+def test_prepare_start_agents_rebuilds_codex_home_for_reused_binding(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # Fork policy: the managed Codex config.toml is rebuilt on every `ccb start`,
+    # even when the agent is already running (reused binding), so changes to the
+    # source ~/.codex/config.toml (model, MCP servers, plugins) take effect on
+    # the next launch without requiring a full relaunch.
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-reuse')
+    binding = SimpleNamespace(runtime_ref='tmux:%1')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: calls.append(kwargs['agent_name']),
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path=None,
+        tmux_session_name=None,
+        workspace_window_id=None,
+        resolve_agent_binding_fn=lambda **kwargs: binding,
+        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert calls == ['agent1']
+    assert prepared[0].binding is binding
+    assert prepared[0].provider_prepared is True
+    assert prepared[0].effective_command is not None
+
+
 def test_prepare_start_agents_skips_provider_preparation_for_reused_binding(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-reuse')
+    project_root, context, config, paths = _single_claude_project(tmp_path, 'repo-start-prep-reuse-claude')
     binding = SimpleNamespace(runtime_ref='tmux:%1')
     calls: list[str] = []
     monkeypatch.setattr(

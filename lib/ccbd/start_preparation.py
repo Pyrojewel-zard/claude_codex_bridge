@@ -158,7 +158,8 @@ def prepare_start_agents(
 def _prepare_provider_launch_set(prepared, *, paths, context) -> tuple[PreparedStartAgent, ...]:
     finalized: list[PreparedStartAgent] = []
     for item in prepared:
-        if item.binding is not None:
+        provider = str(getattr(item.spec, 'provider', '') or '').strip().lower()
+        if item.binding is not None and provider != 'codex':
             finalized.append(item)
             continue
         launch_command = effective_start_command(context.command, item.spec)
