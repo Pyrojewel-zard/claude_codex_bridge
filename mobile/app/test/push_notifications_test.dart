@@ -104,6 +104,7 @@ void main() {
         ),
       );
       await _drain();
+      await _waitFor(() => requests.length == 2);
 
       expect(requests, hasLength(2));
       expect(requests.first['path'], '/v1/devices/me/push-token');
@@ -381,6 +382,16 @@ Future<void> _drain() async {
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
+}
+
+Future<void> _waitFor(bool Function() predicate) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 2));
+  while (!predicate()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('condition was not met before the deadline');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }
 
 class _FakePushMessagingClient implements PushMessagingClient {

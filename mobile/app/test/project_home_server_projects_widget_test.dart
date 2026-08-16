@@ -9,6 +9,116 @@ import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
 
 void main() {
+  testWidgets('home terminal opens independent host shell tabs', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+    final profile = _pairedHost(hostId: 'server-host', deviceId: 'phone');
+    final profileStore = await _profileStoreWith([profile]);
+    final gatewayRepository = _ServerProjectsRepository([
+      _projectFixture(
+        id: 'test_ccb2',
+        displayName: 'test_ccb2',
+        root: '/srv/ccb/test_ccb2',
+      ),
+    ]);
+    final terminalTransport = RecordingTerminalTransport();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _activatePairedGatewayListOnly(tester);
+
+    await tester.tap(
+      find.byKey(const ValueKey('project-list-terminal-action')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('host-terminal-screen')), findsOneWidget);
+    expect(gatewayRepository.getProjectViewCalls, isEmpty);
+    expect(terminalTransport.hostRequests, hasLength(1));
+    expect(terminalTransport.hostRequests.single.clientSessionId, 'shell-1');
+
+    await tester.tap(find.byKey(const ValueKey('host-terminal-add')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('host-terminal-tab-2')), findsOneWidget);
+    expect(terminalTransport.hostRequests, hasLength(2));
+    expect(terminalTransport.hostRequests.last.clientSessionId, 'shell-2');
+
+    await tester.tap(find.byKey(const ValueKey('host-terminal-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Close'));
+    await tester.pumpAndSettle();
+
+    expect(terminalTransport.terminatedHostSessions, ['shell-2']);
+    expect(terminalTransport.sessions[1].closed, isTrue);
+    expect(
+      terminalTransport.hostOperationLog,
+      containsAllInOrder(['close:shell-2', 'terminate:shell-2']),
+    );
+    expect(find.byKey(const ValueKey('host-terminal-tab-2')), findsNothing);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('host-terminal-screen')), findsNothing);
+    expect(terminalTransport.terminatedHostSessions, ['shell-2']);
+  });
+
+  testWidgets('closing final host terminal closes stream before termination', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+    final terminalTransport = RecordingTerminalTransport();
+
+    await tester.pumpWidget(
+      MaterialApp(home: HostTerminalScreen(transport: terminalTransport)),
+    );
+    await tester.pumpAndSettle();
+    final session = terminalTransport.sessions.single;
+
+    await tester.tap(find.byKey(const ValueKey('host-terminal-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Close'));
+    await tester.pumpAndSettle();
+
+    expect(session.closed, isTrue);
+    expect(terminalTransport.terminatedHostSessions, ['shell-1']);
+    expect(
+      terminalTransport.hostOperationLog,
+      containsAllInOrder(['close:shell-1', 'terminate:shell-1']),
+    );
+    expect(find.byKey(const ValueKey('host-terminal-screen')), findsNothing);
+  });
+
+  testWidgets('host terminal caps concurrent tabs at six', (tester) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+    final terminalTransport = RecordingTerminalTransport();
+
+    await tester.pumpWidget(
+      MaterialApp(home: HostTerminalScreen(transport: terminalTransport)),
+    );
+    await tester.pumpAndSettle();
+    for (var slot = 2; slot <= 6; slot += 1) {
+      await tester.tap(find.byKey(const ValueKey('host-terminal-add')));
+      await tester.pumpAndSettle();
+    }
+
+    expect(terminalTransport.hostRequests, hasLength(6));
+    expect(find.byKey(const ValueKey('host-terminal-tab-6')), findsOneWidget);
+    final addButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('host-terminal-add')),
+    );
+    expect(addButton.onPressed, isNull);
+  });
+
   testWidgets(
     'paired gateway lists server projects before opening real project',
     (tester) async {
@@ -725,7 +835,14 @@ GatewayPairedHost _pairedHost({
         kind: RouteProviderKind.lan,
         gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
       ),
-      scopes: const {'view', 'focus', 'terminal_input', 'lifecycle', 'notify'},
+      scopes: const {
+        'view',
+        'focus',
+        'terminal_input',
+        'host_terminal',
+        'lifecycle',
+        'notify',
+      },
     ),
     deviceToken: 'token-$hostId-$deviceId',
     projectId: hostId,

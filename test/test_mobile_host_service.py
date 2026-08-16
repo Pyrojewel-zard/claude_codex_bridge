@@ -21,6 +21,7 @@ from cli.services.mobile_host import (
     PortOwner,
     detect_loopback_port_owner,
     mobile_host_service_paths,
+    restart_running_mobile_host_service,
     run_mobile_host_serve_command,
     start_or_replace_mobile_host_service,
     write_mobile_host_service_state,
@@ -63,6 +64,39 @@ def _claimable_pairing_payload(state_dir: Path) -> dict[str, object]:
     )
 
 
+def _write_spawned_child_state(
+    state_dir: Path,
+    *,
+    pid: int = 222,
+    generation: int = 1,
+    listen: str = '127.0.0.1:8787',
+    gateway_url: str = 'https://desktop.tailnet.ts.net:8787',
+    route_provider: str = 'tailnet',
+) -> None:
+    paths = mobile_host_service_paths(state_dir)
+    write_mobile_host_service_state(
+        paths.state_path,
+        {
+            'schema_version': 1,
+            'record_type': MOBILE_HOST_SERVICE_RECORD_TYPE,
+            'pid': pid,
+            'generation': generation,
+            'listen': listen,
+            'local_gateway_url': f'http://{listen}',
+            'gateway_url': gateway_url,
+            'route_provider': route_provider,
+            'pairing': {
+                **_pairing_payload(),
+                'gateway_url': gateway_url,
+                'claim_endpoint': f'{gateway_url}/v1/pairing/claim',
+                'route_provider': route_provider,
+            },
+            'state_dir': str(state_dir),
+            'command_kind': 'ccb_mobile_host_serve',
+        },
+    )
+
+
 def test_mobile_host_service_clears_stale_state_and_starts(tmp_path: Path) -> None:
     state_dir = tmp_path / 'mobile'
     paths = mobile_host_service_paths(state_dir)
@@ -80,6 +114,8 @@ def test_mobile_host_service_clears_stale_state_and_starts(tmp_path: Path) -> No
 
     def _spawn(command, **kwargs):
         spawned.append({'command': command, **kwargs})
+        generation = int(command[command.index('--generation') + 1])
+        _write_spawned_child_state(state_dir, generation=generation)
         return _FakeProcess(222)
 
     result = start_or_replace_mobile_host_service(
@@ -102,7 +138,7 @@ def test_mobile_host_service_clears_stale_state_and_starts(tmp_path: Path) -> No
     assert spawned[0]['cwd'] == str(Path.cwd())
     assert spawned[0]['env']['CCB_MOBILE_HOST_STATE_HOME'] == str(state_dir)
     assert spawned[0]['env']['CCB_SOURCE_RUNTIME_OK'] == '1'
-    assert not paths.state_path.exists()
+    assert paths.state_path.exists()
 
 
 def test_mobile_host_health_check_tolerates_server_wide_health_latency() -> None:
@@ -189,26 +225,10 @@ def test_mobile_host_service_returns_pairing_written_by_spawned_child(
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / 'mobile'
-    paths = mobile_host_service_paths(state_dir)
 
     def _spawn(command, **_kwargs):
         generation = int(command[command.index('--generation') + 1])
-        write_mobile_host_service_state(
-            paths.state_path,
-            {
-                'schema_version': 1,
-                'record_type': MOBILE_HOST_SERVICE_RECORD_TYPE,
-                'pid': 222,
-                'generation': generation,
-                'listen': '127.0.0.1:8787',
-                'local_gateway_url': 'http://127.0.0.1:8787',
-                'gateway_url': 'https://desktop.tailnet.ts.net:8787',
-                'route_provider': 'tailnet',
-                'pairing': _pairing_payload(),
-                'state_dir': str(state_dir),
-                'command_kind': 'ccb_mobile_host_serve',
-            },
-        )
+        _write_spawned_child_state(state_dir, generation=generation)
         return _FakeProcess(222)
 
     result = start_or_replace_mobile_host_service(
@@ -281,6 +301,150 @@ def test_mobile_host_service_preserves_pairing_for_live_matching_process(
     assert result.to_record()['pairing'] == result.pairing
     store = MobileGatewayPairingStore(state_dir)
     assert store.pairing_code_is_claimable(str(pairing['pairing_code']))
+
+
+def test_mobile_host_service_force_restarts_matching_process_without_rotation(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile'
+    paths = mobile_host_service_paths(state_dir)
+    pairing = _claimable_pairing_payload(state_dir)
+    write_mobile_host_service_state(
+        paths.state_path,
+        {
+            'schema_version': 1,
+            'record_type': MOBILE_HOST_SERVICE_RECORD_TYPE,
+            'pid': 111,
+            'generation': 4,
+            'host_id': 'host-test',
+            'listen': '127.0.0.1:8787',
+            'local_gateway_url': 'http://127.0.0.1:8787',
+            'gateway_url': 'https://desktop.tailnet.ts.net:8787',
+            'route_provider': 'tailnet',
+            'pairing': pairing,
+            'state_dir': str(state_dir),
+            'command_kind': 'ccb_mobile_host_serve',
+        },
+    )
+    alive = {111}
+    commands: list[list[str]] = []
+
+    def _terminate(pid: int, **_kwargs) -> bool:
+        alive.discard(pid)
+        return True
+
+    def _spawn(command, **_kwargs):
+        commands.append(list(command))
+        generation = int(command[command.index('--generation') + 1])
+        _write_spawned_child_state(state_dir, generation=generation)
+        return _FakeProcess(222)
+
+    result = start_or_replace_mobile_host_service(
+        script_root=tmp_path / 'source',
+        listen='127.0.0.1:8787',
+        public_url='https://desktop.tailnet.ts.net:8787',
+        route_provider='tailnet',
+        state_dir=state_dir,
+        force_restart=True,
+        process_exists_fn=lambda pid: pid in alive,
+        process_cmdline_fn=lambda pid: f'python ccb.py {MOBILE_HOST_SERVE_COMMAND} --state-dir {state_dir}' if pid == 111 else '',
+        terminate_pid_tree_fn=_terminate,
+        port_owner_fn=lambda _listen: None,
+        spawn_fn=_spawn,
+        health_check_fn=lambda _url: True,
+    )
+
+    assert result.status == 'replaced'
+    assert result.replaced_pid == 111
+    assert result.generation == 5
+    assert '--rotate-pairing' not in commands[0]
+    assert MobileGatewayPairingStore(state_dir).pairing_code_is_claimable(
+        str(pairing['pairing_code'])
+    )
+
+
+def test_restart_running_mobile_host_preserves_route_and_skips_source_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    install_root = tmp_path / 'install'
+    source_root = tmp_path / 'source'
+    state_dir = tmp_path / 'mobile'
+    paths = mobile_host_service_paths(state_dir)
+    state = {
+        'schema_version': 1,
+        'record_type': MOBILE_HOST_SERVICE_RECORD_TYPE,
+        'pid': 111,
+        'generation': 4,
+        'host_id': 'relay-host',
+        'listen': '127.0.0.1:8787',
+        'local_gateway_url': 'http://127.0.0.1:8787',
+        'gateway_url': 'https://relay.example.test',
+        'route_provider': 'relay',
+        'pairing': _pairing_payload(),
+        'state_dir': str(state_dir),
+        'command_kind': 'ccb_mobile_host_serve',
+        'entrypoint': str(source_root / 'ccb.py'),
+    }
+    write_mobile_host_service_state(paths.state_path, state)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        mobile_host,
+        'start_or_replace_mobile_host_service',
+        lambda **kwargs: calls.append(dict(kwargs)) or SimpleNamespace(status='replaced'),
+    )
+
+    skipped = restart_running_mobile_host_service(
+        script_root=install_root,
+        state_dir=state_dir,
+        process_exists_fn=lambda pid: pid == 111,
+    )
+    assert skipped is None
+    assert calls == []
+
+    state['entrypoint'] = str(install_root / 'ccb.py')
+    write_mobile_host_service_state(paths.state_path, state)
+    restarted = restart_running_mobile_host_service(
+        script_root=install_root,
+        state_dir=state_dir,
+        process_exists_fn=lambda pid: pid == 111,
+    )
+
+    assert restarted is not None
+    assert calls[0]['listen'] == '127.0.0.1:8787'
+    assert calls[0]['route_provider'] == 'relay'
+    assert calls[0]['public_url'] is None
+    assert calls[0]['host_id'] == 'relay-host'
+    assert calls[0]['rotate_pairing'] is False
+    assert calls[0]['force_restart'] is True
+
+
+def test_restart_running_mobile_host_does_not_start_stopped_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile'
+    paths = mobile_host_service_paths(state_dir)
+    write_mobile_host_service_state(
+        paths.state_path,
+        {
+            'schema_version': 1,
+            'record_type': MOBILE_HOST_SERVICE_RECORD_TYPE,
+            'pid': 111,
+            'entrypoint': str(tmp_path / 'install' / 'ccb.py'),
+        },
+    )
+    monkeypatch.setattr(
+        mobile_host,
+        'start_or_replace_mobile_host_service',
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError('stopped host restarted')),
+    )
+
+    assert restart_running_mobile_host_service(
+        script_root=tmp_path / 'install',
+        state_dir=state_dir,
+        process_exists_fn=lambda _pid: False,
+    ) is None
 
 
 def test_mobile_host_service_does_not_rotate_legacy_expired_pairing_without_update(
@@ -465,6 +629,11 @@ def test_mobile_host_service_replaces_live_managed_process(tmp_path: Path) -> No
         alive.discard(pid)
         return True
 
+    def _spawn(command, **_kwargs):
+        generation = int(command[command.index('--generation') + 1])
+        _write_spawned_child_state(state_dir, generation=generation)
+        return _FakeProcess(222)
+
     result = start_or_replace_mobile_host_service(
         script_root=tmp_path / 'source',
         listen='127.0.0.1:8787',
@@ -475,7 +644,7 @@ def test_mobile_host_service_replaces_live_managed_process(tmp_path: Path) -> No
         process_cmdline_fn=lambda pid: f'python ccb.py {MOBILE_HOST_SERVE_COMMAND} --state-dir {state_dir}' if pid == 111 else '',
         terminate_pid_tree_fn=_terminate,
         port_owner_fn=lambda _listen: None,
-        spawn_fn=lambda *_args, **_kwargs: _FakeProcess(222),
+        spawn_fn=_spawn,
         health_check_fn=lambda _url: True,
     )
 
@@ -483,6 +652,65 @@ def test_mobile_host_service_replaces_live_managed_process(tmp_path: Path) -> No
     assert result.status == 'replaced'
     assert result.replaced_pid == 111
     assert result.generation == 5
+
+
+def test_mobile_host_service_waits_for_pairing_state_after_health_ready(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile'
+    paths = mobile_host_service_paths(state_dir)
+    reads = 0
+    tick = -0.01
+
+    def _spawn(command, **_kwargs):
+        generation = int(command[command.index('--generation') + 1])
+        write_mobile_host_service_state(
+            paths.state_path,
+            {
+                'schema_version': 1,
+                'record_type': MOBILE_HOST_SERVICE_RECORD_TYPE,
+                'pid': 222,
+                'generation': generation,
+                'listen': '127.0.0.1:8787',
+                'local_gateway_url': 'http://127.0.0.1:8787',
+                'gateway_url': 'https://desktop.tailnet.ts.net:8787',
+                'route_provider': 'tailnet',
+                'state_dir': str(state_dir),
+                'command_kind': 'ccb_mobile_host_serve',
+            },
+        )
+        return _FakeProcess(222)
+
+    def _monotonic() -> float:
+        nonlocal tick
+        tick += 0.01
+        return tick
+
+    def _sleep(_seconds: float) -> None:
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            state = json.loads(paths.state_path.read_text(encoding='utf-8'))
+            state['pairing'] = _pairing_payload()
+            write_mobile_host_service_state(paths.state_path, state)
+
+    result = start_or_replace_mobile_host_service(
+        script_root=tmp_path / 'source',
+        listen='127.0.0.1:8787',
+        public_url='https://desktop.tailnet.ts.net:8787',
+        route_provider='tailnet',
+        state_dir=state_dir,
+        process_exists_fn=lambda _pid: False,
+        port_owner_fn=lambda _listen: None,
+        spawn_fn=_spawn,
+        health_check_fn=lambda _url: True,
+        sleep_fn=_sleep,
+        monotonic_fn=_monotonic,
+    )
+
+    assert result.status == 'started'
+    assert result.pairing == _pairing_payload()
+    assert reads == 1
 
 
 def test_mobile_host_service_refuses_external_port_owner(tmp_path: Path) -> None:
@@ -509,6 +737,7 @@ def test_mobile_host_service_refuses_external_port_owner(tmp_path: Path) -> None
 
 def test_mobile_host_service_replaces_legacy_foreground_gateway(tmp_path: Path) -> None:
     source_root = tmp_path / 'source'
+    state_dir = tmp_path / 'mobile'
     legacy_command = (
         f'python {source_root / "ccb.py"} install mobile '
         '--listen 127.0.0.1:8787 --route-provider lan'
@@ -521,19 +750,29 @@ def test_mobile_host_service_replaces_legacy_foreground_gateway(tmp_path: Path) 
         alive.discard(pid)
         return True
 
+    def _spawn(command, **_kwargs):
+        generation = int(command[command.index('--generation') + 1])
+        _write_spawned_child_state(
+            state_dir,
+            generation=generation,
+            gateway_url='http://127.0.0.1:8787',
+            route_provider='lan',
+        )
+        return _FakeProcess(222)
+
     result = start_or_replace_mobile_host_service(
         script_root=source_root,
         listen='127.0.0.1:8787',
         public_url=None,
         route_provider='lan',
-        state_dir=tmp_path / 'mobile',
+        state_dir=state_dir,
         process_exists_fn=lambda pid: pid in alive,
         process_cmdline_fn=lambda pid: legacy_command if pid == 333 else '',
         terminate_pid_tree_fn=_terminate,
         port_owner_fn=lambda _listen: (
             PortOwner(pid=333, command=legacy_command) if 333 in alive else None
         ),
-        spawn_fn=lambda *_args, **_kwargs: _FakeProcess(222),
+        spawn_fn=_spawn,
         health_check_fn=lambda _url: True,
     )
 
@@ -640,7 +879,13 @@ def test_mobile_host_service_waits_for_concurrent_update_to_finish(tmp_path: Pat
 
     def _sleep(seconds: float) -> None:
         sleeps.append(seconds)
-        paths.lock_path.unlink()
+        if paths.lock_path.exists():
+            paths.lock_path.unlink()
+
+    def _spawn(*_args, **_kwargs):
+        spawned.append(1)
+        _write_spawned_child_state(paths.state_dir)
+        return _FakeProcess(222)
 
     result = start_or_replace_mobile_host_service(
         script_root=tmp_path / 'source',
@@ -650,7 +895,7 @@ def test_mobile_host_service_waits_for_concurrent_update_to_finish(tmp_path: Pat
         state_dir=paths.state_dir,
         process_exists_fn=lambda pid: pid == 999,
         port_owner_fn=lambda _listen: None,
-        spawn_fn=lambda *_args, **_kwargs: spawned.append(1) or _FakeProcess(222),
+        spawn_fn=_spawn,
         health_check_fn=lambda _url: True,
         sleep_fn=_sleep,
         monotonic_fn=_monotonic,
@@ -747,6 +992,34 @@ def test_detect_loopback_port_owner_uses_lsof_when_ss_is_missing(monkeypatch: py
     assert owner == PortOwner(pid=444, command='python gateway.py')
 
 
+def test_detect_loopback_port_owner_uses_windows_netstat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _run(command, **_kwargs):
+        assert command == ['netstat', '-ano', '-p', 'tcp']
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                '  Proto  Local Address          Foreign Address        State           PID\n'
+                '  TCP    127.0.0.1:8787         0.0.0.0:0              LISTENING       111\n'
+                '  TCP    192.168.31.155:8787    0.0.0.0:0              LISTENING       555\n'
+            ),
+            stderr='',
+        )
+
+    monkeypatch.setattr(mobile_host.os, 'name', 'nt')
+    monkeypatch.setattr(mobile_host.subprocess, 'run', _run)
+    monkeypatch.setattr(mobile_host, '_process_cmdline', lambda pid: 'python mobile.py' if pid == 555 else '')
+
+    owner = mobile_host._detect_loopback_port_owner_netstat(
+        host='192.168.31.155',
+        port=8787,
+    )
+
+    assert owner == PortOwner(pid=555, command='python mobile.py')
+
+
 def test_detect_loopback_port_owner_accepts_specific_private_lan_address(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -780,7 +1053,11 @@ def test_mobile_host_service_rejects_private_listen_for_non_lan_route(
 def test_detect_loopback_port_owner_reports_unknown_when_tools_are_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def _run(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+
     monkeypatch.setattr(mobile_host.shutil, 'which', lambda _name: None)
+    monkeypatch.setattr(mobile_host.subprocess, 'run', _run)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.bind(('127.0.0.1', 0))
         server.listen()
@@ -834,6 +1111,52 @@ def test_mobile_host_serve_removes_current_state_after_server_exits(
     assert code == 0
     assert closed == [True]
     assert not paths.state_path.exists()
+
+
+def test_mobile_host_serve_closes_gateway_on_sigterm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / 'mobile'
+    closed: list[bool] = []
+
+    class _Handle:
+        summary = {
+            'host_id': 'desktop',
+            'listen': '127.0.0.1:8787',
+            'local_gateway_url': 'http://127.0.0.1:8787',
+            'gateway_url': 'http://127.0.0.1:8787',
+            'route_provider': 'lan',
+            'pairing': _pairing_payload(),
+        }
+
+        def serve_forever(self) -> None:
+            mobile_host._raise_mobile_host_shutdown(None, None)
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        mobile_host,
+        'prepare_server_mobile_gateway',
+        lambda *_args, **_kwargs: _Handle(),
+    )
+
+    code = run_mobile_host_serve_command(
+        SimpleNamespace(
+            listen='127.0.0.1:8787',
+            public_url=None,
+            route_provider='lan',
+            state_dir=str(state_dir),
+            generation=7,
+            host_id='desktop',
+        ),
+        script_root=tmp_path / 'source',
+    )
+
+    assert code == 0
+    assert closed == [True]
+    assert not mobile_host_service_paths(state_dir).state_path.exists()
 
 
 def test_mobile_host_serve_runs_relay_connector_with_activated_identity(

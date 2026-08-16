@@ -10,6 +10,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import 'gateway_transport.dart';
 import 'relay_crypto.dart';
@@ -31,7 +32,11 @@ class RelayGatewayException implements Exception {
   }
 }
 
-class RelaySocketGatewayTransport implements GatewayTransport {
+class RelaySocketGatewayTransport
+    implements
+        GatewayTransport,
+        GatewayProviderControlTransport,
+        GatewayHostTerminalTransport {
   static const _fileChunkBytes = 32 * 1024;
   static const _maxUploadBytes = 25 * 1024 * 1024;
   static const _maxDownloadBytes = 128 * 1024 * 1024;
@@ -159,6 +164,58 @@ class RelaySocketGatewayTransport implements GatewayTransport {
   }
 
   @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final body = await _requestBody('get_agent_provider_control', {
+      'project_id': projectId,
+      'agent': agentName,
+    });
+    return CcbProviderControlDetails.fromJson(body);
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final body = await _requestBody('get_agent_provider_quota', {
+      'project_id': projectId,
+      'agent': agentName,
+    });
+    return CcbProviderAccountUsage.fromJson(
+      _objectMap(body['account_usage'], 'account_usage'),
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) async {
+    final body = await _requestBody('update_agent_provider_settings', {
+      'project_id': projectId,
+      'agent': agentName,
+      'model': model,
+      if (_hasText(thinking)) 'thinking': thinking,
+      'expected_revision': expectedRevision,
+      'expected_namespace_epoch': expectedNamespaceEpoch,
+      'expected_provider': expectedProvider,
+      'expected_runtime_revision': expectedRuntimeRevision,
+      'idempotency_key': idempotencyKey,
+    });
+    return CcbProviderSettingsResult.fromJson(body);
+  }
+
+  @override
   Future<CcbProjectView> focusAgent({
     required String projectId,
     required String agent,
@@ -249,6 +306,22 @@ class RelaySocketGatewayTransport implements GatewayTransport {
   ) async {
     final body = await _requestBody('open_terminal', request.toJson());
     return _terminalHandle(body);
+  }
+
+  @override
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  ) async {
+    final body = await _requestBody('open_host_terminal', request.toJson());
+    return _terminalHandle(body);
+  }
+
+  @override
+  Future<void> terminateHostTerminal({required String clientSessionId}) async {
+    await _requestBody('terminate_host_terminal', {
+      'schema_version': 1,
+      'client_session_id': clientSessionId,
+    });
   }
 
   @override
@@ -516,6 +589,10 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       throw const RelayGatewayException('relay transport is closed');
     }
     final session = await _ensureSession();
+    if (session.advertisesUnaryOperations &&
+        !session.unaryOperations.contains(operation)) {
+      throw const RelayGatewayException('operation_not_allowed');
+    }
     final requestId = _identifier('request');
     final completer = Completer<Map<String, Object?>>();
     session.pendingRequests[requestId] = completer;
@@ -658,6 +735,14 @@ class RelaySocketGatewayTransport implements GatewayTransport {
         socket: socket,
         reader: reader,
         crypto: crypto,
+        unaryOperations: _stringSet(hostHello.payload['unary_operations']),
+        streamOperations: _stringSet(hostHello.payload['stream_operations']),
+        advertisesUnaryOperations: hostHello.payload.containsKey(
+          'unary_operations',
+        ),
+        advertisesStreamOperations: hostHello.payload.containsKey(
+          'stream_operations',
+        ),
       );
       crypto = null;
       _session = session;
@@ -710,6 +795,10 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     void Function()? onReady,
   }) async {
     final session = await _ensureSession();
+    if (session.advertisesStreamOperations &&
+        !session.streamOperations.contains(operation)) {
+      throw const RelayGatewayException('operation_not_allowed');
+    }
     final streamId = _identifier('stream');
     late final _RelayClientStream stream;
     stream = _RelayClientStream(
@@ -743,9 +832,7 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       return stream;
     } catch (_) {
       session.streams.remove(streamId);
-      if (terminalId != null) {
-        session.terminalStreams.remove(terminalId);
-      }
+      _forgetTerminalStream(session, stream);
       await stream.close();
       rethrow;
     }
@@ -780,9 +867,7 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     if (session != null &&
         identical(session.streams[stream.streamId], stream)) {
       session.streams.remove(stream.streamId);
-      if (stream.terminalId != null) {
-        session.terminalStreams.remove(stream.terminalId);
-      }
+      _forgetTerminalStream(session, stream);
       if (!session.closed) {
         try {
           await _sendInner(
@@ -897,9 +982,7 @@ class RelaySocketGatewayTransport implements GatewayTransport {
       case RelayInnerKind.streamClose:
       case RelayInnerKind.streamCancel:
         session.streams.remove(streamId);
-        if (stream.terminalId != null) {
-          session.terminalStreams.remove(stream.terminalId);
-        }
+        _forgetTerminalStream(session, stream);
         await stream.close();
       case RelayInnerKind.request:
       case RelayInnerKind.response:
@@ -956,6 +1039,17 @@ class RelaySocketGatewayTransport implements GatewayTransport {
     _httpClient.close(force: force);
   }
 
+  void _forgetTerminalStream(
+    _RelaySocketSession session,
+    _RelayClientStream stream,
+  ) {
+    final terminalId = stream.terminalId;
+    if (terminalId != null &&
+        identical(session.terminalStreams[terminalId], stream)) {
+      session.terminalStreams.remove(terminalId);
+    }
+  }
+
   String _identifier(String prefix) {
     final next = _nextIdentifier++;
     return '$prefix-${DateTime.now().microsecondsSinceEpoch}-$next';
@@ -996,11 +1090,19 @@ class _RelaySocketSession {
     required this.socket,
     required this.reader,
     required this.crypto,
+    required this.unaryOperations,
+    required this.streamOperations,
+    required this.advertisesUnaryOperations,
+    required this.advertisesStreamOperations,
   });
 
   final WebSocket socket;
   final StreamIterator<dynamic> reader;
   final RelayCryptoSession crypto;
+  final Set<String> unaryOperations;
+  final Set<String> streamOperations;
+  final bool advertisesUnaryOperations;
+  final bool advertisesStreamOperations;
   final sendSerial = _SerialExecutor();
   final pendingRequests = <String, Completer<Map<String, Object?>>>{};
   final streams = <String, _RelayClientStream>{};

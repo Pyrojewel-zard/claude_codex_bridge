@@ -56,9 +56,9 @@ def test_confirmed_reply_delivery_empty_transport_ack_remains_completed() -> Non
         decision,
     )
 
-    assert validated is decision
     assert validated.status is CompletionStatus.COMPLETED
     assert validated.reason == 'reply_delivery_sent'
+    assert validated.diagnostics['completion_source_kind'] == 'protocol_event_stream'
 
 
 def test_reply_delivery_without_full_acceptance_proof_still_fails_closed() -> None:
@@ -81,3 +81,33 @@ def test_ordinary_codex_empty_completion_still_fails_closed() -> None:
     assert validated.status is CompletionStatus.INCOMPLETE
     assert validated.reason == 'task_complete_empty_reply'
     assert validated.diagnostics['empty_reply'] is True
+
+
+def test_declared_herdr_agent_state_completion_fails_closed_as_diagnostics_only() -> None:
+    decision = CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.COMPLETED,
+        reason='task_complete',
+        confidence=CompletionConfidence.OBSERVED,
+        reply='done',
+        anchor_seen=True,
+        reply_started=True,
+        reply_stable=True,
+        provider_turn_ref='job_delivery',
+        source_cursor=None,
+        finished_at='2026-07-15T00:00:01Z',
+        diagnostics={
+            'completion_source': 'herdr_agent_state',
+            'completion_source_kind': 'herdr_agent_state',
+            'herdr_agent_state_ref': 'namespace/pane/state',
+        },
+    )
+
+    validated = _validate_provider_completion_decision(
+        _submission(reply_delivery=False, delivery_state='accepted', anchor_seen=True),
+        decision,
+    )
+
+    assert validated.status is CompletionStatus.INCOMPLETE
+    assert validated.reason == 'herdr_agent_state_not_completion_authority'
+    assert validated.diagnostics['herdr_agent_state_role'] == 'diagnostics_only'

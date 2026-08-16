@@ -7,12 +7,15 @@ from cli.models import (
     ParsedAgentCommand,
     ParsedCancelCommand,
     ParsedClearCommand,
+    ParsedCompactCommand,
     ParsedCleanupCommand,
+    ParsedConfigImportHerdrCommand,
     ParsedConfigUiCommand,
     ParsedConfigValidateCommand,
     ParsedDoctorCommand,
     ParsedFrontdeskCommand,
     ParsedFollowupCommand,
+    ParsedHerdrOpenCommand,
     ParsedInboxCommand,
     ParsedKillCommand,
     ParsedLayoutCommand,
@@ -73,6 +76,18 @@ def parse_clear(tokens: list[str], *, project: str | None, error_type) -> Parsed
     if tuple(item.lower() for item in agent_names) == ('all',):
         agent_names = ()
     return ParsedClearCommand(project=project, agent_names=agent_names)
+
+
+def parse_compact(tokens: list[str], *, project: str | None, error_type) -> ParsedCompactCommand:
+    parser = argparse.ArgumentParser(prog='ccb compact', add_help=False)
+    parser.add_argument('agent_names', nargs='*')
+    namespace = parse_args(parser, tokens, error_message='invalid compact command', error_type=error_type)
+    agent_names = tuple(str(item).strip() for item in namespace.agent_names if str(item).strip())
+    if 'all' in {item.lower() for item in agent_names} and len(agent_names) > 1:
+        raise error_type('compact target "all" cannot be combined with agent names')
+    if tuple(item.lower() for item in agent_names) == ('all',):
+        agent_names = ()
+    return ParsedCompactCommand(project=project, agent_names=agent_names)
 
 
 def parse_restart(tokens: list[str], *, project: str | None, error_type) -> ParsedRestartCommand:
@@ -148,7 +163,7 @@ def parse_relay(tokens: list[str], *, project: str | None, error_type) -> Parsed
             parser.add_argument('--ttl-seconds', type=int, default=900)
             parser.add_argument('--label', default=None)
             parser.add_argument('--max-sessions', type=int, default=4)
-            parser.add_argument('--max-bytes-per-day', type=int, default=104857600)
+            parser.add_argument('--max-bytes-per-day', type=int, default=1073741824)
             namespace = parse_args(parser, rest, error_message='invalid relay invite issue command', error_type=error_type)
             return ParsedRelayCommand(
                 project=project,
@@ -1212,8 +1227,20 @@ def parse_doctor(tokens: list[str], *, project: str | None, error_type) -> Parse
 
 def parse_config(tokens: list[str], *, project: str | None, error_type):
     if not tokens:
-        raise error_type('config supports: validate, effective, migrate, ui')
+        raise error_type('config supports: validate, effective, migrate, approve-commands, ui, import-herdr')
     action = str(tokens[0]).strip().lower()
+    if action == 'approve-commands':
+        parser = argparse.ArgumentParser(prog='ccb config approve-commands', add_help=False)
+        parse_args(
+            parser,
+            tokens[1:],
+            error_message='invalid config approve-commands command',
+            error_type=error_type,
+        )
+        return ParsedConfigValidateCommand(
+            project=project,
+            action='approve-commands',
+        )
     if action in {'validate', 'effective'}:
         parser = argparse.ArgumentParser(prog=f'ccb config {action}', add_help=False)
         parser.add_argument('--json', dest='json_output', action='store_true')
@@ -1256,7 +1283,55 @@ def parse_config(tokens: list[str], *, project: str | None, error_type):
             no_open=bool(namespace.no_open),
             port=int(namespace.port) if namespace.port is not None else None,
         )
-    raise error_type('config supports: validate, effective, migrate, ui')
+    if action == 'import-herdr':
+        parser = argparse.ArgumentParser(prog='ccb config import-herdr', add_help=False)
+        parser.add_argument('--output', dest='output_path')
+        parser.add_argument('--no-dry-run', dest='no_dry_run', action='store_true')
+        parser.add_argument('--force', dest='force', action='store_true')
+        namespace = parse_args(
+            parser,
+            tokens[1:],
+            error_message='invalid config import-herdr command',
+            error_type=error_type,
+        )
+        return ParsedConfigImportHerdrCommand(
+            project=project,
+            output_path=str(namespace.output_path) if namespace.output_path else None,
+            dry_run=not bool(namespace.no_dry_run),
+            force=bool(namespace.force),
+        )
+    raise error_type('config supports: validate, effective, migrate, ui, import-herdr')
+
+
+def parse_herdr(tokens: list[str], *, project: str | None, error_type) -> ParsedHerdrOpenCommand:
+    if not tokens:
+        raise error_type('herdr supports: open')
+    action = str(tokens[0]).strip().lower()
+    if action == 'open':
+        parser = argparse.ArgumentParser(prog='ccb herdr open', add_help=False)
+        parser.add_argument('--herdr-exe', dest='herdr_exe')
+        parser.add_argument('--herdr-session', dest='herdr_session')
+        parser.add_argument('--no-attach', dest='no_attach', action='store_true')
+        parser.add_argument(
+            '--wait-ready',
+            dest='wait_ready',
+            action='store_true',
+            help='block until ccbd is mounted before returning (no-attach mode)',
+        )
+        namespace = parse_args(
+            parser,
+            tokens[1:],
+            error_message='invalid herdr open command',
+            error_type=error_type,
+        )
+        return ParsedHerdrOpenCommand(
+            project=project,
+            herdr_exe=str(namespace.herdr_exe) if namespace.herdr_exe else None,
+            herdr_session=str(namespace.herdr_session) if namespace.herdr_session else None,
+            no_attach=bool(namespace.no_attach),
+            wait_ready=bool(namespace.wait_ready),
+        )
+    raise error_type('herdr supports: open')
 
 
 def parse_reload(tokens: list[str], *, project: str | None, error_type) -> ParsedReloadCommand:

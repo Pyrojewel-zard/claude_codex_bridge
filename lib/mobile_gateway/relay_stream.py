@@ -7,9 +7,9 @@ from typing import Mapping
 
 
 RELAY_INNER_PROTOCOL_VERSION = 1
-RELAY_STREAM_INITIAL_WINDOW_BYTES = 256 * 1024
-RELAY_STREAM_MAX_WINDOW_BYTES = 2 * 1024 * 1024
 RELAY_STREAM_MAX_MESSAGE_BYTES = 512 * 1024
+RELAY_STREAM_INITIAL_WINDOW_BYTES = RELAY_STREAM_MAX_MESSAGE_BYTES
+RELAY_STREAM_MAX_WINDOW_BYTES = 2 * 1024 * 1024
 
 _IDENTIFIER_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$')
 _KINDS = {
@@ -22,12 +22,15 @@ _KINDS = {
     'stream_cancel',
     'error',
 }
-_UNARY_OPERATIONS = {
+RELAY_UNARY_OPERATIONS = frozenset({
     'pair_claim',
     'health',
     'device',
     'list_projects',
     'get_project_view',
+    'get_agent_provider_control',
+    'get_agent_provider_quota',
+    'update_agent_provider_settings',
     'focus_agent',
     'focus_window',
     'terminal_history',
@@ -35,8 +38,12 @@ _UNARY_OPERATIONS = {
     'submit_agent_message',
     'lifecycle',
     'open_terminal',
-}
-_STREAM_OPERATIONS = {'terminal', 'notifications', 'file_upload', 'file_download'}
+    'open_host_terminal',
+    'terminate_host_terminal',
+})
+RELAY_STREAM_OPERATIONS = frozenset(
+    {'terminal', 'notifications', 'file_upload', 'file_download'}
+)
 _SAFE_ERROR_CODES = {
     'bad_request',
     'operation_not_allowed',
@@ -140,10 +147,10 @@ class RelayInnerMessage:
             if (self.request_id is None) == (self.stream_id is None):
                 raise RelayStreamProtocolError('stream_protocol_error')
         if self.kind == 'request':
-            if self.operation not in _UNARY_OPERATIONS:
+            if self.operation not in RELAY_UNARY_OPERATIONS:
                 raise RelayStreamProtocolError('operation_not_allowed')
         elif self.kind == 'stream_open':
-            if self.operation not in _STREAM_OPERATIONS:
+            if self.operation not in RELAY_STREAM_OPERATIONS:
                 raise RelayStreamProtocolError('operation_not_allowed')
             _window(self.credit_bytes)
         elif self.kind == 'stream_window':

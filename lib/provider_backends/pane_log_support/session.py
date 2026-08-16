@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 from provider_core.contracts import ProviderSessionBinding
 from provider_core.pathing import find_session_file_for_work_dir, session_filename_for_instance
+from provider_runtime.session_payload import pane_id_from_session, pane_ref_from_session
 from project.identity import compute_ccb_project_id, compute_worktree_scope_id
 from provider_sessions.files import safe_write_session
 
@@ -86,10 +87,11 @@ class PaneLogProjectSessionBase:
 
     @property
     def pane_id(self) -> str:
-        value = self.data.get("pane_id")
-        if not value and self.terminal == "tmux":
-            value = self.data.get("tmux_session")
-        return str(value or "").strip()
+        return str(pane_id_from_session(self.data) or "").strip()
+
+    @property
+    def pane_ref(self) -> dict[str, object] | None:
+        return pane_ref_from_session(self.data)
 
     @property
     def pane_title_marker(self) -> str:

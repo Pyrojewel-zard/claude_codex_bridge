@@ -2,6 +2,29 @@
 
 Date: 2026-06-18
 
+## Phase 4I: Paseo-Aligned Provider Control Plane — Complete
+
+Status: Complete (2026-08-12).
+
+- show Provider, active model, and thinking as selected-agent identity;
+- adapt Paseo's Provider snapshot, model definition, usage, quota, and
+  confirmed-mutation semantics at pinned commit `b599d38`;
+- preserve CCB's Python gateway, Flutter app, ccbd/tmux/session authority, and
+  fail-closed device scopes;
+- persist validated Codex/Claude model and effort choices as explicit
+  restart-required configuration changes, never as guessed live commands;
+- expose bounded native-session usage and separately loaded account quota;
+- keep direct HTTP and encrypted Relay contracts equivalent;
+- require full tests/builds plus real server-wide Android Emulator evidence on
+  dedicated Codex and Claude projects before completion.
+
+Accepted evidence:
+[history/provider-control-plane-acceptance-20260812.md](history/provider-control-plane-acceptance-20260812.md).
+
+Execution authority:
+[goal-provider-control-plane.md](goal-provider-control-plane.md) and
+[Decision 025](decisions/025-paseo-provider-control-alignment.md).
+
 ## Phase 4H: Paseo-Inspired Runtime And Background Hardening — In Progress
 
 Status: In Progress (2026-07-13).
@@ -14,6 +37,9 @@ Status: In Progress (2026-07-13).
   operation rather than relying on an ordinary background WebSocket;
 - provide optional user-controlled Android foreground connectivity for active
   Terminal/large-transfer use;
+- make LAN failures actionable with coarse Android network awareness,
+  phone-side Wi-Fi/VPN/guest-network/DHCP guidance, and a client terminal
+  WebSocket heartbeat;
 - preserve reusable unlimited pairing claims until explicit
   `ccb update mobile` rotation, while existing device credentials remain valid;
 - require same-commit emulator and physical-phone background/Doze/reconnect/
@@ -22,6 +48,8 @@ Status: In Progress (2026-07-13).
 Execution authority:
 [goal-paseo-inspired-runtime-hardening.md](goal-paseo-inspired-runtime-hardening.md)
 and [Decision 021](decisions/021-reusable-pairing-until-manual-rotation.md).
+LAN hardening detail:
+[topics/lan-network-awareness-and-recovery.md](topics/lan-network-awareness-and-recovery.md).
 
 ## Phase 4G: Realtime Authority, Recovery, and Bounded Cache — In Progress (review correction)
 

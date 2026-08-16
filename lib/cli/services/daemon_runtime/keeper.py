@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import subprocess
-import sys
 import time
 
 from agents.config_identity import project_config_identity_payload
@@ -20,6 +19,7 @@ from ccbd.services.ownership import OwnershipGuard
 from ccbd.services.runtime_identity import reconcile_runtime_project_identity
 from ccbd.system import utc_now
 from runtime_env.control_plane import control_plane_env
+from process_background import background_process_kwargs, background_spawn
 
 from cli.kill_runtime.processes import is_pid_alive
 
@@ -280,7 +280,8 @@ def _keeper_state_is_running_for_context(
 def spawn_keeper_process(context) -> None:
     lib_root = _lib_root()
     script = lib_root / 'ccbd' / 'keeper_main.py'
-    env = control_plane_env(extra={'PYTHONUNBUFFERED': '1'})
+    interpreter, venv_env = background_spawn()
+    env = control_plane_env(extra={'PYTHONUNBUFFERED': '1', **venv_env})
     current_pythonpath = env.get('PYTHONPATH')
     env['PYTHONPATH'] = (
         str(lib_root)
@@ -292,12 +293,12 @@ def spawn_keeper_process(context) -> None:
     stdout_log = open(context.paths.ccbd_dir / 'keeper.stdout.log', 'ab')
     stderr_log = open(context.paths.ccbd_dir / 'keeper.stderr.log', 'ab')
     subprocess.Popen(
-        [sys.executable, str(script), '--project', str(context.project.project_root)],
+        [interpreter, str(script), '--project', str(context.project.project_root)],
         cwd=str(context.project.project_root),
         env=env,
         stdout=stdout_log,
         stderr=stderr_log,
-        start_new_session=True,
+        **background_process_kwargs(),
     )
 
 

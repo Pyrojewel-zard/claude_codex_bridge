@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import sqlite3
+import stat
 import tempfile
 from pathlib import Path
 
@@ -46,7 +47,9 @@ def materialize_native_login_state(
         for source_relative, target_relative in auth_trees:
             ensure_private_descendant_directory(target_home, target_relative.parent)
             copy_regular_tree(source / source_relative, target_home / target_relative)
-    if _inherits_config(profile):
+    if _inherits_config(profile) and (
+        name != 'omp' or _inherits_auth(profile)
+    ):
         for source_relative, target_relative in config_files:
             ensure_private_descendant_directory(target_home, target_relative.parent)
             copy_regular_file(source / source_relative, target_home / target_relative)
@@ -75,6 +78,12 @@ def materialize_native_login_state(
             data_dir=data_dir,
             profile=profile,
             use_source_xdg_environment=not explicit_source,
+        )
+    elif name == 'omp':
+        _materialize_omp_auth_state(
+            source,
+            target_home=target_home,
+            profile=profile,
         )
     return target_home
 
@@ -371,6 +380,167 @@ def _copy_kiro_database_projection(
             pass
 
 
+def _materialize_omp_auth_state(
+    source_home: Path,
+    *,
+    target_home: Path,
+    profile,
+) -> None:
+    """Project OMP credentials without sharing its mixed global database."""
+    if not _inherits_auth(profile):
+        return
+    relative_agent_dir = Path('.omp') / 'agent'
+    target_agent_dir = ensure_private_descendant_directory(
+        target_home,
+        relative_agent_dir,
+    )
+    _copy_omp_auth_database_projection(
+        source_home / relative_agent_dir / 'agent.db',
+        target_agent_dir / 'agent.db',
+    )
+
+
+def _copy_omp_auth_database_projection(source: Path, target: Path) -> bool:
+    """Snapshot only OMP auth authority from its mixed WAL-backed database."""
+    src = Path(source).expanduser()
+    dst = Path(target).expanduser()
+    if Path(os.path.abspath(src)) == Path(os.path.abspath(dst)):
+        return False
+    ensure_private_directory(dst.parent)
+    destination_alias_detached = _detach_managed_regular_file_alias(dst)
+    if destination_alias_detached and not _remove_managed_sqlite_sidecars(dst):
+        raise RuntimeError(f'failed to detach OMP managed database sidecars: {dst}')
+    if not src.is_file() or src.is_symlink():
+        return False
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f'.{dst.name}.ccb-',
+        dir=str(dst.parent),
+    )
+    os.close(file_descriptor)
+    temporary_path = Path(temporary_name)
+    source_connection: sqlite3.Connection | None = None
+    target_connection: sqlite3.Connection | None = None
+    try:
+        source_connection = sqlite3.connect(
+            f'{src.absolute().as_uri()}?mode=ro',
+            uri=True,
+            timeout=5.0,
+        )
+        source_connection.execute('PRAGMA query_only = ON')
+        target_connection = sqlite3.connect(str(temporary_path))
+        source_connection.execute('BEGIN')
+        allowed_tables = (
+            'auth_credentials',
+            'auth_schema_version',
+            # OMP's outer AgentStorage schema version is safe metadata and lets
+            # the managed copy reopen without replaying unrelated migrations.
+            'schema_version',
+        )
+        if not _copy_sqlite_table(
+            source_connection,
+            target_connection,
+            'auth_credentials',
+        ):
+            raise RuntimeError(f'OMP source database has no auth_credentials table: {src}')
+        with target_connection:
+            for table in allowed_tables[1:]:
+                _copy_sqlite_table(
+                    source_connection,
+                    target_connection,
+                    table,
+                )
+        quick_check = target_connection.execute('PRAGMA quick_check').fetchone()
+        if not quick_check or str(quick_check[0]).lower() != 'ok':
+            raise RuntimeError(f'OMP auth database projection failed integrity check: {src}')
+        target_connection.close()
+        target_connection = None
+        source_connection.close()
+        source_connection = None
+        if not _remove_managed_sqlite_sidecars(dst):
+            raise RuntimeError(f'failed to replace OMP managed database sidecars: {dst}')
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, dst)
+        return True
+    except (OSError, sqlite3.Error) as exc:
+        raise RuntimeError(f'failed to snapshot OMP auth database: {src}') from exc
+    finally:
+        if target_connection is not None:
+            target_connection.close()
+        if source_connection is not None:
+            source_connection.close()
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _detach_managed_regular_file_alias(path: Path) -> bool:
+    """Detach a managed SQLite file symlink or hard link without touching its source."""
+    target = Path(path).expanduser()
+    try:
+        if target.is_symlink():
+            target.unlink()
+            return True
+        metadata = target.stat(follow_symlinks=False)
+        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink > 1:
+            target.unlink()
+            return True
+    except FileNotFoundError:
+        return False
+    return False
+
+
+def _copy_sqlite_table(
+    source_connection: sqlite3.Connection,
+    target_connection: sqlite3.Connection,
+    table: str,
+) -> bool:
+    """Copy one allowlisted SQLite table and its rows into a fresh database."""
+    schema_row = source_connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    if not schema_row or not str(schema_row[0] or '').strip():
+        return False
+    target_connection.execute(str(schema_row[0]))
+    quoted_table = '"' + table.replace('"', '""') + '"'
+    columns = [
+        str(row[1])
+        for row in source_connection.execute(f'PRAGMA table_xinfo({quoted_table})')
+        if row and len(row) >= 7 and int(row[6] or 0) == 0
+    ]
+    if not columns:
+        return True
+    quoted_columns = [
+        '"' + column.replace('"', '""') + '"'
+        for column in columns
+    ]
+    column_clause = ', '.join(quoted_columns)
+    placeholders = ', '.join('?' for _ in columns)
+    rows = source_connection.execute(
+        f'SELECT {column_clause} FROM {quoted_table}'
+    ).fetchall()
+    if rows:
+        target_connection.executemany(
+            f'INSERT INTO {quoted_table} ({column_clause}) VALUES ({placeholders})',
+            rows,
+        )
+    return True
+
+
+def _remove_managed_sqlite_sidecars(database: Path) -> bool:
+    """Remove stale managed WAL/SHM files without following filesystem aliases."""
+    for suffix in ('-wal', '-shm'):
+        sidecar = Path(f'{database}{suffix}')
+        try:
+            if sidecar.is_dir() and not sidecar.is_symlink():
+                return False
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            return False
+    return True
+
+
 def _source_xdg_root(
     source_home: Path,
     *,
@@ -457,7 +627,14 @@ def _projection_paths(
             ),
             tuple(
                 (Path('.omp') / 'agent' / name, Path('.omp') / 'agent' / name)
-                for name in ('models.json', 'settings.json')
+                for name in (
+                    'config.yml',
+                    'config.yaml',
+                    'models.yml',
+                    'models.yaml',
+                    'models.json',
+                    'settings.json',
+                )
             ),
             (),
         )

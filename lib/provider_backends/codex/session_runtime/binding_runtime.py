@@ -56,8 +56,15 @@ def update_codex_log_binding(
         before = dict(persisted if persisted is not None else session.data)
         change = binding_change_for_data(before, log_path=log_path, session_id=session_id)
         if change is None:
-            _replace_session_data(session, before)
-            return False
+            updated = dict(before)
+            remember_bound_session_authority(updated)
+            if updated == before:
+                _replace_session_data(session, before)
+                return False
+            updated["updated_at"] = now_str()
+            _write_session_data(session, updated)
+            _replace_session_data(session, updated)
+            return True
 
         updated = dict(before)
         record_binding_change(updated, change)

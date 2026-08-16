@@ -3,16 +3,26 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 import ccbd.daemon_process as daemon_process
+import process_background
 from ccbd.daemon_process import _ccbd_env, _prepend_tool_paths, _ready_payload_matches_expected
 from ccbd.startup_fence import (
     EXPECTED_GENERATION_ENV,
     EXPECTED_STARTUP_ID_ENV,
     KEEPER_STARTUP_ACCEPTED_PERF_COUNTER_NS_ENV,
 )
+
+
+def _mock_process_background_os(monkeypatch, *, name: str) -> None:
+    """Change the module-under-test platform without mutating global ``os``."""
+    os_proxy = SimpleNamespace(**vars(process_background.os))
+    os_proxy.name = name
+    monkeypatch.setattr(process_background, 'os', os_proxy)
 
 
 def test_ccbd_env_prefers_current_worktree_tools(monkeypatch) -> None:
@@ -69,8 +79,7 @@ def test_ccbd_env_rejects_partial_startup_fence() -> None:
         raise AssertionError('partial startup fence should fail')
 
 
-def test_ready_payload_requires_serving_child_identity() -> None:
-    process = type('Process', (), {'pid': 4321})()
+def test_ready_payload_identity_does_not_require_serving_pid_equals_popen_pid() -> None:
     payload = {
         'generation': 7,
         'mount_state': 'mounted',
@@ -85,21 +94,36 @@ def test_ready_payload_requires_serving_child_identity() -> None:
         },
     }
 
+    # On Windows the venvlauncher redirector makes Popen.pid differ from the
+    # daemon's own pid; the fence must accept any positive serving pid as long
+    # as startup_id/generation identity matches.
     assert _ready_payload_matches_expected(
         payload,
-        process=process,
+        expected_startup_id='a' * 32,
+        expected_generation=7,
+    )
+    assert _ready_payload_matches_expected(
+        {**payload, 'serving_pid': 9999},
         expected_startup_id='a' * 32,
         expected_generation=7,
     )
     assert not _ready_payload_matches_expected(
-        {**payload, 'serving_pid': 9999},
-        process=process,
+        {**payload, 'serving_pid': 0},
+        expected_startup_id='a' * 32,
+        expected_generation=7,
+    )
+    assert not _ready_payload_matches_expected(
+        {**payload, 'serving_daemon_instance_id': ''},
+        expected_startup_id='a' * 32,
+        expected_generation=7,
+    )
+    assert not _ready_payload_matches_expected(
+        {**payload, 'serving_lease_generation': 8},
         expected_startup_id='a' * 32,
         expected_generation=7,
     )
     assert not _ready_payload_matches_expected(
         {**payload, 'accepted_startup_id': 'b' * 32},
-        process=process,
         expected_startup_id='a' * 32,
         expected_generation=7,
     )
@@ -113,7 +137,6 @@ def test_ready_payload_requires_serving_child_identity() -> None:
                 'startup_stage': 'spawn_requested',
             },
         },
-        process=process,
         expected_startup_id='a' * 32,
         expected_generation=7,
     )
@@ -127,6 +150,63 @@ def test_prepend_tool_paths_deduplicates_existing_entries(tmp_path: Path) -> Non
     _prepend_tool_paths(env, root)
 
     assert env['PATH'].split(os.pathsep) == [str(root / 'bin'), str(root), '/usr/bin']
+
+
+def test_background_process_kwargs_detaches_windows_console(monkeypatch) -> None:
+    _mock_process_background_os(monkeypatch, name='nt')
+    monkeypatch.setattr(process_background.subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200, raising=False)
+    monkeypatch.setattr(process_background.subprocess, 'DETACHED_PROCESS', 0x00000008, raising=False)
+    monkeypatch.setattr(process_background.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
+
+    kwargs = process_background.background_process_kwargs()
+
+    assert kwargs['start_new_session'] is True
+    assert kwargs['creationflags'] & 0x00000200
+    assert kwargs['creationflags'] & 0x00000008
+    assert kwargs['creationflags'] & 0x08000000
+
+
+def test_background_spawn_off_windows_returns_sys_executable(monkeypatch) -> None:
+    _mock_process_background_os(monkeypatch, name='posix')
+
+    interpreter, extra = process_background.background_spawn()
+
+    assert interpreter == sys.executable
+    assert extra == {}
+
+
+def test_background_spawn_resolves_venv_base_interpreter_and_site_packages(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _mock_process_background_os(monkeypatch, name='nt')
+    venv = tmp_path / 'venv'
+    (venv / 'Scripts').mkdir(parents=True)
+    site_packages = venv / 'Lib' / 'site-packages'
+    site_packages.mkdir(parents=True)
+    base_exe = tmp_path / 'base' / 'python.exe'
+    base_exe.parent.mkdir(parents=True)
+    base_exe.write_bytes(b'')
+    (venv / 'pyvenv.cfg').write_text(
+        f'home = {base_exe.parent}\nversion = 3.14\n', encoding='utf-8'
+    )
+    monkeypatch.setattr(
+        process_background.sys, 'executable', str(venv / 'Scripts' / 'python.exe')
+    )
+
+    interpreter, extra = process_background.background_spawn()
+
+    assert interpreter == str(base_exe)
+    assert extra['PYTHONPATH'] == str(site_packages)
+    assert extra['VIRTUAL_ENV'] == str(venv)
+
+
+def test_venv_base_interpreter_none_without_pyvenv_cfg(tmp_path: Path, monkeypatch) -> None:
+    _mock_process_background_os(monkeypatch, name='nt')
+    fake_exe = tmp_path / 'Scripts' / 'python.exe'
+    fake_exe.parent.mkdir(parents=True)
+    monkeypatch.setattr(process_background.sys, 'executable', str(fake_exe))
+
+    assert process_background.venv_base_interpreter() is None
 
 
 def test_spawn_failure_reclaims_only_spawned_child_and_closes_parent_logs(
@@ -190,7 +270,8 @@ def test_spawned_process_cleanup_escalates_and_reaps(monkeypatch) -> None:
             raise AssertionError('process-group kill should be used')
 
     signals: list[tuple[int, int]] = []
-    monkeypatch.setattr(daemon_process.os, 'killpg', lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(daemon_process.os, 'killpg', lambda pid, sig: signals.append((pid, sig)), raising=False)
+    monkeypatch.setattr(daemon_process.signal, 'SIGKILL', 9, raising=False)
     process = FakeProcess()
 
     daemon_process._terminate_spawned_process(process, timeout_s=0.01)

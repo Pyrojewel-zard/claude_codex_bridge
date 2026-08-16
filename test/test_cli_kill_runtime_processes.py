@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,10 +27,16 @@ def _anchor_runtime_state_for_tests(monkeypatch) -> None:
     monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
+def _patch_process_os_name(monkeypatch, name: str) -> None:
+    os_proxy = SimpleNamespace(**vars(processes.os))
+    os_proxy.name = name
+    monkeypatch.setattr(processes, 'os', os_proxy)
+
+
 def test_kill_pid_tree_once_uses_taskkill_on_windows(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(processes.os, 'name', 'nt')
+    _patch_process_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(
         processes.subprocess,
         'run',
@@ -44,10 +51,10 @@ def test_kill_pid_tree_once_prefers_process_group_on_posix(monkeypatch) -> None:
     killed: list[tuple[int, signal.Signals]] = []
     kill_pid_calls: list[tuple[int, bool]] = []
 
-    monkeypatch.setattr(processes.os, 'name', 'posix')
+    _patch_process_os_name(monkeypatch, 'posix')
     monkeypatch.setattr(processes, '_safe_getpgid', lambda pid: 900)
     monkeypatch.setattr(processes, '_safe_getpgrp', lambda: 901)
-    monkeypatch.setattr(processes.os, 'killpg', lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(processes.os, 'killpg', lambda pgid, sig: killed.append((pgid, sig)), raising=False)
     monkeypatch.setattr(processes, 'kill_pid', lambda pid, force=False: kill_pid_calls.append((pid, force)) or True)
 
     assert processes._kill_pid_tree_once(123, force=False) is True
@@ -154,6 +161,7 @@ def test_collect_project_process_candidates_finds_legacy_accelerator_by_exact_cw
             start_token='proc:100',
         ),
     )
+    monkeypatch.setattr('runtime_accelerator.ownership.is_pid_alive', lambda pid: pid == 707)
 
     candidates = collect_project_process_candidates(
         project_root,

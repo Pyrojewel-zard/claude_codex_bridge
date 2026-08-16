@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 
 from agents.models import AgentState, RuntimeBindingSource, normalize_runtime_binding_source
+from ccbd.api_models import JobStatus, TargetKind
 from ccbd.models import CcbdShutdownReport, CcbdStartupReport, MountState, cleanup_summaries_from_objects
+from ccbd.system import process_exists
 from ccbd.reload_drain_auto_retry import tick_reload_drain_auto_retry
 from ccbd.services.dispatcher_runtime.frontdesk_direct_handoff import recover_frontdesk_direct_handoffs
 from ccbd.services.dispatcher_runtime.detailer_replan_handoff import recover_detailer_replan_handoffs
@@ -13,6 +16,8 @@ from ccbd.services.lifecycle import build_lifecycle, current_socket_inode
 from ccbd.startup_fence import StartupFenceError, validate_expected_startup_lifecycle
 from ccbd.startup_policy import CONTROL_PLANE_RPC_TIMEOUT_S
 from ccbd.stop_flow import build_shutdown_runtime_snapshots
+from mailbox_kernel import MailboxKernelService
+from mailbox_runtime.targets import normalize_mailbox_owner_name
 from runtime_accelerator.lifecycle import maybe_start_runtime_accelerator, stop_runtime_accelerator
 from runtime_observability import record_startup_operation, startup_operation_counts
 from storage.path_helpers import socket_placement_payload
@@ -47,6 +52,19 @@ def start(app):
                 )
             else:
                 lifecycle = app.lifecycle_store.load()
+                if lifecycle is not None:
+                    owner_pid = int(getattr(lifecycle, 'owner_pid', 0) or 0)
+                    if (
+                        str(getattr(lifecycle, 'phase', '')) == 'mounted'
+                        and owner_pid > 0
+                        and not process_exists(owner_pid)
+                    ):
+                        # The previous ccbd crashed and left the lifecycle
+                        # phase at "mounted".  Reset to "starting" so the
+                        # expected-fence validation can proceed.
+                        # CcbdLifecycle is a frozen dataclass; use replace()
+                        # to create a new instance with the corrected phase.
+                        lifecycle = replace(lifecycle, phase='starting')
                 validate_expected_startup_lifecycle(
                     expected_fence,
                     lifecycle,
@@ -666,6 +684,7 @@ def _current_lifecycle(app):
         keeper_pid=app.keeper_pid,
         config_signature=str(app.config_identity.get('config_signature') or '').strip() or None,
         socket_path=str(app.paths.ccbd_socket_path),
+        control_plane_endpoint=_current_control_plane_endpoint(app),
     )
 
 
@@ -721,6 +740,7 @@ def _save_lifecycle_mounted(
             config_signature=str(app.config_identity.get('config_signature') or '').strip() or lifecycle.config_signature,
             socket_path=str(app.paths.ccbd_socket_path),
             socket_inode=current_socket_inode(app.paths.ccbd_socket_path),
+            control_plane_endpoint=_current_control_plane_endpoint(app),
             namespace_epoch=getattr(namespace_state, 'namespace_epoch', None),
             startup_stage=startup_stage,
             last_progress_at=app.clock(),
@@ -751,6 +771,7 @@ def _save_lifecycle_runtime_bootstrap(
             or lifecycle.config_signature,
             socket_path=str(app.paths.ccbd_socket_path),
             socket_inode=current_socket_inode(app.paths.ccbd_socket_path),
+            control_plane_endpoint=_current_control_plane_endpoint(app),
             namespace_epoch=getattr(namespace_state, 'namespace_epoch', None),
             startup_stage='runtime_bootstrap',
             last_progress_at=app.clock(),
@@ -775,6 +796,7 @@ def _save_starting_owner_claim(app, lifecycle, *, generation: int) -> None:
             or lifecycle.config_signature,
             socket_path=str(app.paths.ccbd_socket_path),
             socket_inode=current_socket_inode(app.paths.ccbd_socket_path),
+            control_plane_endpoint=_current_control_plane_endpoint(app),
             startup_id=(expected_fence.startup_id if expected_fence is not None else None),
             startup_stage='socket_listening',
             last_progress_at=app.clock(),
@@ -895,6 +917,7 @@ def _publish_mounted_after_bootstrap_probe(app) -> None:
             config_signature=str(app.config_identity['config_signature']),
             keeper_pid=app.keeper_pid,
             daemon_instance_id=app.daemon_instance_id,
+            control_plane_endpoint=_current_control_plane_endpoint(app),
         )
         _save_lifecycle_runtime_bootstrap(
             app,
@@ -903,6 +926,19 @@ def _publish_mounted_after_bootstrap_probe(app) -> None:
             generation=generation,
         )
         app.lease = new_lease
+
+
+def _current_control_plane_endpoint(app) -> dict | None:
+    server = getattr(app, 'socket_server', None)
+    if server is None:
+        return None
+    endpoint = getattr(server, 'control_plane_endpoint', None)
+    if callable(endpoint):
+        try:
+            return endpoint()
+        except Exception:
+            return None
+    return dict(endpoint) if isinstance(endpoint, dict) else None
 
 
 def _validate_bootstrap_readiness_payload(app, payload) -> None:
@@ -1318,6 +1354,7 @@ def _heartbeat_failures(app) -> tuple[str, ...]:
         ('dispatcher_poll_completions', app.dispatcher.poll_completions),
         ('reload_drain_auto_retry', lambda: tick_reload_drain_auto_retry(app)),
         ('job_heartbeat', lambda: app.job_heartbeat.tick(app.dispatcher)),
+        ('lease_expiry_sweep', lambda: _sweep_expired_delivery_leases(app)),
     ):
         if _lifecycle_stopping(app):
             break
@@ -1341,6 +1378,42 @@ def _heartbeat_failures(app) -> tuple[str, ...]:
         metrics.last_heartbeat_agents_inspected = agents_inspected
         metrics.last_heartbeat_runtime_store_writes = runtime_store_writes
     return tuple(failures)
+
+
+def _sweep_expired_delivery_leases(app) -> None:
+    ttl = getattr(app, 'mailbox_lease_ttl_s', None)
+    try:
+        ttl = float(ttl) if ttl is not None else None
+    except (TypeError, ValueError):
+        return
+    if ttl is None or ttl <= 0:
+        return
+    kernel = MailboxKernelService(app.paths, clock=app.clock, lease_ttl_seconds=ttl)
+    candidates = kernel.expired_delivery_leases()
+    if not candidates:
+        return
+    busy = _agents_with_running_jobs(app)
+    for lease in candidates:
+        if lease.agent_name in busy:
+            continue
+        kernel.expire_lease(lease.agent_name)
+
+
+def _agents_with_running_jobs(app) -> set[str]:
+    names: set[str] = set()
+    dispatcher = getattr(app, 'dispatcher', None)
+    state = getattr(dispatcher, '_state', None)
+    if state is None:
+        return names
+    for _target_kind, _target_name, job_id in state.active_items():
+        job = dispatcher.get(job_id)
+        if job is None or job.status is not JobStatus.RUNNING or job.target_kind is not TargetKind.AGENT:
+            continue
+        try:
+            names.add(normalize_mailbox_owner_name(job.target_name))
+        except Exception:
+            continue
+    return names
 
 
 def _runtime_store_save_count(app) -> int | None:

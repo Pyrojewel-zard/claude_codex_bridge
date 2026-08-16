@@ -981,317 +981,6 @@
       flex-wrap: wrap;
     }
 
-    .comm-flow {
-      display: grid;
-      grid-template-columns: minmax(400px, 500px) minmax(280px, 1fr);
-      gap: 10px;
-      padding: 10px 12px 12px;
-      align-items: start;
-      justify-content: center;
-    }
-
-    .flow-controls {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .flow-map {
-      position: relative;
-      width: min(100%, 500px, 58dvh);
-      aspect-ratio: 1 / 1;
-      min-height: 0;
-      justify-self: center;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--control);
-      overflow: hidden;
-    }
-
-    .flow-map::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background-image:
-        linear-gradient(to right, rgba(215, 224, 229, 0.42) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(215, 224, 229, 0.42) 1px, transparent 1px);
-      background-size: 36px 36px;
-      pointer-events: none;
-    }
-
-    .flow-lines {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      color: var(--blue);
-    }
-
-    .flow-line {
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 2.2;
-      stroke-linecap: round;
-      stroke-dasharray: 7 8;
-      opacity: 0.82;
-      animation: flow-dash 1.4s linear infinite;
-    }
-
-    .flow-line.chain {
-      color: var(--amber);
-      animation-duration: 2s;
-    }
-
-    .flow-line.reply {
-      color: var(--green);
-      animation-duration: 1.7s;
-    }
-
-    .flow-line.blocked {
-      color: var(--red);
-      animation: none;
-      stroke-dasharray: 3 7;
-      opacity: 0.7;
-    }
-
-    .flow-paused .flow-line {
-      animation-play-state: paused;
-    }
-
-    @keyframes flow-dash {
-      to {
-        stroke-dashoffset: -30;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .flow-line {
-        animation: none;
-      }
-    }
-
-    .agent-node {
-      position: absolute;
-      z-index: 1;
-      display: grid;
-      place-items: center;
-      align-content: center;
-      gap: 2px;
-      width: 54px;
-      height: 54px;
-      border: 1px solid var(--line);
-      border-radius: 50%;
-      padding: 3px;
-      background: var(--control);
-      color: var(--text);
-      text-align: center;
-      box-shadow: 0 8px 18px rgba(18, 32, 43, 0.1);
-    }
-
-    .agent-node strong {
-      max-width: 42px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 11px;
-    }
-
-    .agent-node small {
-      max-width: 42px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--muted);
-      font-size: 9px;
-    }
-
-    .agent-node .badge {
-      min-height: 16px;
-      max-width: 42px;
-      overflow: hidden;
-      padding: 0 3px;
-      font-size: 8px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .agent-node.active {
-      border-color: rgba(37, 99, 235, 0.72);
-      box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.18), 0 8px 18px rgba(18, 32, 43, 0.1);
-    }
-
-    .node-self {
-      left: calc(50% - 27px);
-      top: 6%;
-    }
-
-    .node-odesign {
-      right: 6%;
-      top: calc(50% - 27px);
-    }
-
-    .node-worker {
-      left: calc(50% - 27px);
-      bottom: 6%;
-    }
-
-    .node-reviewer {
-      left: 6%;
-      top: calc(50% - 27px);
-    }
-
-    .node-archi {
-      left: 19%;
-      top: 17%;
-    }
-
-    .node-planner {
-      right: 19%;
-      top: 17%;
-    }
-
-    .node-worker2 {
-      right: 19%;
-      bottom: 17%;
-    }
-
-    .node-reviewer2 {
-      left: 19%;
-      bottom: 17%;
-    }
-
-    .flow-center {
-      position: absolute;
-      left: calc(50% - 48px);
-      top: calc(50% - 24px);
-      z-index: 1;
-      width: 96px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 5px 8px;
-      background: rgba(255, 255, 255, 0.94);
-      color: var(--muted);
-      text-align: center;
-      font-size: 11px;
-    }
-
-    .flow-center strong {
-      display: block;
-      color: var(--text);
-      font-size: 12px;
-    }
-
-    .flow-legend {
-      position: absolute;
-      left: 10px;
-      right: 10px;
-      bottom: 8px;
-      z-index: 1;
-      display: flex;
-      justify-content: center;
-      gap: 5px;
-      flex-wrap: wrap;
-      pointer-events: none;
-    }
-
-    .legend-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 1px 6px;
-      background: rgba(255, 255, 255, 0.94);
-      color: var(--muted);
-      font-size: 10px;
-    }
-
-    .legend-pill::before {
-      content: "";
-      width: 14px;
-      height: 2px;
-      border-radius: 999px;
-      background: var(--blue);
-    }
-
-    .legend-pill.reply::before {
-      background: var(--green);
-    }
-
-    .legend-pill.chain::before {
-      background: var(--amber);
-    }
-
-    .flow-label {
-      position: absolute;
-      z-index: 1;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 1px 6px;
-      background: rgba(255, 255, 255, 0.92);
-      color: var(--muted);
-      font-size: 10px;
-      white-space: nowrap;
-    }
-
-    .flow-label.ask {
-      right: 18%;
-      top: 28%;
-    }
-
-    .flow-label.chain {
-      right: 22%;
-      bottom: 22%;
-    }
-
-    .flow-label.reply {
-      left: 22%;
-      bottom: 22%;
-    }
-
-    .flow-label.blocked {
-      left: 19%;
-      top: 31%;
-    }
-
-    .flow-events {
-      display: grid;
-      gap: 6px;
-      align-content: start;
-      max-height: min(500px, 58dvh);
-      overflow: auto;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 8px;
-      background: var(--control);
-    }
-
-    .event-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
-      align-items: center;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 6px 7px;
-      background: var(--soft);
-      color: var(--text);
-      text-align: left;
-    }
-
-    .event-route {
-      display: block;
-      margin-bottom: 2px;
-      font-weight: 800;
-      font-size: 12px;
-    }
-
-    .event-meta {
-      color: var(--muted);
-      font-size: 11px;
-    }
-
     pre {
       margin: 0;
       overflow: auto;
@@ -1449,8 +1138,7 @@
       .workflow-grid,
       .bottom-inner,
       .session-stats,
-      .session-controls,
-      .comm-flow {
+      .session-controls {
         grid-template-columns: 1fr;
       }
 
@@ -1472,75 +1160,6 @@
         grid-template-columns: 1fr;
       }
 
-      .flow-map {
-        width: min(100%, 500px, 58dvh);
-      }
-
-      .agent-node {
-        width: 50px;
-        height: 50px;
-      }
-
-      .node-self {
-        left: calc(50% - 25px);
-        top: 5%;
-      }
-
-      .node-odesign {
-        right: 4%;
-        top: calc(50% - 25px);
-      }
-
-      .node-worker {
-        left: calc(50% - 25px);
-        bottom: 5%;
-      }
-
-      .node-reviewer {
-        left: 4%;
-        top: calc(50% - 25px);
-      }
-
-      .node-archi {
-        left: 15%;
-        top: 16%;
-      }
-
-      .node-planner {
-        right: 15%;
-        top: 16%;
-      }
-
-      .node-worker2 {
-        right: 15%;
-        bottom: 16%;
-      }
-
-      .node-reviewer2 {
-        left: 15%;
-        bottom: 16%;
-      }
-
-      .flow-label.ask {
-        right: 28%;
-        top: 28%;
-      }
-
-      .flow-label.chain {
-        right: 28%;
-        top: auto;
-        bottom: 22%;
-      }
-
-      .flow-label.reply {
-        left: 24%;
-        bottom: 22%;
-      }
-
-      .flow-label.blocked {
-        left: 31%;
-        top: 31%;
-      }
     }
   </style>
 </head>
@@ -1761,140 +1380,6 @@ model = "gpt-5.5"</pre>
       </section>
       </div>
 
-      <div id="observe-section" class="page-section">
-        <div class="section-label"><span data-i18n="observeSection">Observe</span><em data-i18n="observeSectionNote">read-only runtime explanation</em></div>
-      <section id="agent-communication-flow" class="panel panel-secondary" aria-label="Agent communication flow" data-i18n-aria-label="commFlowTitle">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title" data-i18n="commFlowTitle">Agent communication flow</h2>
-            <div class="panel-subtitle" data-i18n="commFlowSubtitle">Read-only trace view for ask, chain, reply, and review events. It does not write mailbox or lifecycle state.</div>
-          </div>
-          <span class="badge info" data-i18n="observerOnly">observer only</span>
-        </div>
-        <div class="toolbar">
-          <span class="toolbar-group">
-            <button class="btn" id="pauseFlow" data-i18n="pauseAnimation">Pause animation</button>
-            <span class="field-inline">
-              <label data-i18n="timeWindow">Window</label>
-              <select class="select-inline">
-                <option data-i18n="fifteenMinutes">15 min</option>
-                <option data-i18n="oneHour">1 hour</option>
-                <option data-i18n="twentyFourHours">24 hours</option>
-              </select>
-            </span>
-            <span class="field-inline">
-              <label data-i18n="agentFilter">Agent</label>
-              <select class="select-inline">
-                <option data-i18n="allAgents">all agents</option>
-                <option>ccb_self</option>
-                <option>odesign</option>
-                <option>worker1</option>
-                <option>reviewer3</option>
-              </select>
-            </span>
-          </span>
-          <span class="spacer"></span>
-          <button class="btn" data-drawer="messageTrace" data-i18n="traceDetails">Trace details</button>
-        </div>
-        <div class="comm-flow" id="commFlowPanel">
-          <div class="flow-map" aria-label="Animated agent message flow" data-i18n-aria-label="animatedMessageFlow">
-            <svg class="flow-lines" viewBox="0 0 640 640" preserveAspectRatio="none" aria-hidden="true">
-              <defs>
-                <marker id="arrow-request" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#2563eb"></path>
-                </marker>
-                <marker id="arrow-chain" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#a15c00"></path>
-                </marker>
-                <marker id="arrow-reply" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#147a43"></path>
-                </marker>
-                <marker id="arrow-blocked" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#b83232"></path>
-                </marker>
-              </defs>
-              <path class="flow-line" marker-end="url(#arrow-request)" d="M 320 70 C 455 94 540 180 570 320"></path>
-              <path class="flow-line chain" marker-end="url(#arrow-chain)" d="M 570 320 C 530 470 450 548 320 570"></path>
-              <path class="flow-line reply" marker-end="url(#arrow-reply)" d="M 320 570 C 150 540 72 438 70 320 C 72 196 152 98 320 70"></path>
-              <path class="flow-line blocked" marker-end="url(#arrow-blocked)" d="M 70 320 C 185 226 450 226 570 320"></path>
-            </svg>
-            <div class="flow-center"><strong data-i18n="activeTrace">active trace</strong><span data-i18n="openedAgents">opened agents</span></div>
-            <button class="agent-node node-self active" data-drawer="messageTrace">
-              <strong>ccb_self</strong>
-              <small data-i18n="frontdeskRunning">frontdesk · running</small>
-              <span class="badge ok" data-i18n="delivered">delivered</span>
-            </button>
-            <button class="agent-node node-planner" data-drawer="messageTrace">
-              <strong>planner</strong>
-              <small data-i18n="idle">idle</small>
-              <span class="badge" data-i18n="idle">idle</span>
-            </button>
-            <button class="agent-node node-odesign" data-drawer="messageTrace">
-              <strong>odesign</strong>
-              <small data-i18n="designChainWaiting">design · chain waiting</small>
-              <span class="badge warn" data-i18n="waiting">waiting</span>
-            </button>
-            <button class="agent-node node-worker2" data-drawer="messageTrace">
-              <strong>worker2</strong>
-              <small data-i18n="queued">queued</small>
-              <span class="badge info" data-i18n="queued">queued</span>
-            </button>
-            <button class="agent-node node-worker" data-drawer="messageTrace">
-              <strong>worker1</strong>
-              <small data-i18n="coderReviewRequested">coder · review requested</small>
-              <span class="badge info" data-i18n="running">running</span>
-            </button>
-            <button class="agent-node node-reviewer2" data-drawer="messageTrace">
-              <strong>reviewer1</strong>
-              <small data-i18n="ready">ready</small>
-              <span class="badge ok" data-i18n="ready">ready</span>
-            </button>
-            <button class="agent-node node-reviewer" data-drawer="messageTrace">
-              <strong>reviewer3</strong>
-              <small data-i18n="reviewerStaleReply">reviewer · stale reply</small>
-              <span class="badge danger" data-i18n="stale">stale</span>
-            </button>
-            <button class="agent-node node-archi" data-drawer="messageTrace">
-              <strong>archi</strong>
-              <small data-i18n="observer">observer</small>
-              <span class="badge" data-i18n="idle">idle</span>
-            </button>
-            <span class="flow-label ask">ask · job_8b204</span>
-            <span class="flow-label chain" data-i18n="chainWait">chain wait</span>
-            <span class="flow-label reply" data-i18n="replyCompleted">reply completed</span>
-            <span class="flow-label blocked" data-i18n="staleReply">stale reply</span>
-            <div class="flow-legend" aria-hidden="true">
-              <span class="legend-pill request" data-i18n="request">request</span>
-              <span class="legend-pill chain">chain</span>
-              <span class="legend-pill reply">reply</span>
-            </div>
-          </div>
-          <div class="flow-events">
-            <div>
-              <h3 class="panel-title" data-i18n="latestEvents">Latest events</h3>
-              <div class="panel-subtitle" data-i18n="eventSummary">Sanitized summaries only. Full artifacts open by path when allowed.</div>
-            </div>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">ccb_self -> odesign</span><span class="event-meta">ask · job_8b204be32628 · 14:52:11</span></span>
-              <span class="badge ok" data-i18n="delivered">delivered</span>
-            </button>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">odesign -> worker1</span><span class="event-meta">chain · parent job_8b204 · waiting</span></span>
-              <span class="badge warn" data-i18n="chainWaiting">chain waiting</span>
-            </button>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">worker1 -> reviewer3</span><span class="event-meta">review · artifact summary ready</span></span>
-              <span class="badge info" data-i18n="running">running</span>
-            </button>
-            <button class="event-row" data-drawer="messageTrace">
-              <span><span class="event-route">reviewer3 -> odesign</span><span class="event-meta">reply · digest mismatch</span></span>
-              <span class="badge danger" data-i18n="stale">stale</span>
-            </button>
-          </div>
-        </div>
-      </section>
-      </div>
-
       <div id="agent-session-storage" class="page-section">
         <div class="section-label"><span data-i18n="maintainSection">Maintain</span><em data-i18n="maintainSectionNote">local session storage cleanup</em></div>
       <section class="panel panel-maintenance">
@@ -1907,38 +1392,33 @@ model = "gpt-5.5"</pre>
         </div>
         <div class="session-bar">
           <div class="session-stats">
-            <div class="session-stat"><span class="label" data-i18n="totalAgentStorage">Total .ccb agent storage</span><strong>2.8 GB</strong><span class="panel-subtitle" data-i18n="sessionsLogsArtifacts">sessions, logs, artifacts</span></div>
-            <div class="session-stat"><span class="label" data-i18n="historicalSessions">Historical sessions</span><strong>1.9 GB</strong><span class="panel-subtitle" data-i18n="safeCleanupCandidates">safe cleanup candidates</span></div>
-            <div class="session-stat"><span class="label" data-i18n="mountedAgents">Mounted agents</span><strong data-i18n="fourProtected">4 protected</strong><span class="panel-subtitle" data-i18n="currentSessionExcluded">current session excluded</span></div>
-            <div class="session-stat"><span class="label" data-i18n="staleAgents">Stale agents</span><strong data-i18n="threeRemovable">3 removable</strong><span class="panel-subtitle" data-i18n="notCurrentGraph">not in current graph</span></div>
+            <div class="session-stat"><span class="label" data-i18n="totalAgentStorage">Total .ccb agent storage</span><strong id="historyTotalStorage">—</strong><span class="panel-subtitle" data-i18n="sessionsLogsArtifacts">sessions, logs, artifacts</span></div>
+            <div class="session-stat"><span class="label" data-i18n="historicalSessions">Historical sessions</span><strong id="historyStorage">—</strong><span class="panel-subtitle" data-i18n="recognizedTranscripts">recognized provider transcripts</span></div>
+            <div class="session-stat"><span class="label" data-i18n="protectedHistory">Protected history</span><strong id="historyProtectedAgents">—</strong><span class="panel-subtitle" data-i18n="currentAndLatestProtected">current and latest sessions are always retained</span></div>
+            <div class="session-stat"><span class="label" data-i18n="cleanupCandidates">Cleanup candidates</span><strong id="historyCleanupCandidates">—</strong><span class="panel-subtitle" data-i18n="outsideRetentionWindow">outside the retention window</span></div>
           </div>
           <div class="session-controls">
             <label class="field">
               <span class="label" data-i18n="cleanupOlderThan">Cleanup older than</span>
-              <select class="select"><option data-i18n="thirtyDays">30 days</option><option data-i18n="sevenDays">7 days</option><option data-i18n="ninetyDays">90 days</option><option data-i18n="customDate">custom date...</option></select>
+              <select class="select" id="historyRetentionDays"><option value="30" data-i18n="thirtyDays">30 days</option><option value="7" data-i18n="sevenDays">7 days</option><option value="90" data-i18n="ninetyDays">90 days</option></select>
             </label>
             <label class="field">
               <span class="label" data-i18n="agentScope">Agent scope</span>
-              <select class="select"><option data-i18n="allAgents">all agents</option><option data-i18n="mountedOnly">mounted only</option><option data-i18n="staleUnmountedOnly">stale/unmounted only</option><option data-i18n="selectedAgent">selected agent</option></select>
+              <select class="select" id="historyAgentScope"><option value="all" data-i18n="allAgents">all agents</option></select>
             </label>
             <div class="session-actions">
-              <button class="btn" data-i18n="scanStorage">Scan storage</button>
-              <button class="btn danger" data-i18n="deleteOldSessions">Delete old sessions</button>
-              <button class="btn danger" disabled data-i18n="deleteMountedData">Delete mounted agent data</button>
+              <button class="btn" id="historyScanBtn" data-i18n="scanStorage">Scan storage</button>
+              <button class="btn danger" id="historyCleanupBtn" disabled data-i18n="deleteOldSessions">Clean old history</button>
             </div>
+            <div class="summary-line" id="historyCleanupStatus" aria-live="polite" data-i18n="historyScanPending">Run a scan to load actual project history.</div>
           </div>
           <div class="session-table-wrap">
             <table class="table">
-              <thead><tr><th data-i18n="agent">Agent</th><th data-i18n="status">Status</th><th data-i18n="currentSession">Current session</th><th data-i18n="historicalStorage">Historical storage</th><th data-i18n="oldest">Oldest</th><th data-i18n="allowedCleanup">Allowed cleanup</th></tr></thead>
-              <tbody>
-                <tr><td><strong>ccb_self</strong><div class="panel-subtitle">codex</div></td><td><span class="badge ok" data-i18n="mounted">mounted</span></td><td data-i18n="protected">protected</td><td>420 MB</td><td data-i18n="eighteenDays">18 days</td><td><button class="btn subtle" data-i18n="historyOnly">History only</button></td></tr>
-                <tr><td><strong>odesign</strong><div class="panel-subtitle">codex</div></td><td><span class="badge ok" data-i18n="mounted">mounted</span></td><td data-i18n="protected">protected</td><td>310 MB</td><td data-i18n="elevenDays">11 days</td><td><button class="btn subtle" data-i18n="historyOnly">History only</button></td></tr>
-                <tr><td><strong>worker1</strong><div class="panel-subtitle" data-i18n="oldRoleBinding">old role binding</div></td><td><span class="badge warn" data-i18n="stale">stale</span></td><td data-i18n="none">none</td><td>760 MB</td><td data-i18n="sixtyFourDays">64 days</td><td><button class="btn subtle" data-i18n="history">History</button><button class="btn danger" data-i18n="deleteAll">Delete all</button></td></tr>
-                <tr><td><strong>reviewer3</strong><div class="panel-subtitle" data-i18n="notMounted">not mounted</div></td><td><span class="badge danger" data-i18n="archived">archived</span></td><td data-i18n="none">none</td><td>540 MB</td><td data-i18n="ninetyTwoDays">92 days</td><td><button class="btn danger" data-i18n="deleteAll">Delete all</button></td></tr>
-              </tbody>
+              <thead><tr><th data-i18n="agent">Agent</th><th data-i18n="status">Status</th><th data-i18n="protectedRecords">Protected records</th><th data-i18n="historicalStorage">Historical storage</th><th data-i18n="oldest">Oldest</th><th data-i18n="allowedCleanup">Allowed cleanup</th></tr></thead>
+              <tbody id="historyTableBody"><tr><td colspan="6" data-i18n="historyScanPending">Run a scan to load actual project history.</td></tr></tbody>
             </table>
           </div>
-          <div class="summary-line"><strong data-i18n="rule">Rule:</strong> <span data-i18n="cleanupRule">mounted agents can only remove historical sessions and detached evidence. Current provider state, active mailbox, lifecycle, lease, and runtime records stay protected.</span></div>
+          <div class="summary-line"><strong data-i18n="rule">Rule:</strong> <span data-i18n="cleanupRule">Every agent may clean recognized historical transcripts. Records inside the retention window, current bindings, and each provider's latest transcript stay protected.</span></div>
         </div>
       </section>
       </div>
@@ -2026,18 +1506,6 @@ model = "gpt-5.5"</pre>
         stepBackup: "Backup and write .ccb/ccb.config",
         stepDryRun: "Reload dry-run classifies impact",
         stepApply: "Apply hot reload or show blocker",
-        observeSection: "Observe",
-        observeSectionNote: "read-only runtime explanation",
-        commFlowTitle: "Agent communication flow",
-        commFlowSubtitle: "Read-only trace view for ask, chain, reply, and review events. It does not write mailbox or lifecycle state.",
-        observerOnly: "observer only",
-        pauseAnimation: "Pause animation",
-        resumeAnimation: "Resume animation",
-        timeWindow: "Window",
-        agentFilter: "Agent",
-        traceDetails: "Trace details",
-        latestEvents: "Latest events",
-        eventSummary: "Sanitized summaries only. Full artifacts open by path when allowed.",
         maintainSection: "Maintain",
         maintainSectionNote: "local session storage cleanup",
         close: "Close",
@@ -2114,30 +1582,17 @@ model = "gpt-5.5"</pre>
         oneHour: "1 hour",
         twentyFourHours: "24 hours",
         allAgents: "all agents",
-        animatedMessageFlow: "Animated agent message flow",
-        activeTrace: "active trace",
-        openedAgents: "opened agents",
-        frontdeskRunning: "frontdesk · running",
-        delivered: "delivered",
-        idle: "idle",
-        designChainWaiting: "design · chain waiting",
-        queued: "queued",
-        coderReviewRequested: "coder · review requested",
-        running: "running",
-        reviewerStaleReply: "reviewer · stale reply",
-        stale: "stale",
-        observer: "observer",
-        chainWait: "chain wait",
-        replyCompleted: "reply completed",
-        staleReply: "stale reply",
-        request: "request",
-        chainWaiting: "chain waiting",
         agentSessionStorage: "Agent session storage",
-        agentSessionStorageNote: "Scan .ccb/agents history, estimate old session storage, and stage cleanup actions with mounted-agent protection.",
+        agentSessionStorageNote: "Scan recognized provider transcripts and clean history outside a protected retention window.",
         maintenance: "maintenance",
         totalAgentStorage: "Total .ccb agent storage",
         sessionsLogsArtifacts: "sessions, logs, artifacts",
         historicalSessions: "Historical sessions",
+        recognizedTranscripts: "recognized provider transcripts",
+        protectedHistory: "Protected history",
+        currentAndLatestProtected: "current and latest sessions are always retained",
+        cleanupCandidates: "Cleanup candidates",
+        outsideRetentionWindow: "outside the retention window",
         safeCleanupCandidates: "safe cleanup candidates",
         mountedAgents: "Mounted agents",
         fourProtected: "4 protected",
@@ -2155,9 +1610,10 @@ model = "gpt-5.5"</pre>
         staleUnmountedOnly: "stale/unmounted only",
         selectedAgent: "selected agent",
         scanStorage: "Scan storage",
-        deleteOldSessions: "Delete old sessions",
+        deleteOldSessions: "Clean old history",
         deleteMountedData: "Delete mounted agent data",
         currentSession: "Current session",
+        protectedRecords: "Protected records",
         historicalStorage: "Historical storage",
         oldest: "Oldest",
         allowedCleanup: "Allowed cleanup",
@@ -2175,7 +1631,18 @@ model = "gpt-5.5"</pre>
         ninetyTwoDays: "92 days",
         historyOnly: "History only",
         rule: "Rule:",
-        cleanupRule: "mounted agents can only remove historical sessions and detached evidence. Current provider state, active mailbox, lifecycle, lease, and runtime records stay protected.",
+        cleanupRule: "Every agent may clean recognized historical transcripts. Records inside the retention window, current bindings, and each provider's latest transcript stay protected.",
+        historyScanPending: "Run a scan to load actual project history.",
+        historyScanLoading: "Scanning Agent history...",
+        historyScanFailed: "History scan failed: {error}",
+        historyNoCandidates: "No removable history exists for the selected scope.",
+        historyCandidatesReady: "{count} records · {bytes} can be removed before {cutoff}.",
+        historyCleanupConfirm: "Delete {count} historical records ({bytes})? Records from the latest {days} days, current bindings, and the latest transcript remain protected.",
+        historyCleanupRunning: "Cleaning protected Agent history...",
+        historyCleanupComplete: "Removed {count} records and released {bytes}; skipped {skipped}.",
+        historyCleanupFailed: "History cleanup failed: {error}",
+        recordsCount: "{count} records",
+        noHistory: "No recognized history",
         detailsDrawer: "Details drawer",
         details: "Details",
         inherit: "inherit",
@@ -2231,7 +1698,6 @@ model = "gpt-5.5"</pre>
         drawerMigrationReview: "Migration review",
         drawerSidebarSettings: "Sidebar settings",
         drawerValidationDetails: "Validation details",
-        drawerMessageTrace: "Message trace",
         authority: "Authority",
         authorityCopy: "Profiles are saved control files, not live runtime authority. Activate writes .ccb/ccb.config through validate, backup, dry-run, and reload.",
         importCurrentProfile: "Import current as profile",
@@ -2267,18 +1733,7 @@ model = "gpt-5.5"</pre>
         rolepacksInstalled: "rolepacks installed",
         windowsTopologyParse: "windows topology parse",
         styleWarnings: "style warnings",
-        pass: "pass",
-        traceSummary: "Trace summary",
-        traceSummaryCopy: "Read-only explanation assembled from mailbox traces, job state, completion tracker, and reply artifacts.",
-        traceId: "trace id",
-        route: "route",
-        state: "state",
-        visiblePayload: "visible payload",
-        visiblePayloadCopy: "Design request summary, sanitized status, artifact references only.",
-        artifact: "artifact",
-        copy: "Copy",
-        safetyBoundary: "Safety boundary",
-        safetyBoundaryCopy: "Do not show auth, API keys, private prompts, or large message bodies. Summarize long content with artifact links."
+        pass: "pass"
       },
       zh: {
         active: "当前",
@@ -2324,18 +1779,6 @@ model = "gpt-5.5"</pre>
         stepBackup: "备份并写入 .ccb/ccb.config",
         stepDryRun: "Reload dry-run 判断影响",
         stepApply: "执行热加载或显示阻断原因",
-        observeSection: "观察",
-        observeSectionNote: "只读运行解释",
-        commFlowTitle: "Agent 通讯流",
-        commFlowSubtitle: "只读展示 ask、chain、reply、review 事件，不写 mailbox 或 lifecycle 状态。",
-        observerOnly: "仅观察",
-        pauseAnimation: "暂停动画",
-        resumeAnimation: "继续动画",
-        timeWindow: "时间窗",
-        agentFilter: "Agent",
-        traceDetails: "Trace 详情",
-        latestEvents: "最近事件",
-        eventSummary: "只显示脱敏摘要。允许时再通过 artifact 路径打开全文。",
         maintainSection: "维护",
         maintainSectionNote: "本地 session 存储清理",
         close: "关闭",
@@ -2412,30 +1855,17 @@ model = "gpt-5.5"</pre>
         oneHour: "1 小时",
         twentyFourHours: "24 小时",
         allAgents: "全部 Agent",
-        animatedMessageFlow: "Agent 消息流动画",
-        activeTrace: "当前追踪",
-        openedAgents: "已打开 Agent",
-        frontdeskRunning: "frontdesk · 运行中",
-        delivered: "已送达",
-        idle: "空闲",
-        designChainWaiting: "设计 · 等待 chain",
-        queued: "已排队",
-        coderReviewRequested: "coder · 已请求审查",
-        running: "运行中",
-        reviewerStaleReply: "reviewer · 陈旧回复",
-        stale: "陈旧",
-        observer: "观察者",
-        chainWait: "chain 等待",
-        replyCompleted: "回复完成",
-        staleReply: "陈旧回复",
-        request: "请求",
-        chainWaiting: "等待 chain",
         agentSessionStorage: "Agent Session 存储",
-        agentSessionStorageNote: "扫描 .ccb/agents 历史记录，估算旧 session 占用，并在保护已挂载 Agent 的前提下准备清理。",
+        agentSessionStorageNote: "扫描可识别的 Provider 会话记录，并清理保护窗口之外的历史。",
         maintenance: "维护",
         totalAgentStorage: ".ccb Agent 总存储",
         sessionsLogsArtifacts: "sessions、日志、artifacts",
         historicalSessions: "历史 Sessions",
+        recognizedTranscripts: "可识别的 Provider 会话记录",
+        protectedHistory: "受保护历史",
+        currentAndLatestProtected: "当前会话和每个 Provider 最新会话始终保留",
+        cleanupCandidates: "可清理记录",
+        outsideRetentionWindow: "位于保留窗口之外",
         safeCleanupCandidates: "可安全清理",
         mountedAgents: "已挂载 Agent",
         fourProtected: "4 个受保护",
@@ -2453,9 +1883,10 @@ model = "gpt-5.5"</pre>
         staleUnmountedOnly: "仅陈旧/未挂载",
         selectedAgent: "选中的 Agent",
         scanStorage: "扫描存储",
-        deleteOldSessions: "删除旧 Sessions",
+        deleteOldSessions: "清理旧历史",
         deleteMountedData: "删除已挂载 Agent 数据",
         currentSession: "当前 Session",
+        protectedRecords: "受保护记录",
         historicalStorage: "历史存储",
         oldest: "最早记录",
         allowedCleanup: "允许的清理",
@@ -2473,7 +1904,18 @@ model = "gpt-5.5"</pre>
         ninetyTwoDays: "92 天",
         historyOnly: "仅历史记录",
         rule: "规则：",
-        cleanupRule: "已挂载 Agent 只能删除历史 session 和脱离的证据；当前 provider state、活动 mailbox、lifecycle、lease 和 runtime 记录保持受保护。",
+        cleanupRule: "任何 Agent 都可以清理可识别的历史会话；保留窗口内记录、当前绑定以及每个 Provider 最新会话始终受保护。",
+        historyScanPending: "请先扫描以加载项目真实历史。",
+        historyScanLoading: "正在扫描 Agent 历史…",
+        historyScanFailed: "历史扫描失败：{error}",
+        historyNoCandidates: "所选范围没有可删除的历史记录。",
+        historyCandidatesReady: "可删除 {count} 条记录、{bytes}，截止时间 {cutoff}。",
+        historyCleanupConfirm: "确认删除 {count} 条历史记录（{bytes}）？最近 {days} 天、当前绑定和最新会话将继续保留。",
+        historyCleanupRunning: "正在安全清理 Agent 历史…",
+        historyCleanupComplete: "已删除 {count} 条记录，释放 {bytes}；跳过 {skipped} 条。",
+        historyCleanupFailed: "历史清理失败：{error}",
+        recordsCount: "{count} 条",
+        noHistory: "没有可识别的历史",
         detailsDrawer: "详情抽屉",
         details: "详情",
         inherit: "继承",
@@ -2529,7 +1971,6 @@ model = "gpt-5.5"</pre>
         drawerMigrationReview: "迁移审查",
         drawerSidebarSettings: "侧边栏设置",
         drawerValidationDetails: "校验详情",
-        drawerMessageTrace: "消息追踪",
         authority: "权威边界",
         authorityCopy: "档案是保存的控制文件，不是运行时权威。激活需经过校验、备份、dry-run 和 reload 后写入 .ccb/ccb.config。",
         importCurrentProfile: "导入当前配置",
@@ -2565,18 +2006,7 @@ model = "gpt-5.5"</pre>
         rolepacksInstalled: "角色包已安装",
         windowsTopologyParse: "窗口拓扑解析",
         styleWarnings: "样式警告",
-        pass: "通过",
-        traceSummary: "追踪摘要",
-        traceSummaryCopy: "根据 mailbox trace、job 状态、completion tracker 和回复 artifact 生成的只读说明。",
-        traceId: "追踪 ID",
-        route: "路由",
-        state: "状态",
-        visiblePayload: "可见内容",
-        visiblePayloadCopy: "设计请求摘要、脱敏状态和 artifact 引用。",
-        artifact: "Artifact",
-        copy: "复制",
-        safetyBoundary: "安全边界",
-        safetyBoundaryCopy: "不显示认证信息、API Key、私有提示词或大型消息正文；长内容只提供摘要和 artifact 链接。"
+        pass: "通过"
       }
     };
 
@@ -2655,6 +2085,13 @@ model = "gpt-5.5"</pre>
 
     let providerCapabilities = fallbackProviderCapabilities;
 
+    function roleCatalogOptions(currentRole) {
+      const rows = Array.isArray(providerCapabilities.roles) ? providerCapabilities.roles : [];
+      const ids = new Set(rows.map((row) => String(row && row.role_id || "").trim()).filter(Boolean));
+      if (currentRole) ids.add(currentRole);
+      return [...ids].sort((a, b) => a.localeCompare(b)).map((id) => `<option value="${escapeAttribute(id)}"></option>`).join("");
+    }
+
     let currentVersion = "static";
     let pendingVersion = null;
     let activeDrawerKind = null;
@@ -2682,6 +2119,7 @@ model = "gpt-5.5"</pre>
     let themeStatusKey = "";
     let themeStatusError = false;
     let themeSaveRevision = 0;
+    let historyScanState = null;
 
     function normalizeLanguage(value) {
       return String(value || "").toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -2851,6 +2289,148 @@ main = "demo:codex"
         throw error;
       }
       return payload;
+    }
+
+    function formatBytes(value) {
+      const bytes = Math.max(0, Number(value) || 0);
+      if (bytes < 1024) return `${bytes} B`;
+      const units = ["KiB", "MiB", "GiB", "TiB"];
+      let amount = bytes;
+      let unit = "B";
+      for (const candidate of units) {
+        amount /= 1024;
+        unit = candidate;
+        if (amount < 1024) break;
+      }
+      return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${unit}`;
+    }
+
+    function formatHistoryDate(value) {
+      if (!value) return "—";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+        year: "numeric", month: "2-digit", day: "2-digit"
+      });
+    }
+
+    function historyRequestState() {
+      return {
+        retentionDays: Number(document.getElementById("historyRetentionDays").value || 30),
+        agent: document.getElementById("historyAgentScope").value || "all"
+      };
+    }
+
+    function syncHistoryAgentOptions(payload) {
+      const select = document.getElementById("historyAgentScope");
+      const previous = select.value || "all";
+      const agents = Array.isArray(payload.agents) ? payload.agents : [];
+      select.innerHTML = `<option value="all">${escapeHtml(t("allAgents"))}</option>` + agents.map((row) => (
+        `<option value="${escapeAttribute(row.agent)}">${escapeHtml(row.agent)}</option>`
+      )).join("");
+      select.value = [...select.options].some((option) => option.value === previous) ? previous : "all";
+    }
+
+    function renderHistoryScan(payload, syncOptions = true) {
+      historyScanState = payload;
+      if (syncOptions) syncHistoryAgentOptions(payload);
+      document.getElementById("historyTotalStorage").textContent = formatBytes(payload.total_storage_bytes);
+      document.getElementById("historyStorage").textContent = formatBytes(payload.history_bytes);
+      document.getElementById("historyProtectedAgents").textContent = tf("recordsCount", { count: payload.protected_agent_count || 0 });
+      document.getElementById("historyCleanupCandidates").textContent = `${payload.candidate_count || 0} · ${formatBytes(payload.candidate_bytes)}`;
+
+      const rows = Array.isArray(payload.agents) ? payload.agents : [];
+      const table = document.getElementById("historyTableBody");
+      table.innerHTML = rows.length ? rows.map((row) => {
+        const mounted = row.status === "mounted";
+        const providers = Array.isArray(row.providers) && row.providers.length ? row.providers.join(", ") : "—";
+        const cleanup = row.candidate_count
+          ? `${row.candidate_count} · ${formatBytes(row.candidate_bytes)}`
+          : t("none");
+        return `<tr>
+          <td><strong>${escapeHtml(row.agent)}</strong><div class="panel-subtitle">${escapeHtml(providers)}</div></td>
+          <td><span class="badge ${mounted ? "ok" : "info"}">${t(mounted ? "mounted" : "notMounted")}</span></td>
+          <td>${row.protected_count || 0} · ${formatBytes(row.protected_bytes)}</td>
+          <td>${formatBytes(row.history_bytes)}<div class="panel-subtitle">${tf("recordsCount", { count: row.history_count || 0 })}</div></td>
+          <td>${formatHistoryDate(row.oldest_at)}</td>
+          <td>${cleanup}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="6">${t("noHistory")}</td></tr>`;
+
+      const cleanupButton = document.getElementById("historyCleanupBtn");
+      cleanupButton.disabled = !Number(payload.candidate_count);
+      const status = document.getElementById("historyCleanupStatus");
+      status.textContent = Number(payload.candidate_count)
+        ? tf("historyCandidatesReady", {
+            count: payload.candidate_count,
+            bytes: formatBytes(payload.candidate_bytes),
+            cutoff: formatHistoryDate(payload.cutoff_at)
+          })
+        : t("historyNoCandidates");
+      status.style.color = "";
+    }
+
+    async function scanAgentHistory() {
+      const controls = ["historyScanBtn", "historyCleanupBtn", "historyRetentionDays", "historyAgentScope"]
+        .map((id) => document.getElementById(id));
+      const status = document.getElementById("historyCleanupStatus");
+      status.textContent = t("historyScanLoading");
+      status.style.color = "";
+      controls.forEach((control) => { control.disabled = true; });
+      const request = historyRequestState();
+      try {
+        const query = new URLSearchParams({
+          retention_days: String(request.retentionDays),
+          agent: request.agent
+        });
+        const payload = await apiJson(`/api/storage/history?${query}`);
+        renderHistoryScan(payload);
+      } catch (error) {
+        historyScanState = null;
+        status.textContent = tf("historyScanFailed", { error: error.message });
+        status.style.color = "var(--red)";
+      } finally {
+        document.getElementById("historyScanBtn").disabled = false;
+        document.getElementById("historyRetentionDays").disabled = false;
+        document.getElementById("historyAgentScope").disabled = false;
+        document.getElementById("historyCleanupBtn").disabled = !Number(historyScanState && historyScanState.candidate_count);
+      }
+    }
+
+    async function cleanupAgentHistory() {
+      if (!historyScanState || !Number(historyScanState.candidate_count)) return;
+      const request = historyRequestState();
+      const confirmed = window.confirm(tf("historyCleanupConfirm", {
+        count: historyScanState.candidate_count,
+        bytes: formatBytes(historyScanState.candidate_bytes),
+        days: request.retentionDays
+      }));
+      if (!confirmed) return;
+      const scanButton = document.getElementById("historyScanBtn");
+      const cleanupButton = document.getElementById("historyCleanupBtn");
+      const status = document.getElementById("historyCleanupStatus");
+      scanButton.disabled = true;
+      cleanupButton.disabled = true;
+      status.textContent = t("historyCleanupRunning");
+      status.style.color = "";
+      try {
+        const result = await apiJson("/api/storage/history/cleanup", {
+          method: "POST",
+          body: JSON.stringify({ retention_days: request.retentionDays, agent: request.agent })
+        });
+        renderHistoryScan(result.scan);
+        status.textContent = tf("historyCleanupComplete", {
+          count: result.deleted_count,
+          bytes: formatBytes(result.deleted_bytes),
+          skipped: result.skipped_count
+        });
+      } catch (error) {
+        status.textContent = tf("historyCleanupFailed", { error: error.message });
+        status.style.color = "var(--red)";
+      } finally {
+        scanButton.disabled = false;
+        cleanupButton.disabled = !Number(historyScanState && historyScanState.candidate_count);
+      }
     }
 
     function setActionStatus(message, failed = false) {
@@ -3220,7 +2800,7 @@ main = "demo:codex"
         </div>
         <div class="field-row">
           <label class="field"><span class="label">${t("provider")}</span><select class="select provider-select" data-field="provider" ${isRich ? "disabled" : ""}>${providers.map((provider) => `<option value="${escapeAttribute(provider)}" ${provider === leaf.provider ? "selected" : ""}>${escapeHtml(provider)}</option>`).join("")}</select></label>
-          <label class="field"><span class="label">${t("rolePack")}</span><input class="input" data-field="role" list="${roleListId}" value="${escapeAttribute(role)}" placeholder="none" ${isRich ? "disabled" : ""}><datalist id="${roleListId}"><option value="agentroles.ccb_self"><option value="agentroles.archi"><option value="agentroles.coder"><option value="agentroles.code_reviewer"><option value="agentroles.open_design"></datalist></label>
+          <label class="field"><span class="label">${t("rolePack")}</span><input class="input" data-field="role" list="${roleListId}" value="${escapeAttribute(role)}" placeholder="none" ${isRich ? "disabled" : ""}><datalist id="${roleListId}">${roleCatalogOptions(role)}</datalist></label>
         </div>
         <div class="field-row">
           <label class="field"><span class="label">${t("model")}</span><select class="select model-select" data-field="model" ${isRich || (!capability.model_shortcut && !models.length) ? "disabled" : ""}><option value="inherit">${t("inherit")}</option>${models.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === model ? "selected" : ""}>${escapeHtml(item.label || item.id)}</option>`).join("")}${model !== "inherit" && !models.some((item) => item.id === model) ? `<option value="${escapeAttribute(model)}" selected>${escapeHtml(model)}</option>` : ""}${capability.custom_model ? `<option value="__custom__">${t("customModel")}</option>` : ""}</select></label>
@@ -3930,25 +3510,7 @@ active config: unchanged`;
         <div class="drawer-card"><h3>${t("validation")}</h3><p>${t("validationCopy")}</p></div>
         <div class="step"><span class="step-no">1</span><span>${t("rolepacksInstalled")}</span><span class="badge ok">${t("pass")}</span></div>
         <div class="step"><span class="step-no">2</span><span>${t("windowsTopologyParse")}</span><span class="badge ok">${t("pass")}</span></div>
-        <div class="step"><span class="step-no">3</span><span>${t("styleWarnings")}</span><span class="badge warn">1</span></div>`,
-      messageTrace: () => `
-        <div class="drawer-card">
-          <h3>${t("traceSummary")}</h3>
-          <p>${t("traceSummaryCopy")}</p>
-        </div>
-        <table class="table">
-          <tbody>
-            <tr><th>${t("traceId")}</th><td><span class="mono">job_8b204be32628</span> <button class="btn subtle">${t("copy")}</button></td></tr>
-            <tr><th>${t("route")}</th><td>ccb_self -> odesign -> worker1 -> reviewer3 -> odesign</td></tr>
-            <tr><th>${t("state")}</th><td><span class="badge warn">${t("chainWaiting")}</span></td></tr>
-            <tr><th>${t("visiblePayload")}</th><td>${t("visiblePayloadCopy")}</td></tr>
-            <tr><th>${t("artifact")}</th><td><span class="mono">.ccb/ccbd/artifacts/text/completion-reply/job_8b204...</span></td></tr>
-          </tbody>
-        </table>
-        <div class="drawer-card">
-          <h3>${t("safetyBoundary")}</h3>
-          <p>${t("safetyBoundaryCopy")}</p>
-        </div>`
+        <div class="step"><span class="step-no">3</span><span>${t("styleWarnings")}</span><span class="badge warn">1</span></div>`
     };
 
     function applyLanguage(nextLang) {
@@ -3968,12 +3530,11 @@ active config: unchanged`;
         node.textContent = t(node.dataset.state);
       });
       renderThemeStatus();
-      const flowPaused = document.getElementById("commFlowPanel").classList.contains("flow-paused");
-      document.getElementById("pauseFlow").textContent = flowPaused ? t("resumeAnimation") : t("pauseAnimation");
       updateSummary();
       syncProviderControls();
       syncProfileOptions(profileRecords, document.getElementById("profileSelect").value || "active");
       if (visualState) renderVisualEditors();
+      if (historyScanState) renderHistoryScan(historyScanState, false);
       if (activeDrawerKind && !pendingDiffResolve && document.getElementById("drawer").classList.contains("open")) {
         openDrawer(activeDrawerKind);
       }
@@ -4057,8 +3618,7 @@ active config: unchanged`;
         sidebar: t("drawerSidebarSettings"),
         tools: t("drawerOptionalTools"),
         toml: t("fullToml"),
-        validation: t("drawerValidationDetails"),
-        messageTrace: t("drawerMessageTrace")
+        validation: t("drawerValidationDetails")
       }[kind] || t("details");
       document.getElementById("drawerBody").innerHTML = drawerContent[kind] ? drawerContent[kind]() : "";
       document.getElementById("drawer").classList.add("open");
@@ -4117,6 +3677,7 @@ active config: unchanged`;
     loadThemePreference();
     loadProviderCapabilities();
     loadActiveConfig();
+    scanAgentHistory();
 
     document.getElementById("themeSelect").addEventListener("change", (event) => {
       saveThemePreference(event.target.value);
@@ -4143,6 +3704,10 @@ active config: unchanged`;
     document.getElementById("profileSelect").addEventListener("change", (event) => {
       loadProfile(event.target.value);
     });
+    document.getElementById("historyScanBtn").addEventListener("click", scanAgentHistory);
+    document.getElementById("historyCleanupBtn").addEventListener("click", cleanupAgentHistory);
+    document.getElementById("historyRetentionDays").addEventListener("change", scanAgentHistory);
+    document.getElementById("historyAgentScope").addEventListener("change", scanAgentHistory);
 
     document.querySelectorAll("[data-drawer]").forEach((button) => {
       button.addEventListener("click", () => openDrawer(button.dataset.drawer));
@@ -4171,14 +3736,6 @@ active config: unchanged`;
 
     document.getElementById("closeDrawer").addEventListener("click", closeDrawer);
     document.getElementById("overlay").addEventListener("click", closeDrawer);
-
-    document.getElementById("pauseFlow").addEventListener("click", () => {
-      const panel = document.getElementById("commFlowPanel");
-      const paused = panel.classList.toggle("flow-paused");
-      document.getElementById("pauseFlow").textContent = paused
-        ? text[lang].resumeAnimation
-        : text[lang].pauseAnimation;
-    });
 
     document.getElementById("validateBtn").addEventListener("click", validateDraft);
     document.getElementById("saveProfileBtn").addEventListener("click", saveProfile);

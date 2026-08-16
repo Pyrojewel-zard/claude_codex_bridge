@@ -278,6 +278,13 @@ Contract:
 - Each `[windows]` value uses the compact layout grammar, but `cmd` is not supported in windows topology.
 - Every agent leaf in `[windows]` must declare a provider.
 - Each configured agent is an agent leaf referenced by `[windows]` and must appear in exactly one window layout.
+- On native Windows, provider-less `pwsh`, `powershell`, `bash`, and `wincmd`
+  leaves are built-in interactive shell tool aliases. They create managed tool
+  panes without coding-provider runtimes; `wincmd` is the spelling for
+  `cmd.exe` because `cmd` remains reserved. These provider-less aliases fail
+  config validation on WSL, Linux, and macOS. A provider suffix disambiguates
+  the same text as an Agent name, so `bash:codex` remains an Agent rather than
+  a shell tool pane.
 - `[tool_windows.<name>]` may declare a managed non-agent tmux window. Tool
   windows are part of managed topology but not part of the configured agent
   set. The built-in supported file/workbench surface is the `rich` layout alias;
@@ -288,6 +295,10 @@ Contract:
 - `command` affects managed tmux topology and explicit reload planning.
   `label` and `show_in_sidebar` are project-view presentation fields; changing
   them must not recreate the tool pane or change the provider runtime set.
+- A project-authored `tool_windows.<name>.command` is executable authority. It
+  must have a matching user-state approval receipt before cold-start or reload
+  materializes its pane. Built-in layout aliases are CCB-owned commands and do
+  not require project-command approval.
 - Tool window names use the same grammar as `[windows]` names and must not
   duplicate an agent window name.
 - Tool windows do not declare providers, workspace modes, restore policies,
@@ -556,6 +567,31 @@ Contract:
   the template and keep their original ordering.
 - Providers must reject malformed templates during config loading rather than
   attempting partial fallback at startup.
+- A project-authored `agents.<name>.provider_command_template` must have the
+  same project-command approval as tool-window commands before provider launch.
+
+### 4.6.1 Project Command Approval
+
+Only explicit `tool_windows.<name>.command` and
+`agents.<name>.provider_command_template` values in the project-local
+`.ccb/ccb.config` cross this trust boundary. Configs without those fields,
+user-level defaults, and CCB-owned layout aliases keep their existing behavior.
+
+- The approval digest binds the canonical project root and the sorted exact
+  field names and values; unrelated config edits do not invalidate it.
+- Receipts live outside the repository under the user state root:
+  `$XDG_STATE_HOME/ccb/trust/project-commands` (or
+  `~/.local/state/ccb/trust/project-commands`) on Linux/macOS/WSL and
+  `%LOCALAPPDATA%\CCB\trust\project-commands` on Windows.
+- Interactive startup prints JSON-escaped field names and values and requires
+  an explicit yes. `ccb config approve-commands` provides the same deliberate
+  review path.
+- Missing, invalid, stale, or changed approval fails closed in non-interactive
+  startup, daemon bootstrap, reload, and immediately before the shell-backed
+  execution sink. The diagnostic directs the user to
+  `ccb config approve-commands`.
+- `ccb -s` continues to control provider auto-permission only; it neither grants
+  nor bypasses project-command approval.
 
 ### 4.7 Workspace Mode Semantics
 

@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
 import mimetypes
+import os
 from pathlib import Path
 from queue import Empty, Full, Queue
 import re
@@ -23,9 +24,22 @@ import time
 from typing import Callable, Mapping
 from uuid import uuid4
 from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import url2pathname
 
+from agents.config_loader import load_project_config
 from ccbd.api_models import DeliveryScope, MessageEnvelope
+from platforms.windows.herdr.ccbd_surface_projection import herdr_surface_projection_passes_gate
 from ccbd.socket_client import CcbdClientError
+from cli.services.config_ui import config_ui_provider_capabilities
+from project.identity import normalize_work_dir
+from provider_control import (
+    ProviderQuotaService,
+    ProviderSettingsError,
+    ProviderSettingsStore,
+    project_config_revision,
+    provider_restart_pending_agents,
+    resolve_provider_session_path,
+)
 from provider_pane_status.control_messages import (
     clean_provider_local_control_message,
 )
@@ -44,6 +58,7 @@ from .push import MobilePushDispatcher, PushSender
 from .project_activity import MobileGatewayProjectActivityStore
 from .project_registry import MobileGatewayProject, MobileGatewayProjectRegistry
 from .terminal import (
+    HostTerminalManager,
     TerminalAttachTarget,
     TerminalGeometry,
     TerminalHistoryTarget,
@@ -73,6 +88,8 @@ _PAIRING_CAPABILITIES = (
     'event_cursor_resume',
     'device_presence',
     'push_notifications',
+    'provider_control',
+    'host_terminal',
 )
 _REDACTED_NAMESPACE_KEYS = ('socket_path', 'session_name')
 _DEFAULT_ROUTE_PROVIDER = 'lan'
@@ -94,8 +111,11 @@ _DEFAULT_PAIRING_SCOPES = (
     'file_download',
     'notify',
     'terminal_input',
+    'host_terminal',
     'lifecycle',
+    'provider_settings',
 )
+_PROVIDER_MUTATION_CACHE_MAX_ENTRIES = 256
 _MAX_MOBILE_UPLOAD_FILE_BYTES = 25 * 1024 * 1024
 _MAX_MOBILE_DOWNLOAD_FILE_BYTES = 128 * 1024 * 1024
 _NOTIFICATION_STREAM_POLL_SECONDS = 1.0
@@ -439,6 +459,30 @@ class MobileGatewayError(RuntimeError):
         self.status_code = int(status_code)
 
 
+class _TerminalBlockedError(MobileGatewayError):
+    def __init__(self, payload: dict[str, object]) -> None:
+        super().__init__(str(payload.get('message') or 'terminal target is blocked'), status_code=409)
+        self.terminal_blocked = payload
+
+
+def _default_terminal_session_factory(target: TerminalAttachTarget):
+    if target.backend_impl == 'herdr':
+        raise _TerminalBlockedError(_herdr_terminal_target_blocked_payload('herdr-terminal-adapter-unavailable'))
+    return create_tmux_terminal_session(target)
+
+
+def _default_terminal_history_factory(target: TerminalHistoryTarget) -> dict[str, object]:
+    if target.backend_impl == 'herdr':
+        raise _TerminalBlockedError(_herdr_terminal_target_blocked_payload('herdr-terminal-adapter-unavailable'))
+    return create_tmux_terminal_history(target)
+
+
+def _default_terminal_message_sender(target: PaneMessageTarget, text: str) -> dict[str, object]:
+    if target.backend_impl == 'herdr':
+        raise _TerminalBlockedError(_herdr_terminal_target_blocked_payload('herdr-terminal-adapter-unavailable'))
+    return send_tmux_pane_message(target, text)
+
+
 class MobileGatewayService:
     def __init__(
         self,
@@ -457,11 +501,13 @@ class MobileGatewayService:
         terminal_session_factory: Callable[[TerminalAttachTarget], object] | None = None,
         terminal_history_factory: Callable[[TerminalHistoryTarget], dict[str, object]] | None = None,
         terminal_message_sender: Callable[[PaneMessageTarget, str], dict[str, object]] | None = None,
+        host_terminal_manager: HostTerminalManager | None = None,
         push_sender: PushSender | None = None,
         push_sender_timeout_seconds: float = 2.0,
         push_sender_max_workers: int = 4,
         push_diagnostic: Mapping[str, object] | None = None,
         agent_activity_probe: Callable[..., MobileAgentActivityProbe] | None = None,
+        provider_quota_service: ProviderQuotaService | None = None,
     ) -> None:
         self._project_id = str(project_id)
         self._project_root = Path(project_root)
@@ -478,14 +524,19 @@ class MobileGatewayService:
         self._background_executor = background_executor
         self._owns_background_executor = False
         self._closed = False
-        self._terminal_session_factory = terminal_session_factory or create_tmux_terminal_session
-        self._terminal_history_factory = terminal_history_factory or create_tmux_terminal_history
-        self._terminal_message_sender = terminal_message_sender or send_tmux_pane_message
+        self._terminal_sessions_lock = threading.Lock()
+        self._terminal_sessions: dict[int, object] = {}
+        self._terminal_session_factory = terminal_session_factory or _default_terminal_session_factory
+        self._terminal_history_factory = terminal_history_factory or _default_terminal_history_factory
+        self._terminal_message_sender = terminal_message_sender or _default_terminal_message_sender
         self._agent_activity_probe = (
             agent_activity_probe or probe_mobile_agent_activity
         )
         self._push_diagnostic = dict(push_diagnostic or {})
         self._mobile_dir = Path(mobile_dir) if mobile_dir is not None else None
+        self._host_terminal_manager = host_terminal_manager
+        if self._host_terminal_manager is None and self._mobile_dir is not None:
+            self._host_terminal_manager = HostTerminalManager(self._mobile_dir)
         self._pairing_store = pairing_store
         if self._pairing_store is None and mobile_dir is not None:
             self._pairing_store = MobileGatewayPairingStore(self._mobile_dir)
@@ -509,6 +560,12 @@ class MobileGatewayService:
         ] = OrderedDict()
         self._conversation_page_cache_bytes = 0
         self._conversation_page_cache_lock = threading.Lock()
+        self._provider_settings_store = ProviderSettingsStore()
+        self._provider_quota_service = provider_quota_service or ProviderQuotaService()
+        self._provider_mutation_lock = threading.Lock()
+        self._provider_mutation_results: OrderedDict[
+            tuple[str, str], tuple[str, dict[str, object]]
+        ] = OrderedDict()
         self._project_activity_refreshing: set[str] = set()
         self._project_activity_refresh_lock = threading.Lock()
         # One bounded watcher/cache serves every SSE client.  It tracks only
@@ -615,7 +672,7 @@ class MobileGatewayService:
             item = {
                 'id': project.project_id,
                 'display_name': project.public_display_name,
-                'root': str(project.project_root),
+                'root': project.project_root.as_posix(),
                 'health': str(ccbd.get('health') or 'unknown'),
                 'mount_state': str(ccbd.get('mount_state') or ''),
                 'health_freshness': str(ccbd.get('health_freshness') or 'unknown'),
@@ -655,6 +712,266 @@ class MobileGatewayService:
         self._observe_project_view_for_notifications(project, payload)
         self._record_project_opened(project.project_id)
         return _redact_project_view_payload(payload)
+
+    def agent_provider_control_payload(
+        self,
+        project_id: str,
+        *,
+        agent: str,
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        self._authenticate(headers, required_scopes=('view',))
+        project = self._require_project(project_id)
+        view_payload = _redact_project_view_payload(self._request_project_view(project))
+        view = view_payload.get('view') if isinstance(view_payload.get('view'), dict) else view_payload
+        agent_record = next(
+            (
+                dict(item)
+                for item in tuple(view.get('agents') or ())
+                if isinstance(item, dict) and str(item.get('name') or '').strip() == str(agent).strip()
+            ),
+            None,
+        )
+        if agent_record is None:
+            raise MobileGatewayError('unknown agent', status_code=404)
+        provider = str(agent_record.get('provider') or '').strip().lower()
+        catalog = config_ui_provider_capabilities(
+            project_root=project.project_root,
+            cli_models=None if provider in {'opencode', 'mimo'} else {},
+            roles=(),
+        )
+        provider_entry = next(
+            (
+                dict(item)
+                for item in tuple(catalog.get('providers') or ())
+                if isinstance(item, dict) and str(item.get('id') or '').strip().lower() == provider
+            ),
+            {
+                'id': provider,
+                'model_shortcut': False,
+                'model_source': 'none',
+                'models': [],
+                'custom_model': False,
+                'static_thinking': False,
+            },
+        )
+        config_revision = project_config_revision(project.project_root)
+        try:
+            configured_spec = load_project_config(project.project_root).config.agents.get(str(agent).strip())
+        except Exception:
+            configured_spec = None
+        provider_control = dict(agent_record.get('provider_control') or {})
+        restart_pending = (
+            str(agent).strip().lower()
+            in provider_restart_pending_agents(project.project_root)
+        )
+        provider_control['restart_pending'] = restart_pending
+        if configured_spec is not None:
+            configured_model = str(getattr(configured_spec, 'model', '') or '').strip() or None
+            configured_thinking = str(getattr(configured_spec, 'thinking', '') or '').strip() or None
+            provider_control['configured_model'] = configured_model
+            provider_control['configured_thinking'] = configured_thinking
+            active_model = str(provider_control.get('active_model') or '').strip() or None
+            active_thinking = str(provider_control.get('active_thinking') or '').strip() or None
+            provider_control['pending_model'] = (
+                configured_model
+                if configured_model is not None
+                and (
+                    restart_pending
+                    or (active_model is not None and configured_model != active_model)
+                )
+                else None
+            )
+            provider_control['pending_thinking'] = (
+                configured_thinking
+                if configured_thinking is not None
+                and (
+                    restart_pending
+                    or (
+                        active_thinking is not None
+                        and configured_thinking != active_thinking
+                    )
+                )
+                else None
+            )
+        return {
+            'schema_version': 1,
+            'status': 'ok',
+            'project_id': project.project_id,
+            'agent': str(agent_record.get('name') or agent),
+            'namespace_epoch': _optional_int(
+                (view.get('namespace') or {}).get('epoch')
+                if isinstance(view.get('namespace'), dict)
+                else None
+            ),
+            'provider_control': provider_control,
+            'provider_catalog': provider_entry,
+            'config_revision': config_revision,
+        }
+
+    def agent_provider_quota_payload(
+        self,
+        project_id: str,
+        *,
+        agent: str,
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        """Load optional account quota without delaying provider controls."""
+        self._authenticate(headers, required_scopes=('view',))
+        project = self._require_project(project_id)
+        view_payload = _redact_project_view_payload(self._request_project_view(project))
+        view = view_payload.get('view') if isinstance(view_payload.get('view'), dict) else view_payload
+        agent_record = next(
+            (
+                dict(item)
+                for item in tuple(view.get('agents') or ())
+                if isinstance(item, dict)
+                and str(item.get('name') or '').strip() == str(agent).strip()
+            ),
+            None,
+        )
+        if agent_record is None:
+            raise MobileGatewayError('unknown agent', status_code=404)
+        provider = str(agent_record.get('provider') or '').strip().lower()
+        account_usage = self._provider_quota_service.account_quota(
+            project_root=project.project_root,
+            agent=str(agent_record.get('name') or agent),
+            provider=provider,
+        )
+        return {
+            'schema_version': 1,
+            'status': 'ok',
+            'project_id': project.project_id,
+            'agent': str(agent_record.get('name') or agent),
+            'account_usage': account_usage.to_record(),
+        }
+
+    def update_agent_provider_settings(
+        self,
+        project_id: str,
+        *,
+        agent: str,
+        payload: Mapping[str, object],
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        auth = self._authenticate(headers, required_scopes=('provider_settings',))
+        project = self._require_project(project_id)
+        idempotency_key = str(payload.get('idempotency_key') or '').strip()
+        if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{7,127}', idempotency_key) is None:
+            raise MobileGatewayError('valid idempotency_key is required', status_code=400)
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    'project_id': project.project_id,
+                    'agent': str(agent).strip(),
+                    'payload': dict(payload),
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(',', ':'),
+            ).encode('utf-8')
+        ).hexdigest()
+        cache_key = (auth.device_id, idempotency_key)
+        with self._provider_mutation_lock:
+            cached = self._provider_mutation_results.get(cache_key)
+            if cached is not None:
+                if cached[0] != fingerprint:
+                    raise MobileGatewayError(
+                        'idempotency_key was already used for another request',
+                        status_code=409,
+                    )
+                self._provider_mutation_results.move_to_end(cache_key)
+                return dict(cached[1])
+
+            view_payload = _redact_project_view_payload(self._request_project_view(project))
+            view = view_payload.get('view') if isinstance(view_payload.get('view'), dict) else view_payload
+            namespace = view.get('namespace') if isinstance(view.get('namespace'), dict) else {}
+            current_epoch = _optional_int(namespace.get('epoch'))
+            expected_epoch = _optional_int(payload.get('expected_namespace_epoch'))
+            if current_epoch is None or expected_epoch != current_epoch:
+                raise MobileGatewayError('stale project namespace; refresh before saving', status_code=409)
+            agent_record = next(
+                (
+                    dict(item)
+                    for item in tuple(view.get('agents') or ())
+                    if isinstance(item, dict)
+                    and str(item.get('name') or '').strip() == str(agent).strip()
+                ),
+                None,
+            )
+            if agent_record is None:
+                raise MobileGatewayError('unknown agent', status_code=404)
+            provider = str(agent_record.get('provider') or '').strip().lower()
+            expected_provider = str(payload.get('expected_provider') or '').strip().lower()
+            if not expected_provider or expected_provider != provider:
+                raise MobileGatewayError('stale provider identity; refresh before saving', status_code=409)
+            provider_control = (
+                dict(agent_record.get('provider_control') or {})
+                if isinstance(agent_record.get('provider_control'), dict)
+                else {}
+            )
+            if 'expected_runtime_revision' not in payload:
+                raise MobileGatewayError('expected_runtime_revision is required', status_code=400)
+            expected_runtime_revision = _optional_text(payload.get('expected_runtime_revision'))
+            current_runtime_revision = _optional_text(provider_control.get('runtime_revision'))
+            if expected_runtime_revision != current_runtime_revision:
+                raise MobileGatewayError('stale provider runtime; refresh before saving', status_code=409)
+            catalog = config_ui_provider_capabilities(
+                project_root=project.project_root,
+                cli_models=None if provider in {'opencode', 'mimo'} else {},
+                roles=(),
+            )
+            provider_entry = next(
+                (
+                    dict(item)
+                    for item in tuple(catalog.get('providers') or ())
+                    if isinstance(item, dict)
+                    and str(item.get('id') or '').strip().lower() == provider
+                ),
+                None,
+            )
+            if not provider_entry or not provider_entry.get('model_shortcut'):
+                raise MobileGatewayError('provider model selection is unsupported', status_code=409)
+            models = {
+                str(item.get('id') or '').strip(): dict(item)
+                for item in tuple(provider_entry.get('models') or ())
+                if isinstance(item, dict) and str(item.get('id') or '').strip()
+            }
+            model = str(payload.get('model') or '').strip()
+            selected = models.get(model)
+            if selected is None:
+                raise MobileGatewayError('model is not selectable for this provider', status_code=422)
+            allowed_thinking = {
+                str(item).strip().lower()
+                for item in tuple(selected.get('reasoning_levels') or ())
+                if str(item).strip()
+            }
+            try:
+                result = self._provider_settings_store.apply(
+                    project_root=project.project_root,
+                    agent=str(agent).strip(),
+                    model=model,
+                    thinking=_optional_text(payload.get('thinking')),
+                    expected_revision=str(payload.get('expected_revision') or '').strip(),
+                    allowed_models=set(models),
+                    allowed_thinking=allowed_thinking,
+                )
+            except ProviderSettingsError as exc:
+                raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
+            record = result.to_record()
+            record.update(
+                {
+                    'idempotency_key': idempotency_key,
+                    'namespace_epoch': current_epoch,
+                    'runtime_revision': current_runtime_revision,
+                }
+            )
+            self._provider_mutation_results[cache_key] = (fingerprint, dict(record))
+            self._provider_mutation_results.move_to_end(cache_key)
+            while len(self._provider_mutation_results) > _PROVIDER_MUTATION_CACHE_MAX_ENTRIES:
+                self._provider_mutation_results.popitem(last=False)
+            self._record_project_activity(project.project_id)
+            return record
 
     def invalidation_audit_payload(self) -> dict[str, int]:
         """Test/diagnostic-only counters for proving idle stream cost."""
@@ -768,11 +1085,12 @@ class MobileGatewayService:
         history_suffix = '/terminal-history'
         if route.startswith(prefix) and route.endswith(history_suffix):
             project_id = unquote(route[len(prefix):-len(history_suffix)].strip('/'))
-            return 200, self.terminal_history_payload(
+            history_payload = self.terminal_history_payload(
                 project_id,
                 query=parse_qs(parsed.query, keep_blank_values=True),
                 headers=headers,
             )
+            return (409 if history_payload.get('status') == 'blocked' else 200), history_payload
         conversation_route = _parse_project_agent_route(route, suffix='conversation')
         if conversation_route is not None:
             project_id, agent = conversation_route
@@ -780,6 +1098,22 @@ class MobileGatewayService:
                 project_id,
                 agent=agent,
                 query=parse_qs(parsed.query, keep_blank_values=True),
+                headers=headers,
+            )
+        provider_control_route = _parse_project_agent_route(route, suffix='provider-control')
+        if provider_control_route is not None:
+            project_id, agent = provider_control_route
+            return 200, self.agent_provider_control_payload(
+                project_id,
+                agent=agent,
+                headers=headers,
+            )
+        provider_quota_route = _parse_project_agent_route(route, suffix='provider-quota')
+        if provider_quota_route is not None:
+            project_id, agent = provider_quota_route
+            return 200, self.agent_provider_quota_payload(
+                project_id,
+                agent=agent,
                 headers=headers,
             )
         if route == '/v1/devices/me':
@@ -875,6 +1209,19 @@ class MobileGatewayService:
         project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('view',))
         view_payload = self._request_project_view(project)
+        blocked = _terminal_operation_blocked_payload(
+            view_payload,
+            agent=_query_text(query, 'agent'),
+            namespace_epoch=_query_int(query, 'namespace_epoch'),
+            operation='history',
+        )
+        if blocked is not None:
+            return {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'blocked',
+                'project_id': project.project_id,
+                'terminal_blocked': blocked,
+            }
         target = _terminal_history_target(
             project_id=project.project_id,
             view_payload=view_payload,
@@ -884,6 +1231,13 @@ class MobileGatewayService:
         )
         try:
             history = dict(self._terminal_history_factory(target) or {})
+        except _TerminalBlockedError as exc:
+            return {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'blocked',
+                'project_id': project.project_id,
+                'terminal_blocked': exc.terminal_blocked,
+            }
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
         history.setdefault('agent', target.agent)
@@ -1188,6 +1542,10 @@ class MobileGatewayService:
             except MobileGatewayPairingError as exc:
                 raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
             return 200, {'schema_version': _SCHEMA_VERSION, 'status': 'ok', 'presence': presence}
+        if route == '/v1/terminals':
+            return 201, self._open_host_terminal(payload=payload, headers=headers)
+        if route == '/v1/terminals/terminate':
+            return 200, self._terminate_host_terminal(payload=payload, headers=headers)
         project_route = _parse_project_action_route(route)
         if project_route is not None:
             project_id, action = project_route
@@ -1220,8 +1578,18 @@ class MobileGatewayService:
         message_route = _parse_project_agent_route(route, suffix='messages')
         if message_route is not None:
             project_id, agent = message_route
-            return 202, self._submit_agent_message(
+            message_payload = self._submit_agent_message(
                 project_id=project_id,
+                agent=agent,
+                payload=payload,
+                headers=headers,
+            )
+            return (409 if message_payload.get('status') == 'blocked' else 202), message_payload
+        provider_control_route = _parse_project_agent_route(route, suffix='provider-control')
+        if provider_control_route is not None:
+            project_id, agent = provider_control_route
+            return 200, self.update_agent_provider_settings(
+                project_id,
                 agent=agent,
                 payload=payload,
                 headers=headers,
@@ -1341,6 +1709,20 @@ class MobileGatewayService:
                     },
                 },
             }
+        blocked = _terminal_operation_blocked_payload(
+            view_payload,
+            agent=str(target['agent']),
+            namespace_epoch=int(target['namespace_epoch']),
+            operation='input',
+        )
+        if blocked is not None:
+            return {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'blocked',
+                'project_id': project.project_id,
+                'agent': target['agent'],
+                'terminal_blocked': blocked,
+            }
         message_target = _pane_message_target(
             project_id=project.project_id,
             view_payload=view_payload,
@@ -1348,6 +1730,14 @@ class MobileGatewayService:
         )
         try:
             self._terminal_message_sender(message_target, submit_body)
+        except _TerminalBlockedError as exc:
+            return {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'blocked',
+                'project_id': project.project_id,
+                'agent': target['agent'],
+                'terminal_blocked': exc.terminal_blocked,
+            }
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
         message_id = idempotency_key
@@ -1454,12 +1844,17 @@ class MobileGatewayService:
                 include_history=resume_cursor is None,
             )
             session = self._terminal_session_factory(attach_target)
+            self._register_terminal_session(session)
+            viewport = _terminal_viewport_state(session, fallback=attach_target)
             connection.send_json(
                 {
                     'type': 'open',
                     'terminal_id': terminal_id,
                     'resume_cursor': _int(record.get('last_output_seq'), 0),
                     'last_input_seq': _int(record.get('last_input_seq'), 0),
+                    'geometry': viewport['geometry'],
+                    'resize_policy': viewport['resize_policy'],
+                    'geometry_revision': viewport['revision'],
                 }
             )
             output_thread = threading.Thread(
@@ -1473,6 +1868,7 @@ class MobileGatewayService:
                     terminal_id,
                     terminal_token,
                     _int(record.get('last_output_seq'), 0),
+                    _int(viewport.get('revision'), 0),
                 ),
                 daemon=True,
             )
@@ -1502,7 +1898,7 @@ class MobileGatewayService:
         except MobileGatewayError as exc:
             close_reason = _terminal_error_code(exc)
             close_handle = True
-            _safe_send_json(connection, {'type': 'error', 'code': close_reason})
+            _safe_send_json(connection, _terminal_error_frame(exc))
         except WebSocketProtocolError as exc:
             close_reason = 'protocol_error'
             close_handle = True
@@ -1530,6 +1926,7 @@ class MobileGatewayService:
                 except MobileGatewayPairingError:
                     pass
             if session is not None:
+                self._unregister_terminal_session(session)
                 try:
                     session.close()
                 except Exception:
@@ -1701,6 +2098,68 @@ class MobileGatewayService:
         handle['websocket_url'] = _terminal_websocket_url(headers, terminal_id=terminal_id)
         return handle
 
+    def _open_host_terminal(
+        self,
+        *,
+        payload: Mapping[str, object],
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        auth = self._authenticate(headers, required_scopes=('host_terminal',))
+        client_session_id = str(payload.get('client_session_id') or '').strip()
+        display_name = str(payload.get('display_name') or '').strip()
+        geometry_payload = _map(payload.get('geometry'))
+        geometry = TerminalGeometry.from_mapping(geometry_payload)
+        try:
+            attach_target = self._require_host_terminal_manager().attach_target(
+                terminal_id='pending',
+                device_id=auth.device_id,
+                client_session_id=client_session_id,
+                display_name=display_name,
+                geometry=geometry,
+                include_history=True,
+            )
+        except RuntimeError as exc:
+            status_code = 400 if 'slot must be' in str(exc) else 503
+            raise MobileGatewayError(str(exc), status_code=status_code) from exc
+        handle = self._require_pairing_store().create_terminal_handle(
+            project_id='@host',
+            device_id=auth.device_id,
+            target_epoch=0,
+            target_summary=attach_target.target_summary,
+            geometry=geometry_payload,
+        )
+        terminal_id = str(handle.get('terminal_id') or '')
+        handle['websocket_url'] = _terminal_websocket_url(headers, terminal_id=terminal_id)
+        return handle
+
+    def _terminate_host_terminal(
+        self,
+        *,
+        payload: Mapping[str, object],
+        headers: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        auth = self._authenticate(headers, required_scopes=('host_terminal',))
+        client_session_id = str(payload.get('client_session_id') or '').strip()
+        revoked_terminal_count = self._require_pairing_store().revoke_host_terminal_handles(
+            device_id=auth.device_id,
+            client_session_id=client_session_id,
+        )
+        try:
+            terminated = self._require_host_terminal_manager().terminate(
+                device_id=auth.device_id,
+                client_session_id=client_session_id,
+            )
+        except RuntimeError as exc:
+            status_code = 400 if 'slot must be' in str(exc) else 503
+            raise MobileGatewayError(str(exc), status_code=status_code) from exc
+        return {
+            'schema_version': _SCHEMA_VERSION,
+            'status': 'ok',
+            'client_session_id': client_session_id,
+            'terminated': terminated,
+            'revoked_terminal_count': revoked_terminal_count,
+        }
+
     def _focused_project_view_payload(
         self,
         project: MobileGatewayProject,
@@ -1712,9 +2171,19 @@ class MobileGatewayService:
         return redacted
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._terminal_sessions_lock:
+            if self._closed:
+                return
+            self._closed = True
+            terminal_sessions = tuple(self._terminal_sessions.values())
+            self._terminal_sessions.clear()
+        for session in terminal_sessions:
+            close = getattr(session, 'close', None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
         if self._project_health_cache is not None:
             self._project_health_cache.close()
         if self._push_dispatcher is not None:
@@ -1723,6 +2192,23 @@ class MobileGatewayService:
             close = getattr(self._background_executor, 'close', None)
             if callable(close):
                 close()
+
+    def _register_terminal_session(self, session: object) -> None:
+        with self._terminal_sessions_lock:
+            if not self._closed:
+                self._terminal_sessions[id(session)] = session
+                return
+        close = getattr(session, 'close', None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        raise MobileGatewayError('mobile gateway is shutting down', status_code=503)
+
+    def _unregister_terminal_session(self, session: object) -> None:
+        with self._terminal_sessions_lock:
+            self._terminal_sessions.pop(id(session), None)
 
     def _registry_projects(self, *, refresh: bool = False) -> tuple[MobileGatewayProject, ...]:
         if refresh and self._project_registry_provider is not None:
@@ -1761,6 +2247,11 @@ class MobileGatewayService:
         if self._pairing_store is None:
             raise MobileGatewayError('mobile pairing store is not configured', status_code=503)
         return self._pairing_store
+
+    def _require_host_terminal_manager(self) -> HostTerminalManager:
+        if self._host_terminal_manager is None:
+            raise MobileGatewayError('host terminal service is not configured', status_code=503)
+        return self._host_terminal_manager
 
     def _require_notification_store(self) -> MobileNotificationStore:
         if self._notification_store is None:
@@ -2100,6 +2591,19 @@ class MobileGatewayService:
         *,
         include_history: bool,
     ) -> TerminalAttachTarget:
+        target_summary = _map(record.get('target_summary'))
+        if target_summary.get('kind') == 'host_shell':
+            try:
+                return self._require_host_terminal_manager().attach_target(
+                    terminal_id=str(record.get('terminal_id') or ''),
+                    device_id=str(record.get('device_id') or ''),
+                    client_session_id=str(target_summary.get('client_session_id') or ''),
+                    display_name=str(target_summary.get('display_name') or ''),
+                    geometry=TerminalGeometry.from_mapping(record.get('geometry')),
+                    include_history=include_history,
+                )
+            except RuntimeError as exc:
+                raise MobileGatewayError(str(exc), status_code=503) from exc
         project = self._require_project(str(record.get('project_id') or ''))
         view_payload = self._request_project_view(project)
         view = _map(view_payload.get('view'))
@@ -2108,23 +2612,39 @@ class MobileGatewayService:
         target_epoch = _optional_int(record.get('target_epoch'))
         if actual_epoch is None or target_epoch is None or actual_epoch != target_epoch:
             raise MobileGatewayError('stale namespace epoch', status_code=409)
+        blocked = _terminal_operation_blocked_payload(
+            view_payload,
+            agent=_optional_text(_map(record.get('target_summary')).get('agent')),
+            namespace_epoch=target_epoch,
+            operation='attach',
+        )
+        if blocked is not None:
+            raise _TerminalBlockedError(blocked)
+        herdr_summary = _herdr_terminal_target_summary(
+            view,
+            agent=_optional_text(target_summary.get('agent')),
+            operation='attach',
+        )
         socket_path = _optional_text(namespace.get('socket_path'))
         session_name = _optional_text(namespace.get('session_name'))
+        _validate_terminal_summary(record, view, herdr_summary=herdr_summary)
         if not socket_path or not session_name:
-            raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
-        _validate_terminal_summary(record, view)
-        target_summary = _map(record.get('target_summary'))
+            if herdr_summary is None:
+                raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
         pane_id = _terminal_summary_pane_id(target_summary, view)
+        if not pane_id and herdr_summary is not None:
+            pane_id = _optional_text(herdr_summary.get('pane_id'))
         if not pane_id:
             raise MobileGatewayError('terminal target pane evidence is required', status_code=409)
         return TerminalAttachTarget(
             terminal_id=str(record.get('terminal_id') or ''),
-            socket_path=socket_path,
-            session_name=session_name,
+            socket_path=socket_path or '',
+            session_name=session_name or _optional_text(_map(herdr_summary).get('session_name')) or '',
             pane_id=pane_id,
             geometry=TerminalGeometry.from_mapping(record.get('geometry')),
             target_summary=target_summary,
             include_history=include_history,
+            **_terminal_target_kwargs(herdr_summary),
         )
 
     def _handle_terminal_frame(
@@ -2146,7 +2666,9 @@ class MobileGatewayService:
                 sequence=seq,
             )
             session.write(data)
-            self._record_project_activity(str(record.get('project_id') or ''))
+            project_id = str(record.get('project_id') or '')
+            if project_id != '@host':
+                self._record_project_activity(project_id)
             return ''
         if frame_type == 'paste':
             seq = _required_positive_int(frame.get('seq'), 'seq')
@@ -2156,9 +2678,14 @@ class MobileGatewayService:
                 sequence=seq,
             )
             session.paste(str(frame.get('text') or ''))
-            self._record_project_activity(str(record.get('project_id') or ''))
+            project_id = str(record.get('project_id') or '')
+            if project_id != '@host':
+                self._record_project_activity(project_id)
             return ''
         if frame_type == 'resize':
+            viewport = _terminal_viewport_state(session)
+            if viewport is not None and viewport.get('resize_policy') != 'client':
+                return ''
             session.resize(TerminalGeometry.from_mapping(frame))
             return ''
         if frame_type == 'closed':
@@ -2217,11 +2744,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                 try:
                     status, body, headers = service.dispatch_file_download(self.path, self.headers)
                 except MobileGatewayError as exc:
-                    self._send_json(exc.status_code, {
-                        'schema_version': _SCHEMA_VERSION,
-                        'status': 'error',
-                        'error': _error_text(exc),
-                    })
+                    self._send_json(exc.status_code, _mobile_error_payload(exc))
                     return
                 self._send_bytes(status, body, headers)
                 return
@@ -2229,11 +2752,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                 status, payload = service.dispatch_get(self.path, self.headers)
             except MobileGatewayError as exc:
                 status = exc.status_code
-                payload = {
-                    'schema_version': _SCHEMA_VERSION,
-                    'status': 'error',
-                    'error': _error_text(exc),
-                }
+                payload = _mobile_error_payload(exc)
             self._send_json(status, payload)
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib hook
@@ -2248,11 +2767,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                     status, payload = service.dispatch_post(self.path, self._read_json_body(), self.headers)
             except MobileGatewayError as exc:
                 status = exc.status_code
-                payload = {
-                    'schema_version': _SCHEMA_VERSION,
-                    'status': 'error',
-                    'error': _error_text(exc),
-                }
+                payload = _mobile_error_payload(exc)
             except ValueError as exc:
                 status = 400
                 payload = {
@@ -2267,7 +2782,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                 status, payload = service.dispatch_put(self.path, self._read_json_body(), self.headers)
             except MobileGatewayError as exc:
                 status = exc.status_code
-                payload = {'schema_version': _SCHEMA_VERSION, 'status': 'error', 'error': _error_text(exc)}
+                payload = _mobile_error_payload(exc)
             except ValueError as exc:
                 status = 400
                 payload = {'schema_version': _SCHEMA_VERSION, 'status': 'error', 'error': _error_text(exc)}
@@ -2278,7 +2793,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                 status, payload = service.dispatch_delete(self.path, self.headers)
             except MobileGatewayError as exc:
                 status = exc.status_code
-                payload = {'schema_version': _SCHEMA_VERSION, 'status': 'error', 'error': _error_text(exc)}
+                payload = _mobile_error_payload(exc)
             self._send_json(status, payload)
 
         def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
@@ -2300,11 +2815,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
             try:
                 events = service.notification_events_since(self.path, self.headers)
             except MobileGatewayError as exc:
-                self._send_json(exc.status_code, {
-                    'schema_version': _SCHEMA_VERSION,
-                    'status': 'error',
-                    'error': _error_text(exc),
-                })
+                self._send_json(exc.status_code, _mobile_error_payload(exc))
                 return
             self.send_response(200)
             self.send_header('content-type', 'text/event-stream; charset=utf-8')
@@ -2801,13 +3312,28 @@ def _mobile_project_upload_relative_path(*, agent: str, file_id: str, file_name:
     )
 
 
-def _workspace_artifact_relative_path_allowed(relative_path: Path) -> bool:
+def _workspace_artifact_relative_path_allowed(
+    relative_path: Path,
+    *,
+    agent: str,
+) -> bool:
     parts = relative_path.parts
     if not parts or parts[0] == '.git':
         return False
     if parts[0] != '.ccb':
         return True
-    return parts[: len(_MOBILE_PROJECT_UPLOAD_DIR)] == _MOBILE_PROJECT_UPLOAD_DIR
+    if parts[: len(_MOBILE_PROJECT_UPLOAD_DIR)] == _MOBILE_PROJECT_UPLOAD_DIR:
+        return True
+    try:
+        workspace_prefix = ('.ccb', 'workspaces', _safe_path_segment(agent))
+    except MobileGatewayError:
+        return False
+    workspace_parts = parts[len(workspace_prefix) :]
+    return (
+        parts[: len(workspace_prefix)] == workspace_prefix
+        and bool(workspace_parts)
+        and all(not part.startswith('.') for part in workspace_parts)
+    )
 
 
 def _safe_path_segment(value: object) -> str:
@@ -2950,11 +3476,11 @@ def _agent_conversation_items(
         limit=limit,
         cursor=cursor,
     )
-    # Codex/Claude files are the authority whenever those providers are in
+    # Provider-native files are the authority whenever those providers are in
     # use, including an intentionally empty native history. Other providers do
     # not all expose a native transcript, so retain the safe structured CCB
     # records. Terminal scrollback is deliberately excluded from this path.
-    if provider_key in {'', 'codex', 'claude'} or native_items.items:
+    if provider_key in {'', 'codex', 'claude', 'pi'} or native_items.items:
         return native_items
     return _agent_structured_fallback_conversation_items(
         view_payload,
@@ -3080,8 +3606,17 @@ def _agent_native_conversation_items(
         if codex_items.items:
             return codex_items
     if provider_key in {'', 'claude'}:
+        claude_items = _claude_native_conversation_items(
+            project_root,
+            project_id=project_id,
+            agent=agent,
+            mobile_files_dir=mobile_files_dir,
+        )
+        if provider_key == 'claude' or claude_items:
+            return _ConversationItemsResult(claude_items)
+    if provider_key in {'', 'pi'}:
         return _ConversationItemsResult(
-            _claude_native_conversation_items(
+            _pi_native_conversation_items(
                 project_root,
                 project_id=project_id,
                 agent=agent,
@@ -3112,6 +3647,13 @@ def _agent_native_conversation_cache_fingerprint(
         )
         if claude_fingerprint:
             return claude_fingerprint
+    if provider_key in {'', 'pi'}:
+        pi_fingerprint = _pi_native_conversation_cache_fingerprint(
+            project_root,
+            agent=agent,
+        )
+        if pi_fingerprint:
+            return pi_fingerprint
     return ()
 
 
@@ -3150,6 +3692,209 @@ def _conversation_page_has_provider_native_items(page: dict[str, object]) -> boo
         if source.startswith('provider_native/'):
             return True
     return False
+
+
+def _pi_native_conversation_items(
+    project_root: Path,
+    *,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None = None,
+) -> list[dict[str, object]]:
+    session_paths = _pi_native_session_paths(project_root, agent=agent)
+    if not session_paths:
+        return []
+    file_roots = [
+        path
+        for path in (
+            mobile_files_dir,
+            project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+        )
+        if path is not None
+    ]
+    items: list[dict[str, object]] = []
+    for session_order, session_path in enumerate(session_paths):
+        try:
+            lines = session_path.open(encoding='utf-8-sig')
+            fallback_timestamp = f'{int(session_path.stat().st_mtime):020d}'
+        except Exception:
+            continue
+        parent_by_id: dict[str, str | None] = {}
+        visible_by_id: dict[str, dict[str, object]] = {}
+        visible_order: list[str] = []
+        latest_record_id: str | None = None
+        session_id = _native_id_part(session_path.stem, fallback='session')
+        with lines:
+            for line_number, line in enumerate(lines, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = _map(json.loads(line))
+                except Exception:
+                    continue
+                record_id = _optional_text(record.get('id'))
+                if not record_id:
+                    continue
+                latest_record_id = record_id
+                parent_by_id[record_id] = _optional_text(record.get('parentId'))
+                if record.get('type') == 'session':
+                    session_id = _native_id_part(record_id, fallback=session_id)
+                    continue
+                if record.get('type') != 'message':
+                    continue
+                message = _map(record.get('message'))
+                role = str(message.get('role') or '').strip().lower()
+                if role not in {'user', 'assistant'}:
+                    continue
+                body = _pi_message_content_text(message.get('content'))
+                body = _inject_workspace_artifacts(
+                    body,
+                    project_root=project_root,
+                    project_id=project_id,
+                    agent=agent,
+                    mobile_files_dir=mobile_files_dir,
+                )
+                body = _clean_native_message_text(body)
+                if not body:
+                    continue
+                item_id = (
+                    f'pi-{session_id}-{line_number}-'
+                    f'{_native_id_part(record_id, fallback=role)}-{role}'
+                )
+                if role == 'user':
+                    item = {
+                        'id': item_id,
+                        'agent': agent,
+                        'kind': 'user_message',
+                        'title': 'You',
+                        'body': body,
+                        'format': 'markdown',
+                        'source': 'provider_native/pi',
+                        'state': 'sent',
+                        'attachments': [],
+                    }
+                else:
+                    item = {
+                        'id': item_id,
+                        'agent': agent,
+                        'kind': 'agent_reply',
+                        'title': 'Agent reply',
+                        'body': body,
+                        'format': 'markdown',
+                        'source': 'provider_native/pi',
+                        'attachments': _artifact_link_attachments(
+                            body,
+                            file_roots=file_roots,
+                            project_id=project_id,
+                            agent=agent,
+                        ),
+                    }
+                _set_native_sort_fields(
+                    item,
+                    record,
+                    fallback_timestamp=fallback_timestamp,
+                    thread_order=session_order,
+                    line_number=line_number,
+                )
+                visible_by_id[record_id] = item
+                visible_order.append(record_id)
+        active_record_ids = _pi_active_record_ids(
+            latest_record_id,
+            parent_by_id=parent_by_id,
+        )
+        items.extend(
+            visible_by_id[record_id]
+            for record_id in visible_order
+            if record_id in active_record_ids
+        )
+    sorted_items = [
+        item
+        for _, item in sorted(
+            enumerate(items),
+            key=lambda indexed: (
+                _optional_text(indexed[1].get('_native_sort_timestamp')) or '',
+                int(indexed[1].get('_native_thread_order') or 0),
+                int(indexed[1].get('_native_line_number') or 0),
+                indexed[0],
+            ),
+        )
+    ]
+    return [
+        _without_native_sort_fields(item)
+        for item in _coalesce_pi_native_agent_replies(sorted_items)
+    ]
+
+
+def _pi_native_session_paths(project_root: Path, *, agent: str) -> list[Path]:
+    session_dir = (
+        project_root / '.ccb' / 'agents' / agent / 'provider-state' / 'pi' / 'sessions'
+    )
+    if session_dir.is_symlink() or not session_dir.is_dir():
+        return []
+    project_work_dir = normalize_work_dir(project_root)
+    candidates: list[tuple[str, str, Path]] = []
+    try:
+        for path in session_dir.glob('*.jsonl'):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                with path.open(encoding='utf-8-sig') as lines:
+                    header = _map(json.loads(lines.readline()))
+            except Exception:
+                continue
+            if header.get('type') != 'session':
+                continue
+            recorded_work_dir = _optional_text(header.get('cwd'))
+            if not recorded_work_dir or normalize_work_dir(recorded_work_dir) != project_work_dir:
+                continue
+            candidates.append((
+                _optional_text(header.get('timestamp')) or '',
+                path.name,
+                path,
+            ))
+    except Exception:
+        return []
+    return [path for _, _, path in sorted(candidates)]
+
+
+def _pi_native_conversation_cache_fingerprint(
+    project_root: Path,
+    *,
+    agent: str,
+) -> tuple[tuple[str, int, int], ...]:
+    return tuple(
+        entry
+        for path in _pi_native_session_paths(project_root, agent=agent)
+        if (entry := _conversation_file_fingerprint_entry(path)) is not None
+    )
+
+
+def _pi_active_record_ids(
+    latest_record_id: str | None,
+    *,
+    parent_by_id: Mapping[str, str | None],
+) -> set[str]:
+    active: set[str] = set()
+    current = latest_record_id
+    while current and current not in active:
+        active.add(current)
+        current = parent_by_id.get(current)
+    return active
+
+
+def _pi_message_content_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    parts: list[str] = []
+    for item in _iterable(value):
+        content = _map(item)
+        if content.get('type') != 'text':
+            continue
+        text = _optional_text(content.get('text')) or ''
+        if text:
+            parts.append(text)
+    return '\n\n'.join(parts)
 
 
 def _claude_native_conversation_items(
@@ -3214,6 +3959,7 @@ def _claude_native_conversation_items(
                     item = {
                         'id': item_id,
                         'agent': agent,
+                        'session_id': session_id,
                         'kind': 'user_message',
                         'title': 'You',
                         'body': body,
@@ -3231,6 +3977,7 @@ def _claude_native_conversation_items(
                     item = {
                         'id': item_id,
                         'agent': agent,
+                        'session_id': session_id,
                         'kind': 'agent_reply',
                         'title': 'Agent reply',
                         'body': body,
@@ -3269,58 +4016,12 @@ def _claude_native_conversation_items(
 
 
 def _claude_native_session_path(project_root: Path, *, agent: str) -> Path | None:
-    try:
-        from provider_backends.claude.session_runtime.pathing import (
-            find_project_session_file,
-            read_json,
-        )
-        session_file = find_project_session_file(project_root, agent)
-    except Exception:
-        return None
-    if session_file is None:
-        return None
-    data = read_json(session_file)
-    path_text = _optional_text(_map(data).get('claude_session_path'))
-    if path_text:
-        try:
-            path = Path(path_text).expanduser()
-        except Exception:
-            path = None
-        if path is not None and path.is_file():
-            return path
-    return _discover_claude_native_session_path(project_root, data=_map(data))
-
-
-def _discover_claude_native_session_path(
-    project_root: Path,
-    *,
-    data: dict[str, object],
-) -> Path | None:
-    projects_root_text = _optional_text(data.get('claude_projects_root'))
-    if not projects_root_text:
-        return None
-    work_dir_text = (
-        _optional_text(data.get('work_dir'))
-        or _optional_text(data.get('workspace_path'))
-        or _optional_text(data.get('project_root'))
-        or str(project_root)
+    return resolve_provider_session_path(
+        'claude',
+        None,
+        project_root=project_root,
+        agent=agent,
     )
-    try:
-        projects_root = Path(projects_root_text).expanduser()
-        work_dir = Path(work_dir_text).expanduser()
-    except Exception:
-        return None
-    try:
-        from provider_backends.claude.comm import ClaudeLogReader
-
-        path = ClaudeLogReader(
-            root=projects_root,
-            work_dir=work_dir,
-            use_sessions_index=False,
-        ).current_session_path()
-    except Exception:
-        return None
-    return path if path is not None and path.is_file() else None
 
 
 def _claude_native_conversation_cache_fingerprint(
@@ -3927,6 +4628,7 @@ def _codex_rollout_conversation_items(
                 file_roots=file_roots,
             )
             if event_item is not None:
+                event_item['session_id'] = thread_id
                 _set_native_sort_fields(
                     event_item,
                     record,
@@ -3964,6 +4666,7 @@ def _codex_rollout_conversation_items(
             item = {
                 'id': item_id,
                 'agent': agent,
+                'session_id': thread_id,
                 'kind': 'user_message',
                 'title': 'You',
                 'body': body,
@@ -3981,6 +4684,7 @@ def _codex_rollout_conversation_items(
             item = {
                 'id': item_id,
                 'agent': agent,
+                'session_id': thread_id,
                 'kind': 'agent_reply',
                 'title': 'Agent reply',
                 'body': body,
@@ -4240,6 +4944,15 @@ def _coalesce_claude_native_agent_replies(
     )
 
 
+def _coalesce_pi_native_agent_replies(
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return _coalesce_provider_native_agent_replies(
+        items,
+        source='provider_native/pi',
+    )
+
+
 def _coalesce_provider_native_agent_replies(
     items: list[dict[str, object]],
     *,
@@ -4434,12 +5147,17 @@ def _inject_workspace_artifacts(
         parsed = urlparse(url)
         if url.startswith('#'):
             return match.group(0)
-        if parsed.scheme not in {'', 'file'}:
+        if parsed.scheme not in {'', 'file'} and not (os.name == 'nt' and len(parsed.scheme) == 1):
             return match.group(0)
         if parsed.netloc not in {'', 'localhost'}:
             return match.group(0)
         try:
-            link_path = unquote(parsed.path)
+            if parsed.scheme == 'file':
+                link_path = url2pathname(parsed.path)
+            elif os.name == 'nt' and len(parsed.scheme) == 1:
+                link_path = f'{parsed.scheme}:{unquote(parsed.path)}'
+            else:
+                link_path = unquote(parsed.path)
             if not link_path.strip():
                 return match.group(0)
             target_path = Path(link_path).expanduser()
@@ -4452,7 +5170,10 @@ def _inject_workspace_artifacts(
                 relative_path = None
             if (
                 relative_path is not None
-                and not _workspace_artifact_relative_path_allowed(relative_path)
+                and not _workspace_artifact_relative_path_allowed(
+                    relative_path,
+                    agent=agent,
+                )
             ):
                 return match.group(0)
             target_stat = target_path.stat()
@@ -4909,7 +5630,12 @@ def _agent_status_summary(agent: dict[str, object]) -> str:
     return f'{state}, {health}, no queued items'
 
 
-def _validate_terminal_summary(record: dict[str, object], view: dict[str, object]) -> None:
+def _validate_terminal_summary(
+    record: dict[str, object],
+    view: dict[str, object],
+    *,
+    herdr_summary: dict[str, object] | None = None,
+) -> None:
     summary = _map(record.get('target_summary'))
     agent = _optional_text(summary.get('agent'))
     window = _optional_text(summary.get('window'))
@@ -4923,6 +5649,9 @@ def _validate_terminal_summary(record: dict[str, object], view: dict[str, object
     if pane_id and agent:
         matched = next((item for item in agents if str(item.get('name') or '') == agent), None)
         if matched is None or _optional_text(matched.get('pane_id')) != pane_id:
+            herdr_pane_id = _optional_text(_map(herdr_summary).get('pane_id'))
+            if herdr_pane_id == pane_id:
+                return
             raise MobileGatewayError('unknown terminal target pane', status_code=404)
 
 
@@ -4971,8 +5700,8 @@ def _validate_terminal_target(
         raise MobileGatewayError('ProjectView namespace epoch is required', status_code=409)
     if namespace_epoch != actual_epoch:
         raise MobileGatewayError('stale namespace epoch', status_code=409)
-    if not _optional_text(namespace.get('socket_path')) or not _optional_text(namespace.get('session_name')):
-        raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
+    socket_path = _optional_text(namespace.get('socket_path'))
+    session_name = _optional_text(namespace.get('session_name'))
 
     kind = str(target.get('kind') or '').strip()
     agent = _optional_text(target.get('agent'))
@@ -4991,6 +5720,18 @@ def _validate_terminal_target(
         if window and matched_window and window != matched_window:
             raise MobileGatewayError('terminal target window does not match agent', status_code=409)
         matched_pane_id = _optional_text(matched.get('pane_id')) or pane_id
+        herdr_summary = _herdr_terminal_target_summary(view, agent=agent, operation='attach')
+        if not socket_path or not session_name:
+            if herdr_summary is None:
+                blocked = _terminal_operation_blocked_payload(
+                    view_payload,
+                    agent=agent,
+                    namespace_epoch=namespace_epoch,
+                    operation='attach',
+                )
+                if blocked is not None:
+                    raise _TerminalBlockedError(blocked)
+                raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
         return {
             'target_epoch': actual_epoch,
             'target_summary': {
@@ -4998,18 +5739,47 @@ def _validate_terminal_target(
                 'agent': agent,
                 'window': matched_window,
                 **({'pane_id': matched_pane_id} if matched_pane_id else {}),
+                **(herdr_summary or {}),
             },
         }
     if kind == 'window_active_pane':
         if not window:
             raise MobileGatewayError('terminal target window is required', status_code=400)
-        if not any(str(item.get('name') or '') == window for item in windows):
+        matched_window = next((item for item in windows if str(item.get('name') or '') == window), None)
+        if matched_window is None:
             raise MobileGatewayError('unknown terminal target window', status_code=404)
+        herdr_summary = _herdr_terminal_target_summary(view, agent=None, operation='attach')
+        if herdr_summary is not None:
+            herdr_pane_id = _optional_text(herdr_summary.get('pane_id'))
+            active_pane_id = (
+                _optional_text(matched_window.get('active_pane_id'))
+                or (
+                    _optional_text(namespace.get('active_pane_id'))
+                    if _optional_text(namespace.get('active_window')) == window
+                    else None
+                )
+            )
+            if not active_pane_id or active_pane_id != herdr_pane_id:
+                raise _TerminalBlockedError(
+                    _herdr_terminal_target_blocked_payload('window-active-pane-does-not-match-herdr-pane')
+                )
+        if not socket_path or not session_name:
+            if herdr_summary is None:
+                blocked = _terminal_operation_blocked_payload(
+                    view_payload,
+                    agent=None,
+                    namespace_epoch=namespace_epoch,
+                    operation='attach',
+                )
+                if blocked is not None:
+                    raise _TerminalBlockedError(blocked)
+                raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
         return {
             'target_epoch': actual_epoch,
             'target_summary': {
                 'project_id': project_id,
                 'window': window,
+                **(herdr_summary or {}),
             },
         }
     if kind == 'pane_evidence':
@@ -5019,6 +5789,24 @@ def _validate_terminal_target(
             raise MobileGatewayError('unknown terminal target agent', status_code=404)
         if window and not any(str(item.get('name') or '') == window for item in windows):
             raise MobileGatewayError('unknown terminal target window', status_code=404)
+        herdr_summary = _herdr_terminal_target_summary(view, agent=agent, operation='attach')
+        if herdr_summary is not None:
+            herdr_pane_id = _optional_text(herdr_summary.get('pane_id'))
+            if not pane_id or pane_id != herdr_pane_id:
+                raise _TerminalBlockedError(
+                    _herdr_terminal_target_blocked_payload('pane-evidence-does-not-match-herdr-pane')
+                )
+        if not socket_path or not session_name:
+            if herdr_summary is None:
+                blocked = _terminal_operation_blocked_payload(
+                    view_payload,
+                    agent=agent,
+                    namespace_epoch=namespace_epoch,
+                    operation='attach',
+                )
+                if blocked is not None:
+                    raise _TerminalBlockedError(blocked)
+                raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
         summary = {'project_id': project_id}
         if agent:
             summary['agent'] = agent
@@ -5026,11 +5814,153 @@ def _validate_terminal_target(
             summary['window'] = window
         if pane_id:
             summary['pane_id'] = pane_id
+        summary.update(herdr_summary or {})
         return {
             'target_epoch': actual_epoch,
             'target_summary': summary,
         }
     raise MobileGatewayError('unknown terminal target kind', status_code=400)
+
+
+def _terminal_operation_blocked_payload(
+    view_payload: dict[str, object],
+    *,
+    agent: str | None,
+    namespace_epoch: int | None,
+    operation: str,
+) -> dict[str, object] | None:
+    view = _map(view_payload.get('view'))
+    namespace = _map(view.get('namespace'))
+    actual_epoch = _optional_int(namespace.get('epoch'))
+    if actual_epoch is None or namespace_epoch != actual_epoch:
+        return None
+    projection = _herdr_terminal_projection(view, agent=agent)
+    if projection is None:
+        return None
+    if _herdr_terminal_operation_supported(projection):
+        return None
+    code = {
+        'attach': 'attach_unsupported',
+        'history': 'history_unsupported',
+        'input': 'input_unsupported',
+    }.get(operation, 'target_not_attachable')
+    capability_status = _optional_text(projection.get('capability_status')) or 'blocked'
+    if capability_status == 'supported':
+        capability_status = 'blocked'
+    beta_gaps = _text_list(projection.get('beta_gaps'))
+    blocking_gaps = _text_list(projection.get('blocking_gaps')) or [code]
+    next_action = _optional_text(projection.get('degraded_next_action'))
+    message = (
+        f'Herdr mobile terminal {operation} is not available; '
+        f'next_action={next_action or "collect-validation-transcript"}'
+    )
+    return {
+        'code': code,
+        'backend_impl': 'herdr',
+        'capability_status': capability_status,
+        'degraded_next_action': next_action,
+        'message': message,
+        'beta_gaps': beta_gaps,
+        'blocking_gaps': blocking_gaps,
+    }
+
+
+def _herdr_terminal_target_blocked_payload(reason: str) -> dict[str, object]:
+    return {
+        'code': 'target_not_attachable',
+        'backend_impl': 'herdr',
+        'capability_status': 'blocked',
+        'degraded_next_action': 'collect-validation-transcript',
+        'message': f'Herdr mobile terminal target is not attachable; reason={reason}',
+        'beta_gaps': [],
+        'blocking_gaps': [reason],
+    }
+
+
+def _herdr_terminal_projection(view: dict[str, object], *, agent: str | None) -> dict[str, object] | None:
+    agent_name = _optional_text(agent)
+    if agent_name:
+        for item in _iterable(view.get('agents')):
+            record = _map(item)
+            if _optional_text(record.get('name')) != agent_name:
+                continue
+            projection = _map(record.get('herdr_surface_projection'))
+            if projection.get('backend_impl') == 'herdr':
+                return projection
+    namespace = _map(view.get('namespace'))
+    projection = _map(namespace.get('herdr_surface_projection'))
+    if projection.get('backend_impl') == 'herdr':
+        return projection
+    if namespace.get('namespace_backend_impl') == 'herdr':
+        return {
+            'backend_impl': 'herdr',
+            'capability_status': 'blocked',
+            'beta_gaps': ['mobile-terminal-validation-pending'],
+            'blocking_gaps': ['mobile-terminal-adapter-unavailable'],
+            'degraded_next_action': 'collect-validation-transcript',
+        }
+    return None
+
+
+def _herdr_terminal_operation_supported(projection: dict[str, object]) -> bool:
+    return herdr_surface_projection_passes_gate(projection)
+
+
+def _herdr_terminal_target_summary(
+    view: dict[str, object],
+    *,
+    agent: str | None,
+    operation: str,
+) -> dict[str, object] | None:
+    projection = _herdr_terminal_projection(view, agent=agent)
+    if projection is None or not _herdr_terminal_operation_supported(projection):
+        return None
+    refs = _map(projection.get('evidence_refs'))
+    namespace_ref = _map(refs.get('namespace_ref'))
+    pane_ref = _map(refs.get('pane_ref'))
+    if not namespace_ref or not pane_ref:
+        return None
+    pane_id = _optional_text(pane_ref.get('pane_id'))
+    return {
+        'backend_impl': 'herdr',
+        'namespace_ref': dict(namespace_ref),
+        'pane_ref': dict(pane_ref),
+        'pane_id': pane_id,
+        'session_name': _optional_text(namespace_ref.get('session_name')),
+        'attach_supported': True,
+        'history_supported': True,
+        'input_supported': True,
+        'blocked_reason': None,
+    }
+
+
+def _terminal_target_kwargs(summary: dict[str, object] | None) -> dict[str, object]:
+    if not summary:
+        return {}
+    return {
+        'backend_impl': _optional_text(summary.get('backend_impl')) or 'tmux',
+        'namespace_ref': _map(summary.get('namespace_ref')) or None,
+        'pane_ref': _map(summary.get('pane_ref')) or None,
+        'attach_supported': bool(summary.get('attach_supported')),
+        'history_supported': bool(summary.get('history_supported')),
+        'input_supported': bool(summary.get('input_supported')),
+        'blocked_reason': _optional_text(summary.get('blocked_reason')),
+    }
+
+
+def _text_list(value: object) -> list[str]:
+    if isinstance(value, (str, bytes)):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = list(value)
+    else:
+        values = []
+    result: list[str] = []
+    for item in values:
+        text = _optional_text(item)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _terminal_history_target(
@@ -5050,8 +5980,6 @@ def _terminal_history_target(
         raise MobileGatewayError('stale namespace epoch', status_code=409)
     socket_path = _optional_text(namespace.get('socket_path'))
     session_name = _optional_text(namespace.get('session_name'))
-    if not socket_path or not session_name:
-        raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
     agent_name = str(agent or '').strip()
     if not agent_name:
         raise MobileGatewayError('agent is required', status_code=400)
@@ -5060,6 +5988,12 @@ def _terminal_history_target(
     if matched is None:
         raise MobileGatewayError('unknown terminal target agent', status_code=404)
     pane_id = _optional_text(matched.get('pane_id'))
+    herdr_summary = _herdr_terminal_target_summary(view, agent=agent_name, operation='history')
+    if not socket_path or not session_name:
+        if herdr_summary is None:
+            raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
+    if not pane_id and herdr_summary is not None:
+        pane_id = _optional_text(herdr_summary.get('pane_id'))
     if not pane_id:
         raise MobileGatewayError('terminal history target has no pane evidence', status_code=409)
     return TerminalHistoryTarget(
@@ -5068,9 +6002,10 @@ def _terminal_history_target(
         agent=agent_name,
         window=_optional_text(matched.get('window')) or '',
         pane_id=pane_id,
-        socket_path=socket_path,
-        session_name=session_name,
+        socket_path=socket_path or '',
+        session_name=session_name or _optional_text(_map(herdr_summary).get('session_name')) or '',
         max_lines=min(2000, max(20, int(max_lines))),
+        **_terminal_target_kwargs(herdr_summary),
     )
 
 
@@ -5084,10 +6019,14 @@ def _pane_message_target(
     namespace = _map(view.get('namespace'))
     socket_path = _optional_text(namespace.get('socket_path'))
     session_name = _optional_text(namespace.get('session_name'))
-    if not socket_path or not session_name:
-        raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
     agent_record = _map(target.get('agent_record'))
     pane_id = _optional_text(agent_record.get('pane_id'))
+    herdr_summary = _herdr_terminal_target_summary(view, agent=str(target.get('agent') or ''), operation='input')
+    if not socket_path or not session_name:
+        if herdr_summary is None:
+            raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
+    if not pane_id and herdr_summary is not None:
+        pane_id = _optional_text(herdr_summary.get('pane_id'))
     if not pane_id:
         raise MobileGatewayError('message target has no pane evidence', status_code=409)
     return PaneMessageTarget(
@@ -5096,8 +6035,9 @@ def _pane_message_target(
         agent=str(target.get('agent') or ''),
         window=_optional_text(agent_record.get('window')) or '',
         pane_id=pane_id,
-        socket_path=socket_path,
-        session_name=session_name,
+        socket_path=socket_path or '',
+        session_name=session_name or _optional_text(_map(herdr_summary).get('session_name')) or '',
+        **_terminal_target_kwargs(herdr_summary),
     )
 
 
@@ -5162,6 +6102,9 @@ def _ccbd_focus_status(exc: Exception) -> int:
 
 
 def _terminal_error_code(exc: MobileGatewayError) -> str:
+    blocked = _terminal_blocked_payload(exc)
+    if blocked is not None:
+        return _optional_text(blocked.get('code')) or 'terminal_blocked'
     text = _error_text(exc)
     if text.startswith('stale namespace epoch'):
         return 'stale_namespace_epoch'
@@ -5178,6 +6121,39 @@ def _terminal_error_code(exc: MobileGatewayError) -> str:
     return 'terminal_error'
 
 
+def _mobile_error_payload(exc: MobileGatewayError) -> dict[str, object]:
+    blocked = _terminal_blocked_payload(exc)
+    if blocked is not None:
+        return {
+            'schema_version': _SCHEMA_VERSION,
+            'status': 'blocked',
+            'terminal_blocked': blocked,
+            'error': _error_text(exc),
+        }
+    return {
+        'schema_version': _SCHEMA_VERSION,
+        'status': 'error',
+        'error': _error_text(exc),
+    }
+
+
+def _terminal_error_frame(exc: MobileGatewayError) -> dict[str, object]:
+    blocked = _terminal_blocked_payload(exc)
+    if blocked is not None:
+        return {
+            'type': 'error',
+            'code': _optional_text(blocked.get('code')) or 'terminal_blocked',
+            'terminal_blocked': blocked,
+            'message': _error_text(exc),
+        }
+    return {'type': 'error', 'code': _terminal_error_code(exc)}
+
+
+def _terminal_blocked_payload(exc: MobileGatewayError) -> dict[str, object] | None:
+    payload = getattr(exc, 'terminal_blocked', None)
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
 def _pump_terminal_output(
     connection: WebSocketConnection,
     session,
@@ -5187,6 +6163,7 @@ def _pump_terminal_output(
     terminal_id: str,
     terminal_token: str,
     sequence: int,
+    geometry_revision: int,
 ) -> None:
     try:
         while not stop.is_set():
@@ -5196,16 +6173,53 @@ def _pump_terminal_output(
                 _safe_send_json(connection, {'type': 'closed', 'reason': 'pty_closed'})
                 stop.set()
                 return
+            viewport = _terminal_viewport_state(session)
+            if viewport is not None:
+                next_revision = _int(viewport.get('revision'), geometry_revision)
+                if next_revision != geometry_revision:
+                    geometry_revision = next_revision
+                    geometry = _map(viewport.get('geometry'))
+                    connection.send_json(
+                        {
+                            'type': 'geometry',
+                            **geometry,
+                            'resize_policy': viewport['resize_policy'],
+                            'revision': geometry_revision,
+                        }
+                    )
             if data:
                 sequence += 1
                 try:
-                    connection.send_json(
-                        {
-                            'type': 'output',
-                            'seq': sequence,
-                            'bytes_b64': base64.b64encode(data).decode('ascii'),
-                        },
-                    )
+                    payload: dict[str, object] = {
+                        'type': 'output',
+                        'seq': sequence,
+                        'bytes_b64': base64.b64encode(data).decode('ascii'),
+                    }
+                    take_projection = getattr(session, 'take_output_projection', None)
+                    projection = take_projection() if callable(take_projection) else None
+                    if isinstance(projection, Mapping):
+                        screen = projection.get('screen')
+                        history = projection.get('history')
+                        history_append = projection.get('history_append')
+                        if isinstance(screen, (bytes, bytearray)):
+                            payload.update(
+                                {
+                                    'render_mode': 'replace_snapshot',
+                                    'screen_b64': base64.b64encode(screen).decode('ascii'),
+                                    'history_reset': bool(
+                                        projection.get('history_reset', False)
+                                    ),
+                                }
+                            )
+                            if isinstance(history, (bytes, bytearray)):
+                                payload['history_b64'] = base64.b64encode(history).decode(
+                                    'ascii'
+                                )
+                            if isinstance(history_append, (bytes, bytearray)):
+                                payload['history_append_b64'] = base64.b64encode(
+                                    history_append
+                                ).decode('ascii')
+                    connection.send_json(payload)
                 except OSError:
                     close_state['reason'] = 'transport_disconnected'
                     stop.set()
@@ -5219,6 +6233,37 @@ def _pump_terminal_output(
         close_state['reason'] = 'terminal_output_error'
         _safe_send_json(connection, {'type': 'error', 'code': 'terminal_output_error', 'message': _error_text(exc)})
         stop.set()
+
+
+def _terminal_viewport_state(
+    session,
+    *,
+    fallback: TerminalAttachTarget | None = None,
+) -> dict[str, object] | None:
+    viewport_state = getattr(session, 'viewport_state', None)
+    if callable(viewport_state):
+        payload = viewport_state()
+        if isinstance(payload, Mapping):
+            geometry = TerminalGeometry.from_mapping(payload.get('geometry'))
+            policy = str(payload.get('resize_policy') or '').strip()
+            if policy not in {'adaptive_pane', 'fixed_source', 'client'}:
+                raise RuntimeError('terminal viewport resize policy is invalid')
+            return {
+                'revision': max(0, _int(payload.get('revision'), 0)),
+                'geometry': geometry.to_mapping(),
+                'resize_policy': policy,
+            }
+    if fallback is None:
+        return None
+    return {
+        'revision': 0,
+        'geometry': fallback.geometry.to_mapping(),
+        'resize_policy': (
+            'client'
+            if fallback.target_summary.get('kind') == 'host_shell'
+            else 'fixed_source'
+        ),
+    }
 
 
 def _safe_send_json(connection: WebSocketConnection, payload: Mapping[str, object]) -> None:

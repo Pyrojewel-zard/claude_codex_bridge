@@ -11,6 +11,9 @@ import '../repository/fake_mobile_ccb_repository.dart';
 import 'app_theme.dart';
 import 'app_update.dart';
 import 'background_connection.dart';
+import 'chat_background.dart';
+import 'mobile_network_status.dart';
+import 'terminal_shortcut_preferences.dart';
 
 class CcbMobileApp extends StatefulWidget {
   const CcbMobileApp({
@@ -18,6 +21,10 @@ class CcbMobileApp extends StatefulWidget {
     this.themePreferenceStore,
     this.backgroundConnectionPreferenceStore,
     this.backgroundConnectionPlatform,
+    this.chatBackgroundStore,
+    this.chatBackgroundPicker = pickCcbChatBackgroundImage,
+    this.terminalShortcutPreferenceStore,
+    this.mobileNetworkStatusPlatform,
     this.profileStore,
     this.updateService,
     this.automaticUpdateCheck = true,
@@ -31,6 +38,10 @@ class CcbMobileApp extends StatefulWidget {
   final CcbBackgroundConnectionPreferenceStore?
   backgroundConnectionPreferenceStore;
   final BackgroundConnectionPlatform? backgroundConnectionPlatform;
+  final CcbChatBackgroundStore? chatBackgroundStore;
+  final CcbChatBackgroundPicker chatBackgroundPicker;
+  final CcbTerminalShortcutPreferenceStore? terminalShortcutPreferenceStore;
+  final MobileNetworkStatusPlatform? mobileNetworkStatusPlatform;
   final GatewayHostProfileStore? profileStore;
   final CcbMobileUpdateService? updateService;
   final bool automaticUpdateCheck;
@@ -49,7 +60,18 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
   _backgroundConnectionPreferenceStore =
       widget.backgroundConnectionPreferenceStore ??
       FlutterCcbBackgroundConnectionPreferenceStore();
+  late final CcbTerminalShortcutPreferenceStore
+  _terminalShortcutPreferenceStore =
+      widget.terminalShortcutPreferenceStore ??
+      FlutterCcbTerminalShortcutPreferenceStore();
+  late final CcbChatBackgroundStore _chatBackgroundStore =
+      widget.chatBackgroundStore ?? FlutterCcbChatBackgroundStore();
   CcbThemePreference _themePreference = CcbThemePreference.system;
+  CcbChatBackgroundPreference? _chatBackgroundPreference;
+  CcbTerminalShortcutPreferences _terminalShortcutPreferences =
+      CcbTerminalShortcutPreferences.defaults;
+  Future<void> _terminalShortcutPreferenceWrite = Future<void>.value();
+  bool _terminalShortcutPreferencesChangedLocally = false;
   bool _backgroundConnectionEnabled = false;
   bool _backgroundConnectionPreferenceLoaded = false;
 
@@ -57,7 +79,9 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
   void initState() {
     super.initState();
     _loadThemePreference();
+    _loadChatBackgroundPreference();
     _loadBackgroundConnectionPreference();
+    _loadTerminalShortcutPreferences();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_checkForUpdateOnLaunch());
     });
@@ -129,7 +153,9 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
                         try {
                           final apk = await service.downloadApk(release);
                           await widget.installApk(apk);
-                          if (context.mounted) Navigator.of(context).pop();
+                          if (context.mounted) {
+                            Navigator.of(context).pop();
+                          }
                         } catch (_) {
                           if (context.mounted) {
                             setDialogState(() {
@@ -165,6 +191,45 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
     unawaited(_themePreferenceStore.write(preference));
   }
 
+  Future<void> _loadChatBackgroundPreference() async {
+    CcbChatBackgroundPreference? preference;
+    try {
+      preference = await _chatBackgroundStore.read();
+    } catch (_) {
+      preference = null;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatBackgroundPreference = preference;
+    });
+  }
+
+  Future<void> _chooseChatBackground() async {
+    final selection = await widget.chatBackgroundPicker();
+    if (selection == null) {
+      return;
+    }
+    final preference = await _chatBackgroundStore.save(selection);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatBackgroundPreference = preference;
+    });
+  }
+
+  Future<void> _clearChatBackground() async {
+    await _chatBackgroundStore.clear();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatBackgroundPreference = null;
+    });
+  }
+
   Future<void> _loadBackgroundConnectionPreference() async {
     final enabled = await _backgroundConnectionPreferenceStore.read();
     if (!mounted) {
@@ -184,11 +249,48 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
     unawaited(_backgroundConnectionPreferenceStore.write(enabled));
   }
 
+  Future<void> _loadTerminalShortcutPreferences() async {
+    CcbTerminalShortcutPreferences preferences;
+    try {
+      preferences = await _terminalShortcutPreferenceStore.read();
+    } catch (_) {
+      return;
+    }
+    if (!mounted || _terminalShortcutPreferencesChangedLocally) {
+      return;
+    }
+    setState(() {
+      _terminalShortcutPreferences = preferences;
+    });
+  }
+
+  void _setTerminalShortcutPreferences(
+    CcbTerminalShortcutPreferences preferences,
+  ) {
+    _terminalShortcutPreferencesChangedLocally = true;
+    setState(() {
+      _terminalShortcutPreferences = preferences;
+    });
+    _terminalShortcutPreferenceWrite = _terminalShortcutPreferenceWrite
+        .then((_) => _terminalShortcutPreferenceStore.write(preferences))
+        .catchError((_) {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final repository = FakeMobileCcbRepository.demo();
     return MaterialApp(
       navigatorKey: _navigatorKey,
+      builder: (context, child) => CcbChatBackgroundScope(
+        preference: _chatBackgroundPreference,
+        onChoose: _chooseChatBackground,
+        onClear: _clearChatBackground,
+        child: CcbTerminalShortcutPreferencesScope(
+          preferences: _terminalShortcutPreferences,
+          onChanged: _setTerminalShortcutPreferences,
+          child: child ?? const SizedBox.shrink(),
+        ),
+      ),
       onGenerateTitle: (context) => CcbMobileLocalizations.of(context).appTitle,
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       supportedLocales: CcbMobileLocalizations.supportedLocales,
@@ -207,6 +309,7 @@ class _CcbMobileAppState extends State<CcbMobileApp> {
             _backgroundConnectionPreferenceLoaded,
         onBackgroundConnectionEnabledChanged: _setBackgroundConnectionEnabled,
         backgroundConnectionPlatform: widget.backgroundConnectionPlatform,
+        mobileNetworkStatusPlatform: widget.mobileNetworkStatusPlatform,
       ),
     );
   }

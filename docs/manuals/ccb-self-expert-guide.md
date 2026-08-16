@@ -407,6 +407,7 @@ ccb ps
 ccb ping <agent_name|all>
 ccb logs <agent_name>
 ccb clear [agent_names...|all]
+ccb compact [agent_names...|all]
 ccb restart <agent_name>
 ccb reload [--dry-run]
 ccb kill [-f|--force]
@@ -778,6 +779,20 @@ ccb clear <agent>
 provider pane 发送 `/clear`。清理完成后紧接着提交的新 Codex 任务仍以精确
 request anchor 为权威；即使 Codex 的新 rollout 创建和 session-file 更新存在
 短暂先后差，执行层也会事务化重绑，不能依赖固定 sleep 规避竞态。
+
+如果只需要释放 provider 对话上下文而保留当前 session 和项目状态，使用：
+
+```bash
+ccb compact <agent>
+ccb compact
+```
+
+`compact` 发送 provider 已验证的原生命令：Codex、Claude、OpenCode、Kimi、
+MiMo、Copilot、Pi 和 OMP 使用 `/compact`；Gemini、Qwen、Droid 和 Augment
+使用 `/compress`；Crush 使用 `/summarize`。busy 或 queued agent 会返回
+`blocked`，未验证原生命令的 provider 返回 `unsupported` 并且不会向 pane 写入任何内容。该命令不删除
+`.ccb` 状态、workspace、auth、session、日志或 memory；它也不会等待 provider
+回复或轮询结果。
 
 如果 provider 进程必须替换，且 active work 已清空：
 

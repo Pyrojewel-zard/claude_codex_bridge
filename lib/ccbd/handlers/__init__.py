@@ -15,6 +15,7 @@ from .project_focus import (
     build_project_sidebar_click_handler,
 )
 from .project_clear import build_project_clear_context_handler
+from .project_compact import build_project_compact_context_handler
 from .project_reload import build_project_reload_config_handler
 from .project_restart import build_project_restart_agent_handler, build_project_restart_panes_handler
 from .project_view import build_project_view_dismiss_comms_handler, build_project_view_handler
@@ -43,6 +44,7 @@ __all__ = [
     'build_project_focus_window_handler',
     'build_project_sidebar_click_handler',
     'build_project_clear_context_handler',
+    'build_project_compact_context_handler',
     'build_project_reload_config_handler',
     'build_project_restart_agent_handler',
     'build_project_restart_panes_handler',

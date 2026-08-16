@@ -191,6 +191,48 @@ def test_ensure_daemon_started_uses_shared_startup_deadline(monkeypatch) -> None
     assert current['t'] < 9.0
 
 
+def test_ensure_daemon_started_surfaces_failed_terminal_state_without_waiting(monkeypatch) -> None:
+    current = {'t': 100.0}
+
+    monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.time', lambda: current['t'])
+    monkeypatch.setattr(
+        'cli.services.daemon_runtime.lifecycle.time.sleep',
+        lambda seconds: (_ for _ in ()).throw(AssertionError('failed startup should not sleep')),
+    )
+
+    inspection = SimpleNamespace(
+        phase='failed',
+        desired_state='stopped',
+        health=LeaseHealth.MISSING,
+        socket_connectable=False,
+        reason='lease_missing',
+        last_failure_reason='ccbd exited before ready with code 1',
+        startup_stage='spawn_failed',
+        last_progress_at='1970-01-01T00:00:00Z',
+        startup_deadline_at=None,
+    )
+
+    with pytest.raises(
+        CcbdServiceError,
+        match='ccbd is unavailable: lease_missing; lifecycle_failure: ccbd exited before ready with code 1',
+    ):
+        ensure_daemon_started_runtime(
+            SimpleNamespace(),
+            clear_shutdown_intent_fn=lambda context: None,
+            record_running_intent_fn=lambda context: True,
+            ensure_keeper_started_fn=lambda context: True,
+            inspect_daemon_fn=lambda context: (None, None, inspection),
+            connect_compatible_daemon_fn=lambda context, inspection, restart_on_mismatch: None,
+            should_restart_unreachable_daemon_fn=lambda inspection: False,
+            restart_unreachable_daemon_fn=lambda context, inspection: None,
+            incompatible_daemon_error_fn=lambda: 'incompatible',
+            start_timeout_s=20.0,
+            progress_stall_timeout_s=0.0,
+        )
+
+    assert current['t'] == 100.0
+
+
 def test_connect_compatible_daemon_uses_short_control_plane_timeout(monkeypatch, tmp_path: Path) -> None:
     captured: list[float | None] = []
 

@@ -6,7 +6,7 @@ on:
       tag:
         description: "Release tag to build and upload"
         required: true
-        default: "v8.5.2"
+        default: "v8.6.7"
   push:
     tags:
       - "v*"
@@ -21,6 +21,7 @@ concurrency:
 jobs:
   build:
     name: Build ${{ matrix.platform }} release artifact
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -113,6 +114,7 @@ jobs:
 
   mobile-android:
     name: Build Android mobile APK
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
 
     steps:

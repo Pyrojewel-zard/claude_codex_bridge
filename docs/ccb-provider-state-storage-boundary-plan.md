@@ -260,6 +260,9 @@ Examples:
 - Kimi inherited and role `skills/` directories under managed provider state
 - OpenCode generated `opencode.json` and generated ask skill instruction files
   under `.ccb/runtime/skills/<agent>/opencode/`
+- OMP `config.yml`/`config.yaml` and `models.yml`/`models.yaml` are one-way
+  managed-home projections, but storage inventory classifies them as `SECRET`
+  because both formats may contain broker tokens, provider API keys, or headers
 
 Auth, OAuth, token, and credential files are never `PROJECTED_CONFIG` even when
 they were created by a projection step. They must classify as `SECRET`.
@@ -303,6 +306,8 @@ Examples:
 - Kiro's filtered `data.sqlite3`, because it still contains auth rows
 - auth-bearing mixed records such as DeepSeek `settings.json`, Kimi
   `config.toml`, Crush `providers.json`, and Z.ai `user-settings.json`
+- OMP's filtered `.omp/agent/agent.db` auth snapshot, its WAL/SHM sidecars, and
+  auth-capable `config.yml`/`config.yaml` and `models.yml`/`models.yaml` files
 - API key material
 - OAuth credential files
 - macOS Keychain-derived Claude credentials
@@ -611,6 +616,45 @@ Exit criteria:
 - provider startup and ask completion semantics are unchanged
 - `ccb cleanup` deletes only safe rebuildable cache and preserves authority,
   sessions, secrets, and startup authority bundles
+
+### Phase C.1 - Explicit Agent History Retention
+
+The config control panel may provide a separate, user-confirmed history
+retention action for managed agent transcripts. This is not the provider-cache
+`ccb cleanup` command and must not broaden that command's deletion classes.
+
+Required behavior:
+
+- allow selecting all known agents or one exact agent, regardless of whether
+  that agent is currently mounted
+- support only the fixed 7, 30, and 90 day retention windows, defaulting to 30
+  days
+- delete only allowlisted, independently removable provider transcript files:
+  Codex rollout JSONL, Claude project JSONL, Gemini chat session JSON, Droid
+  session JSONL, Kimi wire JSONL, Grok updates JSONL, DeepSeek project JSONL,
+  and Antigravity transcript JSONL
+- re-read the project-owned provider session control records and protect every
+  current provider session path and session id
+- always preserve records inside the retention window and at least the newest
+  recognized transcript for each agent/provider binding, even when no current
+  binding record can be resolved
+- never delete provider databases, session indexes, control records, auth,
+  secrets, projected config, mailbox data, lifecycle/lease/runtime authority,
+  workspaces, or unknown provider state
+- refuse symlink and non-regular-file candidates and validate every deletion
+  against the managed provider-home transcript allowlist
+- hold the project lifecycle/startup guard while refreshing the candidate set
+  and applying deletions; active provider processes remain safe because the
+  current-binding, retention-window, and newest-transcript protections are
+  mandatory
+- expose token-guarded scan and mutation APIs only on the existing loopback
+  config UI server, require an explicit browser confirmation, and rescan after
+  mutation
+- report deleted bytes/count and skipped paths without returning transcript
+  contents
+
+The panel must describe this as historical transcript retention. It must not
+present a generic "delete agent data" or "delete all sessions" action.
 
 ### Phase D - Retire Project-Scoped Provider Cache
 
@@ -937,7 +981,9 @@ Required integration tests:
 - macOS Claude storage audit with Keychain-compatible managed home
 - `ccb ask` still completes after storage audit
 - `ccbd` restart still restores managed provider sessions
-- cleanup preserves provider sessions/auth and is idempotent
+- provider-cache cleanup preserves provider sessions/auth and is idempotent;
+  explicit Phase C.1 history retention preserves current/recent/latest
+  transcripts and remains idempotent
 - provider-profile Codex migration preserves bound session authority
 
 Required real tests:
@@ -958,7 +1004,9 @@ Required real tests:
    accumulate runtime sessions/log/cache.
 5. Implement `ccb cleanup` as the single conservative provider-cache cleanup
    command.
-6. Keep `ccb doctor storage` as the only cleanup preview/audit surface.
+6. Keep `ccb doctor storage` as the provider-cache cleanup preview/audit
+   surface. The config UI may additionally expose the bounded, age-filtered
+   transcript inventory defined by Phase C.1.
 7. Evaluate Codex startup-bundle sharing only after content-addressed
    whole-bundle atomic replacement exists.
 8. Retire project-scoped Claude/Gemini cache generation, migrate recognized
@@ -979,9 +1027,12 @@ Required real tests:
 - Do not make cleanup part of normal `ask` critical path.
 - Do not stop active projects for update-time cleanup or make cleanup failure
   fail an otherwise successful core update.
-- Do not run destructive `ccb cleanup` concurrently with an active backend:
+- Do not run destructive provider-cache `ccb cleanup` concurrently with an active backend:
   cleanup must acquire the project startup/lifecycle guard, confirm `ccbd` is
   stopped inside that guard, and refuse to prune while pending `ask` jobs exist.
+- Do not interpret the explicit Phase C.1 transcript-retention action as
+  permission to delete arbitrary `StorageClass.SESSION` paths. Only its fixed
+  provider transcript allowlist is eligible.
 
 ## 12. First Concrete Slice
 
@@ -1106,6 +1157,10 @@ Implemented:
   when required post-update provisioning has already selected rollback.
 - `ccb cleanup` holds the project `startup.lock` while re-checking backend/job
   state and pruning; malformed job JSONL blocks cleanup conservatively.
+- The config control panel exposes a separate Agent history scan/cleanup flow.
+  It supports all-agent or exact-agent selection with 7/30/90 day retention,
+  protects current bindings plus each provider's latest transcript, and deletes
+  only the Phase C.1 provider transcript allowlist.
 - cleanup reports symlinked Claude `versions/` directories and skips
   out-of-bounds Gemini cache paths instead of traversing them.
 - diagnostics bundle export writes `generated/storage-summary.json` and uses

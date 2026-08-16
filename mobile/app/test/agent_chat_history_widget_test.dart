@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm/xterm.dart';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
+import 'package:ccb_mobile/features/agent_chat/conversation_bubble.dart';
 import 'package:ccb_mobile/features/agent_chat/conversation_timeline.dart';
+import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace_model.dart';
 
 import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
@@ -172,6 +174,66 @@ void main() {
 
     expect(find.text('Stable provider reply'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('provider session boundary renders as a compact divider', (
+    tester,
+  ) async {
+    final repository = FakeMobileCcbRepository.demo();
+    final view = CcbProjectView.fromProjectViewPayload(demoProjectViewFixture);
+    final agent = view.agentByName('lead')!;
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+    final boundary = providerSessionBoundaryConversationItem(
+      agent.name,
+      nextItem: const CcbConversationItem(
+        id: 'new-session-user',
+        agentName: 'lead',
+        kind: CcbConversationItemKind.userMessage,
+        title: 'You',
+        body: 'new message',
+        source: 'provider_native/codex',
+        sessionId: 'session-new',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 600,
+          child: ConversationTimeline(
+            repository: repository,
+            view: view,
+            agent: agent,
+            contentItems: const [],
+            initialHistory: null,
+            items: [boundary],
+            isLoading: false,
+            controller: controller,
+            expandedItemIds: const {},
+            downloadingAttachmentIds: const {},
+            downloadedAttachmentIds: const {},
+            onRetry: (_) {},
+            onDeleteFailedMessage: (_) {},
+            onToggleExpanded: (_) {},
+            onNearEnd: () {},
+            onUserNearEnd: () {},
+            onNearStart: () {},
+            onUserScrollDirectionChanged: (_) {},
+            hasOlderItems: false,
+            onDownloadAttachment: (_) {},
+            onOpenAttachment: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('New context'), findsOneWidget);
+    expect(find.byType(ConversationBubble), findsNothing);
+    expect(
+      find.byKey(ValueKey('provider-session-boundary-${boundary.id}')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('readable terminal history scrolls through retained blocks', (

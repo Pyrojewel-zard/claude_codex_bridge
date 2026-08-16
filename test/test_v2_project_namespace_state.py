@@ -4,8 +4,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.project_namespace_runtime import build_namespace_topology_plan
+from ccbd.services.project_namespace_runtime.models import ProjectNamespace
 from ccbd.services.project_namespace_runtime.backend import prepare_server
 from ccbd.services.project_namespace_state import (
     ProjectNamespaceEvent,
@@ -81,6 +84,1107 @@ def test_project_namespace_state_store_round_trip(tmp_path: Path) -> None:
     assert loaded.summary_fields()['namespace_tmux_socket_path'] == str(layout.ccbd_tmux_socket_path)
     assert second_stat.st_ino == first_stat.st_ino
     assert second_stat.st_mtime_ns == first_stat.st_mtime_ns
+
+
+def test_project_namespace_state_round_trips_herdr_namespace_without_public_restore_token(
+    tmp_path: Path,
+) -> None:
+    del tmp_path
+    state = ProjectNamespaceState(
+        project_id='proj-herdr',
+        namespace_epoch=5,
+        tmux_socket_path='',
+        tmux_session_name='ccb-herdr',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='workspace-1',
+        namespace_session_name='ccb-herdr',
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://ccb-herdr',
+        namespace_restore_token='ccb-herdr::workspace-1',
+        layout_version=3,
+        workspace_window_name='workspace',
+        ui_attachable=True,
+    )
+
+    loaded = ProjectNamespaceState.from_record(state.to_record())
+
+    assert loaded == state
+    assert loaded is not None
+    record = loaded.to_record()
+    summary = loaded.summary_fields()
+    internal_ref = loaded.namespace_ref()
+
+    assert record['namespace_restore_token'] == 'ccb-herdr::workspace-1'
+    assert internal_ref['restore_token'] == 'ccb-herdr::workspace-1'
+    assert summary['namespace_backend_family'] == 'herdr-native'
+    assert summary['namespace_backend_impl'] == 'herdr'
+    assert summary['namespace_ipc_kind'] == 'herdr_socket'
+    assert summary['namespace_restore_token_present'] is True
+    assert 'namespace_restore_token' not in summary
+    assert 'ccb-herdr::workspace-1' not in str(summary)
+
+
+def test_project_namespace_event_summary_redacts_herdr_restore_token() -> None:
+    event = ProjectNamespaceEvent(
+        event_kind='namespace_created',
+        project_id='proj-herdr',
+        occurred_at='2026-08-02T00:00:00Z',
+        namespace_epoch=5,
+        tmux_socket_path=None,
+        tmux_session_name='ccb-herdr',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='workspace-1',
+        namespace_session_name='ccb-herdr',
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://ccb-herdr',
+        namespace_restore_token='ccb-herdr::workspace-1',
+        details={'restore_token': 'ccb-herdr::workspace-1', 'reason': 'initial_create'},
+    )
+
+    record = event.to_record()
+    summary = event.summary_fields()
+
+    assert record['namespace_restore_token'] == 'ccb-herdr::workspace-1'
+    assert record['details']['restore_token'] == 'ccb-herdr::workspace-1'
+    assert summary['namespace_last_event_backend_impl'] == 'herdr'
+    assert summary['namespace_last_event_restore_token_present'] is True
+    assert 'namespace_restore_token' not in summary
+    assert 'ccb-herdr::workspace-1' not in str(summary)
+
+
+def test_project_namespace_event_store_load_latest_skips_corrupt_historical_rows(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo')
+    store = ProjectNamespaceEventStore(layout)
+    latest = ProjectNamespaceEvent(
+        event_kind='namespace_destroyed',
+        project_id='proj-1',
+        occurred_at='2026-08-05T00:00:00Z',
+        namespace_epoch=1,
+        tmux_session_name='ccb-proj-1',
+        details={'reason': 'kill'},
+    )
+    store.append(latest)
+    with layout.ccbd_lifecycle_log_path.open('a', encoding='utf-8') as handle:
+        handle.write('}}\n')
+
+    assert store.load_latest() == latest
+
+
+def test_project_namespace_runtime_dto_preserves_internal_herdr_namespace_ref() -> None:
+    state = ProjectNamespaceState(
+        project_id='proj-herdr',
+        namespace_epoch=5,
+        tmux_socket_path='',
+        tmux_session_name='ccb-herdr',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='workspace-1',
+        namespace_session_name='ccb-herdr',
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://ccb-herdr',
+        namespace_restore_token='ccb-herdr::workspace-1',
+        layout_version=3,
+        workspace_window_name='workspace',
+        ui_attachable=True,
+    )
+
+    namespace = ProjectNamespace.from_state(state)
+
+    assert namespace.namespace_backend_family == 'herdr-native'
+    assert namespace.backend_impl == 'herdr'
+    assert namespace.namespace_ref() == {
+        'backend_family': 'herdr-native',
+        'backend_impl': 'herdr',
+        'namespace_id': 'workspace-1',
+        'session_name': 'ccb-herdr',
+        'ipc_kind': 'herdr_socket',
+        'ipc_ref': 'herdr://ccb-herdr',
+        'restore_token': 'ccb-herdr::workspace-1',
+    }
+
+
+def test_project_namespace_state_reads_legacy_tmux_record_without_namespace_fields() -> None:
+    payload = {
+        'schema_version': 2,
+        'record_type': 'ccbd_project_namespace_state',
+        'project_id': 'proj-legacy',
+        'namespace_epoch': 2,
+        'tmux_socket_path': '/tmp/ccb.sock',
+        'tmux_session_name': 'ccb-legacy',
+        'layout_version': 1,
+        'workspace_epoch': 1,
+        'ui_attachable': True,
+    }
+
+    state = ProjectNamespaceState.from_record(payload)
+
+    assert state.namespace_backend_family == 'tmux-family'
+    assert state.backend_impl == 'tmux'
+    assert state.namespace_ref() == {
+        'backend_family': 'tmux-family',
+        'backend_impl': 'tmux',
+        'namespace_id': 'ccb-legacy',
+        'session_name': 'ccb-legacy',
+        'ipc_kind': 'socket_path',
+        'ipc_ref': '/tmp/ccb.sock',
+        'restore_token': None,
+    }
+
+
+class _MemoryProjectNamespaceStateStore:
+    def __init__(self) -> None:
+        self.state = None
+
+    def load(self):
+        return self.state
+
+    def save(self, state) -> None:
+        self.state = state
+
+
+class _MemoryProjectNamespaceEventStore:
+    def __init__(self) -> None:
+        self.events = []
+
+    def append(self, event) -> None:
+        self.events.append(event)
+
+    def load_latest(self):
+        return self.events[-1] if self.events else None
+
+
+class _FakeHerdrProjectNamespaceBackend:
+    backend_impl = 'herdr'
+
+    def __init__(
+        self,
+        *,
+        pane_spawn_status: str = 'supported',
+        server_session_name: str | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.namespace: dict[str, object] | None = None
+        self.windows: dict[str, dict[str, object]] = {}
+        self.panes: dict[str, dict[str, object]] = {}
+        self.pane_spawn_status = pane_spawn_status
+        self.server_session_name = server_session_name
+
+    def capabilities(self) -> dict[str, object]:
+        from terminal_runtime.mux_backend_contract import make_capabilities
+
+        status = {
+            'session_attach': 'supported',
+            'pane_spawn': self.pane_spawn_status,
+            'send_input': 'supported',
+            'read_output': 'supported',
+            'kill_pane': 'supported',
+            'workspace_create': 'supported',
+            'workspace_list': 'supported',
+            'workspace_focus': self.pane_spawn_status,
+            'workspace_close': 'supported',
+            'workspace_metadata': 'supported',
+            'pane_metadata': 'supported',
+            'pane_list': 'supported',
+            'pane_split': 'supported',
+            'pane_run': 'supported',
+        }
+        return make_capabilities(
+            backend_impl='herdr',
+            command_status=status,  # type: ignore[arg-type]
+            semantic_status=status,  # type: ignore[arg-type]
+        )
+
+    def prepare_server(self) -> None:
+        self.calls.append(('prepare_server', None))
+
+    def ensure_server_policy(self) -> None:
+        self.calls.append(('ensure_server_policy', None))
+
+    def create_session(self, *, project_id: str, cwd: str, title: str) -> dict[str, object]:
+        from terminal_runtime.mux_backend_contract import make_namespace_ref
+
+        self.calls.append(('create_session', {'project_id': project_id, 'cwd': cwd, 'title': title}))
+        self.namespace = make_namespace_ref(
+            backend_impl='herdr',
+            namespace_id='workspace-1',
+            session_name=self.server_session_name or title,
+            ipc_kind='herdr_socket',
+            ipc_ref='herdr://workspace-1',
+            restore_token='restore-token-1',
+        )
+        return self.namespace
+
+    def namespace_alive(self, namespace: dict[str, object]) -> bool:
+        self.calls.append(('namespace_alive', namespace))
+        return True
+
+    def list_windows(self, namespace: dict[str, object]) -> list[dict[str, object]]:
+        self.calls.append(('list_windows', namespace))
+        return list(self.windows.values())
+
+    def ensure_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_name: str,
+        cwd: str,
+        select: bool,
+    ) -> dict[str, object]:
+        self.calls.append(('ensure_window', {'namespace': namespace, 'window_name': window_name, 'cwd': cwd, 'select': select}))
+        record = self.windows.setdefault(
+            window_name,
+            {'window_id': f'window-{len(self.windows) + 1}', 'window_name': window_name, 'active': False},
+        )
+        record['active'] = bool(select)
+        return record
+
+    def create_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_name: str,
+        cwd: str,
+        select: bool,
+    ) -> dict[str, object]:
+        return self.ensure_window(namespace, window_name=window_name, cwd=cwd, select=select)
+
+    def window_root_pane(self, namespace: dict[str, object], *, window_name: str) -> dict[str, object]:
+        from terminal_runtime.mux_backend_contract import make_pane_ref
+
+        self.calls.append(('window_root_pane', {'namespace': namespace, 'window_name': window_name}))
+        pane = make_pane_ref(
+            backend_impl='herdr',
+            pane_id=f'herdr-pane-{len(self.panes) + 1}',
+            session_name=str(namespace['session_name']),
+            window_name=window_name,
+        )
+        self.panes[pane['pane_id']] = pane
+        return pane
+
+    def split_pane(
+        self,
+        pane: dict[str, object],
+        *,
+        direction: str = 'right',
+        percent: int = 50,
+        command: list[str] | None = None,
+        cwd: str = '',
+        env: dict[str, str] | None = None,
+        title: str = '',
+    ) -> dict[str, object]:
+        from terminal_runtime.mux_backend_contract import make_pane_ref
+
+        self.calls.append(('split_pane', {'pane': pane, 'direction': direction, 'percent': percent, 'command': command, 'cwd': cwd, 'env': env, 'title': title}))
+        child = make_pane_ref(
+            backend_impl='herdr',
+            pane_id=f'herdr-pane-{len(self.panes) + 1}',
+            session_name=str(pane['session_name']),
+            window_name=pane.get('window_name'),  # type: ignore[arg-type]
+        )
+        self.panes[child['pane_id']] = child
+        return child
+
+    def respawn_pane(
+        self,
+        pane: dict[str, object],
+        *,
+        command: list[str],
+        cwd: str,
+        env: dict[str, str],
+    ) -> None:
+        self.calls.append(('respawn_pane', {'pane': pane, 'command': command, 'cwd': cwd, 'env': env}))
+
+    def set_pane_identity(self, pane: dict[str, object], **kwargs) -> None:
+        self.calls.append(('set_pane_identity', {'pane': pane, **kwargs}))
+
+    def kill_window(self, namespace: dict[str, object], *, window_id: str | None, target: str) -> None:
+        self.calls.append(('kill_window', {'namespace': namespace, 'window_id': window_id, 'target': target}))
+        if window_id:
+            for name, record in tuple(self.windows.items()):
+                if record.get('window_id') == window_id or name == window_id:
+                    self.windows.pop(name, None)
+
+    def destroy_namespace(self, namespace: dict[str, object]) -> None:
+        self.calls.append(('destroy_namespace', namespace))
+
+    def kill_server(self, namespace: dict[str, object]) -> None:
+        self.calls.append(('kill_server', namespace))
+
+    def rename_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_id: str | None,
+        target: str,
+        new_name: str,
+    ) -> None:
+        self.calls.append(('rename_window', {'namespace': namespace, 'window_id': window_id, 'target': target, 'new_name': new_name}))
+        for name, record in tuple(self.windows.items()):
+            if record.get('window_id') == window_id or name == window_id:
+                self.windows.pop(name, None)
+                record['window_name'] = new_name
+                self.windows[new_name] = record
+                return
+
+    def select_window(self, namespace: dict[str, object], *, window_id: str | None, target: str) -> None:
+        self.calls.append(('select_window', {'namespace': namespace, 'window_id': window_id, 'target': target}))
+        for record in self.windows.values():
+            record['active'] = record.get('window_id') == window_id or record.get('window_name') == window_id
+
+
+def test_project_namespace_controller_creates_herdr_state_and_redacted_event(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-ensure')
+    backend = _FakeHerdrProjectNamespaceBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    event_store = _MemoryProjectNamespaceEventStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    namespace = controller.ensure()
+    state = state_store.load()
+    event = event_store.load_latest()
+
+    assert state is not None
+    assert event is not None
+    assert namespace.namespace_backend_family == 'herdr-native'
+    assert namespace.backend_impl == 'herdr'
+    assert namespace.namespace_ref()['restore_token'] == 'restore-token-1'
+    assert state.tmux_socket_path == ''
+    assert state.namespace_ipc_kind == 'herdr_socket'
+    assert state.namespace_restore_token == 'restore-token-1'
+    assert event.summary_fields()['namespace_last_event_restore_token_present'] is True
+    assert 'restore-token-1' not in str(event.summary_fields())
+    assert not hasattr(backend, '_tmux_run')
+    assert 'set_pane_identity' in [call[0] for call in backend.calls]
+
+
+def test_project_namespace_controller_keeps_materialized_herdr_cmd_pane_when_metadata_is_not_yet_queryable(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-herdr-topology'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        'cmd; agent1:codex\n',
+        encoding='utf-8',
+    )
+    config = load_project_config(project_root).config
+    layout = PathLayout(project_root)
+    backend = _FakeHerdrProjectNamespaceBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr-topology',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=_MemoryProjectNamespaceStateStore(),
+        event_store=_MemoryProjectNamespaceEventStore(),
+    )
+    topology = build_namespace_topology_plan(
+        config,
+        ccbd_socket_path=str(layout.ccbd_socket_path),
+        project_root=str(project_root),
+    )
+
+    controller.ensure(topology_plan=topology)
+
+    cmd_identity_calls = [
+        call
+        for call in backend.calls
+        if call[0] == 'set_pane_identity' and call[1].get('role') == 'cmd'
+    ]
+    assert len(cmd_identity_calls) == 1
+    assert controller._last_materialized_cmd_pane == cmd_identity_calls[0][1]['pane']['pane_id']
+
+
+def test_project_namespace_controller_preserves_herdr_server_session_name(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-server-session')
+    backend = _FakeHerdrProjectNamespaceBackend(server_session_name='ccb-cmd-013-session')
+    state_store = _MemoryProjectNamespaceStateStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=state_store,
+        event_store=_MemoryProjectNamespaceEventStore(),
+    )
+
+    namespace = controller.ensure()
+    state = state_store.load()
+
+    assert state is not None
+    assert namespace.namespace_session_name == 'ccb-cmd-013-session'
+    assert state.namespace_session_name == 'ccb-cmd-013-session'
+    assert namespace.tmux_session_name.startswith('ccb-repo-herdr-server-session-')
+    assert namespace.namespace_session_name != namespace.tmux_session_name
+
+
+def test_project_namespace_controller_restores_herdr_state_alias_on_fresh_backend(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-server-session-restore')
+    state_store = _MemoryProjectNamespaceStateStore()
+    event_store = _MemoryProjectNamespaceEventStore()
+    first_backend = _FakeHerdrProjectNamespaceBackend(server_session_name='ccb-cmd-013-session')
+    first = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        backend_factory=lambda socket_path=None: first_backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+    first_namespace = first.ensure()
+    second_backend = _FakeHerdrProjectNamespaceBackend(server_session_name='ccb-cmd-013-session')
+    second = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        backend_factory=lambda socket_path=None: second_backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    second_namespace = second.ensure()
+
+    assert first_namespace.tmux_session_name == second_namespace.tmux_session_name
+    assert second_namespace.namespace_session_name == 'ccb-cmd-013-session'
+    assert 'create_session' not in [call[0] for call in second_backend.calls]
+    assert all(
+        call[1].get('session_name') == 'ccb-cmd-013-session'
+        for call in second_backend.calls
+        if isinstance(call[1], dict) and 'session_name' in call[1]
+    )
+
+
+def test_project_namespace_controller_default_backend_factory_prefers_herdr_when_resolver_returns_it(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-default')
+    backend = _FakeHerdrProjectNamespaceBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    event_store = _MemoryProjectNamespaceEventStore()
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        lambda backend_name='herdr': backend,
+    )
+
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    namespace = controller.ensure()
+    state = state_store.load()
+
+    assert namespace.namespace_backend_family == 'herdr-native'
+    assert namespace.backend_impl == 'herdr'
+    assert state is not None
+    assert state.tmux_socket_path == ''
+    call_names = [call[0] for call in backend.calls]
+    assert 'create_session' in call_names
+    assert 'set_pane_identity' in call_names
+    assert not hasattr(backend, '_tmux_run')
+
+
+def test_project_namespace_default_backend_factory_keeps_persisted_tmux_state_on_tmux_family(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+    from terminal_runtime import TmuxBackend
+
+    monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
+    monkeypatch.delenv('CCB_HERDR_SOCKET_REF', raising=False)
+    calls: list[object] = []
+
+    def resolve(backend_name=None):
+        calls.append(backend_name)
+        return 'herdr-backend'
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        resolve,
+    )
+    state = ProjectNamespaceState(
+        project_id='proj-tmux',
+        namespace_epoch=3,
+        tmux_socket_path='tmux.sock',
+        tmux_session_name='ccb-tmux',
+        namespace_backend_family='tmux-family',
+        backend_impl='tmux',
+    )
+
+    backend = default_project_namespace_backend(socket_path='tmux.sock', namespace_state=state)
+
+    assert isinstance(backend, TmuxBackend)
+    assert calls == []
+
+
+def test_project_namespace_default_backend_factory_rejects_persisted_tmux_state_when_herdr_configured(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+    from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
+
+    calls: list[object] = []
+
+    def resolve(backend_name=None):
+        calls.append(backend_name)
+        raise MuxCommandErrorV2(
+            category='schema-mismatch',
+            backend_impl='herdr',
+            operation='capability_probe',
+            detail='partial herdr capability evidence',
+        )
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        resolve,
+    )
+    monkeypatch.setenv('CCB_HERDR_CAPABILITY_REPORT', 'evidence/herdr-partial.json')
+    state = ProjectNamespaceState(
+        project_id='proj-tmux',
+        namespace_epoch=3,
+        tmux_socket_path='tmux.sock',
+        tmux_session_name='ccb-tmux',
+        namespace_backend_family='tmux-family',
+        backend_impl='tmux',
+    )
+
+    with pytest.raises(MuxCommandErrorV2) as exc_info:
+        default_project_namespace_backend(socket_path='tmux.sock', namespace_state=state)
+
+    assert calls == ['herdr']
+    assert exc_info.value.backend_impl == 'herdr'
+    assert exc_info.value.operation == 'select_backend'
+    assert exc_info.value.evidence['cause_operation'] == 'capability_probe'
+    assert exc_info.value.evidence['cause_detail'] == 'partial herdr capability evidence'
+
+
+def test_project_namespace_rebuild_backend_keeps_persisted_tmux_state_on_recreate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.ensure_context import rebuild_namespace_backend
+    from terminal_runtime import TmuxBackend
+
+    monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
+    monkeypatch.delenv('CCB_HERDR_SOCKET_REF', raising=False)
+    calls: list[object] = []
+
+    def resolve(backend_name=None):
+        calls.append(backend_name)
+        return 'herdr-backend'
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        resolve,
+    )
+    layout = PathLayout(tmp_path / 'repo-rebuild-tmux')
+    controller = ProjectNamespaceController(layout, 'proj-tmux')
+    state = ProjectNamespaceState(
+        project_id='proj-tmux',
+        namespace_epoch=3,
+        tmux_socket_path='tmux.sock',
+        tmux_session_name='ccb-tmux',
+        namespace_backend_family='tmux-family',
+        backend_impl='tmux',
+    )
+
+    backend = rebuild_namespace_backend(
+        controller,
+        socket_path='tmux.sock',
+        namespace_state=state,
+    )
+
+    assert isinstance(backend, TmuxBackend)
+    assert calls == []
+
+
+def test_project_namespace_default_backend_factory_uses_explicit_herdr_for_persisted_herdr_state(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+
+    calls: list[object] = []
+
+    def resolve(backend_name=None):
+        calls.append(backend_name)
+        return 'herdr-backend'
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        resolve,
+    )
+    state = ProjectNamespaceState(
+        project_id='proj-herdr',
+        namespace_epoch=3,
+        tmux_socket_path='',
+        tmux_session_name='ccb-herdr',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='w-anchor',
+        namespace_session_name='ccb-herdr',
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://w-anchor',
+        namespace_restore_token='restore-token',
+    )
+
+    assert default_project_namespace_backend(namespace_state=state) == 'herdr-backend'
+    assert calls == ['herdr']
+
+
+def test_project_focus_backend_for_namespace_passes_herdr_state() -> None:
+    from ccbd.project_focus.tmux import backend_for_namespace
+
+    seen: list[object] = []
+    state = ProjectNamespaceState(
+        project_id='proj-herdr',
+        namespace_epoch=3,
+        tmux_socket_path='',
+        tmux_session_name='ccb-herdr',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='w-anchor',
+        namespace_session_name='ccb-herdr',
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://w-anchor',
+        namespace_restore_token='restore-token',
+    )
+
+    def backend_factory(*, socket_path=None, namespace_state=None):
+        del socket_path
+        seen.append(namespace_state)
+        return 'herdr-backend'
+
+    assert backend_for_namespace(backend_factory, state) == 'herdr-backend'
+    assert seen == [state]
+
+
+def test_project_namespace_default_backend_factory_fails_closed_for_explicit_herdr_selection(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+    from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
+
+    class LegacyBackend:
+        backend_impl = 'tmux'
+
+    def fail_herdr(backend_name='herdr'):
+        if backend_name != 'herdr':
+            return LegacyBackend()
+        raise MuxCommandErrorV2(
+            category='schema-mismatch',
+            backend_impl='herdr',
+            operation='capability_probe',
+            detail='missing herdr capability evidence',
+        )
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        fail_herdr,
+    )
+    monkeypatch.setenv('CCB_HERDR_CAPABILITY_REPORT', 'evidence/herdr.json')
+
+    with pytest.raises(MuxCommandErrorV2) as exc_info:
+        default_project_namespace_backend(socket_path='tmux.sock')
+
+    assert exc_info.value.backend_impl == 'herdr'
+    assert exc_info.value.operation == 'select_backend'
+    assert exc_info.value.evidence['cause_operation'] == 'capability_probe'
+    assert exc_info.value.evidence['cause_category'] == 'schema-mismatch'
+
+
+def test_project_namespace_default_backend_factory_ignores_weak_herdr_env_hints(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+
+    calls: list[object] = []
+
+    class LegacyBackend:
+        backend_impl = 'tmux'
+
+    def resolve(backend_name=None):
+        calls.append(backend_name)
+        return LegacyBackend()
+
+    monkeypatch.setenv('CCB_HERDR_SESSION', 'stale-session')
+    monkeypatch.setenv('CCB_HERDR_EXE', 'herdr')
+    monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
+    monkeypatch.delenv('CCB_HERDR_SOCKET_REF', raising=False)
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        resolve,
+    )
+
+    backend = default_project_namespace_backend(socket_path='tmux.sock')
+
+    assert isinstance(backend, LegacyBackend)
+    assert calls == [None]
+
+
+def test_project_namespace_default_backend_factory_rebinds_cached_tmux_to_project_socket(
+    monkeypatch,
+) -> None:
+    from ccbd.services.project_namespace_runtime.controller import default_project_namespace_backend
+    from terminal_runtime import TmuxBackend
+
+    monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
+    monkeypatch.delenv('CCB_HERDR_SOCKET_REF', raising=False)
+    cached_backend = TmuxBackend()
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        lambda backend_name=None: cached_backend,
+    )
+
+    backend = default_project_namespace_backend(socket_path='project-tmux.sock')
+
+    assert isinstance(backend, TmuxBackend)
+    assert backend is not cached_backend
+    assert backend._socket_path == 'project-tmux.sock'
+
+
+def test_project_namespace_controller_reflows_herdr_workspace_with_v2_helpers(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-reflow')
+    backend = _FakeHerdrProjectNamespaceBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    event_store = _MemoryProjectNamespaceEventStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+    controller.ensure()
+    backend.calls.clear()
+
+    namespace = controller.reflow_workspace(reason='pane_recovery:agent1')
+    state = state_store.load()
+    event = event_store.load_latest()
+
+    assert state is not None
+    assert event is not None
+    assert namespace.workspace_epoch == 2
+    assert namespace.namespace_backend_family == 'herdr-native'
+    assert state.namespace_restore_token == 'restore-token-1'
+    assert event.event_kind == 'workspace_reflowed'
+    assert event.summary_fields()['namespace_last_event_restore_token_present'] is True
+    assert 'kill_window' in [call[0] for call in backend.calls]
+    assert 'rename_window' in [call[0] for call in backend.calls]
+    assert 'select_window' in [call[0] for call in backend.calls]
+    assert not hasattr(backend, '_tmux_run')
+
+
+def test_project_namespace_controller_materializes_herdr_topology_with_v2_helpers(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-herdr-topology'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        """version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+""",
+        encoding='utf-8',
+    )
+    config = load_project_config(project_root).config
+    layout = PathLayout(project_root)
+    backend = _FakeHerdrProjectNamespaceBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    event_store = _MemoryProjectNamespaceEventStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+    topology_plan = build_namespace_topology_plan(
+        config,
+        ccbd_socket_path=str(layout.ccbd_socket_path),
+        project_root=str(project_root),
+    )
+
+    namespace = controller.ensure(topology_plan=topology_plan)
+    state = state_store.load()
+    event = event_store.load_latest()
+    call_names = [call[0] for call in backend.calls]
+
+    assert state is not None
+    assert event is not None
+    assert namespace.namespace_backend_family == 'herdr-native'
+    assert namespace.workspace_window_name == 'main'
+    assert state.workspace_window_name == 'main'
+    assert state.namespace_restore_token == 'restore-token-1'
+    assert 'ensure_window' in call_names
+    assert 'window_root_pane' in call_names
+    assert 'split_pane' in call_names
+    assert call_names.count('set_pane_identity') >= 2
+    assert not hasattr(backend, '_tmux_run')
+
+
+def test_project_namespace_controller_herdr_layout_capability_gap_does_not_save_state(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-capability-gap')
+    backend = _FakeHerdrProjectNamespaceBackend(pane_spawn_status='unsupported')
+    state_store = _MemoryProjectNamespaceStateStore()
+    event_store = _MemoryProjectNamespaceEventStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        controller.ensure()
+
+    assert type(exc_info.value).__name__ == 'MuxCommandErrorV2'
+    assert getattr(exc_info.value, 'operation', None) == 'ensure_window'
+    assert state_store.load() is None
+    assert event_store.load_latest() is None
+    assert not hasattr(backend, '_tmux_run')
+
+
+def test_project_namespace_controller_destroy_herdr_namespace_without_killing_global_server(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-destroy')
+    backend = _FakeHerdrProjectNamespaceBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    state_store.save(
+        ProjectNamespaceState(
+            project_id='proj-herdr',
+            namespace_epoch=4,
+            tmux_socket_path='',
+            tmux_session_name='ccb-herdr',
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            namespace_id='w-anchor',
+            namespace_session_name='ccb-herdr',
+            namespace_ipc_kind='herdr_socket',
+            namespace_ipc_ref='herdr://w-anchor',
+            namespace_restore_token='restore-token',
+            control_window_name='__ccb_ctl',
+            workspace_window_name='ccb',
+            ui_attachable=True,
+        )
+    )
+    initial_state = state_store.load()
+    event_store = _MemoryProjectNamespaceEventStore()
+    seen_namespace_state: list[object] = []
+
+    def backend_factory(*, socket_path=None, namespace_state=None):
+        seen_namespace_state.append(namespace_state)
+        return backend
+
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        backend_factory=backend_factory,
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    summary = controller.destroy(reason='kill')
+    state = state_store.load()
+    event = event_store.load_latest()
+
+    assert summary.destroyed is True
+    assert state is not None
+    assert event is not None
+    assert state.ui_attachable is False
+    assert state.last_destroy_reason == 'kill'
+    assert event.event_kind == 'namespace_destroyed'
+    assert event.details['destroyed'] is True
+    assert event.details['reason'] == 'kill'
+    assert event.namespace_backend_family == 'herdr-native'
+    assert event.backend_impl == 'herdr'
+    assert event.namespace_id == 'w-anchor'
+    assert seen_namespace_state == [initial_state]
+    assert [call[0] for call in backend.calls] == ['destroy_namespace']
+    assert backend.calls[0][1]['namespace_id'] == 'w-anchor'  # type: ignore[index]
+
+
+def test_project_namespace_backend_for_teardown_reuses_persisted_herdr_state(monkeypatch) -> None:
+    from ccbd.services.project_namespace_runtime.controller import backend_for_namespace_teardown
+
+    seen: list[dict[str, object]] = []
+
+    def build(namespace_ref: dict[str, object]):
+        seen.append(dict(namespace_ref))
+        return 'teardown-backend'
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.get_backend_for_namespace_teardown',
+        build,
+    )
+    state = ProjectNamespaceState(
+        project_id='proj-herdr',
+        namespace_epoch=4,
+        tmux_socket_path='',
+        tmux_session_name='ccb-herdr',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='w-anchor',
+        namespace_session_name='ccb-herdr',
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://w-anchor',
+        namespace_restore_token='restore-token',
+    )
+
+    backend = backend_for_namespace_teardown(socket_path='', namespace_state=state)
+
+    assert backend == 'teardown-backend'
+    assert seen == [
+        {
+            'backend_family': 'herdr-native',
+            'backend_impl': 'herdr',
+            'namespace_id': 'w-anchor',
+            'session_name': 'ccb-herdr',
+            'ipc_kind': 'herdr_socket',
+            'ipc_ref': 'herdr://w-anchor',
+            'restore_token': 'restore-token',
+        }
+    ]
+
+
+def test_project_namespace_backend_for_teardown_tmux_state_returns_bound_tmux() -> None:
+    from ccbd.services.project_namespace_runtime.controller import backend_for_namespace_teardown
+    from terminal_runtime import TmuxBackend
+
+    state = ProjectNamespaceState(
+        project_id='proj-tmux',
+        namespace_epoch=4,
+        tmux_socket_path='tmux.sock',
+        tmux_session_name='ccb-tmux',
+        namespace_backend_family='tmux-family',
+        backend_impl='tmux',
+    )
+
+    backend = backend_for_namespace_teardown(socket_path='tmux.sock', namespace_state=state)
+
+    assert isinstance(backend, TmuxBackend)
+    assert backend._socket_path == 'tmux.sock'
+
+
+def test_project_namespace_controller_destroy_uses_teardown_backend_with_default_factory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    layout = PathLayout(tmp_path / 'repo-herdr-destroy-default-factory')
+    backend = _FakeHerdrProjectNamespaceBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    state_store.save(
+        ProjectNamespaceState(
+            project_id='proj-herdr',
+            namespace_epoch=4,
+            tmux_socket_path='',
+            tmux_session_name='ccb-herdr',
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            namespace_id='w-anchor',
+            namespace_session_name='ccb-herdr',
+            namespace_ipc_kind='herdr_socket',
+            namespace_ipc_ref='herdr://w-anchor',
+            namespace_restore_token='restore-token',
+        )
+    )
+    event_store = _MemoryProjectNamespaceEventStore()
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.get_backend_for_namespace_teardown',
+        lambda namespace_ref: backend,
+    )
+
+    def fail_resolve(backend_name=None):
+        raise AssertionError('teardown must not re-run the Herdr selection gate')
+
+    monkeypatch.setattr(
+        'ccbd.services.project_namespace_runtime.controller.resolve_terminal_backend',
+        fail_resolve,
+    )
+
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    summary = controller.destroy(reason='kill')
+
+    assert summary.destroyed is True
+    assert [call[0] for call in backend.calls] == ['destroy_namespace']
+    assert backend.calls[0][1]['namespace_id'] == 'w-anchor'  # type: ignore[index]
+
+
+def test_project_namespace_controller_destroy_marks_herdr_state_when_teardown_cli_unavailable(
+    tmp_path: Path,
+) -> None:
+    from terminal_runtime.mux_backend_contract import MuxCommandErrorV2
+
+    class _UnavailableHerdrBackend(_FakeHerdrProjectNamespaceBackend):
+        def destroy_namespace(self, namespace: dict[str, object]) -> None:
+            self.calls.append(('destroy_namespace', namespace))
+            raise MuxCommandErrorV2(
+                category='transient-unavailable',
+                backend_impl='herdr',
+                operation='resolve_executable',
+                detail='Herdr executable is not available',
+            )
+
+    layout = PathLayout(tmp_path / 'repo-herdr-destroy-unavailable')
+    backend = _UnavailableHerdrBackend()
+    state_store = _MemoryProjectNamespaceStateStore()
+    state_store.save(
+        ProjectNamespaceState(
+            project_id='proj-herdr',
+            namespace_epoch=4,
+            tmux_socket_path='',
+            tmux_session_name='ccb-herdr',
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            namespace_id='w-anchor',
+            namespace_session_name='ccb-herdr',
+            namespace_ipc_kind='herdr_socket',
+            namespace_ipc_ref='herdr://w-anchor',
+            namespace_restore_token='restore-token',
+            ui_attachable=True,
+        )
+    )
+    event_store = _MemoryProjectNamespaceEventStore()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-herdr',
+        clock=lambda: '2026-08-02T00:00:00Z',
+        backend_factory=lambda socket_path=None, namespace_state=None: backend,
+        state_store=state_store,
+        event_store=event_store,
+    )
+
+    summary = controller.destroy(reason='kill')
+    state = state_store.load()
+    event = event_store.load_latest()
+
+    assert summary.destroyed is False
+    assert state is not None
+    assert event is not None
+    assert state.ui_attachable is False
+    assert state.last_destroy_reason == 'kill'
+    assert event.event_kind == 'namespace_destroyed'
+    assert event.details['destroyed'] is False
+    assert [call[0] for call in backend.calls] == ['destroy_namespace']
 
 
 def test_path_layout_normalizes_tmux_session_name_for_tmux_targets(tmp_path: Path) -> None:

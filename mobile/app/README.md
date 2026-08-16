@@ -1,18 +1,22 @@
 # CCB Mobile App
 
-This is the Flutter source baseline for the CCB Mobile controller.
+This is the Flutter application for the CCB Mobile controller.
 
 Current status:
 
-- permissive/minimal baseline while AGPL app-source reuse is undecided;
-- fake CCB repository and `project_view` fixtures first;
-- socket-aware tmux command builder before live terminal networking;
-- no ServerBox or Paseo source copied into this tree.
+- server-wide real-project gateway, chat, Terminal, file, notification, and
+  Relay paths behind route-agnostic repository/transport boundaries;
+- Provider identity, model/thinking selection, session usage, and account
+  quota semantics aligned with open-source Paseo at pinned commit `b599d38`;
+- CCB remains authoritative for project/window/agent/session lifecycle,
+  configuration, permissions, and tmux panes;
+- third-party provenance is recorded in
+  [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 The Android and iOS platform folders were generated with `flutter create` after
 the local Flutter/Android toolchain became available.
 
-Useful first commands once Flutter is installed:
+Useful development commands:
 
 ```bash
 cd app

@@ -6,6 +6,7 @@ from cli.render import (
     render_ack,
     render_ask,
     render_clear,
+    render_compact,
     render_doctor,
     render_doctor_bundle,
     render_fault_arm,
@@ -13,6 +14,7 @@ from cli.render import (
     render_fault_list,
     render_inbox,
     render_kill,
+    render_layout,
     render_logs,
     render_mobile_serve,
     render_ps,
@@ -108,6 +110,27 @@ def test_render_clear_includes_agent_results() -> None:
         'clear_agent: agent=agent1 status=cleared pane_id=%1',
         'clear_agent: agent=agent2 status=skipped reason=runtime_missing',
         'clear_agent: agent=agent3 status=failed pane_id=%3 reason=send failed',
+    )
+
+
+def test_render_compact_includes_provider_commands_and_counts() -> None:
+    assert render_compact(
+        {
+            'status': 'unsupported',
+            'results': [
+                {'agent': 'agent1', 'status': 'compacted', 'provider': 'codex', 'command': '/compact'},
+                {'agent': 'agent2', 'status': 'unsupported', 'provider': 'zai', 'reason': 'provider_native_compact_unverified'},
+            ],
+        }
+    ) == (
+        'compact_status: unsupported',
+        'compacted_count: 1',
+        'skipped_count: 0',
+        'blocked_count: 0',
+        'unsupported_count: 1',
+        'failed_count: 0',
+        'compact_agent: agent=agent1 status=compacted provider=codex command=/compact',
+        'compact_agent: agent=agent2 status=unsupported provider=zai reason=provider_native_compact_unverified',
     )
 
 
@@ -1010,6 +1033,24 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
             'namespace_last_event_epoch': 4,
             'namespace_last_event_socket_path': '/tmp/repo/.ccb/ccbd/tmux.sock',
             'namespace_last_event_session_name': 'ccb-repo',
+            'herdr_surface_projection': {
+                'backend_impl': 'herdr',
+                'capability_status': 'partial',
+                'support_tier_projection': 'experimental',
+                'support_tier_projection_source': 'validation_pending',
+                'beta_gaps': ['mobile-terminal-validation-pending'],
+                'blocking_gaps': ['config-ui-validation-pending'],
+                'degraded_next_action': 'collect-validation-transcript',
+                'evidence_refs': {
+                    'namespace_ref': {
+                        'backend_impl': 'herdr',
+                        'namespace_id': 'workspace-1',
+                        'session_name': 'ccb-herdr',
+                        'restore_token_present': True,
+                    },
+                    'pane_ref': {'backend_impl': 'herdr', 'pane_id': 'pane-1'},
+                },
+            },
         },
         'active_inbound_diagnostics': [
             {
@@ -1137,6 +1178,16 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     assert 'ccbd_tmux_effective_socket_path_bytes: 58' in doctor_lines
     assert 'ccbd_tmux_start_server_command: tmux -f /dev/null -S /home/demo/.local/state/ccb/projects/proj-1/ccbd/tmux.sock start-server' in doctor_lines
     assert 'ccbd_namespace_tmux_session_name: ccb-repo' in doctor_lines
+    assert (
+        'ccbd_herdr_surface: capability_status=partial support_tier_projection=experimental '
+        'source=validation_pending beta_gaps=mobile-terminal-validation-pending '
+        'blocking_gaps=config-ui-validation-pending next_action=collect-validation-transcript'
+    ) in doctor_lines
+    assert (
+        'ccbd_herdr_namespace_ref: backend_impl=herdr,namespace_id=workspace-1,'
+        'restore_token_present=True,session_name=ccb-herdr'
+    ) in doctor_lines
+    assert 'ccbd_herdr_pane_ref: backend_impl=herdr,pane_id=pane-1' in doctor_lines
     assert 'agent: name=codex health=healthy provider=codex completion=protocol_turn' in doctor_lines
     assert (
         'binding: status=ready runtime=tmux:%1 session=/tmp/.codex-session '
@@ -1155,6 +1206,55 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
         'projected_active=None projected_head=iev_1 projected_head_type=task_reply '
         'projected_head_status=queued'
     ) in doctor_lines
+
+
+def test_render_ps_and_layout_include_herdr_surface_projection() -> None:
+    projection = {
+        'backend_impl': 'herdr',
+        'capability_status': 'partial',
+        'support_tier_projection': 'experimental',
+        'support_tier_projection_source': 'validation_pending',
+        'beta_gaps': ['mobile-terminal-validation-pending'],
+        'blocking_gaps': ['config-ui-validation-pending'],
+        'degraded_next_action': 'collect-validation-transcript',
+        'evidence_refs': {
+            'namespace_ref': {
+                'backend_impl': 'herdr',
+                'namespace_id': 'workspace-1',
+                'session_name': 'ccb-herdr',
+            }
+        },
+    }
+
+    ps_lines = render_ps({'project_id': 'proj-1', 'ccbd_state': 'mounted', 'herdr_surface_projection': projection, 'agents': []})
+    layout_lines = render_layout(
+        {
+            'layout_status': 'ok',
+            'action': 'status',
+            'project_id': 'proj-1',
+            'pane_count': 0,
+            'window_count': 0,
+            'ccbd_state': 'mounted',
+            'namespace': {
+                'status': 'mounted',
+                'state_load_status': 'ok',
+                'tmux_session_name': '',
+                'workspace_window_name': '',
+                'herdr_surface_projection': projection,
+            },
+            'windows': [],
+        }
+    )
+
+    expected = (
+        'herdr_surface: capability_status=partial support_tier_projection=experimental '
+        'source=validation_pending beta_gaps=mobile-terminal-validation-pending '
+        'blocking_gaps=config-ui-validation-pending next_action=collect-validation-transcript'
+    )
+    assert expected in ps_lines
+    assert expected in layout_lines
+    assert 'herdr_namespace_ref: backend_impl=herdr,namespace_id=workspace-1,session_name=ccb-herdr' in ps_lines
+    assert 'herdr_namespace_ref: backend_impl=herdr,namespace_id=workspace-1,session_name=ccb-herdr' in layout_lines
 
 
 def test_render_start_and_kill_include_tmux_cleanup_summary() -> None:

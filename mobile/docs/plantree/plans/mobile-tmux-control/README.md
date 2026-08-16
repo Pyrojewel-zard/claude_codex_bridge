@@ -79,6 +79,14 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
   architecture while adopting Paseo-inspired host persistence, unified
   reconnect, cursor catch-up, Push, presence, and optional foreground-service
   behavior with strict emulator and physical-phone evidence.
+- [goal-provider-control-plane.md](goal-provider-control-plane.md) directly
+  aligns Provider identity, model/thinking controls, session usage, and
+  account quota semantics with pinned open-source Paseo contracts while
+  retaining CCB runtime authority.
+- [topics/lan-network-awareness-and-recovery.md](topics/lan-network-awareness-and-recovery.md)
+  is the execute-ready LAN reliability package for phone-side Wi-Fi/VPN
+  guidance, reconnect diagnostics, terminal heartbeat, and DHCP/address-change
+  recovery instructions.
 - [roadmap.md](roadmap.md) tracks likely implementation phases.
 - [implementation-status.md](implementation-status.md) is the current
   execution handoff for the active landing phase.
@@ -202,6 +210,9 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
 - [topics/product-requirements.md](topics/product-requirements.md) captures the
   core mobile/iPad requirements around projects, agents, lifecycle,
   notifications, and Markdown/math display.
+- [topics/chat-background-customization.md](topics/chat-background-customization.md)
+  defines local-only chat wallpaper selection, persistence, readability, and
+  chat-versus-terminal acceptance boundaries.
 - [topics/ccb-mobile-control-architecture.md](topics/ccb-mobile-control-architecture.md)
   defines the recommended CCB-specific architecture.
 - [topics/mobile-api-contract.md](topics/mobile-api-contract.md) sketches the
@@ -294,6 +305,11 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
 - [decisions/023-one-time-public-relay-admission.md](decisions/023-one-time-public-relay-admission.md)
   records that each hosted-relay applicant receives a one-use invitation that
   activates one host key, while reusable CCB phone pairing remains separate.
+- [decisions/024-official-and-self-hosted-relay-modes.md](decisions/024-official-and-self-hosted-relay-modes.md)
+  records the official and self-hosted Relay deployment modes.
+- [decisions/025-paseo-provider-control-alignment.md](decisions/025-paseo-provider-control-alignment.md)
+  supersedes Decision 008 for the Provider-control scope and records direct,
+  attributed AGPLv3 alignment with pinned Paseo source.
 
 ## Current Direction
 

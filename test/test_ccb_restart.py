@@ -344,10 +344,47 @@ def test_hapi_manual_restart_rebuilds_fresh_launch_generation(monkeypatch, tmp_p
     assert calls[0]['run_start_flow_fn'] is project_restart.run_start_flow
 
 
+def test_project_restart_agent_handler_defers_herdr_namespace_without_tmux_backend(monkeypatch) -> None:
+    app = _app(runtimes={'agent1': _runtime(pane_id='herdr-pane-1')})
+    app.project_namespace = SimpleNamespace(
+        load=lambda: SimpleNamespace(
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            tmux_socket_path='',
+        )
+    )
+    handler = build_project_restart_agent_handler(app)
+
+    payload = handler({'agent_name': 'agent1'})
+
+    assert payload['status'] == 'unsupported'
+    assert payload['restart_status'] == 'deferred'
+    assert payload['reason'] == 'deferred_to_provider_runtime_on_herdr'
+    assert payload['result']['status'] == 'deferred'
+    assert payload['result']['backend_impl'] == 'herdr'
+    assert payload['result']['restart_evidence'] == {
+        'backend_impl': 'herdr',
+        'namespace_backend_family': 'herdr-native',
+        'restart_surface': 'provider_runtime_required',
+        'restart_status': 'deferred',
+        'reason': 'deferred_to_provider_runtime_on_herdr',
+        'respawn_evidence': 'not_attempted',
+        'session_binding_evidence': 'not_attempted',
+        'agent': 'agent1',
+    }
+    assert payload['old_runtime']['pane_id'] == 'herdr-pane-1'
+    assert payload['new_runtime']['pane_id'] == 'herdr-pane-1'
+
+
 def test_project_restart_agent_socket_targets_one_agent(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-restart-socket'
     _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex,agent2:codex\n')
     app = CcbdApp(project_root)
+    monkeypatch.setattr(
+        app,
+        'execute_project_stop',
+        lambda **kwargs: SimpleNamespace(to_record=lambda: {'status': 'ok'}),
+    )
     calls: list[tuple[str, ...]] = []
 
     def _restart(app_arg, *, agent_names):

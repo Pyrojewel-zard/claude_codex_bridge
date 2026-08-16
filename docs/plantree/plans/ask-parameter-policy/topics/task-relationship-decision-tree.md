@@ -4,31 +4,31 @@ Date: 2026-06-08
 
 ## Decision Questions
 
-Before choosing artifact flags, choose result intent.
+Before choosing result or artifact flags, pass the dependency gate.
 
 1. Does the work need delegation?
    - No: answer directly.
    - Yes: continue.
 
-2. Is the ask mainly publishing or executing work where a successful result is
+2. Is this ask from an active CCB parent task that cannot finish until this
+   exact child result arrives?
+   - Yes: add `--chain`, then stop for CCB continuation.
+   - No: do not add `--chain`; continue.
+
+3. Is the ask mainly publishing or executing work where a successful result is
    not useful to the caller?
    - Yes: use `--silence`.
    - No: continue.
 
-3. Does the caller want a result, but only a distilled status, finding, risk,
+4. Does the caller want a result, but only a distilled status, finding, risk,
    blocker, or next action?
    - Yes: use `--compact`.
    - No: continue.
 
-4. Is the ask consultation, analysis, review/report generation, or any task
+5. Is the ask consultation, analysis, review/report generation, or any task
    where full output should be preserved?
    - Yes: use `--artifact-reply`.
    - No: use plain `ask` only for short questions or short handoffs.
-
-5. Is this ask from an active CCB parent task that cannot finish until the child
-   result arrives?
-   - Yes: add `--chain`, then stop for CCB continuation.
-   - No: submit normally and stop.
 
 6. Does the request body include exact transient text?
    - Yes: add `--artifact-request`, or use `--artifact-io` if the reply also
@@ -118,3 +118,8 @@ B --chain -> C
 ```
 
 CCB propagates continuations after those edges exist.
+
+Communication tests, batch sends, notifications, and independent asks are not
+chain dependencies merely because replies are requested. Do not retry a
+rejected plain ask by mechanically adding `--chain`; use `--silence` only when
+no successful result is needed, otherwise report the routing limitation.

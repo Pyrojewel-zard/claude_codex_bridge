@@ -58,6 +58,7 @@ def _clear_post_update_env(monkeypatch) -> None:
         "CCB_UPDATE_PROVIDERS",
         "CCB_POST_UPDATE_CACHE_CLEANUP_FLOW",
         "CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED",
+        "CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW",
         "CCB_UPDATE_CACHE_CLEANUP",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -205,14 +206,21 @@ def test_cmd_update_current_release_runs_provider_flow_without_reinstall(
     assert "Already up to date" in capsys.readouterr().out
 
 
-def test_cmd_update_rejects_non_unix_platform(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_update_windows_uses_release_surface_diagnostic(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setattr(update_runtime.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(update_runtime.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(
+        update_runtime,
+        "get_available_versions",
+        lambda: (_ for _ in ()).throw(AssertionError("diagnostic-only Windows update must not resolve releases")),
+    )
 
     code = update_runtime.cmd_update(SimpleNamespace(target=None), script_root=tmp_path / "script-root")
 
     assert code == 1
-    captured = capsys.readouterr()
-    assert "Linux, macOS, or WSL" in captured.out
+    output = capsys.readouterr().out
+    assert "Windows x64 release route is blocked" in output
+    assert "Use install.ps1 from a validated Windows release ZIP or source checkout" in output
 
 
 def test_cmd_update_allows_source_dev_install_and_targets_managed_prefix(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -282,6 +290,13 @@ def test_release_artifact_name_uses_macos_universal_bundle(monkeypatch) -> None:
     monkeypatch.setattr(update_runtime.platform, "machine", lambda: "arm64")
 
     assert update_runtime._release_artifact_name() == "ccb-macos-universal.tar.gz"
+
+
+def test_release_artifact_name_keeps_windows_beta_out_of_stable_update_route(monkeypatch) -> None:
+    monkeypatch.setattr(update_runtime.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(update_runtime.platform, "machine", lambda: "AMD64")
+
+    assert update_runtime._release_artifact_name() is None
 
 
 def test_release_artifact_url_points_to_release_download() -> None:
@@ -633,6 +648,7 @@ def test_post_update_delegation_runs_installed_entrypoint(monkeypatch, tmp_path:
     assert calls[1]["kwargs"]["env"]["CCB_PROVIDER_UPDATE_MODE"] == "prompt"
     assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_CACHE_CLEANUP_FLOW"] == "1"
     assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_CACHE_CLEANUP_ENABLED"] == "1"
+    assert calls[1]["kwargs"]["env"]["CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW"] == "1"
     assert calls[1]["kwargs"]["timeout"] == update_runtime.POST_UPDATE_WITH_PROVIDERS_TIMEOUT_SECONDS
 
 
@@ -842,6 +858,83 @@ def test_post_update_refreshes_tmux_ui_without_affecting_provisioning(monkeypatc
     assert code == 0
     assert calls == [True]
     assert "Tmux UI post-update refresh skipped" not in captured.out
+
+
+def test_post_update_refreshes_active_mobile_host_non_blocking(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_INSTALL_ROLES", "0")
+    monkeypatch.setenv("CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW", "1")
+    calls: list[Path] = []
+    result = SimpleNamespace(pid=321, route_provider="relay")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(
+        update_runtime,
+        "restart_running_mobile_host_service",
+        lambda *, script_root: calls.append(script_root) or result,
+    )
+
+    code = update_runtime._run_post_update_provisioning(
+        install_dir=tmp_path / "install",
+    )
+
+    assert code == 0
+    assert calls == [tmp_path / "install"]
+    assert "Mobile Host refreshed with the installed CCB version" in capsys.readouterr().out
+
+
+def test_post_update_mobile_host_refresh_failure_warns_without_rollback(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_INSTALL_ROLES", "0")
+    monkeypatch.setenv("CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(
+        update_runtime,
+        "restart_running_mobile_host_service",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("port busy")),
+    )
+
+    code = update_runtime._run_post_update_provisioning(
+        install_dir=tmp_path / "install",
+    )
+
+    captured = capsys.readouterr().out
+    assert code == 0
+    assert "Mobile Host post-update refresh failed" in captured
+    assert "ccb update mobile" in captured
+
+
+def test_required_post_update_failure_skips_mobile_host_refresh_before_rollback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_post_update_env(monkeypatch)
+    monkeypatch.setenv("CCB_POST_UPDATE_REQUIRED", "1")
+    monkeypatch.setenv("CCB_POST_UPDATE_MOBILE_HOST_REFRESH_FLOW", "1")
+    monkeypatch.setattr(update_runtime, "set_tmux_ui_active", lambda _active: None)
+    monkeypatch.setattr(
+        update_runtime,
+        "_update_builtin_roles_after_update",
+        lambda **_kwargs: 1,
+    )
+    monkeypatch.setattr(
+        update_runtime,
+        "restart_running_mobile_host_service",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("host restarted before required rollback")
+        ),
+    )
+
+    assert update_runtime._run_post_update_provisioning(
+        install_dir=tmp_path / "install",
+    ) == 1
 
 
 def test_post_update_tmux_ui_refresh_failure_is_non_blocking(monkeypatch, tmp_path: Path, capsys) -> None:

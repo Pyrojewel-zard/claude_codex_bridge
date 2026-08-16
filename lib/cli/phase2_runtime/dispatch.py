@@ -19,6 +19,7 @@ from .handlers_ops import (
     handle_agent,
     handle_cleanup,
     handle_clear,
+    handle_compact,
     handle_doctor,
     handle_fault_arm,
     handle_fault_clear,
@@ -40,7 +41,13 @@ from .handlers_ops import (
     handle_reload,
     handle_restart,
 )
-from .handlers_start import handle_config_ui, handle_config_validate, handle_start
+from .handlers_start import (
+    handle_config_import_herdr,
+    handle_config_ui,
+    handle_config_validate,
+    handle_herdr_open,
+    handle_start,
+)
 
 
 _HANDLERS = {
@@ -50,7 +57,9 @@ _HANDLERS = {
     'cancel': handle_cancel,
     'followup': handle_followup,
     'clear': handle_clear,
+    'compact': handle_compact,
     'cleanup': handle_cleanup,
+    'config-import-herdr': handle_config_import_herdr,
     'config-ui': handle_config_ui,
     'config-validate': handle_config_validate,
     'doctor': handle_doctor,
@@ -58,6 +67,7 @@ _HANDLERS = {
     'fault-clear': handle_fault_clear,
     'fault-list': handle_fault_list,
     'frontdesk': handle_frontdesk,
+    'herdr-open': handle_herdr_open,
     'inbox': handle_inbox,
     'kill': handle_kill,
     'layout': handle_layout,

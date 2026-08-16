@@ -10,6 +10,7 @@ from provider_core.fifo_delivery import cleanup_acks
 from provider_backends.codex.launcher_runtime.command_runtime.diagnostics import CodexDiagnosticLogFilterInstaller
 
 from .env import env_float
+from .reconnect_autostart import CodexReconnectAutostart
 from .runtime_io import process_request, read_request
 from .runtime_state import build_bridge_runtime_state
 from .app_server import ManagedCodexAppServer
@@ -23,6 +24,10 @@ class DualBridge:
         if not pane_id:
             raise RuntimeError('Missing CODEX_TMUX_SESSION environment variable')
 
+        self._reconnect_autostart = CodexReconnectAutostart(
+            runtime_dir,
+            log=self._log_console,
+        )
         self._runtime = build_bridge_runtime_state(runtime_dir, pane_id=pane_id)
         self._app_server = ManagedCodexAppServer(runtime_dir)
         self._diagnostic_log_filter = CodexDiagnosticLogFilterInstaller()
@@ -81,6 +86,7 @@ class DualBridge:
         try:
             while self._running:
                 try:
+                    self._reconnect_autostart.maybe_arm()
                     self._diagnostic_log_filter.maybe_install()
                     payload = self._read_request(timeout=poll_timeout)
                     if payload is None:
@@ -98,6 +104,7 @@ class DualBridge:
                         error_backoff = min(error_backoff_max, max(error_backoff_min, error_backoff * 2))
         finally:
             self.binding_tracker.stop()
+            self._reconnect_autostart.stop()
             self._app_server.stop()
             if self._runtime.fifo_reader is not None:
                 self._runtime.fifo_reader.close()

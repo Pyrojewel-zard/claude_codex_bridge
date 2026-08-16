@@ -179,12 +179,9 @@ class MessageBureauFacade(MessageBureauFacadeStateMixin):
         return self._callback_edge_store.get_latest(edge_id)
 
     def pending_callback_edges(self) -> tuple[CallbackEdgeRecord, ...]:
-        latest: dict[str, CallbackEdgeRecord] = {}
-        for edge in self._callback_edge_store.list_all():
-            latest[edge.edge_id] = edge
         return tuple(
             edge
-            for edge in latest.values()
+            for edge in self._callback_edge_store.list_latest()
             if edge.state in {CallbackEdgeState.PENDING, CallbackEdgeState.CHILD_COMPLETED}
         )
 

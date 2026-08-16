@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -33,6 +34,7 @@ from codex_reconnect.tmux_watch import (
     TmuxClient,
     TmuxWatchError,
     WatchState,
+    WatchStopped,
     classify_session_error,
     current_watch_context,
     disable_current,
@@ -391,6 +393,19 @@ class ClassificationTests(unittest.TestCase):
             ),
             EligibleError("overload", "responseTooManyFailedAttempts"),
         )
+        self.assertEqual(
+            classify_session_error(
+                {
+                    "type": "error",
+                    "codex_error_info": "other",
+                    "message": (
+                        "Selected model is at capacity. "
+                        "Please try a different model."
+                    ),
+                }
+            ),
+            EligibleError("overload", "serverOverloaded"),
+        )
 
     def test_quota_auth_and_policy_errors_are_excluded(self) -> None:
         for message in (
@@ -615,6 +630,96 @@ class TrackerTests(unittest.TestCase):
         )
         self.assertEqual([action.kind for action in actions], ["incident"])
 
+    def test_task_complete_nested_capacity_error_is_eligible(self) -> None:
+        tracker = SessionEventTracker()
+        tracker.observe(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": "capacity-turn"},
+            }
+        )
+        actions = tracker.observe(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "capacity-turn",
+                    "last_agent_message": None,
+                    "error": {
+                        "message": (
+                            "Selected model is at capacity. "
+                            "Please try a different model."
+                        ),
+                        "codex_error_info": "server_overloaded",
+                    },
+                },
+            }
+        )
+        self.assertEqual([action.kind for action in actions], ["incident"])
+        self.assertEqual(
+            actions[0].incident,
+            Incident("capacity-turn", "overload", "serverOverloaded"),
+        )
+        self.assertEqual(
+            tracker.observe_terminal_log_error(
+                "capacity-turn",
+                "Selected model is at capacity. Please try a different model.",
+            ),
+            [],
+        )
+
+    def test_task_complete_nested_retry_error_does_not_create_incident(self) -> None:
+        tracker = SessionEventTracker()
+        tracker.observe(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": "retry-turn"},
+            }
+        )
+        actions = tracker.observe(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "retry-turn",
+                    "error": {
+                        "message": "server overloaded",
+                        "codex_error_info": "server_overloaded",
+                        "willRetry": True,
+                    },
+                },
+            }
+        )
+        self.assertEqual([action.kind for action in actions], ["turn_complete"])
+        self.assertIsNone(tracker.incident)
+
+    def test_terminal_capacity_sqlite_error_is_eligible(self) -> None:
+        tracker = SessionEventTracker()
+        tracker.observe(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": "capacity-turn"},
+            }
+        )
+        tracker.observe(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_complete", "turn_id": "capacity-turn"},
+            }
+        )
+        actions = tracker.observe_terminal_log_error(
+            "capacity-turn",
+            "Selected model is at capacity. " "Please try a different model.",
+        )
+        self.assertEqual([action.kind for action in actions], ["incident"])
+        self.assertEqual(
+            tracker.observe_terminal_log_error(
+                "capacity-turn",
+                "Selected model is at capacity. Please try a different model.",
+            ),
+            [],
+        )
+
     def test_newer_turn_rejects_delayed_sqlite_error(self) -> None:
         tracker = SessionEventTracker()
         for turn_id in ("failed-turn", "newer-turn"):
@@ -663,6 +768,27 @@ class _FakeProcess:
 
 
 class EnableDisableTests(unittest.TestCase):
+    def test_enable_uses_active_provider_route_for_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex_home = root / "codex-home"
+            _write_session(codex_home)
+            (codex_home / "config.toml").write_text(
+                'model_provider = "custom"\n'
+                '[model_providers.custom]\n'
+                'base_url = "https://provider.example.test/v1"\n',
+                encoding="utf-8",
+            )
+            state = enable_current(
+                state_dir=root / "state",
+                environment=_environment(codex_home),
+                tmux_runner=_tmux_runner,
+                process_factory=lambda *args, **kwargs: _FakeProcess(),
+            )
+            self.assertEqual(
+                state.openai_probe_url, "https://provider.example.test/v1"
+            )
+
     def test_enable_starts_one_bound_watcher_and_disable_is_thread_scoped(self) -> None:
         calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -719,6 +845,94 @@ class EnableDisableTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][calls[0].index("--log-file") + 1], str(log_path))
         self.assertEqual(calls[0][calls[0].index("--log-cursor") + 1], str(row_id))
+
+    def test_same_thread_supersedes_live_watcher_after_pane_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            codex_home = root / "codex-home"
+            session = _write_session(codex_home)
+            state_path = watch_state_path(state_dir, THREAD_ID)
+            save_watch_state(
+                state_path,
+                WatchState(
+                    schema_version=1,
+                    instance_id="old-instance",
+                    enabled=True,
+                    status="armed",
+                    thread_id=THREAD_ID,
+                    codex_home=str(codex_home),
+                    session_path=str(session),
+                    tmux_socket="/tmp/codex-reconnect-test.sock",
+                    pane_id="%7",
+                    pane_pid=4100,
+                    pane_command="node",
+                    session_offset=session.stat().st_size,
+                    watcher_pid=os.getpid(),
+                    openai_probe_url="https://openai.test/probe",
+                    public_probe_url=None,
+                    probe_timeout=0.1,
+                    updated_at=time.time(),
+                    last_error=None,
+                ),
+            )
+
+            state = enable_current(
+                state_dir=state_dir,
+                environment=_environment(codex_home),
+                tmux_runner=_tmux_runner,
+                process_factory=lambda *args, **kwargs: _FakeProcess(),
+            )
+            audit = state_path.with_suffix(".audit.jsonl").read_text(encoding="utf-8")
+
+        self.assertNotEqual(state.instance_id, "old-instance")
+        self.assertEqual(state.pane_pid, 4242)
+        self.assertEqual(state.watcher_pid, _FakeProcess.pid)
+        self.assertIn('"event":"watcher_superseded_pane_restart"', audit)
+        self.assertIn('"oldPanePid":4100', audit)
+        self.assertIn('"newPanePid":4242', audit)
+
+    def test_same_thread_live_watcher_in_different_pane_remains_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            codex_home = root / "codex-home"
+            session = _write_session(codex_home)
+            state_path = watch_state_path(state_dir, THREAD_ID)
+            save_watch_state(
+                state_path,
+                WatchState(
+                    schema_version=1,
+                    instance_id="other-pane-instance",
+                    enabled=True,
+                    status="armed",
+                    thread_id=THREAD_ID,
+                    codex_home=str(codex_home),
+                    session_path=str(session),
+                    tmux_socket="/tmp/codex-reconnect-test.sock",
+                    pane_id="%8",
+                    pane_pid=4100,
+                    pane_command="node",
+                    session_offset=session.stat().st_size,
+                    watcher_pid=os.getpid(),
+                    openai_probe_url="https://openai.test/probe",
+                    public_probe_url=None,
+                    probe_timeout=0.1,
+                    updated_at=time.time(),
+                    last_error=None,
+                ),
+            )
+
+            with self.assertRaisesRegex(TmuxWatchError, "already armed in pane %8"):
+                enable_current(
+                    state_dir=state_dir,
+                    environment=_environment(codex_home),
+                    tmux_runner=_tmux_runner,
+                    process_factory=lambda *args, **kwargs: _FakeProcess(),
+                )
+            self.assertEqual(
+                load_watch_state(state_path).instance_id, "other-pane-instance"
+            )
 
     def test_two_threads_create_independent_watcher_state(self) -> None:
         class Process:
@@ -871,6 +1085,71 @@ class _FakeTmux:
 
 
 class WatcherIntegrationTests(unittest.TestCase):
+    def test_shutdown_signal_disables_current_watcher_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = _write_session(root / "codex-home")
+            state_path, state = _state(root, session)
+            watcher = SessionWatcher(
+                state_path, state.instance_id, tmux_client=_FakeTmux()
+            )
+
+            with self.assertRaisesRegex(WatchStopped, "SIGTERM"):
+                watcher._stop_for_signal(signal.SIGTERM)
+
+            stopped = load_watch_state(state_path)
+            audit = state_path.with_suffix(".audit.jsonl").read_text(encoding="utf-8")
+
+        self.assertFalse(stopped.enabled)
+        self.assertEqual(stopped.status, "off")
+        self.assertIn('"event":"watcher_stopped_by_signal"', audit)
+        self.assertIn('"signal":"SIGTERM"', audit)
+
+    def test_startup_arming_retries_until_empty_prompt_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = _write_session(root / "codex-home")
+            state_path, state = _state(root, session)
+            fake_tmux = _FakeTmux()
+            ready_prompt = fake_tmux.prompt
+            ready_cursor = fake_tmux.cursor
+            fake_tmux.prompt = "\nBooting Codex\n"
+            fake_tmux.cursor = PaneCursor(0, 1, 2)
+            clock = _FakeClock()
+            watcher = SessionWatcher(
+                state_path,
+                state.instance_id,
+                tmux_client=fake_tmux,
+                poll_interval=0.01,
+                monotonic=clock.monotonic,
+                wait=clock.sleep,
+            )
+            thread = threading.Thread(target=watcher.run)
+            thread.start()
+            time.sleep(0.03)
+            self.assertEqual(load_watch_state(state_path).status, "arming")
+
+            fake_tmux.prompt = ready_prompt
+            fake_tmux.cursor = ready_cursor
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                if load_watch_state(state_path).status == "armed":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(load_watch_state(state_path).status, "armed")
+
+            modify_watch_state(
+                state_path,
+                state.instance_id,
+                lambda current: replace(
+                    current, enabled=False, status="off", updated_at=time.time()
+                ),
+            )
+            thread.join(3)
+            self.assertFalse(thread.is_alive())
+            audit = state_path.with_suffix(".audit.jsonl").read_text(encoding="utf-8")
+            self.assertEqual(audit.count('"event":"empty_prompt_learned"'), 1)
+
     def test_lazily_created_sqlite_log_is_discovered_after_activation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1041,6 +1320,62 @@ class WatcherIntegrationTests(unittest.TestCase):
             audit = state_path.with_suffix(".audit.jsonl").read_text(encoding="utf-8")
             self.assertIn('"event":"terminal_log_error_observed"', audit)
             self.assertIn('"event":"continue_submitted"', audit)
+
+    def test_nested_capacity_completion_waits_for_two_probes_then_injects_once(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex_home = root / "codex-home"
+            session = _write_session(codex_home)
+            state_path, state = _state(root, session)
+            fake_tmux = _FakeTmux()
+            clock = _FakeClock()
+            watcher = SessionWatcher(
+                state_path,
+                state.instance_id,
+                tmux_client=fake_tmux,
+                primary_probe=lambda url, timeout: ProbeResult(url, True, 405, 0.01),
+                poll_interval=0.01,
+                monotonic=clock.monotonic,
+                wait=clock.sleep,
+                random_value=lambda: 0.0,
+            )
+            thread = threading.Thread(target=watcher.run)
+            thread.start()
+            _append_event(session, {"type": "task_started", "turn_id": "capacity-turn"})
+            _append_event(
+                session,
+                {
+                    "type": "task_complete",
+                    "turn_id": "capacity-turn",
+                    "last_agent_message": None,
+                    "error": {
+                        "message": (
+                            "Selected model is at capacity. "
+                            "Please try a different model."
+                        ),
+                        "codex_error_info": "server_overloaded",
+                    },
+                },
+            )
+            self.assertTrue(fake_tmux.sent.wait(3))
+            self.assertEqual(fake_tmux.send_count, 1)
+            self.assertEqual(fake_tmux.settle_delays, [0.5])
+            modify_watch_state(
+                state_path,
+                state.instance_id,
+                lambda current: replace(
+                    current, enabled=False, status="off", updated_at=time.time()
+                ),
+            )
+            thread.join(3)
+            self.assertFalse(thread.is_alive())
+            audit = state_path.with_suffix(".audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"event":"terminal_failure_observed"', audit)
+            self.assertIn('"failureKind":"overload"', audit)
+            self.assertEqual(audit.count('"event":"network_probe"'), 2)
+            self.assertEqual(audit.count('"event":"continue_submitted"'), 1)
 
     def test_changed_prompt_refuses_input_injection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

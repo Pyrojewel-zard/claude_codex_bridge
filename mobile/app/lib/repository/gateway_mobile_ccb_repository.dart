@@ -4,6 +4,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import '../transport/gateway_transport.dart';
 import '../transport/gateway_connection_outcome.dart';
@@ -37,6 +38,7 @@ class GatewayMobileCcbRepository
     implements
         MobileCcbRepository,
         MobileCcbRepositoryFileUploader,
+        MobileCcbProviderControlRepository,
         MobileGatewayProfileHealthProbe,
         MobileGatewayCoreRouteVerifier,
         MobileGatewayPresenceReporter,
@@ -129,6 +131,71 @@ class GatewayMobileCcbRepository
     return _report(
       GatewayConnectionOperation.dataRead,
       () => _transport.getProjectView(projectId),
+    );
+  }
+
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) {
+    final transport = _transport;
+    if (transport is! GatewayProviderControlTransport) {
+      throw UnsupportedError('gateway does not support provider control');
+    }
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      () => (transport as GatewayProviderControlTransport)
+          .getAgentProviderControl(projectId: projectId, agentName: agentName),
+    );
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) {
+    final transport = _transport;
+    if (transport is! GatewayProviderControlTransport) {
+      throw UnsupportedError('gateway does not support provider quota');
+    }
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      () => (transport as GatewayProviderControlTransport)
+          .getAgentProviderQuota(projectId: projectId, agentName: agentName),
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) {
+    final transport = _transport;
+    if (transport is! GatewayProviderControlTransport) {
+      throw UnsupportedError('gateway does not support provider control');
+    }
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => (transport as GatewayProviderControlTransport)
+          .updateAgentProviderSettings(
+            projectId: projectId,
+            agentName: agentName,
+            model: model,
+            thinking: thinking,
+            expectedRevision: expectedRevision,
+            expectedNamespaceEpoch: expectedNamespaceEpoch,
+            expectedProvider: expectedProvider,
+            expectedRuntimeRevision: expectedRuntimeRevision,
+            idempotencyKey: idempotencyKey,
+          ),
     );
   }
 

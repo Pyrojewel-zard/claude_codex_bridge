@@ -102,6 +102,52 @@ void main() {
     );
   });
 
+  testWidgets('agent terminal mode survives narrow and wide layout changes', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(430, 900));
+    await tester.pumpWidget(const CcbMobileApp(enableProductOnboarding: false));
+    await tester.pumpAndSettle();
+    await openCurrentProject(tester);
+
+    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('project-agent-terminal-mode')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('return-to-agent-chat-button')),
+      findsOneWidget,
+    );
+
+    await setTestSurfaceSize(tester, const Size(1200, 800));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('wide-project-agent-terminal-mode')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('selected-agent-workspace')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('return-to-agent-chat-button')),
+      findsOneWidget,
+    );
+
+    await setTestSurfaceSize(tester, const Size(430, 900));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('project-agent-terminal-mode')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('agent-message-composer')), findsNothing);
+  });
+
   testWidgets('mobile layout collapses agents and composer independently', (
     tester,
   ) async {
@@ -137,7 +183,7 @@ void main() {
       find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),
       findsOneWidget,
     );
-    expect(find.text('main / mobile'), findsOneWidget);
+    expect(find.text('main / mobile · Codex'), findsOneWidget);
 
     await tester.drag(
       find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),

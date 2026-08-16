@@ -6,8 +6,8 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
+  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
@@ -68,6 +68,26 @@ ccb update
 
 On an npm-managed install, `ccb update` prints the equivalent npm command and
 does not modify npm's vendored payload in place.
+
+<details>
+<summary><b>Native Windows x64 beta</b></summary>
+
+The Windows beta artifact is attached to the matching stable CCB GitHub
+release. Download `ccb-windows-x86_64.zip` and its `.sha256` sidecar, verify
+the digest, extract the ZIP, then run:
+
+```powershell
+.\install.ps1 install -Yes
+ccb --print-version
+```
+
+It requires native Windows x64, Python 3.10+, WezTerm, Git Bash, and Herdr
+0.8.0 or newer. The installer creates an install-local managed Python runtime.
+The binaries are unsigned, and `ccb update` remains diagnostic-only for this
+beta support tier; install a later Windows build by rerunning its validated
+`install.ps1`.
+
+</details>
 
 CCB-managed provider panes suppress known provider-native startup update prompts.
 After updating CCB—or immediately when CCB is already current—`ccb update`
@@ -220,9 +240,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.2 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.6.6 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.2 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
+- [Download CCB Mobile v8.6.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -280,6 +300,8 @@ CCB supports [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec), a
 
 Use the **⚙ Settings** control panel for normal project configuration. If you want agent-assisted configuration and runtime diagnosis, `ccb_self` remains available as an optional Role Pack and can be added with `ccb roles add agentroles.ccb_self:codex`.
 
+Supported managed Agents receive the built-in `ask`, `ccb-clear`, `ccb-compact`, and `ccb-diagnose` control skills even when optional skill inheritance is disabled. Use `$ccb_diagnose <agentname>` to inspect one Agent's authoritative runtime/job state and live pane evidence, apply bounded recovery when safe, and review a redacted issue draft before explicitly authorizing GitHub submission. Managed Codex also keeps `reconnect`.
+
 `.ccb/ccb_memory.md` is the project-wide shared memory document. Use it for team collaboration rules, project constraints, long-lived context, and agent handoff conventions. Stable cross-agent information belongs there instead of being copied into several provider-private memory files.
 
 <a id="contact"></a>
@@ -291,7 +313,7 @@ Use the **⚙ Settings** control panel for normal project configuration. If you 
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=0a86422d" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
@@ -309,6 +331,109 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.6.6</b> - Mobile continuity and Provider-safe recovery</summary>
+
+- Restart an active installed Mobile Host after `ccb update` without rotating pairing, and prevent valid large Relay terminal-history snapshots from stalling before the first credit update.
+- Recover a Claude prompt whose initial Enter was lost only when the current composer still contains exact task evidence; pane history cannot trigger the retry (PR #305).
+- Keep explicit Agent environment and Provider routes above inherited Claude settings, and rebuild drifted Provider-profile bindings without clearing conversation history (PRs #307 and #308).
+- Honor exact non-root Herdr split parents and add native-Windows `pwsh`, `powershell`, `bash`, and `wincmd` shell panes without stealing provider-qualified Agent names (PRs #309 and #310).
+
+</details>
+
+<details>
+<summary><b>v8.6.5</b> - Responsive and reliable Mobile terminals</summary>
+
+- Reflow Agent terminal snapshots to the phone viewport while preserving the desktop tmux pane geometry.
+- Keep terminal input and reconnection stable across LAN and Relay routes, and close active sessions cleanly during gateway shutdown.
+- Keep terminal font size and shortcut order in the shared Terminal settings panel, with full-width inline terminal mode on phones and wide layouts.
+- Reattach persisted Windows Herdr namespace and pane references with fail-closed capability checks (PR #304).
+
+</details>
+
+<details>
+<summary><b>v8.6.3</b> - Mobile access to agent workspace artifacts</summary>
+
+- Turn links to ordinary files in the current Agent's `.ccb/workspaces/&lt;agent&gt;/...` tree into authenticated Mobile download attachments.
+- Keep the boundary fail-closed: other Agent workspaces, hidden workspace paths, and all other private `.ccb` runtime state remain unavailable.
+- Preserve the existing Mobile client behavior and pairing model; no project configuration or state migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.6.2</b> - Explicit command approval, resilient sessions, and broader Mobile terminals</summary>
+
+- Require exact, external approval before project configuration can execute tool-window commands or custom Provider command templates; use `ccb config approve-commands` for intentional values.
+- Recover managed Codex conversations from the latest valid session when the current session record is corrupt, without silently clearing context.
+- Add visible-pane Cursor execution, Pi native history, OMP Provider-config inheritance, and more reliable Windows process and namespace cleanup.
+- Expand CCB Mobile with multi-session host terminals, Relay capability-negotiated Provider controls, and stronger native Windows readiness validation.
+
+</details>
+
+<details>
+<summary><b>v8.6.1</b> - Mobile Provider controls, direct terminals, and safe context compaction</summary>
+
+- Show selected-Agent Provider identity, configured/active/pending model and thinking state, Codex/Claude native session usage, and optional account quota in CCB Mobile.
+- Persist supported model/thinking choices through guarded, restart-required host configuration without interrupting active work or exposing Provider credentials.
+- Open project-window or Agent terminals directly from Mobile home and customize terminal shortcut visibility and order.
+- Add the built-in `ccb-compact` Skill and `ccb compact` command with outstanding-work checks and fail-closed Provider command selection.
+- Populate Config UI from the complete available Role catalog, retain native-session boundaries in Mobile history, and refresh the WeChat group QR image.
+
+</details>
+
+<details>
+<summary><b>v8.5.7</b> - Built-in agent diagnosis and stuck-delivery recovery</summary>
+
+- Keep `ccb-clear` in every supported managed Agent and add the required `ccb-diagnose` Skill. Run `$ccb_diagnose &lt;agentname&gt;` to combine daemon, lineage, queue, inbox, trace, provider-log, and live Pane evidence for one Agent.
+- Classify working, waiting-input, stale-prompt, Provider-error, dead/blank, and misframed Pane states; apply only evidence-backed bounded control-plane recovery and verify the Agent afterward.
+- Generate a redacted incident draft after diagnosis, but require fresh user authorization before creating any GitHub issue.
+- Recover abandoned mailbox deliveries without replaying business work, expose queue depth and active job identifiers in the sidebar, preserve Kiro login/settings through its isolated `KIRO_HOME`, forward Provider no-terminal timeout settings, and keep old Claude busy-turn records fenced from newly queued requests.
+- Probe reconnect readiness against the active Codex Provider route so custom Provider capacity and connectivity failures can continue through the existing guarded recovery path.
+
+</details>
+
+<details>
+<summary><b>v8.5.6</b> - Continuous Provider inheritance without clearing CCB conversations</summary>
+
+- Resolve each configured API, token, URL, route, and account dimension from CCB-local authority first, then read only the missing dimensions from the current external Provider state.
+- Refresh inherited state on a stopped Provider generation without writing back to the user's shell, Provider home, IDE, keyring, or remote login.
+- Keep one stable CCB conversation and its workspace, queue, and history across authority generations. Same-authority sessions use native resume; supported Codex/Claude/Gemini import or fork when safe, otherwise CCB records a linked continuation instead of hiding history.
+- Recover usable sessions affected by the withdrawn v8.5.5 migration shape without clearing them. The withdrawn v8.5.5 package is not reused.
+- Install and automatically arm bundled `codex-reconnect` for managed Codex panes; terminal network and selected-model capacity failures receive one bounded `continue` recovery when the exact pane and thread are proven safe.
+- Raise the default quota for newly issued Relay Host invitations from 200 MiB to 1 GiB per 24-hour window; explicit overrides and existing credentials remain unchanged.
+- Refresh the WeChat community QR image and cache key. No configuration or data migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.5.5</b> - Withdrawn compatibility release</summary>
+
+- Withdrawn from GitHub on 2026-08-05 after a legacy-session migration regression made existing managed conversations unavailable to native `resume`.
+- Use v8.5.6 or v8.5.4; do not install v8.5.5 for managed sessions.
+
+</details>
+
+<details>
+<summary><b>v8.5.4</b> - Safer ask routing, bounded history cleanup, and actionable Mobile LAN recovery</summary>
+
+- Treat `--chain` as a real dependency only: independent asks, communication tests, batches, notifications, and reply-delivery acknowledgements no longer create false callback chains.
+- Scan or clean one Agent or all Agents from Config UI with 7/30/90-day retention while protecting active bindings, recent history, and each Provider's newest transcript.
+- Keep the current Config UI focused on configuration and history cleanup by temporarily removing the read-only communication-flow observer.
+- Add Android LAN preflight and reconnect guidance, Retry/Diagnostics actions, and a 15-second terminal WebSocket heartbeat without reading SSID, BSSID, or other network identity.
+- Flutter analysis and all 736 App tests pass; the physical Android Wi-Fi/hotspot/VPN/DHCP-change matrix remains an explicit validation limitation.
+
+</details>
+
+<details>
+<summary><b>v8.5.3</b> - Higher Relay quota, bounded callback repair, and complete Claude agent env</summary>
+
+- Raise the default quota for newly issued Relay Host invitations from 100 MiB to 200 MiB per 24-hour window; explicit operator quota flags still take precedence.
+- Cache the latest callback-edge view and bound repair candidates, preventing old append-only callback history from driving sustained idle CPU and cached-read amplification.
+- Pass non-API variables from `agents.&lt;name&gt;.env` into managed Claude launches while preserving CCB's API credential and endpoint precedence (PR #284).
+- Existing Relay Host credentials retain their issued quota; operators must update them separately or issue a new invitation.
+
+</details>
+
+<details>
 <summary><b>v8.5.2</b> - Bounded pane recovery, quieter asks, and isolated Rich terminal launches</summary>
 
 - Keep a respawned pane in a 90-second probation window and hold queued work until a new healthy observation confirms recovery.

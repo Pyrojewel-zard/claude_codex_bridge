@@ -18,6 +18,8 @@ from ccbd.services.project_namespace_runtime import (
 from ccbd.services.project_namespace_runtime.sidebar_helper import SIDEBAR_HELPER_ID_OPTION
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from storage.paths import PathLayout
+from terminal_runtime.mux_backend_contract import make_capabilities, make_pane_ref
+from project_command_trust import approve_project_commands
 
 
 BASE_CONFIG = """version = 2
@@ -284,6 +286,230 @@ class _PatchFakeBackend:
         return f'%{self.pane_counter}'
 
 
+class _PatchFakeHerdrBackend:
+    backend_impl = 'herdr'
+
+    def __init__(self, *, session_name: str = 'ccb-herdr', support_reflow: bool = True) -> None:
+        self.session_name = session_name
+        self.calls: list[tuple[str, object]] = []
+        self.windows: dict[str, dict[str, object]] = {}
+        self.window_panes: dict[str, list[str]] = {}
+        self.pane_options: dict[str, dict[str, str]] = {}
+        self.pane_refs: dict[str, dict[str, object]] = {}
+        self.pane_counter = 0
+        if not support_reflow:
+            self.reflow_window = None
+
+    def capabilities(self) -> dict[str, object]:
+        return make_capabilities(
+            backend_impl='herdr',
+            command_status={
+                'session_attach': 'supported',
+                'workspace_list': 'supported',
+                'workspace_create': 'supported',
+                'workspace_focus': 'supported',
+                'workspace_metadata': 'supported',
+                'workspace_close': 'supported',
+                'pane_list': 'supported',
+                'pane_spawn': 'supported',
+                'pane_split': 'supported',
+                'pane_run': 'supported',
+                'pane_metadata': 'supported',
+                'send_input': 'supported',
+                'read_output': 'supported',
+                'kill_pane': 'supported',
+            },
+            semantic_status={
+                'session_attach': 'supported',
+                'workspace_list': 'supported',
+                'workspace_create': 'supported',
+                'workspace_focus': 'supported',
+                'workspace_metadata': 'supported',
+                'workspace_close': 'supported',
+                'pane_list': 'supported',
+                'pane_spawn': 'supported',
+                'pane_split': 'supported',
+                'pane_run': 'supported',
+                'pane_metadata': 'supported',
+                'send_input': 'supported',
+                'read_output': 'supported',
+                'kill_pane': 'supported',
+            },
+        )
+
+    def namespace_alive(self, namespace: dict[str, object]) -> bool:
+        self.calls.append(('namespace_alive', namespace))
+        return True
+
+    def list_windows(self, namespace: dict[str, object]) -> list[dict[str, object]]:
+        self.calls.append(('list_windows', namespace))
+        return list(self.windows.values())
+
+    def create_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_name: str,
+        cwd: str,
+        select: bool,
+    ) -> dict[str, object]:
+        self.calls.append(('create_window', {'namespace': namespace, 'window_name': window_name, 'cwd': cwd, 'select': select}))
+        pane_id = self.add_window(str(namespace['session_name']), window_name)
+        del pane_id
+        return self.windows[window_name]
+
+    def ensure_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_name: str,
+        cwd: str,
+        select: bool,
+    ) -> dict[str, object]:
+        if window_name not in self.windows:
+            return self.create_window(namespace, window_name=window_name, cwd=cwd, select=select)
+        self.calls.append(('ensure_window', {'namespace': namespace, 'window_name': window_name, 'cwd': cwd, 'select': select}))
+        return self.windows[window_name]
+
+    def window_root_pane(self, namespace: dict[str, object], *, window_name: str) -> dict[str, object]:
+        self.calls.append(('window_root_pane', {'namespace': namespace, 'window_name': window_name}))
+        pane_id = self.window_panes[window_name][0]
+        return dict(self.pane_refs[pane_id])
+
+    def split_pane(
+        self,
+        pane: dict[str, object],
+        *,
+        direction: str,
+        percent: int,
+        command: list[str],
+        cwd: str,
+        env: dict[str, str],
+        title: str,
+    ) -> dict[str, object]:
+        self.calls.append(('split_pane', {'pane': pane, 'direction': direction, 'percent': percent, 'command': command, 'cwd': cwd, 'env': env, 'title': title}))
+        window_name = self._window_for_pane(str(pane['pane_id']))
+        child = self._alloc_pane(str(pane['session_name']), window_name)
+        panes = self.window_panes[window_name]
+        index = panes.index(str(pane['pane_id']))
+        panes.insert(index + 1, child['pane_id'])
+        return child
+
+    def respawn_pane(self, pane: dict[str, object], *, command: list[str], cwd: str, env: dict[str, str]) -> None:
+        self.calls.append(('respawn_pane', {'pane': pane, 'command': command, 'cwd': cwd, 'env': env}))
+
+    def set_pane_identity(self, pane: dict[str, object], **kwargs) -> None:
+        self.calls.append(('set_pane_identity', {'pane': pane, **kwargs}))
+        pane_id = str(pane['pane_id'])
+        self.pane_options.setdefault(pane_id, {}).update(
+            {
+                '@ccb_project_id': str(kwargs.get('project_id') or ''),
+                '@ccb_role': str(kwargs.get('role') or ''),
+                '@ccb_slot': str(kwargs.get('slot_key') or ''),
+                '@ccb_window': str(kwargs.get('window_name') or ''),
+                '@ccb_managed_by': str(kwargs.get('managed_by') or ''),
+                '@ccb_namespace_epoch': str(kwargs.get('namespace_epoch') or ''),
+            }
+        )
+
+    def move_pane(self, source: dict[str, object], anchor: dict[str, object], *, direction: str) -> None:
+        self.calls.append(('move_pane', {'source': source, 'anchor': anchor, 'direction': direction}))
+        source_id = str(source['pane_id'])
+        anchor_id = str(anchor['pane_id'])
+        source_window = self._window_for_pane(source_id)
+        target_window = self._window_for_pane(anchor_id)
+        self.window_panes[source_window].remove(source_id)
+        target_panes = self.window_panes[target_window]
+        target_panes.insert(target_panes.index(anchor_id) + 1, source_id)
+        self.pane_refs[source_id]['window_name'] = target_window
+
+    def kill_pane(self, pane: dict[str, object]) -> None:
+        self.calls.append(('kill_pane', pane))
+        pane_id = str(pane['pane_id'])
+        for panes in self.window_panes.values():
+            if pane_id in panes:
+                panes.remove(pane_id)
+                break
+        self.pane_options.pop(pane_id, None)
+        self.pane_refs.pop(pane_id, None)
+
+    def kill_window(self, namespace: dict[str, object], *, window_id: str | None, target: str) -> None:
+        self.calls.append(('kill_window', {'namespace': namespace, 'window_id': window_id, 'target': target}))
+        window_name = str(window_id or target.rsplit(':', 1)[-1])
+        for pane_id in self.window_panes.pop(window_name, []):
+            self.pane_options.pop(pane_id, None)
+            self.pane_refs.pop(pane_id, None)
+        self.windows.pop(window_name, None)
+
+    def reflow_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_name: str,
+        window_id: str | None,
+        target: str,
+        prefer_topology_layout: bool,
+    ) -> None:
+        self.calls.append(('reflow_window', {'namespace': namespace, 'window_name': window_name, 'window_id': window_id, 'target': target, 'prefer_topology_layout': prefer_topology_layout}))
+
+    def list_panes_by_user_options(self, expected: dict[str, str]) -> list[str]:
+        matches = []
+        for pane_id, options in self.pane_options.items():
+            if all(str(options.get(key, '') or '') == str(value) for key, value in expected.items()):
+                matches.append(pane_id)
+        return matches
+
+    def describe_pane(self, pane_id: str, *, user_options: tuple[str, ...]) -> dict[str, object]:
+        window_name = self._window_for_pane(pane_id)
+        options = self.pane_options.get(pane_id, {})
+        return {
+            'pane_id': pane_id,
+            'session_name': self.session_name,
+            'window_id': self.windows[window_name]['window_id'],
+            'window_name': window_name,
+            'pane_dead': '0',
+            **{option: options.get(option, '') for option in user_options},
+        }
+
+    def add_window(self, session_name: str, window_name: str) -> str:
+        pane = self._alloc_pane(session_name, window_name)
+        self.windows[window_name] = {
+            'window_id': window_name,
+            'window_name': window_name,
+            'active': False,
+        }
+        self.window_panes[window_name] = [pane['pane_id']]
+        return str(pane['pane_id'])
+
+    def _alloc_pane(self, session_name: str, window_name: str) -> dict[str, object]:
+        self.pane_counter += 1
+        pane = make_pane_ref(
+            backend_impl='herdr',
+            pane_id=f'herdr-pane-{self.pane_counter}',
+            session_name=session_name,
+            window_name=window_name,
+        )
+        self.pane_refs[pane['pane_id']] = pane
+        return pane
+
+    def _window_for_pane(self, pane_id: str) -> str:
+        for window_name, panes in self.window_panes.items():
+            if pane_id in panes:
+                return window_name
+        raise RuntimeError(f'pane not found: {pane_id}')
+
+
+class _MemoryProjectNamespaceStateStore:
+    def __init__(self, state: ProjectNamespaceState | None = None) -> None:
+        self.state = state
+
+    def load(self) -> ProjectNamespaceState | None:
+        return self.state
+
+    def save(self, state: ProjectNamespaceState) -> None:
+        self.state = state
+
+
 def test_apply_add_window_creates_only_new_window_sidebar_and_agent_panes(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv('CCB_TMUX_THEME_PROFILE', raising=False)
     current = _load_config(tmp_path / 'current', BASE_CONFIG)
@@ -343,6 +569,178 @@ def test_apply_add_window_creates_only_new_window_sidebar_and_agent_panes(tmp_pa
     assert backend.pane_options['%5']['@ccb_slot'] == 'agent4'
     assert {backend.pane_options[pane]['@ccb_window'] for pane in ('%3', '%4', '%5')} == {'review'}
     assert ProjectNamespaceStateStore(layout).load().layout_signature is None
+
+
+def test_apply_herdr_append_agent_uses_v2_namespace_ref_without_tmux_runner(tmp_path: Path, monkeypatch) -> None:
+    current = _load_config(tmp_path / 'current-herdr-add-agent', BASE_CONFIG)
+    new = _load_config(
+        tmp_path / 'new-herdr-add-agent',
+        BASE_CONFIG.replace('agent1:codex, agent2:claude', 'agent1:codex, agent2:claude, agent3:codex'),
+    )
+    layout = PathLayout(_project(tmp_path / 'repo-herdr-add-agent', BASE_CONFIG))
+    backend = _PatchFakeHerdrBackend()
+    first_pane = backend.add_window('ccb-herdr', 'main')
+    second = backend._alloc_pane('ccb-herdr', 'main')
+    backend.window_panes['main'].append(str(second['pane_id']))
+    _seed_agent_pane(backend, first_pane, project_id='proj-1', window='main', agent='agent1')
+    _seed_agent_pane(backend, str(second['pane_id']), project_id='proj-1', window='main', agent='agent2')
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-1',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=_MemoryProjectNamespaceStateStore(_herdr_namespace_state(project_id='proj-1')),
+    )
+    _forbid_recreate_paths(monkeypatch)
+    plan = build_reload_dry_run_plan(current, new, project_id='proj-1', current_namespace=controller.load())
+
+    result = controller.apply_reload_patch(
+        patch_plan=plan['namespace_patch_plan'],
+        old_topology=build_namespace_topology_plan(current),
+        new_topology=build_namespace_topology_plan(new),
+        timeout_s=0.0,
+    )
+
+    assert result.status == 'applied'
+    assert result.agent_panes == {'agent3': 'herdr-pane-3'}
+    assert result.reflowed_windows == ('main',)
+    assert not hasattr(backend, '_tmux_run')
+    call_names = [call[0] for call in backend.calls]
+    assert 'namespace_alive' in call_names
+    assert 'split_pane' in call_names
+    assert 'set_pane_identity' in call_names
+    assert 'reflow_window' in call_names
+    assert call_names.count('reflow_window') == 1
+    assert any(
+        isinstance(call[1], dict) and call[1].get('restore_token') == 'restore-secret'
+        for call in backend.calls
+        if call[0] == 'namespace_alive'
+    )
+
+
+def test_apply_herdr_remove_agent_uses_v2_kill_pane_and_reflow(tmp_path: Path, monkeypatch) -> None:
+    current = _load_config(tmp_path / 'current-herdr-remove-agent', BASE_CONFIG)
+    new = _load_config(
+        tmp_path / 'new-herdr-remove-agent',
+        BASE_CONFIG.replace('agent1:codex, agent2:claude', 'agent1:codex'),
+    )
+    layout = PathLayout(_project(tmp_path / 'repo-herdr-remove-agent', BASE_CONFIG))
+    backend = _PatchFakeHerdrBackend()
+    first_pane = backend.add_window('ccb-herdr', 'main')
+    second = backend._alloc_pane('ccb-herdr', 'main')
+    backend.window_panes['main'].append(str(second['pane_id']))
+    _seed_agent_pane(backend, first_pane, project_id='proj-1', window='main', agent='agent1')
+    _seed_agent_pane(backend, str(second['pane_id']), project_id='proj-1', window='main', agent='agent2')
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-1',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=_MemoryProjectNamespaceStateStore(_herdr_namespace_state(project_id='proj-1')),
+    )
+    _forbid_recreate_paths(monkeypatch)
+    plan = build_reload_dry_run_plan(current, new, project_id='proj-1', current_namespace=controller.load())
+
+    result = controller.apply_reload_patch(
+        patch_plan=plan['namespace_patch_plan'],
+        old_topology=build_namespace_topology_plan(current),
+        new_topology=build_namespace_topology_plan(new),
+        timeout_s=0.0,
+    )
+
+    assert result.status == 'applied'
+    assert result.removed_agents == {'agent2': 'herdr-pane-2'}
+    assert result.removed_panes == ('herdr-pane-2',)
+    assert result.reflowed_windows == ('main',)
+    assert 'kill_pane' in [call[0] for call in backend.calls]
+    assert 'reflow_window' in [call[0] for call in backend.calls]
+
+
+def test_apply_herdr_move_agent_uses_v2_move_pane_and_identity(tmp_path: Path, monkeypatch) -> None:
+    current_text = """version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex, agent2:claude"
+review = "agent3:codex"
+"""
+    new_text = """version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+review = "agent3:codex, agent2:claude"
+"""
+    current = _load_config(tmp_path / 'current-herdr-move-agent', current_text)
+    new = _load_config(tmp_path / 'new-herdr-move-agent', new_text)
+    layout = PathLayout(_project(tmp_path / 'repo-herdr-move-agent', current_text))
+    backend = _PatchFakeHerdrBackend()
+    first_pane = backend.add_window('ccb-herdr', 'main')
+    second = backend._alloc_pane('ccb-herdr', 'main')
+    backend.window_panes['main'].append(str(second['pane_id']))
+    review_pane = backend.add_window('ccb-herdr', 'review')
+    _seed_agent_pane(backend, first_pane, project_id='proj-1', window='main', agent='agent1')
+    _seed_agent_pane(backend, str(second['pane_id']), project_id='proj-1', window='main', agent='agent2')
+    _seed_agent_pane(backend, review_pane, project_id='proj-1', window='review', agent='agent3')
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-1',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=_MemoryProjectNamespaceStateStore(_herdr_namespace_state(project_id='proj-1')),
+    )
+    _forbid_recreate_paths(monkeypatch)
+    plan = build_reload_dry_run_plan(current, new, project_id='proj-1', current_namespace=controller.load())
+
+    result = controller.apply_reload_patch(
+        patch_plan=plan['namespace_patch_plan'],
+        old_topology=build_namespace_topology_plan(current),
+        new_topology=build_namespace_topology_plan(new),
+        timeout_s=0.0,
+    )
+
+    assert result.status == 'applied'
+    assert result.moved_agents == {'agent2': 'herdr-pane-2'}
+    assert result.moved_agent_windows == {'agent2': 'review'}
+    assert backend.window_panes['main'] == ['herdr-pane-1']
+    assert backend.window_panes['review'] == ['herdr-pane-3', 'herdr-pane-2']
+    assert 'move_pane' in [call[0] for call in backend.calls]
+    assert backend.pane_options['herdr-pane-2']['@ccb_window'] == 'review'
+
+
+def test_apply_herdr_reload_missing_reflow_primitive_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    current = _load_config(tmp_path / 'current-herdr-missing-reflow', BASE_CONFIG)
+    new = _load_config(
+        tmp_path / 'new-herdr-missing-reflow',
+        BASE_CONFIG.replace('agent1:codex, agent2:claude', 'agent1:codex, agent2:claude, agent3:codex'),
+    )
+    layout = PathLayout(_project(tmp_path / 'repo-herdr-missing-reflow', BASE_CONFIG))
+    backend = _PatchFakeHerdrBackend(support_reflow=False)
+    first_pane = backend.add_window('ccb-herdr', 'main')
+    second = backend._alloc_pane('ccb-herdr', 'main')
+    backend.window_panes['main'].append(str(second['pane_id']))
+    _seed_agent_pane(backend, first_pane, project_id='proj-1', window='main', agent='agent1')
+    _seed_agent_pane(backend, str(second['pane_id']), project_id='proj-1', window='main', agent='agent2')
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-1',
+        backend_factory=lambda socket_path=None: backend,
+        state_store=_MemoryProjectNamespaceStateStore(_herdr_namespace_state(project_id='proj-1')),
+    )
+    _forbid_recreate_paths(monkeypatch)
+    plan = build_reload_dry_run_plan(current, new, project_id='proj-1', current_namespace=controller.load())
+
+    result = controller.apply_reload_patch(
+        patch_plan=plan['namespace_patch_plan'],
+        old_topology=build_namespace_topology_plan(current),
+        new_topology=build_namespace_topology_plan(new),
+        timeout_s=0.0,
+    )
+
+    assert result.status == 'failed'
+    assert result.partial is True
+    assert result.diagnostics['reason'] == 'namespace_patch_failed'
+    assert result.diagnostics['error_type'] == 'MuxCommandErrorV2'
+    assert result.diagnostics['graph_published'] is False
+    assert result.diagnostics['runtime_authority_written'] is False
+    assert result.diagnostics['lease_or_lifecycle_written'] is False
 
 
 def test_apply_add_window_materializes_rich_alias_as_tool_pane(tmp_path: Path, monkeypatch) -> None:
@@ -1449,9 +1847,11 @@ def test_apply_add_tool_window_creates_tool_window_sidebar_and_tool_pane(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv('CCB_TMUX_THEME_PROFILE', 'light')
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     current = _load_config(tmp_path / 'current-tool-window', BASE_CONFIG)
     new = _load_config(tmp_path / 'new-tool-window', ADD_TOOL_WINDOW_CONFIG)
-    layout = PathLayout(_project(tmp_path / 'repo-tool-window', BASE_CONFIG))
+    layout = PathLayout(_project(tmp_path / 'repo-tool-window', ADD_TOOL_WINDOW_CONFIG))
+    approve_project_commands(layout.project_root)
     backend = _PatchFakeBackend(socket_path=str(layout.ccbd_tmux_socket_path))
     backend.add_window(layout.ccbd_tmux_session_name, 'main')
     backend.sessions[layout.ccbd_tmux_session_name][0]['panes'].append('%2')
@@ -1940,6 +2340,31 @@ def _store_namespace(
     )
 
 
+def _herdr_namespace_state(*, project_id: str, session_name: str = 'ccb-herdr') -> ProjectNamespaceState:
+    return ProjectNamespaceState(
+        project_id=project_id,
+        namespace_epoch=3,
+        tmux_socket_path='',
+        tmux_session_name=session_name,
+        layout_version=3,
+        layout_signature=None,
+        control_window_name='ccb-control',
+        control_window_id='control',
+        workspace_window_name='main',
+        workspace_window_id='main',
+        workspace_epoch=1,
+        ui_attachable=True,
+        last_started_at='2026-05-29T00:00:00Z',
+        namespace_backend_family='herdr-native',
+        backend_impl='herdr',
+        namespace_id='herdr-namespace-1',
+        namespace_session_name=session_name,
+        namespace_ipc_kind='herdr_socket',
+        namespace_ipc_ref='herdr://namespace-1',
+        namespace_restore_token='restore-secret',
+    )
+
+
 def _project(project_root: Path, config_text: str) -> Path:
     project_root.mkdir(parents=True, exist_ok=True)
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -1950,3 +2375,54 @@ def _project(project_root: Path, config_text: str) -> Path:
 
 def _load_config(project_root: Path, config_text: str):
     return load_project_config(_project(project_root, config_text)).config
+
+
+def test_apply_add_window_normalizes_mixed_case_agent_names(tmp_path: Path, monkeypatch) -> None:
+    """物化时 agent_panes key / pane token 用 normalize_agent_name 统一。
+
+    回归背景（2026-08-06 采集暴露）：config 布局含大写 agent 名（Main_Code）时，
+    物化用原始名写 key/token，消费端用 normalized 名匹配 → main_code 拿不到 pane →
+    provider_runtime_deferred_on_herdr。
+    """
+    monkeypatch.delenv('CCB_TMUX_THEME_PROFILE', raising=False)
+    config_text = ADD_WINDOW_CONFIG.replace('agent3:codex', 'Main_Code:codex')
+    current = _load_config(tmp_path / 'current', BASE_CONFIG)
+    new = _load_config(tmp_path / 'new', config_text)
+    project_root = _project(tmp_path / 'repo', BASE_CONFIG)
+    layout = PathLayout(project_root)
+    backend = _PatchFakeBackend(socket_path=str(layout.ccbd_tmux_socket_path))
+    backend.add_window(layout.ccbd_tmux_session_name, 'main')
+    backend.sessions[layout.ccbd_tmux_session_name][0]['panes'].append('%2')
+    backend.pane_counter = 2
+    _seed_agent_pane(backend, '%1', project_id='proj-1', window='main', agent='agent1')
+    _seed_agent_pane(backend, '%2', project_id='proj-1', window='main', agent='agent2')
+    _store_namespace(layout, project_id='proj-1')
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-1',
+        clock=lambda: '2026-05-29T00:00:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+    _forbid_recreate_paths(monkeypatch)
+    plan = build_reload_dry_run_plan(
+        current,
+        new,
+        project_id='proj-1',
+        current_namespace=controller.load(),
+    )
+
+    result = controller.apply_additive_patch(
+        patch_plan=plan['namespace_patch_plan'],
+        old_topology=build_namespace_topology_plan(current),
+        new_topology=build_namespace_topology_plan(new),
+        timeout_s=0.0,
+    )
+
+    assert result.status == 'applied'
+    # 大写 agent 名物化后 key 归一化为小写；原始大小写 key 不应出现
+    assert 'main_code' in result.agent_panes
+    assert 'Main_Code' not in result.agent_panes
+    assert result.agent_panes['main_code'] == '%4'
+    # pane token 也应归一化（ccb_slot / ccb_agent 用 main_code）
+    assert backend.pane_options['%4'].get('@ccb_slot') == 'main_code'
+    assert backend.pane_options['%4'].get('@ccb_agent') == 'main_code'

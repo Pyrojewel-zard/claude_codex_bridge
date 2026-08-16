@@ -12,6 +12,13 @@ from .common import (
     require_record_type,
     require_schema_version,
 )
+from .namespace_projection import (
+    HERDR_BACKEND_FAMILY,
+    HERDR_IPC_KIND,
+    NAMESPACE_BACKEND_FAMILY,
+    redacted_namespace_projection,
+    resolved_namespace_backend_family,
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +27,13 @@ class ProjectNamespaceState:
     namespace_epoch: int
     tmux_socket_path: str
     tmux_session_name: str
+    namespace_backend_family: str = NAMESPACE_BACKEND_FAMILY
+    backend_impl: str = 'tmux'
+    namespace_id: str | None = None
+    namespace_session_name: str | None = None
+    namespace_ipc_kind: str | None = None
+    namespace_ipc_ref: str | None = None
+    namespace_restore_token: str | None = None
     layout_version: int = 1
     layout_signature: str | None = None
     control_window_name: str | None = None
@@ -35,8 +49,18 @@ class ProjectNamespaceState:
     def __post_init__(self) -> None:
         require_non_empty_text(self.project_id, field_name='project_id')
         require_positive_int(self.namespace_epoch, field_name='namespace_epoch')
-        require_non_empty_text(self.tmux_socket_path, field_name='tmux_socket_path')
         require_non_empty_text(self.tmux_session_name, field_name='tmux_session_name')
+        family = resolved_namespace_backend_family(self.backend_impl, self.namespace_backend_family)
+        if family == HERDR_BACKEND_FAMILY:
+            if self.backend_impl != 'herdr':
+                raise ValueError('herdr-native namespace requires backend_impl=herdr')
+            require_non_empty_text(self.namespace_id, field_name='namespace_id')
+            require_non_empty_text(self.namespace_session_name, field_name='namespace_session_name')
+            if self.namespace_ipc_kind != HERDR_IPC_KIND:
+                raise ValueError('herdr-native namespace requires namespace_ipc_kind=herdr_socket')
+            require_non_empty_text(self.namespace_ipc_ref, field_name='namespace_ipc_ref')
+        else:
+            require_non_empty_text(self.tmux_socket_path, field_name='tmux_socket_path')
         require_positive_int(self.layout_version, field_name='layout_version')
         if self.layout_signature is not None:
             require_non_empty_text(self.layout_signature, field_name='layout_signature')
@@ -73,6 +97,16 @@ class ProjectNamespaceState:
             'namespace_epoch': self.namespace_epoch,
             'tmux_socket_path': self.tmux_socket_path,
             'tmux_session_name': self.tmux_session_name,
+            'namespace_backend_family': resolved_namespace_backend_family(
+                self.backend_impl,
+                self.namespace_backend_family,
+            ),
+            'backend_impl': self.backend_impl,
+            'namespace_id': self.namespace_id,
+            'namespace_session_name': self.namespace_session_name,
+            'namespace_ipc_kind': self.namespace_ipc_kind,
+            'namespace_ipc_ref': self.namespace_ipc_ref,
+            'namespace_restore_token': self.namespace_restore_token,
             'layout_version': self.layout_version,
             'layout_signature': self.layout_signature,
             'control_window_name': self.control_window_name,
@@ -93,8 +127,18 @@ class ProjectNamespaceState:
         return cls(
             project_id=str(payload['project_id']),
             namespace_epoch=int(payload['namespace_epoch']),
-            tmux_socket_path=str(payload['tmux_socket_path']),
+            tmux_socket_path=str(payload.get('tmux_socket_path') or ''),
             tmux_session_name=str(payload['tmux_session_name']),
+            namespace_backend_family=resolved_namespace_backend_family(
+                payload.get('backend_impl'),
+                payload.get('namespace_backend_family'),
+            ),
+            backend_impl=str(payload.get('backend_impl') or 'tmux'),
+            namespace_id=clean_text(payload.get('namespace_id')),
+            namespace_session_name=clean_text(payload.get('namespace_session_name')),
+            namespace_ipc_kind=clean_text(payload.get('namespace_ipc_kind')),
+            namespace_ipc_ref=clean_text(payload.get('namespace_ipc_ref')),
+            namespace_restore_token=clean_text(payload.get('namespace_restore_token')),
             layout_version=int(payload.get('layout_version', 1)),
             layout_signature=clean_text(payload.get('layout_signature')),
             control_window_name=clean_text(payload.get('control_window_name')),
@@ -113,6 +157,7 @@ class ProjectNamespaceState:
             'namespace_epoch': self.namespace_epoch,
             'namespace_tmux_socket_path': self.tmux_socket_path,
             'namespace_tmux_session_name': self.tmux_session_name,
+            **redacted_namespace_projection(self._namespace_projection_fields()),
             'namespace_layout_version': self.layout_version,
             'namespace_control_window_name': self.control_window_name,
             'namespace_control_window_id': self.control_window_id,
@@ -125,6 +170,38 @@ class ProjectNamespaceState:
             'namespace_last_destroy_reason': self.last_destroy_reason,
         }
 
+    def namespace_ref(self) -> dict[str, object]:
+        if resolved_namespace_backend_family(self.backend_impl, self.namespace_backend_family) == HERDR_BACKEND_FAMILY:
+            return {
+                'backend_family': HERDR_BACKEND_FAMILY,
+                'backend_impl': 'herdr',
+                'namespace_id': str(self.namespace_id or ''),
+                'session_name': str(self.namespace_session_name or self.tmux_session_name),
+                'ipc_kind': HERDR_IPC_KIND,
+                'ipc_ref': str(self.namespace_ipc_ref or ''),
+                'restore_token': self.namespace_restore_token,
+            }
+        return {
+            'backend_family': NAMESPACE_BACKEND_FAMILY,
+            'backend_impl': self.backend_impl,
+            'namespace_id': self.tmux_session_name,
+            'session_name': self.tmux_session_name,
+            'ipc_kind': self.namespace_ipc_kind or 'socket_path',
+            'ipc_ref': self.namespace_ipc_ref or self.tmux_socket_path,
+            'restore_token': None,
+        }
+
+    def _namespace_projection_fields(self) -> dict[str, object]:
+        return {
+            'namespace_backend_family': self.namespace_backend_family,
+            'backend_impl': self.backend_impl,
+            'namespace_id': self.namespace_id,
+            'namespace_session_name': self.namespace_session_name or self.tmux_session_name,
+            'namespace_ipc_kind': self.namespace_ipc_kind,
+            'namespace_ipc_ref': self.namespace_ipc_ref,
+            'namespace_restore_token': self.namespace_restore_token,
+        }
+
 
 @dataclass(frozen=True)
 class ProjectNamespaceEvent:
@@ -134,6 +211,13 @@ class ProjectNamespaceEvent:
     namespace_epoch: int | None = None
     tmux_socket_path: str | None = None
     tmux_session_name: str | None = None
+    namespace_backend_family: str | None = None
+    backend_impl: str | None = None
+    namespace_id: str | None = None
+    namespace_session_name: str | None = None
+    namespace_ipc_kind: str | None = None
+    namespace_ipc_ref: str | None = None
+    namespace_restore_token: str | None = None
     details: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -153,6 +237,13 @@ class ProjectNamespaceEvent:
             'namespace_epoch': self.namespace_epoch,
             'tmux_socket_path': self.tmux_socket_path,
             'tmux_session_name': self.tmux_session_name,
+            'namespace_backend_family': self.namespace_backend_family,
+            'backend_impl': self.backend_impl,
+            'namespace_id': self.namespace_id,
+            'namespace_session_name': self.namespace_session_name,
+            'namespace_ipc_kind': self.namespace_ipc_kind,
+            'namespace_ipc_ref': self.namespace_ipc_ref,
+            'namespace_restore_token': self.namespace_restore_token,
             'details': dict(self.details or {}),
         }
 
@@ -169,6 +260,13 @@ class ProjectNamespaceEvent:
             namespace_epoch=int(epoch) if epoch is not None else None,
             tmux_socket_path=clean_text(payload.get('tmux_socket_path')),
             tmux_session_name=clean_text(payload.get('tmux_session_name')),
+            namespace_backend_family=clean_text(payload.get('namespace_backend_family')),
+            backend_impl=clean_text(payload.get('backend_impl')),
+            namespace_id=clean_text(payload.get('namespace_id')),
+            namespace_session_name=clean_text(payload.get('namespace_session_name')),
+            namespace_ipc_kind=clean_text(payload.get('namespace_ipc_kind')),
+            namespace_ipc_ref=clean_text(payload.get('namespace_ipc_ref')),
+            namespace_restore_token=clean_text(payload.get('namespace_restore_token')),
             details=details,
         )
 
@@ -179,6 +277,31 @@ class ProjectNamespaceEvent:
             'namespace_last_event_epoch': self.namespace_epoch,
             'namespace_last_event_socket_path': self.tmux_socket_path,
             'namespace_last_event_session_name': self.tmux_session_name,
+            'namespace_last_event_backend_family': redacted_namespace_projection(
+                self._namespace_projection_fields()
+            )['namespace_backend_family'],
+            'namespace_last_event_backend_impl': redacted_namespace_projection(
+                self._namespace_projection_fields()
+            )['namespace_backend_impl'],
+            'namespace_last_event_id': self.namespace_id,
+            'namespace_last_event_ipc_kind': self.namespace_ipc_kind,
+            'namespace_last_event_ipc_ref': self.namespace_ipc_ref,
+            'namespace_last_event_restore_token_present': bool(
+                redacted_namespace_projection(self._namespace_projection_fields())[
+                    'namespace_restore_token_present'
+                ]
+            ),
+        }
+
+    def _namespace_projection_fields(self) -> dict[str, object]:
+        return {
+            'namespace_backend_family': self.namespace_backend_family,
+            'backend_impl': self.backend_impl,
+            'namespace_id': self.namespace_id,
+            'namespace_session_name': self.namespace_session_name or self.tmux_session_name,
+            'namespace_ipc_kind': self.namespace_ipc_kind,
+            'namespace_ipc_ref': self.namespace_ipc_ref,
+            'namespace_restore_token': self.namespace_restore_token,
         }
 
 
@@ -199,4 +322,9 @@ def record_details(payload: dict[str, Any]) -> dict[str, object]:
     return dict(details)
 
 
-__all__ = ['ProjectNamespaceEvent', 'ProjectNamespaceState']
+__all__ = [
+    'ProjectNamespaceEvent',
+    'ProjectNamespaceState',
+    'redacted_namespace_projection',
+    'resolved_namespace_backend_family',
+]

@@ -6,7 +6,7 @@ on:
       tag:
         description: "Release tag to publish"
         required: true
-        default: "v8.5.2"
+        default: "v8.6.7"
   push:
     tags:
       - "v*.*.*"
@@ -22,6 +22,7 @@ concurrency:
 jobs:
   npm:
     name: Publish @seemseam/ccb to npm
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release ref

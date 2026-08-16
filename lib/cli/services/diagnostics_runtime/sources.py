@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
 _COPY_SUFFIXES = {'.json', '.pid'}
@@ -189,19 +189,26 @@ def session_path_from_runtime(runtime_path: Path) -> Path | None:
 
 
 def archive_path_for_source(context, source: Path) -> str:
+    windows_source = PureWindowsPath(str(source))
+    if windows_source.drive:
+        anchors = {windows_source.anchor, windows_source.drive, windows_source.root, '/', '\\', ''}
+        safe_parts = [part for part in windows_source.parts if part not in anchors]
+        suffix = Path(*safe_parts[-4:]) if safe_parts else Path(source.name)
+        return (Path('external') / suffix).as_posix()
     source_path = _resolve_source(source)
     try:
         relative = source_path.relative_to(_resolve_source(context.project.project_root))
-        return str(Path('project') / relative)
+        return (Path('project') / relative).as_posix()
     except Exception:
         pass
     try:
         relative = source_path.relative_to(_resolve_source(context.paths.runtime_state_root))
-        return str(Path('project') / '.ccb' / relative)
+        return (Path('project') / '.ccb' / relative).as_posix()
     except Exception:
-        safe_parts = [part for part in source.parts if part not in ('/', '')]
+        anchors = {source_path.anchor, source_path.drive, source_path.root, '/', '\\', ''}
+        safe_parts = [part for part in source_path.parts if part not in anchors]
         suffix = Path(*safe_parts[-4:]) if safe_parts else Path(source.name)
-        return str(Path('external') / suffix)
+        return (Path('external') / suffix).as_posix()
 
 
 def _agent_source_items(

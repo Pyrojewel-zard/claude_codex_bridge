@@ -33,6 +33,12 @@ Detailed implementation sequencing lives in
   - project anchor + logical agent name + provider
 - `runtime generation`
   - one launch generation, currently represented by `ccb_session_id`
+- `CCB conversation identity`
+  - stable across managed launches and authority generations, represented by
+    `ccb_conversation_id`
+- `authority generation`
+  - the ordered credential/route generation inside one CCB conversation,
+    represented by `ccb_authority_generation`
 - `provider conversation identity`
   - the concrete Codex conversation, represented by `codex_session_id`
 
@@ -95,13 +101,16 @@ By default, the managed Codex session root is derived from that home:
 
 The managed `sessions/` tree is a first-class namespace, not disposable residue:
 
-- Codex may automatically continue the most recent conversation it finds inside
-  the active managed `sessions/` tree even without an explicit `resume` command
-- therefore `ccb` must treat the active `sessions/` tree as route-bound
-  authority and not merely as log storage
-- when route authority becomes incompatible, `ccb` must rotate the current
-  `sessions/` tree out of the active namespace before starting a fresh
-  conversation
+- Codex 0.145.0 ordinary interactive startup creates a new native conversation;
+  the presence of older files alone is not a resume instruction
+- `codex resume <id>` continues an existing native conversation, while
+  `codex fork <id>` creates a new native conversation initialized from it
+- therefore `ccb` treats `sessions/` as Agent-owned conversation history, not
+  route or credential authority
+- an authority fingerprint fences which binding may be passed to `resume` or
+  `fork`; it does not authorize hiding, moving, or deleting the transcript tree
+- authority change keeps the tree in place and turns the prior binding into
+  historical linked-continuation evidence
 
 If the effective Codex home is explicitly overridden by a provider profile, the effective session root must still be:
 
@@ -133,8 +142,15 @@ The managed session file must persist:
 - `codex_session_authority_fingerprint` once a concrete bound session is known under an explicit route
 - home-level session-namespace authority under the managed Codex home so startup
   can detect whether the active `sessions/` tree is compatible before launch
+- `ccb_conversation_id`, `ccb_authority_generation`, continuity status, resume
+  compatibility, and prior Provider bindings
 
 These fields are authority for managed Codex runtime recovery.
+
+The managed fingerprint is a private, Agent-scoped HMAC generation over the
+selected API/route/profile and applicable inherited or Agent-private auth
+inputs. Its HMAC key is owner-only CCB state and neither raw credentials nor a
+portable plain token hash may be persisted in session or diagnostic records.
 
 For new managed launches, `codex_home` is mandatory. A session file without
 `codex_home` is legacy evidence that must be migrated or rejected before it can
@@ -190,14 +206,17 @@ When `ccb` starts a managed Codex agent:
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart
+- `ccb restart <agent>` must use this same preparation and command/session
+  construction path in the Agent's existing pane; it must not respawn the
+  persisted `start_cmd`
 - optional source-home skills must be projected as independently marked
   symlink-first entries inside a local managed `skills/` container; unmarked
   conflicts are preserved, symlink failure falls back to a marked copy, and
   Codex's nested `.system` collection is projected as one entry
 - independently of optional skill inheritance, it must verify the packaged
-  `ask`, `ccb-clear`, and Codex-only `reconnect` control skills immediately
-  before process creation; missing or stale named entries are repaired without
-  replacing unrelated skills
+  `ask`, `ccb-clear`, `ccb-compact`, `ccb-diagnose`, and Codex-only `reconnect`
+  control skills immediately before process creation; missing or stale named
+  entries are repaired without replacing unrelated skills
 - accepting an already live, identity-proven binding is not a managed launch and
   must not re-project the Codex home underneath that running process; when
   startup must launch or relaunch, it performs the managed-home refresh exactly
@@ -240,10 +259,52 @@ When `ccb` starts a managed Codex agent:
   so Codex request auth and managed route authority stay aligned
 - startup must validate the active managed `sessions/` namespace against the
   current provider-route authority before launching Codex
-- when that namespace is missing authority metadata or records a different route
-  authority, startup must archive/rotate the current `sessions/` tree and clear
-  stale bound-session fields before launch so Codex cannot auto-continue an
-  incompatible conversation from the same home
+- when that namespace records a different route authority inside the validated
+  Agent-managed home, startup must retain the current `sessions/` tree, move the
+  incompatible binding into CCB continuity history, and remove it only from the
+  current native-resume target
+- when current Codex capability probing proves `codex fork <id>` is available
+  and the old id/path remain inside the same managed session root, startup uses
+  that command to create the linked native continuation; otherwise it starts a
+  new native binding while retaining the linked transcript and must not claim
+  that context import occurred
+- native `fork` continuation must use a launch surface that preserves and
+  exposes the requested parent binding; advertising `--remote` and `fork`
+  separately is not proof that their combination preserves fork semantics
+- when the installed Codex remote surface creates a thread without the
+  requested `forked_from_id`, CCB must keep linked-continuation startup on the
+  local native CLI and must not record the blank thread as a native fork
+- if legacy state already claims `native_fork_continuation` but the bound
+  rollout does not name the recorded old binding as its parent, startup must
+  reject that binding, durably record the mismatch, and recover the old
+  binding's unique managed fork-chain descendant before resume
+- before choosing a native resume/fork target, startup may repair a lagging
+  binding by following one linear `forked_from_id` chain in the same
+  agent-managed root and `work_dir`; a sibling branch is ambiguous and must
+  leave the last durable binding unchanged
+- archive/rotation is allowed only when the resolved Codex home/session root is
+  outside the validated Agent-managed boundary or other ownership/path evidence
+  is unsafe; authority mismatch alone is not archive authority
+- missing namespace metadata is legacy/unknown evidence, not proof of an
+  authority mismatch: when the persisted managed home/session root remains
+  agent-scoped and any legacy route fingerprint is absent or matches the
+  current legacy route representation, startup must adopt the active namespace
+  into the current private-HMAC generation without moving its conversations
+- a conflicting legacy route fingerprint remains mismatch evidence and must
+  use the same linked-continuation fence rather than the compatibility adoption
+  path
+- a Codex home affected by the withdrawn v8.5.5 first-start regression may
+  contain its former active tree under `archived-sessions/<timestamp>-global`
+  or a matching legacy-route label; startup may merge that tree back only when
+  `old_codex_session_id` and `old_codex_session_path` identify a file under the
+  same active session root and the current namespace fingerprint still matches
+- that recovery must preserve a newer current binding if one was created after
+  the regression; it restores the old binding only when no current binding
+  exists, while making all recovered transcripts visible to native `resume`
+- the namespace comparison must include credential/account changes as well as
+  explicit API route changes; a changed inherited `auth.json`, explicit API key,
+  endpoint, or relevant source config must not directly `resume` the
+  incompatible old native id
 - it must write the effective `codex_home` and `codex_session_root` into the agent session file
 - it must export the canonical agent-scoped `CCB_SESSION_FILE` path into the
   managed Codex process; this is a pointer to the same session authority that
@@ -267,10 +328,14 @@ Project control-plane isolation rule:
 - a fresh project control-plane subprocess must treat such caller-shell variables as contamination, not startup authority
 - only the managed agent session file and managed provider-state under `.ccb/agents/<agent>/provider-state/codex/` may define restore authority for a project-scoped Codex agent
 
-Opt-in disconnect recovery follows the same boundary:
+Managed disconnect recovery follows the same boundary:
 
-- the inherited `reconnect` skill may start only the bundled
-  `codex-reconnect` watcher for its current Codex thread
+- every CCB installation must include the bundled `codex-reconnect` command
+  and project its control skill into each managed Codex home; a separate
+  standalone installation is not a prerequisite
+- the Codex bridge may request automatic `on` only after the authoritative
+  managed session file contains a concrete `codex_session_id`; standalone
+  Codex sessions remain opt-in through `$reconnect on`
 - when ordinary `TMUX` / `TMUX_PANE` variables are sanitized, the watcher must
   resolve `tmux_socket_path`, `pane_id`, `codex_home`, and
   `codex_session_id` from the owner-controlled active `CCB_SESSION_FILE`
@@ -281,6 +346,16 @@ Opt-in disconnect recovery follows the same boundary:
 - the watcher may follow CCB's owner-controlled `logs_2.sqlite` symlink only
   when both the symlink and its resolved regular-file target are owned by the
   current user
+- one bridge generation may successfully arm each bound thread only once;
+  failed activation retries use bounded backoff, while a later explicit
+  `$reconnect off` or circuit-open state must not be undone by bridge polling
+- a managed pane restart may supersede the prior watcher only when thread,
+  tmux socket, and pane id still match and the pane pid is the changed
+  generation evidence; a different socket or pane remains a fail-closed
+  conflict
+- bridge shutdown must request best-effort `off`; watcher `SIGTERM`/`SIGINT`
+  handling must atomically disable only its current instance, and normal CCB
+  project shutdown must leave no live watcher process
 
 ## 5. Binding Contract
 
@@ -349,6 +424,10 @@ session-switch boundary:
   the current agent's managed home, has the same `work_dir`, is newer than the
   current binding, is the only valid candidate, and belongs to the current
   runtime generation
+- for idle discovery, belonging to the current runtime generation requires
+  candidate activity at or after the managed session file's `started_at`; a
+  conversation last active before the pane restart is stale evidence even when
+  it is newer than the persisted binding
 - when a running job is visible, auto-commit additionally requires the candidate
   log to contain that job's request anchor
 - for an active wrapped job, a unique newer top-level candidate inside the same
@@ -399,8 +478,9 @@ Runtime pane reuse is a separate proof obligation from session-file binding:
   agent-local credential boundary and must not be overwritten from global auth
 - when the current explicit agent-local Codex provider authority differs from
   the provider authority recorded for the last managed session, startup must
-  skip `resume` and start a fresh Codex conversation inside the same managed
-  home rather than reattaching a session created under a different route
+  skip direct `resume`, retain that binding in the same stable CCB conversation,
+  and use a capability-proven native `fork` or a linked fresh binding rather
+  than reattaching the old id under a different route
 - managed `CODEX_HOME/AGENTS.md` memory projection fingerprints are diagnostic
   and freshness metadata, not conversation identity; a changed memory projection
   must not by itself skip `resume`, archive the active `sessions/` namespace, or
@@ -408,17 +488,20 @@ Runtime pane reuse is a separate proof obligation from session-file binding:
 - if updated project memory must become the initial prompt context for Codex,
   that is an explicit fresh-start or session-switch choice rather than implicit
   restart behavior
-- for explicit managed routes, launch-intent fingerprint alone is not sufficient
-  proof for `resume`
+- after the private-HMAC migration, explicit managed routes require a matching
+  bound-session fingerprint for normal `resume`
 - a bound Codex conversation may be resumed only when
   `codex_session_authority_fingerprint` matches the current explicit route
-- if a legacy session file has only launch fingerprint but no bound-session
-  fingerprint, startup must treat that binding as untrusted and force one fresh
-  conversation so the binding can be re-established cleanly
-- forcing a fresh conversation under the same managed home also requires a
-  compatible active `sessions/` namespace; skipping explicit `resume` alone is
-  not sufficient because Codex may auto-continue the most recent conversation in
-  that namespace
+- a pre-HMAC legacy session with only the old route fingerprint may be adopted
+  once when that fingerprint matches the current legacy route representation
+  and its managed home/session path remains agent-scoped; startup writes both
+  current private-HMAC fields before resuming it
+- a legacy session with no route fingerprint may likewise establish a one-time
+  compatibility baseline inside its existing agent-scoped managed home;
+  missing proof must not be treated as positive mismatch evidence
+- a native fork is recorded as `native_fork_continuation` only when startup
+  actually selected the capability-proven `fork` command and a new binding was
+  observed; a blank fallback binding remains a linked continuation
 
 Legacy agent-only reuse exception:
 

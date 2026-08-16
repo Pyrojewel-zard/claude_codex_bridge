@@ -67,6 +67,10 @@ business task executor.
   decision that future `ccb_self` changes must preserve the canonical
   `agentroles.ccb_self` id and keep maintenance heartbeat disabled unless
   manually enabled.
+- [decisions/007-unified-diagnose-entrypoint.md](decisions/007-unified-diagnose-entrypoint.md):
+  decision to expose one `ccb_diagnose <agentname>` workflow that diagnoses,
+  performs bounded recovery, verifies, and requests authorization before
+  submitting a redacted GitHub issue.
 - [drafts/agentroles.ccb_self/](drafts/agentroles.ccb_self/): reviewable draft
   Role Pack payload for `agentroles.ccb_self`; production content should move
   to the role catalog or an accepted local role source after review.

@@ -73,6 +73,29 @@ def test_claude_session_update_backfills_work_dir_fields(tmp_path: Path) -> None
     assert data["work_dir_norm"] == normalize_work_dir(str(tmp_path))
 
 
+def test_claude_session_update_binds_new_fork_to_current_authority(tmp_path: Path) -> None:
+    session_file = tmp_path / '.ccb' / '.claude-session'
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text('{}', encoding='utf-8')
+    session = ClaudeProjectSession(
+        session_file=session_file,
+        data={
+            'claude_provider_authority_fingerprint': 'authority-b',
+            'ccb_resume_compatibility': 'linked_continuation',
+            'ccb_continuation_launch_mode': 'fork',
+        },
+    )
+    session_path = tmp_path / 'managed-home' / '.claude' / 'projects' / 'workspace' / 'native-b.jsonl'
+    session_path.parent.mkdir(parents=True)
+    session_path.write_text('{}\n', encoding='utf-8')
+
+    session.update_claude_binding(session_path=session_path, session_id='native-b')
+
+    data = json.loads(session_file.read_text(encoding='utf-8'))
+    assert data['claude_session_authority_fingerprint'] == 'authority-b'
+    assert data['ccb_resume_compatibility'] == 'native_fork_continuation'
+
+
 def test_registry_direct_update_backfills_work_dir_fields(tmp_path: Path) -> None:
     cfg = tmp_path / ".ccb"
     cfg.mkdir(parents=True, exist_ok=True)

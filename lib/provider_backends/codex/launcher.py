@@ -91,7 +91,7 @@ def build_session_payload(
         'completion_artifact_dir': str(artifacts.completion_dir),
         'input_fifo': str(input_fifo),
         'output_fifo': str(output_fifo),
-        'terminal': 'tmux',
+        'terminal': str(prepared_state.get('ccb_backend_impl', 'tmux')).strip() or 'tmux',
         'tmux_session': pane_id,
         'pane_id': pane_id,
         'pane_title_marker': pane_title_marker,
@@ -109,9 +109,11 @@ def build_session_payload(
     memory_projection_fingerprint = current_memory_projection_fingerprint(runtime_dir)
     if memory_projection_fingerprint:
         payload['codex_memory_projection_sha256'] = memory_projection_fingerprint
-    provider_authority_fingerprint = current_provider_authority_fingerprint(profile)
+    provider_authority_fingerprint = current_provider_authority_fingerprint(profile, runtime_dir=runtime_dir)
     if provider_authority_fingerprint:
         payload['codex_provider_authority_fingerprint'] = provider_authority_fingerprint
+    if str(prepared_state.get('ccb_continuation_launch_mode') or '').strip() == 'fork':
+        payload['ccb_continuation_launch_mode'] = 'fork'
     if bool(prepared_state.get('codex_app_server_enabled')):
         payload['codex_app_server_enabled'] = True
         payload['codex_app_server_socket'] = str(prepared_state.get('codex_app_server_socket') or '')

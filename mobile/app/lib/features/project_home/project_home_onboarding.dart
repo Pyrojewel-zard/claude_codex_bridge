@@ -1,10 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_theme.dart';
 import '../../app/background_connection.dart';
+import '../../app/chat_background.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
 import 'gateway_pairing_panel.dart';
 import 'project_home_update_panel.dart';
+import '../terminal/terminal_shortcut_settings.dart';
 
 class ProjectHomeOnboardingScaffold extends StatelessWidget {
   const ProjectHomeOnboardingScaffold({
@@ -120,6 +124,13 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
                 themePreference: themePreference,
                 onThemePreferenceChanged: onThemePreferenceChanged,
               ),
+              if (CcbChatBackgroundScope.maybeOf(context)
+                  case final scope?) ...[
+                const SizedBox(height: 16),
+                _ChatBackgroundSection(scope: scope),
+              ],
+              const SizedBox(height: 16),
+              const TerminalShortcutSettingsSection(),
               const SizedBox(height: 16),
               _BackgroundConnectionSection(
                 enabled: backgroundConnectionEnabled,
@@ -132,6 +143,176 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
               const ProjectHomeUpdatePanel(),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatBackgroundSection extends StatefulWidget {
+  const _ChatBackgroundSection({required this.scope});
+
+  final CcbChatBackgroundScope scope;
+
+  @override
+  State<_ChatBackgroundSection> createState() => _ChatBackgroundSectionState();
+}
+
+class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
+  bool _busy = false;
+
+  Future<void> _choose() async {
+    if (_busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.scope.onChoose();
+    } catch (error) {
+      if (mounted) {
+        _showError(error);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _clear() async {
+    if (_busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.scope.onClear();
+    } catch (error) {
+      if (mounted) {
+        _showError(error);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  void _showError(Object error) {
+    final strings = CcbMobileLocalizations.of(context);
+    final message = switch (error) {
+      CcbChatBackgroundException(failure: CcbChatBackgroundFailure.tooLarge) =>
+        strings.chatBackgroundTooLarge,
+      CcbChatBackgroundException(
+        failure: CcbChatBackgroundFailure.unsupportedImage,
+      ) =>
+        strings.chatBackgroundUnsupported,
+      _ => strings.chatBackgroundCouldNotSave,
+    };
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final strings = CcbMobileLocalizations.of(context);
+    final imagePath = widget.scope.preference?.imagePath;
+    return Material(
+      color: colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.wallpaper_outlined, color: colorScheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    strings.chatBackground,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
+                if (_busy)
+                  const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              strings.chatBackgroundDescription,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            if (imagePath != null) ...[
+              const SizedBox(height: 12),
+              AspectRatio(
+                aspectRatio: 16 / 7,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: Image.file(
+                    File(imagePath),
+                    key: const ValueKey('chat-background-settings-preview'),
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder:
+                        (context, error, stackTrace) => ColoredBox(
+                          color: colorScheme.surfaceContainerHighest,
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    key: const ValueKey('chat-background-choose'),
+                    onPressed: _busy ? null : _choose,
+                    icon: const Icon(Icons.image_outlined),
+                    label: Text(
+                      imagePath == null
+                          ? strings.chooseChatBackground
+                          : strings.replaceChatBackground,
+                    ),
+                  ),
+                ),
+                if (imagePath != null) ...[
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    key: const ValueKey('chat-background-remove'),
+                    tooltip: strings.removeChatBackground,
+                    onPressed: _busy ? null : _clear,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ],
+            ),
+          ],
         ),
       ),
     );

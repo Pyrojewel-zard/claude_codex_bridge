@@ -21,6 +21,9 @@ class PiRuntimeObservation:
     ready: bool = False
     busy: bool = False
     runtime_instance_id: str = ""
+    native_session_id: str = ""
+    native_session_path: str = ""
+    native_session_observed_at: str = ""
     next_offset: int = 0
     trailing_partial: bool = False
     protocol_error: str = ""
@@ -141,6 +144,9 @@ def inspect_pi_runtime(
     ready = False
     busy = False
     runtime_instance_id = ""
+    native_session_id = ""
+    native_session_path = ""
+    native_session_observed_at = ""
     expected_actor = _text(actor)
     expected_session = _text(launch_session_id)
     for event in batch.events:
@@ -156,6 +162,9 @@ def inspect_pi_runtime(
             ready = True
             busy = False
             runtime_instance_id = event_instance
+            native_session_id = _text(event.get("pi_session_id"))
+            native_session_path = _text(event.get("pi_session_path"))
+            native_session_observed_at = _text(event.get("timestamp"))
             continue
         if not ready or event_instance != runtime_instance_id:
             continue
@@ -168,6 +177,9 @@ def inspect_pi_runtime(
         ready=ready,
         busy=busy,
         runtime_instance_id=runtime_instance_id,
+        native_session_id=native_session_id,
+        native_session_path=native_session_path,
+        native_session_observed_at=native_session_observed_at,
         next_offset=batch.next_offset,
         trailing_partial=batch.trailing_partial,
     )

@@ -18,6 +18,67 @@ class TerminalGeometry {
   final int rows;
   final int pixelWidth;
   final int pixelHeight;
+
+  @override
+  bool operator ==(Object other) {
+    return other is TerminalGeometry &&
+        other.columns == columns &&
+        other.rows == rows &&
+        other.pixelWidth == pixelWidth &&
+        other.pixelHeight == pixelHeight;
+  }
+
+  @override
+  int get hashCode => Object.hash(columns, rows, pixelWidth, pixelHeight);
+}
+
+enum TerminalResizePolicy {
+  adaptivePane('adaptive_pane'),
+  fixedSource('fixed_source'),
+  client('client');
+
+  const TerminalResizePolicy(this.wireName);
+
+  final String wireName;
+
+  static TerminalResizePolicy fromWireName(String value) {
+    return values.firstWhere(
+      (candidate) => candidate.wireName == value,
+      orElse:
+          () => throw FormatException('unknown terminal resize policy: $value'),
+    );
+  }
+}
+
+class TerminalViewport {
+  const TerminalViewport({
+    required this.geometry,
+    required this.resizePolicy,
+    this.revision = 0,
+  }) : assert(revision >= 0);
+
+  final TerminalGeometry geometry;
+  final TerminalResizePolicy resizePolicy;
+  final int revision;
+
+  bool get hasFixedSourceGeometry =>
+      resizePolicy == TerminalResizePolicy.fixedSource ||
+      resizePolicy == TerminalResizePolicy.adaptivePane;
+
+  bool get acceptsClientResize => resizePolicy == TerminalResizePolicy.client;
+}
+
+class TerminalProjection {
+  TerminalProjection({
+    required List<int> historyBytes,
+    required List<int> screenBytes,
+    required this.sequence,
+  }) : historyBytes = Uint8List.fromList(historyBytes),
+       screenBytes = Uint8List.fromList(screenBytes);
+
+  final Uint8List historyBytes;
+  final Uint8List screenBytes;
+  final int sequence;
 }
 
 class TerminalOpenRequest {
@@ -72,6 +133,37 @@ abstract interface class TerminalTransport {
   Future<TerminalSession> open(TerminalOpenRequest request);
 }
 
+class HostTerminalOpenRequest {
+  HostTerminalOpenRequest({
+    required this.clientSessionId,
+    required this.displayName,
+    this.geometry = const TerminalGeometry(),
+    this.terminalType = 'xterm-256color',
+  }) {
+    if (!RegExp(r'^shell-[1-9][0-9]*$').hasMatch(clientSessionId)) {
+      throw ArgumentError.value(
+        clientSessionId,
+        'clientSessionId',
+        'expected shell-N',
+      );
+    }
+    TerminalOpenRequest._validateTerminalType(terminalType);
+  }
+
+  final String clientSessionId;
+  final String displayName;
+  final TerminalGeometry geometry;
+  final String terminalType;
+
+  String get attachCommand => 'host shell $clientSessionId (~)';
+}
+
+abstract interface class HostTerminalTransport {
+  Future<TerminalSession> openHostTerminal(HostTerminalOpenRequest request);
+
+  Future<void> terminateHostTerminal(String clientSessionId);
+}
+
 abstract interface class TerminalSession {
   String get launchedCommand;
 
@@ -86,6 +178,18 @@ abstract interface class TerminalSession {
   Future<void> reconnect();
 
   Future<void> close();
+}
+
+abstract interface class TerminalViewportSession {
+  TerminalViewport get viewport;
+
+  Stream<TerminalViewport> get viewportChanges;
+}
+
+abstract interface class TerminalProjectionSession {
+  TerminalProjection? get projection;
+
+  Stream<TerminalProjection> get projectionChanges;
 }
 
 class TerminalTransportException implements Exception {

@@ -1,7 +1,7 @@
 # Decision 008: Permissive Baseline Until AGPL Approval
 
 Date: 2026-06-18
-Status: Accepted for Batch 1
+Status: Accepted for Batch 1; superseded for Provider control by Decision 025
 Depends on: [Decision 005](005-native-flutter-tmux-first-client.md),
 [Decision 007](007-native-baseline-before-ccb-gateway.md)
 

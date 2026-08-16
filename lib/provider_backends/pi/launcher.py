@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 from pathlib import Path
 
 from provider_core.contracts import ProviderRuntimeLauncher
+from provider_core.pathing import session_filename_for_agent
+from provider_core.runtime_shared import provider_start_parts
 
 from provider_backends.native_cli_support import NativeCliLaunchConfig
 from provider_backends.native_cli_support.launcher import (
@@ -16,6 +19,11 @@ from provider_backends.native_cli_support.launcher import (
 from provider_backends.native_cli_support.launcher import (
     prepare_launch_context as prepare_native_launch_context,
 )
+from provider_backends.pi.session import (
+    PI_RESTART_SESSION_MARKER,
+    render_restart_command,
+    resume_binding_for_launch,
+)
 
 _PI_COMPLETION_SCHEMA_VERSION = 1
 _PI_EXTENSION_FILENAME = "ccb-pi-completion.ts"
@@ -26,16 +34,7 @@ def build_runtime_launcher() -> ProviderRuntimeLauncher:
     return ProviderRuntimeLauncher(
         provider="pi",
         launch_mode="simple_tmux",
-        prepare_launch_context=lambda context, spec, plan, runtime_dir, prepared_state: (
-            prepare_native_launch_context(
-                config,
-                context,
-                spec,
-                plan,
-                runtime_dir,
-                prepared_state,
-            )
-        ),
+        prepare_launch_context=prepare_launch_context,
         build_start_cmd=lambda command, spec, runtime_dir, launch_session_id, prepared_state=None: (
             _build_start_cmd(
                 config,
@@ -62,6 +61,57 @@ def build_runtime_launcher() -> ProviderRuntimeLauncher:
             )
         ),
     )
+
+
+def prepare_launch_context(
+    context,
+    spec,
+    plan,
+    runtime_dir: Path,
+    prepared_state: dict[str, object],
+) -> dict[str, object]:
+    payload = prepare_native_launch_context(
+        _launch_config(),
+        context,
+        spec,
+        plan,
+        runtime_dir,
+        prepared_state,
+    )
+    run_cwd = Path(str(payload.get("workspace_path") or plan.workspace_path))
+    session_dir = _pi_session_dir(payload)
+    session_file = context.paths.ccb_dir / session_filename_for_agent("pi", spec.name)
+    payload.update(
+        resume_binding_for_launch(
+            session_file,
+            agent_name=spec.name,
+            project_id=context.project.project_id,
+            work_dir=run_cwd,
+            session_dir=session_dir,
+        )
+    )
+    payload["pi_session_dir"] = str(session_dir)
+    return payload
+
+
+def _has_session_control(parts: tuple[str, ...] | list[str]) -> bool:
+    normalized = [str(part).strip() for part in parts]
+    if any(part in _SESSION_CONTROL_FLAGS for part in normalized):
+        return True
+    return any(
+        part.startswith(("--session=", "--session-id=", "--resume=", "--continue="))
+        for part in normalized
+    )
+
+
+_SESSION_CONTROL_FLAGS = {
+    "--continue",
+    "--session",
+    "--session-id",
+    "--resume",
+    "-c",
+    "-r",
+}
 
 
 def _launch_config() -> NativeCliLaunchConfig:
@@ -93,12 +143,24 @@ def _build_start_cmd(
 ) -> str:
     if prepared_state is None:
         raise RuntimeError("pi launch requires prepared_state")
+    launch_context = prepared_state
+    command_parts = (*provider_start_parts("pi"), *spec.startup_args)
+    template_parts = _template_parts(getattr(spec, "provider_command_template", None))
+    if _has_session_control((*command_parts, *template_parts)):
+        launch_context["pi_resume_status"] = "explicit_session_control"
+        launch_context["pi_explicit_session_control"] = True
+    else:
+        launch_context["pi_explicit_session_control"] = False
+        if not command.restore:
+            launch_context["pi_resume_status"] = "fresh_restore_disabled"
+        elif launch_context.get("pi_resume_status") == "exact_session_ready":
+            launch_context["pi_resume_status"] = "exact_session_selected"
     _materialize_completion_extension(
         prepared_state,
         runtime_dir=runtime_dir,
         launch_session_id=launch_session_id,
     )
-    return build_native_start_cmd(
+    command_template = build_native_start_cmd(
         config,
         command,
         spec,
@@ -106,6 +168,28 @@ def _build_start_cmd(
         launch_session_id,
         prepared_state=prepared_state,
     )
+    if command_template.count(PI_RESTART_SESSION_MARKER) == 1:
+        launch_context["pi_restart_start_cmd_template"] = command_template
+    else:
+        launch_context.pop("pi_restart_start_cmd_template", None)
+    exact_args = ""
+    if launch_context.get("pi_resume_status") == "exact_session_selected":
+        resume_path = str(launch_context.get("pi_resume_session_path") or "").strip()
+        if resume_path:
+            exact_args = f"--session {shlex.quote(resume_path)}"
+        else:
+            launch_context["pi_resume_status"] = "fresh_native_session_path_missing"
+    return render_restart_command(command_template, exact_args=exact_args) or command_template
+
+
+def _template_parts(template: object) -> tuple[str, ...]:
+    raw = str(template or "").strip()
+    if not raw:
+        return ()
+    try:
+        return tuple(shlex.split(raw))
+    except ValueError:
+        return ()
 
 
 def _build_session_payload(
@@ -134,20 +218,32 @@ def _build_session_payload(
         launch_session_id,
         prepared_state,
     )
+    payload.pop("pi_session_id", None)
+    payload.pop("pi_session_path", None)
     payload.update(
         {
             "pi_completion_schema_version": _PI_COMPLETION_SCHEMA_VERSION,
-            "pi_completion_extension": str(
-                prepared_state.get("pi_completion_extension") or ""
-            ),
-            "pi_completion_event_log": str(
-                prepared_state.get("pi_completion_event_log") or ""
-            ),
-            "pi_dispatch_event_log": str(
-                prepared_state.get("pi_dispatch_event_log") or ""
-            ),
+            "pi_completion_extension": str(prepared_state.get("pi_completion_extension") or ""),
+            "pi_completion_event_log": str(prepared_state.get("pi_completion_event_log") or ""),
+            "pi_dispatch_event_log": str(prepared_state.get("pi_dispatch_event_log") or ""),
+            "pi_session_dir": str(prepared_state.get("pi_session_dir") or _pi_session_dir(prepared_state)),
+            "pi_resume_status": str(prepared_state.get("pi_resume_status") or "fresh_no_binding"),
+            "pi_explicit_session_control": bool(prepared_state.get("pi_explicit_session_control")),
+            "pi_restart_start_cmd_template": str(prepared_state.get("pi_restart_start_cmd_template") or ""),
         }
     )
+    if payload["pi_resume_status"] == "exact_session_selected":
+        payload.update(
+            {
+                "pi_session_id": str(prepared_state.get("pi_resume_session_id") or ""),
+                "pi_session_path": str(prepared_state.get("pi_resume_session_path") or ""),
+                "pi_session_work_dir_norm": str(prepared_state.get("pi_resume_session_work_dir_norm") or ""),
+                "pi_session_bound_at": str(prepared_state.get("pi_resume_session_bound_at") or ""),
+                "pi_session_binding_source": str(
+                    prepared_state.get("pi_resume_binding_source") or "native_session_observation"
+                ),
+            }
+        )
     return payload
 
 
@@ -155,13 +251,16 @@ def _pi_visible_args(prepared_state: dict[str, object]) -> tuple[str, ...]:
     session_dir = _pi_session_dir(prepared_state)
     extension_path = _path_from_prepared(prepared_state, "pi_completion_extension")
     session_dir.mkdir(parents=True, exist_ok=True)
-    return (
+    args = (
         "--session-dir",
         str(session_dir),
         "--extension",
         str(extension_path),
         "--no-approve",
     )
+    if not bool(prepared_state.get("pi_explicit_session_control")):
+        return (*args, PI_RESTART_SESSION_MARKER)
+    return args
 
 
 def _pi_visible_env(prepared_state: dict[str, object]) -> dict[str, str]:
@@ -397,7 +496,13 @@ function bindDispatchedInput(prompt: string, source: string): boolean {
 }
 
 export default function ccbPiCompletion(pi: any): void {
-  appendEvent("extension_ready");
+  pi.on("session_start", async (_event: any, ctx: any) => {
+    const manager = ctx?.sessionManager;
+    appendEvent("extension_ready", {
+      pi_session_id: String(manager?.getSessionId?.() || ""),
+      pi_session_path: String(manager?.getSessionFile?.() || ""),
+    });
+  });
 
   pi.on("input", async (event: any) => {
     const prompt = String(event?.text || "");

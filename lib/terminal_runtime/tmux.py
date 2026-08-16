@@ -21,6 +21,8 @@ def config_base_args() -> list[str]:
     config_path = str(os.environ.get("CCB_TMUX_CONFIG") or _DEFAULT_CCB_TMUX_CONFIG).strip()
     if not config_path:
         return []
+    if config_path == _DEFAULT_CCB_TMUX_CONFIG:
+        return ["-f", _DEFAULT_CCB_TMUX_CONFIG]
     return ["-f", str(Path(config_path).expanduser())]
 
 

@@ -172,6 +172,79 @@ void main() {
       );
     });
 
+    testWidgets('mobile header shows provider identity and control action', (
+      tester,
+    ) async {
+      final control = CcbProviderControl(
+        provider: 'codex',
+        configuredModel: 'gpt-5.6-sol',
+        activeModel: 'gpt-5.5',
+        activeThinking: 'high',
+        pendingModel: 'gpt-5.6-sol',
+      );
+      final view = _view(providerControl: control);
+
+      await _pump(
+        tester,
+        ProjectHomeMobileChatScaffoldHost(
+          view: view,
+          selectedAgent: view.agentByName('mobile'),
+          repository: _ProviderControlRecordingRepository(),
+          terminalTransport: RecordingTerminalTransport(),
+          usePaneInputForMessages: true,
+          mobileAgentsCollapsed: false,
+          onBack: () {},
+          onOpenConnectionDetails: () {},
+          onCollapseAgents: () {},
+          onExpandAgents: () {},
+          onWindowSelected: (_) {},
+          onAgentSelected: (_) {},
+          onRefreshView: () async => null,
+          onTimelineScrollDirectionChanged: (_) {},
+        ),
+      );
+
+      expect(
+        find.text('Codex / gpt-5.5 / high · pending restart'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('agent-provider-control-action')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('mobile header hides provider control for an older host', (
+      tester,
+    ) async {
+      final view = _view();
+
+      await _pump(
+        tester,
+        ProjectHomeMobileChatScaffoldHost(
+          view: view,
+          selectedAgent: view.agentByName('mobile'),
+          repository: _ProviderControlRecordingRepository(),
+          terminalTransport: RecordingTerminalTransport(),
+          usePaneInputForMessages: true,
+          mobileAgentsCollapsed: false,
+          onBack: () {},
+          onOpenConnectionDetails: () {},
+          onCollapseAgents: () {},
+          onExpandAgents: () {},
+          onWindowSelected: (_) {},
+          onAgentSelected: (_) {},
+          onRefreshView: () async => null,
+          onTimelineScrollDirectionChanged: (_) {},
+        ),
+      );
+
+      expect(
+        find.byKey(const ValueKey('agent-provider-control-action')),
+        findsNothing,
+      );
+    });
+
     testWidgets('mobile host toggles terminal content from the header', (
       tester,
     ) async {
@@ -250,6 +323,97 @@ void main() {
       );
       expect(find.text('preserved draft'), findsOneWidget);
     });
+
+    testWidgets(
+      'mobile terminal collapses project chrome on entry and scroll',
+      (tester) async {
+        final view = _view();
+        final terminalTransport = RecordingTerminalTransport();
+        var mobileAgentsCollapsed = false;
+
+        await _pump(
+          tester,
+          StatefulBuilder(
+            builder: (context, setState) {
+              void collapse() {
+                if (!mobileAgentsCollapsed) {
+                  setState(() {
+                    mobileAgentsCollapsed = true;
+                  });
+                }
+              }
+
+              return ProjectHomeMobileChatScaffoldHost(
+                view: view,
+                selectedAgent: view.agentByName('mobile'),
+                repository: RecordingGatewayRepository(),
+                terminalTransport: terminalTransport,
+                usePaneInputForMessages: true,
+                mobileAgentsCollapsed: mobileAgentsCollapsed,
+                onBack: () {},
+                onOpenConnectionDetails: () {},
+                onCollapseAgents: collapse,
+                onExpandAgents: () {
+                  setState(() {
+                    mobileAgentsCollapsed = false;
+                  });
+                },
+                onWindowSelected: (_) {},
+                onAgentSelected: (_) {},
+                onRefreshView: () async => null,
+                onTimelineScrollDirectionChanged: (direction) {
+                  if (direction == ScrollDirection.reverse) {
+                    collapse();
+                  }
+                },
+              );
+            },
+          ),
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('open-agent-terminal-button')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),
+          findsOneWidget,
+        );
+      expect(
+        find.byKey(const ValueKey('ccb-live-terminal-view')),
+        findsOneWidget,
+      );
+
+        await tester.tap(
+          find.byKey(const ValueKey('mobile-agent-switcher-expand-action')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('mobile-agent-switcher-expanded')),
+          findsOneWidget,
+        );
+
+        terminalTransport.sessions.single.addOutput(
+          List.generate(240, (index) => 'terminal line $index\r\n').join(),
+        );
+        await tester.pumpAndSettle();
+        final terminal = find.byKey(const ValueKey('ccb-live-terminal-view'));
+        await tester.drag(terminal, const Offset(0, 240));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('mobile-agent-switcher-expanded')),
+          findsOneWidget,
+        );
+
+        await tester.drag(terminal, const Offset(0, -240));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('mobile-agent-switcher-collapsed')),
+          findsOneWidget,
+        );
+      },
+    );
 
     testWidgets('terminal mode follows the shared selected agent in place', (
       tester,
@@ -497,7 +661,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('project-chat-title')), findsOneWidget);
       expect(find.text('demo'), findsOneWidget);
-      expect(find.text('main / mobile'), findsOneWidget);
+      expect(find.text('main / mobile · Codex'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('mobile-agent-switcher-unread-star')),
         findsOneWidget,
@@ -597,14 +761,52 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets('wide terminal temporarily owns the full device width', (
+      tester,
+    ) async {
+      final view = _view();
+      final selectedAgent = view.agentByName('mobile');
+
+      await _pump(
+        tester,
+        _wideHost(
+          view,
+          selectedAgent,
+          WideSidebarState.expanded,
+          terminalMode: true,
+        ),
+        size: const Size(1200, 800),
+      );
+
+      expect(find.byKey(const ValueKey('wide-project-column')), findsNothing);
+      expect(find.byKey(const ValueKey('agent-secondary-list')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('wide-collapsed-sidebar-rail')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('wide-sidebar-drag-handle')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('wide-project-agent-terminal-mode')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('return-to-agent-chat-button')),
+        findsOneWidget,
+      );
+    });
   });
 }
 
 ProjectHomeWideScaffoldHost _wideHost(
   CcbProjectView view,
   CcbAgent? selectedAgent,
-  WideSidebarState sidebarState,
-) {
+  WideSidebarState sidebarState, {
+  bool terminalMode = false,
+}) {
   return ProjectHomeWideScaffoldHost(
     view: view,
     selectedAgent: selectedAgent,
@@ -623,6 +825,8 @@ ProjectHomeWideScaffoldHost _wideHost(
     onHorizontalDragUpdate: (_) {},
     onHorizontalDragEnd: (_) {},
     onRefreshView: () async => null,
+    terminalMode: terminalMode,
+    onShowChat: () {},
   );
 }
 
@@ -639,7 +843,10 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
-CcbProjectView _view({int namespaceEpoch = 4}) {
+CcbProjectView _view({
+  int namespaceEpoch = 4,
+  CcbProviderControl? providerControl,
+}) {
   return CcbProjectView(
     project: CcbProject(
       id: 'proj-demo',
@@ -687,6 +894,7 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
         order: 1,
         active: true,
         queueDepth: 1,
+        providerControl: providerControl,
       ),
       CcbAgent(
         name: 'reviewer',
@@ -702,4 +910,38 @@ CcbProjectView _view({int namespaceEpoch = 4}) {
     notifications: [],
     terminalHistories: {},
   );
+}
+
+class _ProviderControlRecordingRepository extends RecordingGatewayRepository
+    implements MobileCcbProviderControlRepository {
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) {
+    throw UnimplementedError();
+  }
 }

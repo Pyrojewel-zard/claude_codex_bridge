@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .ops_views_common import binding_line
+from .ops_views_common import binding_line, herdr_surface_lines
 
 
 def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
@@ -43,6 +43,9 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'requirement_python_version: {requirements.get("python_version")}',
         f'requirement_tmux_available: {requirements.get("tmux_available")}',
         f'requirement_tmux_path: {requirements.get("tmux_path")}',
+    ]
+    lines.extend(_windows_x64_release_surface_lines(payload.get('windows_x64_release_surface')))
+    lines.extend([
         f'ccbd_state: {ccbd["state"]}',
         f'ccbd_pid: {ccbd.get("pid")}',
         f'ccbd_keeper_pid: {ccbd.get("keeper_pid")}',
@@ -176,7 +179,7 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'ccbd_tmux_cleanup_total_orphaned: {ccbd.get("tmux_cleanup_total_orphaned")}',
         f'ccbd_tmux_cleanup_total_killed: {ccbd.get("tmux_cleanup_total_killed")}',
         f'ccbd_tmux_cleanup_sockets: {ccbd.get("tmux_cleanup_sockets")}',
-    ]
+    ])
     for provider in requirements.get('provider_commands') or ():
         line = (
             'requirement_provider: '
@@ -196,6 +199,7 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
         lines.append(f'runtime_warning: {warning}')
     for error in ccbd.get('diagnostic_errors') or ():
         lines.append(f'ccbd_diagnostic_error: {error}')
+    lines.extend(herdr_surface_lines(ccbd.get('herdr_surface_projection'), prefix='ccbd_herdr'))
     diagnostics = payload.get('active_inbound_diagnostics') or ()
     lines.append(f'active_inbound_diagnostic_count: {len(diagnostics)}')
     for diagnostic in diagnostics:
@@ -267,6 +271,39 @@ def _format_mapping(value: object) -> str:
     if not isinstance(value, Mapping):
         return ''
     return ','.join(f'{key}={value[key]}' for key in sorted(value))
+
+
+def _windows_x64_release_surface_lines(value: object) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    return [
+        'windows_x64_release_surface: '
+        f'surface_state={value.get("surface_state")} '
+        f'failure_reason={value.get("failure_reason")} '
+        f'release_install_entry={value.get("release_install_entry")} '
+        f'source_install_allowed={value.get("source_install_allowed")} '
+        f'source_install_entry={value.get("source_install_entry")} '
+        f'update_entry={value.get("update_entry")} '
+        f'managed_python_status={value.get("managed_python_status")} '
+        f'native_helper_status={value.get("native_helper_status")}',
+        'windows_x64_release_surface_detail: '
+        f'implementation_admission={value.get("implementation_admission")} '
+        f'baseline_version_status={value.get("baseline_version_status")} '
+        f'upstream_gate_status={value.get("upstream_gate_status")} '
+        f'upstream_failure_ref={value.get("upstream_failure_ref")} '
+        f'upstream_detail_reason={value.get("upstream_detail_reason")} '
+        f'beta_gaps={_format_list(value.get("beta_gaps"))}',
+        'windows_x64_release_surface_next_action: '
+        f'diagnostic={value.get("diagnostic")} '
+        f'next_action={value.get("next_action")}',
+    ]
+
+
+def _format_list(value: object) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return ','.join(str(item) for item in value) or 'none'
+    text = str(value or '').strip()
+    return text or 'none'
 
 
 def render_doctor_storage(payload: Mapping[str, object]) -> tuple[str, ...]:

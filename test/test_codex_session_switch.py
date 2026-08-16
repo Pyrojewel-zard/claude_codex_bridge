@@ -38,6 +38,32 @@ def test_bridge_tracker_auto_rebinds_unique_managed_candidate(tmp_path: Path, mo
     assert switch["committed"] is True
 
 
+def test_bridge_tracker_does_not_adopt_idle_candidate_from_previous_runtime_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    work_dir, session_file, runtime_dir, old_log = _project(tmp_path)
+    stale_log = _log(tmp_path, session_id=NEW_ID, work_dir=work_dir, mtime=200)
+    data = json.loads(session_file.read_text(encoding="utf-8"))
+    data["started_at"] = "2026-08-12 23:24:00"
+    session_file.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(
+        "provider_backends.codex.session_switch.resolver._runtime_started_at",
+        lambda _data: 250.0,
+    )
+    monkeypatch.setenv("CCB_SESSION_FILE", str(session_file))
+
+    assert CodexBindingTracker(runtime_dir).refresh_once() is False
+
+    persisted = json.loads(session_file.read_text(encoding="utf-8"))
+    assert persisted["codex_session_id"] == OLD_ID
+    assert persisted["codex_session_path"] == str(old_log)
+
+    os.utime(stale_log, (300, 300))
+    assert CodexBindingTracker(runtime_dir).refresh_once() is True
+    assert json.loads(session_file.read_text(encoding="utf-8"))["codex_session_id"] == NEW_ID
+
+
 def test_bridge_tracker_rejects_ambiguous_managed_candidates(tmp_path: Path, monkeypatch) -> None:
     work_dir, session_file, runtime_dir, old_log = _project(tmp_path)
     _log(tmp_path, session_id=NEW_ID, work_dir=work_dir, mtime=200)

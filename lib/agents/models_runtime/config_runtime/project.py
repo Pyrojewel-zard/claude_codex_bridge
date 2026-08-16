@@ -42,6 +42,7 @@ class ProjectConfig:
     windows_explicit: bool | None = None
     maintenance_heartbeat: MaintenanceHeartbeatConfig | None = None
     loop_capacity: LoopCapacityConfig | None = None
+    runtime_mux_backend: str | None = None
     workflow: WorkflowConfig | None = None
     hapi: HapiConfig | None = None
 
@@ -140,6 +141,8 @@ class ProjectConfig:
             'topology_signature': self.topology_signature,
             'source_path': self.source_path,
         }
+        if self.runtime_mux_backend is not None:
+            payload['runtime'] = {'mux': {'backend': self.runtime_mux_backend}}
         if self.workflow is not None:
             payload['workflow'] = self.workflow.to_record()
         return payload

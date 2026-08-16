@@ -44,7 +44,7 @@ def test_windows_bootstrap_script_installs_expected_provider_clis() -> None:
 
 
 def test_windows_install_script_prefers_discovered_real_python_over_store_alias() -> None:
-    text = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "platforms/windows/installer/install.ps1").read_text(encoding="utf-8-sig")
 
     assert "Get-PythonCandidates" in text
     assert 'Add-Candidate "py -3"' in text

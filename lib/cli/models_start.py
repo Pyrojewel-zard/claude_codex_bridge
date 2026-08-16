@@ -28,6 +28,13 @@ class ParsedClearCommand:
 
 
 @dataclass(frozen=True)
+class ParsedCompactCommand:
+    project: str | None
+    agent_names: tuple[str, ...] = ()
+    kind: str = 'compact'
+
+
+@dataclass(frozen=True)
 class ParsedRestartCommand:
     project: str | None
     agent_name: str
@@ -66,7 +73,7 @@ class ParsedRelayCommand:
     label: str | None = None
     reason: str | None = None
     max_sessions: int = 4
-    max_bytes_per_day: int = 104857600
+    max_bytes_per_day: int = 1073741824
     relay_mode: str | None = None
     relay_origin: str | None = None
     invitation: str | None = None
@@ -256,6 +263,25 @@ class ParsedConfigUiCommand:
 
 
 @dataclass(frozen=True)
+class ParsedConfigImportHerdrCommand:
+    project: str | None
+    output_path: str | None = None
+    dry_run: bool = True
+    force: bool = False
+    kind: str = 'config-import-herdr'
+
+
+@dataclass(frozen=True)
+class ParsedHerdrOpenCommand:
+    project: str | None
+    herdr_exe: str | None = None
+    herdr_session: str | None = None
+    no_attach: bool = False
+    wait_ready: bool = False
+    kind: str = 'herdr-open'
+
+
+@dataclass(frozen=True)
 class ParsedReloadCommand:
     project: str | None
     dry_run: bool = False
@@ -289,11 +315,13 @@ class ParsedPingCommand:
 __all__ = [
     'ParsedAgentCommand',
     'ParsedClearCommand',
+    'ParsedCompactCommand',
     'ParsedCleanupCommand',
     'ParsedConfigUiCommand',
     'ParsedConfigValidateCommand',
     'ParsedDoctorCommand',
     'ParsedFrontdeskCommand',
+    'ParsedHerdrOpenCommand',
     'ParsedKillCommand',
     'ParsedLayoutCommand',
     'ParsedLogsCommand',

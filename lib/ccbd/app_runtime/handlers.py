@@ -16,6 +16,7 @@ from ccbd.handlers import (
     build_project_focus_window_handler,
     build_project_sidebar_click_handler,
     build_project_clear_context_handler,
+    build_project_compact_context_handler,
     build_project_reload_config_handler,
     build_project_restart_agent_handler,
     build_project_restart_panes_handler,
@@ -115,6 +116,10 @@ def register_handlers(app) -> None:
         _graph_request(graph_source, build_project_clear_context_handler(_GraphAppProxy(app, graph_source))),
     )
     app.socket_server.register_handler(
+        'project_compact_context',
+        _graph_request(graph_source, build_project_compact_context_handler(_GraphAppProxy(app, graph_source))),
+    )
+    app.socket_server.register_handler(
         'project_reload_config',
         build_project_reload_config_handler(app, graph_source.current),
     )
@@ -150,6 +155,11 @@ def register_handlers(app) -> None:
                         app.expected_startup_fence.startup_id
                         if app.expected_startup_fence is not None
                         else None
+                    ),
+                    'source_runtime_identity': getattr(
+                        app,
+                        'source_runtime_identity',
+                        None,
                     ),
                 },
             ),

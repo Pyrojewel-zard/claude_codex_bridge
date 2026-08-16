@@ -64,6 +64,55 @@ class CcbMobileLocalizations {
 
   String get retry => isChinese ? '重试' : 'Retry';
 
+  String get continueAnyway => isChinese ? '仍然继续' : 'Continue anyway';
+
+  String get lanPairingWarningTitle =>
+      isChinese
+          ? '连接 LAN 前请检查手机网络'
+          : 'Check the phone network before LAN pairing';
+
+  String get lanPairingWarningIntroduction =>
+      isChinese
+          ? '这个连接码使用电脑的局域网地址。当前手机网络可能无法访问它。'
+          : 'This code uses the computer\'s local-network address, which may not be reachable from the phone\'s current network.';
+
+  String get lanPhoneOfflineTitle =>
+      isChinese ? '手机当前没有可用网络' : 'The phone is offline';
+
+  String get lanPhoneOfflineBody =>
+      isChinese
+          ? '请打开 Wi-Fi，并确认手机和电脑连接到同一个可信局域网。'
+          : 'Turn on Wi-Fi and connect the phone and computer to the same trusted local network.';
+
+  String get lanLocalNetworkRequiredTitle =>
+      isChinese ? '请连接与电脑相同的 Wi-Fi' : 'Connect to the computer\'s Wi-Fi';
+
+  String lanLocalNetworkRequiredBody(String gatewayHost) {
+    return isChinese
+        ? '当前未检测到 Wi-Fi 或以太网，仅使用移动数据通常无法访问 $gatewayHost。若手机正在共享热点，请确认电脑已连接该热点。'
+        : 'No Wi-Fi or Ethernet connection was detected. Mobile data normally cannot reach $gatewayHost. If this phone is sharing a hotspot, confirm the computer joined it.';
+  }
+
+  String get lanVpnMayBlockTitle =>
+      isChinese ? 'VPN 可能阻止局域网连接' : 'A VPN may block the LAN connection';
+
+  String lanVpnMayBlockBody(String gatewayHost) {
+    return isChinese
+        ? '请允许 VPN 访问本地网络，或暂时关闭 VPN 后重试 $gatewayHost。'
+        : 'Allow local-network access in the VPN, or temporarily disable it and retry $gatewayHost.';
+  }
+
+  String get lanGatewayUnreachableTitle =>
+      isChinese
+          ? '已连接本地网络，但电脑端不可达'
+          : 'Local network connected, but the computer is unreachable';
+
+  String lanGatewayUnreachableBody(String gatewayHost) {
+    return isChinese
+        ? '确认手机和电脑在同一 Wi-Fi，未使用访客/设备隔离网络，防火墙允许 $gatewayHost。若电脑 IP 已变化，请在电脑重新运行 ccb update mobile 并扫码。'
+        : 'Check that both devices use the same Wi-Fi, guest/client isolation is off, and the firewall allows $gatewayHost. If the computer IP changed, rerun ccb update mobile and scan the new code.';
+  }
+
   String get rePair => isChinese ? '重新配对' : 'Re-pair';
 
   String get deleteMessage => isChinese ? '删除' : 'Delete';
@@ -71,6 +120,8 @@ class CcbMobileLocalizations {
   String get collapseMessage => isChinese ? '折叠消息' : 'Collapse message';
 
   String get expandMessage => isChinese ? '展开消息' : 'Expand message';
+
+  String get newContext => isChinese ? '新上下文' : 'New context';
 
   String get backToProjects => isChinese ? '返回项目列表' : 'Back to projects';
 
@@ -105,6 +156,43 @@ class CcbMobileLocalizations {
   String get themeLight => isChinese ? '浅色' : 'Light';
 
   String get themeDark => isChinese ? '深色' : 'Dark';
+
+  String get chatBackground => isChinese ? '工作区背景' : 'Workspace background';
+
+  String get chatBackgroundDescription =>
+      isChinese
+          ? '选择一张本机图片作为聊天和终端的全屏背景。图片只保存在此设备，不会上传到 CCB。'
+          : 'Choose a local image as the full-screen background for chats and terminals. It stays on this device and is never uploaded to CCB.';
+
+  String get chooseChatBackground => isChinese ? '选择图片' : 'Choose image';
+
+  String get replaceChatBackground => isChinese ? '更换图片' : 'Replace image';
+
+  String get removeChatBackground =>
+      isChinese ? '移除工作区背景' : 'Remove workspace background';
+
+  String get chatBackgroundTooLarge =>
+      isChinese ? '图片不能超过 20 MB。' : 'The image must be 20 MB or smaller.';
+
+  String get chatBackgroundUnsupported =>
+      isChinese
+          ? '请选择 PNG、JPEG、GIF、WebP 或 BMP 图片。'
+          : 'Choose a PNG, JPEG, GIF, WebP, or BMP image.';
+
+  String get chatBackgroundCouldNotSave =>
+      isChinese
+          ? '无法保存工作区背景图片。'
+          : 'Could not save the workspace background image.';
+
+  String get terminalShortcuts => isChinese ? '终端快捷键' : 'Terminal shortcuts';
+
+  String get terminalSettings => isChinese ? '终端设置' : 'Terminal settings';
+
+  String get terminalTextSize => isChinese ? '终端字体' : 'Terminal text size';
+
+  String get restoreDefaults => isChinese ? '恢复默认' : 'Restore defaults';
+
+  String get reorder => isChinese ? '调整顺序' : 'Reorder';
 
   String get backgroundConnection =>
       isChinese ? '保持后台连接' : 'Keep connected in background';
@@ -216,6 +304,46 @@ class CcbMobileLocalizations {
 
   String get openTerminal => isChinese ? '打开终端' : 'Open Terminal';
 
+  String get computerTerminal => isChinese ? '电脑终端' : 'Computer terminal';
+
+  String get newTerminal => isChinese ? '新建终端' : 'New terminal';
+
+  String get closeTerminal => isChinese ? '关闭当前终端' : 'Close terminal';
+
+  String closeTerminalQuestion(String name) =>
+      isChinese
+          ? '终止 $name 中运行的 shell？'
+          : 'Terminate the shell running in $name?';
+
+  String shellName(int index) => isChinese ? '终端 $index' : 'Shell $index';
+
+  String get maximumTerminalsReached =>
+      isChinese ? '最多可同时打开 6 个终端' : 'Up to 6 terminals can be open';
+
+  String get hostTerminalAccessUnavailable =>
+      isChinese
+          ? '当前配对未启用电脑终端权限，请重新配对'
+          : 'Re-pair to enable computer terminal access';
+
+  String get chooseTerminalProject =>
+      isChinese ? '选择项目和终端' : 'Choose a project and terminal';
+
+  String get windows => isChinese ? '窗口' : 'Windows';
+
+  String get agents => isChinese ? 'Agent' : 'Agents';
+
+  String get activeWindow => isChinese ? '当前活动窗口' : 'Active window';
+
+  String get windowTerminal => isChinese ? '窗口当前 pane' : 'Window active pane';
+
+  String get noTerminalTargets =>
+      isChinese ? '这个项目没有可用终端' : 'No terminals are available for this project';
+
+  String get terminalAccessUnavailable =>
+      isChinese
+          ? '当前配对未启用终端权限'
+          : 'Terminal access is not enabled for this pairing';
+
   String get returnToChat => isChinese ? '返回对话' : 'Return to Chat';
 
   String messageAgent(String agentName) {
@@ -243,6 +371,8 @@ class CcbMobileLocalizations {
 
   String get cancel => isChinese ? '取消' : 'Cancel';
 
+  String get close => isChinese ? '关闭' : 'Close';
+
   String get open => isChinese ? '打开' : 'Open';
 
   String get removeAttachment => isChinese ? '移除附件' : 'Remove attachment';
@@ -268,6 +398,110 @@ class CcbMobileLocalizations {
   String get couldNotOpenUrl => isChinese ? '无法打开链接' : 'Could not open link';
 
   String get refreshConversation => isChinese ? '刷新对话' : 'Refresh conversation';
+
+  String get providerControl => isChinese ? '模型与用量' : 'Model and usage';
+
+  String get providerModel => isChinese ? '模型' : 'Model';
+
+  String get providerSelectModel => isChinese ? '选择模型' : 'Select model';
+
+  String get providerThinking => isChinese ? '思考强度' : 'Thinking';
+
+  String get providerSessionUsage => isChinese ? '当前会话用量' : 'Session usage';
+
+  String get providerAccountQuota => isChinese ? '账户配额' : 'Account quota';
+
+  String get providerUsageUnavailable => isChinese ? '暂不可用' : 'Unavailable';
+
+  String get providerRestartRequired =>
+      isChinese ? '重启 Agent 后生效' : 'Applies after agent restart';
+
+  String get providerPendingRestart =>
+      isChinese ? '等待 Agent 重启' : 'Pending agent restart';
+
+  String get providerPendingShort => isChinese ? '待重启' : 'pending restart';
+
+  String providerConfigured(String model) =>
+      isChinese ? '已配置：$model' : 'Configured: $model';
+
+  String providerContextUsage(String used, String maximum) =>
+      isChinese ? '$used / $maximum 上下文' : '$used / $maximum context';
+
+  String providerInputTokens(String value) =>
+      isChinese ? '输入 $value' : 'Input $value';
+
+  String providerCachedTokens(String value) =>
+      isChinese ? '缓存 $value' : 'Cached $value';
+
+  String providerOutputTokens(String value) =>
+      isChinese ? '输出 $value' : 'Output $value';
+
+  String get providerSave => isChinese ? '保存选择' : 'Save selection';
+
+  String get providerApply => isChinese ? '应用' : 'Apply';
+
+  String get providerSaving => isChinese ? '正在保存' : 'Saving';
+
+  String get providerRefresh =>
+      isChinese ? '刷新模型与用量' : 'Refresh model and usage';
+
+  String get providerConfirmTitle =>
+      isChinese ? '应用模型设置？' : 'Apply model settings?';
+
+  String get providerConfirmBody =>
+      isChinese
+          ? '当前任务不会中断；新设置会在 Agent 下次重启后生效。'
+          : 'The current task will not be interrupted. The new setting applies after the next agent restart.';
+
+  String get providerScopeRequired =>
+      isChinese
+          ? '当前配对未授权修改模型，请重新配对后再试。'
+          : 'This pairing cannot change models. Re-pair to grant access.';
+
+  String get providerHostUpdateRequired =>
+      isChinese
+          ? '电脑端 CCB 版本不支持模型控制。请在电脑执行 ccb update，然后重新连接。'
+          : 'The computer CCB version does not support model controls. Run ccb update on the computer, then reconnect.';
+
+  String get providerRequestRejected =>
+      isChinese
+          ? '电脑端拒绝了这次设置。请刷新模型状态后重试。'
+          : 'The computer rejected this setting. Refresh the model state and try again.';
+
+  String get providerNoModels => isChinese ? '没有可选模型' : 'No selectable models';
+
+  String get providerUsageDetails =>
+      isChinese ? '查看用量详情' : 'View usage details';
+
+  String providerThinkingOption(String option) {
+    final normalized = option.trim().toLowerCase();
+    if (isChinese) {
+      return switch (normalized) {
+        'off' => '关闭',
+        'minimal' => '最低',
+        'low' => '低',
+        'medium' => '中',
+        'high' => '高',
+        'xhigh' || 'extra_high' || 'extra-high' => '超高',
+        'max' => '最高',
+        'ultra' => '极致',
+        _ => option,
+      };
+    }
+    return switch (normalized) {
+      'off' => 'Off',
+      'minimal' => 'Minimal',
+      'low' => 'Low',
+      'medium' => 'Medium',
+      'high' => 'High',
+      'xhigh' || 'extra_high' || 'extra-high' => 'Extra high',
+      'max' => 'Max',
+      'ultra' => 'Ultra',
+      _ => option,
+    };
+  }
+
+  String get searchModels => isChinese ? '搜索模型' : 'Search models';
 
   String get newMessages => isChinese ? '新消息' : 'New messages';
 

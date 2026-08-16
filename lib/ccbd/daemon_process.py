@@ -4,10 +4,10 @@ from pathlib import Path
 import os
 import signal
 import subprocess
-import sys
 import time
 
 from runtime_env.control_plane import control_plane_env
+from process_background import background_process_kwargs, background_spawn
 
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.startup_fence import (
@@ -34,11 +34,13 @@ def spawn_ccbd_process(
     keeper_startup_accepted_perf_counter_ns: int | None = None,
 ) -> None:
     script = Path(__file__).resolve().parent / 'main.py'
+    interpreter, venv_env = background_spawn()
     env = _ccbd_env(
         keeper_pid=keeper_pid,
         expected_startup_id=expected_startup_id,
         expected_generation=expected_generation,
         keeper_startup_accepted_perf_counter_ns=keeper_startup_accepted_perf_counter_ns,
+        venv_env=venv_env,
     )
     ccbd_dir.mkdir(parents=True, exist_ok=True)
     with open(ccbd_dir / 'ccbd.stdout.log', 'ab') as stdout_log, open(
@@ -46,12 +48,12 @@ def spawn_ccbd_process(
         'ab',
     ) as stderr_log:
         process = subprocess.Popen(
-            [sys.executable, str(script), '--project', str(project_root)],
+            [interpreter, str(script), '--project', str(project_root)],
             cwd=str(project_root),
             env=env,
             stdout=stdout_log,
             stderr=stderr_log,
-            start_new_session=True,
+            **background_process_kwargs(),
         )
         try:
             _wait_for_ccbd_ready(
@@ -82,7 +84,6 @@ def _wait_for_ccbd_ready(
                 payload = CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S).ping('ccbd')
                 if _ready_payload_matches_expected(
                     payload,
-                    process=process,
                     expected_startup_id=expected_startup_id,
                     expected_generation=expected_generation,
                 ):
@@ -96,7 +97,6 @@ def _wait_for_ccbd_ready(
                     payload = CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S).ping('ccbd')
                     if _ready_payload_matches_expected(
                         payload,
-                        process=process,
                         expected_startup_id=expected_startup_id,
                         expected_generation=expected_generation,
                     ):
@@ -115,6 +115,7 @@ def _ccbd_env(
     expected_startup_id: str | None = None,
     expected_generation: int | None = None,
     keeper_startup_accepted_perf_counter_ns: int | None = None,
+    venv_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     startup_id = str(expected_startup_id or '').strip()
     generation = int(expected_generation or 0)
@@ -135,6 +136,10 @@ def _ccbd_env(
             str(accepted_ns) if accepted_ns is not None else None
         ),
     }
+    if venv_env:
+        for key, value in venv_env.items():
+            if value:
+                extra[key] = value
     env = control_plane_env(extra=extra)
     lib_root = str(Path(__file__).resolve().parents[1])
     script_root = Path(__file__).resolve().parents[2]
@@ -159,7 +164,6 @@ def _positive_diagnostics_int(value: object) -> int | None:
 def _ready_payload_matches_expected(
     payload: dict[str, object],
     *,
-    process: subprocess.Popen[bytes],
     expected_startup_id: str | None,
     expected_generation: int | None,
 ) -> bool:
@@ -178,8 +182,12 @@ def _ready_payload_matches_expected(
     diagnostics = payload.get('diagnostics')
     if not isinstance(diagnostics, dict):
         return False
+    # Do not require serving_pid == the spawner's Popen pid: on Windows the
+    # venvlauncher redirector makes Popen.pid differ from the daemon's own pid.
+    # Startup identity is proven by startup_id/generation/daemon_instance_id,
+    # so a positive serving_pid is sufficient sanity.
     return (
-        serving_pid == int(process.pid)
+        serving_pid > 0
         and serving_generation == generation
         and lifecycle_generation == generation
         and str(payload.get('accepted_startup_id') or '') == startup_id

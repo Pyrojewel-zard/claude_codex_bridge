@@ -66,6 +66,7 @@ def print_start_help(*, file=None) -> None:
               ccb -s               Safe start. Disable CLI auto-permission override.
               ccb -n               Rebuild runtime state while preserving config and managed agent history.
               ccb clear [agent...]  Send provider-native /clear to managed agent panes.
+              ccb compact [agent...] Compact context in managed agent panes using each provider's native command.
               ccb restart <agent> Restart one idle configured agent pane through ccbd.
               ccb reload            Apply a safe additive config reload, or reject with diagnostics.
               ccb reload --dry-run  Validate and plan config reload without mutation.
@@ -373,6 +374,20 @@ _COMMAND_HELP = {
           - It does not delete .ccb state, workspaces, auth, sessions, or logs.
           - Use `ccb kill` or the sidebar restart control when you need process restart.
     """,
+    "compact": """
+        usage: ccb compact [agent_name|all]...
+
+        Agent context compaction:
+          ccb compact             Compact every configured mounted agent pane.
+          ccb compact agent1      Compact one agent pane.
+          ccb compact agent1 agent2
+                                  Compact multiple agent panes.
+
+        Notes:
+          - This sends the provider-native context compaction command.
+          - It does not delete .ccb state, workspaces, auth, sessions, or logs.
+          - Providers without a verified native compaction command are reported as unsupported.
+    """,
     "restart": """
         usage: ccb restart <agent_name>
 
@@ -584,11 +599,12 @@ _COMMAND_HELP = {
           Legacy `ack` / `retry` / `resubmit` commands remain compatibility entrypoints.
     """,
     "config": """
-        usage: ccb config <validate|effective|migrate|ui> ...
+        usage: ccb config <validate|effective|migrate|approve-commands|ui> ...
 
         Config:
           ccb config validate [--json]                 Validate `.ccb/ccb.config` for the current project.
           ccb config effective --json                  Show sanitized effective config authority.
+          ccb config approve-commands                  Review and approve project command fields.
           ccb config migrate --to 3 --dry-run [--json] Preview V2-to-V3 mappings without writing.
           ccb config ui         Open the local-only project configuration panel.
           ccb config ui --no-open [--port PORT]

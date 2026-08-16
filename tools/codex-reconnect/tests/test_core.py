@@ -14,10 +14,12 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from codex_reconnect.cli import build_parser
 from codex_reconnect.network import (
+    DEFAULT_OPENAI_PROBE_URL,
     ProbeResult,
     Readiness,
     classify_readiness,
     probe_https,
+    resolve_primary_probe_url,
 )
 from codex_reconnect.paths import default_state_dir
 from codex_reconnect.policy import codex_error_class, full_jitter_delay
@@ -31,9 +33,7 @@ class NamingTests(unittest.TestCase):
     def test_public_cli_and_state_directory_use_codex_reconnect(self) -> None:
         self.assertEqual(build_parser().prog, "codex-reconnect")
         with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.dict(
-                os.environ, {"XDG_STATE_HOME": temporary}, clear=True
-            ):
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": temporary}, clear=True):
                 self.assertEqual(
                     default_state_dir(), Path(temporary) / "codex-reconnect"
                 )
@@ -53,6 +53,54 @@ class NamingTests(unittest.TestCase):
 
 
 class NetworkTests(unittest.TestCase):
+    def test_primary_probe_prefers_active_provider_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            (codex_home / "config.toml").write_text(
+                'model_provider = "custom"\n'
+                '[model_providers.custom]\n'
+                'base_url = "https://provider.example.test/v1"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                resolve_primary_probe_url(
+                    codex_home,
+                    environment={"OPENAI_BASE_URL": "https://ambient.example.test"},
+                ),
+                "https://provider.example.test/v1",
+            )
+
+    def test_primary_probe_falls_back_to_environment_then_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            self.assertEqual(
+                resolve_primary_probe_url(
+                    codex_home,
+                    environment={"OPENAI_BASE_URL": "https://ambient.example.test"},
+                ),
+                "https://ambient.example.test",
+            )
+            self.assertEqual(
+                resolve_primary_probe_url(codex_home), DEFAULT_OPENAI_PROBE_URL
+            )
+
+    def test_explicit_probe_override_remains_authoritative(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            (codex_home / "config.toml").write_text(
+                'model_provider = "custom"\n'
+                '[model_providers.custom]\n'
+                'base_url = "https://provider.example.test/v1"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                resolve_primary_probe_url(
+                    codex_home,
+                    configured_url="https://explicit.example.test/health",
+                ),
+                "https://explicit.example.test/health",
+            )
+
     def test_http_error_still_proves_https_reachability(self) -> None:
         def fail_with_http(request: object, **kwargs: object) -> object:
             raise urllib.error.HTTPError(

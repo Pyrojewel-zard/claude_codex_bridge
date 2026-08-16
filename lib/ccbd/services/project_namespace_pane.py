@@ -125,7 +125,7 @@ class ProjectNamespacePaneRecord:
         fail-closed requirements for authoritative matching.
         """
 
-        if not str(self.pane_id or '').strip().startswith('%'):
+        if not str(self.pane_id or '').strip():
             return False
         if require_alive and not self.alive:
             return False
@@ -154,9 +154,9 @@ class ProjectNamespacePaneRecord:
 
 def inspect_project_namespace_pane(backend, pane_id: str) -> ProjectNamespacePaneRecord | None:
     pane_text = str(pane_id or '').strip()
-    if not pane_text.startswith('%'):
+    if not pane_text:
         return None
-    details = _describe_pane_via_tmux(backend, pane_text)
+    details = _describe_pane_via_tmux(backend, pane_text) if pane_text.startswith('%') else None
     if details is None:
         details = _describe_pane_via_backend(backend, pane_text)
     if details is None:

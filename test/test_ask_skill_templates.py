@@ -33,16 +33,22 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
         assert '## Decision Card' in text
         assert 'Before every ask, decide:' in text
         assert 'Need delegation? If no, answer directly.' in text
-        assert '2. Result intent:' in text
+        assert '2. Dependency gate:' in text
+        assert 'Default: do not use `--chain`.' in text
+        assert 'Use `--chain` only when the current active CCB task cannot finish until' in text
+        assert 'Communication tests, batch sends, notifications, and independent work do not become chain dependencies merely because replies are requested.' in normalized
+        assert '3. Result intent:' in text
         assert '`--silence`: publish/execute task; success result not needed.' in text
         assert 'Failures,' in text and 'required next actions still surface.' in text
         assert '`--compact`: result wanted, but only distilled' in text
         assert '`+ --artifact-reply`: consultation/analysis/report where full text should' in text
         assert 'plain `ask`: short question or short handoff where inline text is enough.' in text
-        assert '`--chain`: active CCB parent job + child result required to finish.' in text
-        assert 'Combine with `--compact` or `--artifact-reply` as needed.' in text
-        assert '3. Request fidelity:' in text
+        result_section = text.split('3. Result intent:', 1)[1].split('4. Request fidelity:', 1)[0]
+        assert '`--chain`' not in result_section
+        assert '4. Request fidelity:' in text
         assert 'Prefer repo paths when the target can read files directly.' in text
+        assert 'Never add `--chain` merely to make a rejected plain ask succeed.' in text
+        assert 'Use `--chain` only for a real child dependency' in normalized
         assert 'Avoid `--silence --artifact-reply`' in text
         assert 'diagnostics-only commands' in text
         assert 'explicit debugging requests' in text
@@ -88,16 +94,22 @@ def test_powershell_ask_skill_template_uses_short_ask_command() -> None:
     assert '## Decision Card' in text
     assert 'Before every ask, decide:' in text
     assert 'Need delegation? If no, answer directly.' in text
-    assert '2. Result intent:' in text
+    assert '2. Dependency gate:' in text
+    assert 'Default: do not use `--chain`.' in text
+    assert 'Use `--chain` only when the current active CCB task cannot finish until' in text
+    assert 'Communication tests, batch sends, notifications, and independent work do not become chain dependencies merely because replies are requested.' in normalized
+    assert '3. Result intent:' in text
     assert '`--silence`: publish/execute task; success result not needed.' in text
     assert 'Failures,' in text and 'required next actions still surface.' in text
     assert '`--compact`: result wanted, but only distilled' in text
     assert '`+ --artifact-reply`: consultation/analysis/report where full text should' in text
     assert 'plain `ask`: short question or short handoff where inline text is enough.' in text
-    assert '`--chain`: active CCB parent job + child result required to finish.' in text
-    assert 'Combine with `--compact` or `--artifact-reply` as needed.' in text
-    assert '3. Request fidelity:' in text
+    result_section = text.split('3. Result intent:', 1)[1].split('4. Request fidelity:', 1)[0]
+    assert '`--chain`' not in result_section
+    assert '4. Request fidelity:' in text
     assert 'Prefer repo paths when the target can read files directly.' in text
+    assert 'Never add `--chain` merely to make a rejected plain ask succeed.' in text
+    assert 'Use `--chain` only for a real child dependency' in normalized
     assert 'Avoid `--silence --artifact-reply`' in text
     assert 'diagnostics-only commands' in text
     assert 'explicit debugging requests' in text

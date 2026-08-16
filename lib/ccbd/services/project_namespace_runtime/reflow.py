@@ -5,6 +5,7 @@ from .backend import (
     ensure_window,
     find_window,
     kill_window,
+    namespace_state_fields,
     rename_window,
     select_window,
     session_window_target,
@@ -123,11 +124,21 @@ def reflow_project_workspace(
                 workspace_window.window_id or desired_workspace_name,
             ),
         )
+    namespace_fields = namespace_state_fields(
+        context.backend,
+        session_name=context.desired_session_name,
+        tmux_socket_path=context.desired_socket_path,
+    )
+    state_tmux_socket_path = (
+        ''
+        if namespace_fields.get('namespace_backend_family') == 'herdr-native'
+        else context.desired_socket_path
+    )
     state = build_active_state(
         project_id=controller._project_id,
         current=current,
         namespace_epoch=current.namespace_epoch,
-        tmux_socket_path=context.desired_socket_path,
+        tmux_socket_path=state_tmux_socket_path,
         tmux_session_name=context.desired_session_name,
         layout_version=controller._layout_version,
         layout_signature=context.desired_layout_signature or current.layout_signature,
@@ -138,6 +149,7 @@ def reflow_project_workspace(
         workspace_epoch=next_workspace_epoch,
         ui_attachable=True,
         last_started_at=current.last_started_at,
+        **namespace_fields,
     )
     controller._state_store.save(state)
     controller._event_store.append(
@@ -146,8 +158,15 @@ def reflow_project_workspace(
             project_id=controller._project_id,
             occurred_at=controller._clock(),
             namespace_epoch=current.namespace_epoch,
-            tmux_socket_path=context.desired_socket_path,
+            tmux_socket_path=state.tmux_socket_path,
             tmux_session_name=context.desired_session_name,
+            namespace_backend_family=state.namespace_backend_family,
+            backend_impl=state.backend_impl,
+            namespace_id=state.namespace_id,
+            namespace_session_name=state.namespace_session_name,
+            namespace_ipc_kind=state.namespace_ipc_kind,
+            namespace_ipc_ref=state.namespace_ipc_ref,
+            namespace_restore_token=state.namespace_restore_token,
             details={'reason': str(reason or '').strip() or 'workspace_reflow'},
         )
     )
@@ -165,6 +184,13 @@ def reflow_project_workspace(
         workspace_window_id=namespace.workspace_window_id,
         workspace_epoch=namespace.workspace_epoch,
         ui_attachable=namespace.ui_attachable,
+        namespace_backend_family=namespace.namespace_backend_family,
+        backend_impl=namespace.backend_impl,
+        namespace_id=namespace.namespace_id,
+        namespace_session_name=namespace.namespace_session_name,
+        namespace_ipc_kind=namespace.namespace_ipc_kind,
+        namespace_ipc_ref=namespace.namespace_ipc_ref,
+        namespace_restore_token=namespace.namespace_restore_token,
         created_this_call=False,
         workspace_recreated_this_call=True,
     )

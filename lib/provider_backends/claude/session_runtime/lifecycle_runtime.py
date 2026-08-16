@@ -3,21 +3,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from provider_backends.pane_log_support.lifecycle import attach_pane_log as _attach_pane_log_impl
 from provider_backends.pane_log_support.lifecycle import ensure_pane as _ensure_pane_impl
+from provider_backends.session_authority import remember_bound_provider_session_authority
 from provider_sessions.files import safe_write_session
 
 from .auto_transfer import maybe_auto_extract_old_session
 from .pathing import ensure_work_dir_fields, now_str
 
 
-def attach_pane_log(session, backend: object, pane_id: str) -> None:
-    ensure = getattr(backend, "ensure_pane_log", None)
-    if not callable(ensure):
-        return
-    try:
-        ensure(str(pane_id))
-    except Exception:
-        pass
+def attach_pane_log(session, backend: object, pane_id: object) -> None:
+    _attach_pane_log_impl(session, backend, pane_id)
 
 
 def ensure_pane(session) -> tuple[bool, str]:
@@ -30,6 +26,7 @@ def update_claude_binding(session, *, session_path: Path | None, session_id: str
         return
 
     record_binding_change(session, change)
+    remember_bound_provider_session_authority(session.data, 'claude')
     session._write_back()
     maybe_extract_previous_binding(session, change)
 

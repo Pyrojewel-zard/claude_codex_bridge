@@ -77,6 +77,23 @@ def noop_mount_result(preserved_agents: tuple[str, ...]) -> AdditiveRuntimeMount
     )
 
 
+def deferred_mount_result(
+    requested_agents: tuple[str, ...],
+    preserved_agents: tuple[str, ...] = (),
+) -> AdditiveRuntimeMountResult:
+    return AdditiveRuntimeMountResult(
+        status='noop',
+        requested_agents=requested_agents,
+        preserved_runtime_unchanged_agents=preserved_agents,
+        diagnostics={
+            'reason': 'provider_runtime_deferred_on_herdr',
+            'runtime_mount_deferred': True,
+            'runtime_authority_scope': 'provider_runtime_on_herdr',
+            **_no_publish_diagnostics(),
+        },
+    )
+
+
 def failed_mount_result(
     *,
     reason: str,
@@ -225,6 +242,7 @@ def _no_publish_diagnostics() -> dict[str, object]:
 __all__ = [
     'AdditiveRuntimeMountResult',
     'blocked_mount_result',
+    'deferred_mount_result',
     'failed_mount_result',
     'mounted_result',
     'moved_result',

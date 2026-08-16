@@ -37,7 +37,7 @@ class StorageEntry:
     def to_record(self) -> dict[str, object]:
         return {
             'path': str(self.path),
-            'relative_path': self.relative_path,
+            'relative_path': self.relative_path.replace('\\', '/'),
             'storage_class': self.storage_class.value,
             'size_bytes': self.size_bytes,
             'provider': self.provider,

@@ -27,6 +27,7 @@ class WorkflowRuntimePolicy:
     name_template: str = 'loop-{loop_id}-{node_id}-{profile}'
     release_policy: str = 'auto'
     window_policy: str = 'auto'
+    mux_backend: str | None = None
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -41,6 +42,7 @@ class WorkflowRuntimePolicy:
             'name_template': self.name_template,
             'release_policy': self.release_policy,
             'window_policy': self.window_policy,
+            'mux_backend': self.mux_backend,
         }
 
 

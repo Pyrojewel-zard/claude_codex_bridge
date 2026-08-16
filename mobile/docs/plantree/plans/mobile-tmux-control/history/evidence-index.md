@@ -1,6 +1,20 @@
 # Mobile Tmux Control Evidence Index
 
-Date: 2026-06-29
+Date: 2026-08-12
+
+## 2026-08-12: Paseo-Aligned Provider Control Plane
+
+Evidence:
+
+- [provider-control-plane-acceptance-20260812.md](provider-control-plane-acceptance-20260812.md)
+
+Result:
+
+- Provider identity, model/thinking controls, native Codex/Claude session
+  usage, account-quota isolation, and visible session boundaries passed full
+  automated checks and the dedicated real server-wide Android Emulator matrix.
+- The implementation is directly aligned with attributed Paseo contracts at
+  pinned commit `b599d38`, while retaining CCB runtime authority.
 
 ## 2026-07-22: Public Relay Encrypted Stream Package
 

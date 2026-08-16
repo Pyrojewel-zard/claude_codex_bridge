@@ -6,6 +6,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -24,6 +25,7 @@ from .network import (
     ProbeResult,
     classify_readiness,
     probe_https,
+    resolve_primary_probe_url,
 )
 from .paths import default_state_dir
 from .policy import full_jitter_delay
@@ -481,6 +483,19 @@ class SessionEventTracker:
         turn_id = payload.get("turn_id")
         if not isinstance(turn_id, str) or not turn_id:
             return [TrackerAction("turn_complete")]
+        # Recent Codex versions attach terminal failures to task_complete
+        # instead of emitting a separate event_msg:error record. Feed that
+        # nested error through the same state used by the legacy event shape.
+        nested_error = payload.get("error")
+        if isinstance(nested_error, dict):
+            self.saw_any_error = True
+            self.any_error_turn_id = turn_id
+            error_payload = dict(nested_error)
+            error_payload["type"] = "error"
+            eligible = classify_session_error(error_payload)
+            if eligible is not None:
+                self.pending_error = eligible
+                self.pending_error_turn_id = turn_id
         self.last_completed_turn_id = turn_id
         pending_matches = self.pending_error is not None and (
             self.pending_error_turn_id is None or self.pending_error_turn_id == turn_id
@@ -536,6 +551,8 @@ class SessionEventTracker:
     def observe_terminal_log_error(
         self, turn_id: str, message: str
     ) -> list[TrackerAction]:
+        if self.incident is not None and self.incident.turn_id == turn_id:
+            return []
         if turn_id in self.terminal_error_turn_ids:
             return []
         matches_active = self.active_turn_id == turn_id
@@ -654,6 +671,10 @@ class SessionWatcher:
                         "empty_prompt_learned",
                         threadId=self.state.thread_id,
                         paneId=self.state.pane_id,
+                    )
+                else:
+                    self.prompt_learn_after = self.monotonic() + max(
+                        0.25, self.poll_interval
                     )
                 self.audit.write(
                     "watcher_started",
@@ -924,6 +945,22 @@ class SessionWatcher:
             raise WatchStopped("watcher was disabled or superseded")
         self.state = current
 
+    def _stop_for_signal(self, signum: int) -> None:
+        signal_name = signal.Signals(signum).name
+        try:
+            self._disable("off", None)
+            try:
+                self.audit.write(
+                    "watcher_stopped_by_signal",
+                    threadId=self.state.thread_id,
+                    signal=signal_name,
+                )
+            except OSError:
+                pass
+        except (OSError, TmuxWatchError):
+            pass
+        raise WatchStopped(f"watcher received {signal_name}")
+
     def _set_status(self, status: str) -> None:
         def update(current: WatchState) -> WatchState:
             if not current.enabled:
@@ -1053,6 +1090,9 @@ def classify_session_error(payload: object) -> EligibleError | None:
         for marker in (
             "server overloaded",
             "server is overloaded",
+            "selected model is at capacity",
+            "model is at capacity",
+            "model at capacity",
             "too many requests",
             "last status: 429",
         )
@@ -1086,9 +1126,7 @@ def initial_codex_log_cursor(
     _validate_sqlite_log_path(path)
     try:
         with closing(
-            sqlite3.connect(
-                path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0
-            )
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)
         ) as connection:
             _validate_sqlite_schema(connection)
             row = connection.execute(
@@ -1113,9 +1151,7 @@ def read_codex_terminal_logs(
     _validate_sqlite_log_path(path)
     try:
         with closing(
-            sqlite3.connect(
-                path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0
-            )
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)
         ) as connection:
             _validate_sqlite_schema(connection)
             rows = connection.execute(
@@ -1192,6 +1228,36 @@ def _supersede_pane_watchers(
         )
 
 
+def _supersede_restarted_pane_watcher(
+    state_path: Path, state: WatchState, context: WatchContext
+) -> bool:
+    if (
+        state.tmux_socket != str(context.tmux_socket)
+        or state.pane_id != context.pane.pane_id
+        or state.pane_pid == context.pane.pane_pid
+    ):
+        return False
+
+    def supersede(current: WatchState) -> WatchState:
+        return replace(
+            current,
+            enabled=False,
+            status="superseded",
+            updated_at=time.time(),
+            last_error=None,
+        )
+
+    modify_watch_state(state_path, state.instance_id, supersede)
+    AuditLog(_audit_path(state_path)).write(
+        "watcher_superseded_pane_restart",
+        threadId=state.thread_id,
+        paneId=state.pane_id,
+        oldPanePid=state.pane_pid,
+        newPanePid=context.pane.pane_pid,
+    )
+    return True
+
+
 def _validate_sqlite_log_path(path: Path) -> None:
     try:
         path_stat = path.lstat()
@@ -1200,7 +1266,9 @@ def _validate_sqlite_log_path(path: Path) -> None:
     except OSError as exc:
         raise TmuxWatchError(f"Codex SQLite log is not a regular file: {path}") from exc
     if path.is_symlink() and hasattr(os, "getuid") and path_stat.st_uid != os.getuid():
-        raise TmuxWatchError("Codex SQLite log symlink is not owned by the current user")
+        raise TmuxWatchError(
+            "Codex SQLite log symlink is not owned by the current user"
+        )
     if not stat.S_ISREG(target_stat.st_mode):
         raise TmuxWatchError(f"Codex SQLite log is not a regular file: {path}")
     if hasattr(os, "getuid") and target_stat.st_uid != os.getuid():
@@ -1221,7 +1289,7 @@ def _validate_sqlite_schema(connection: sqlite3.Connection) -> None:
 def enable_current(
     *,
     state_dir: Path | None = None,
-    openai_probe_url: str = DEFAULT_OPENAI_PROBE_URL,
+    openai_probe_url: str | None = None,
     public_probe_url: str | None = DEFAULT_PUBLIC_PROBE_URL,
     probe_timeout: float = 5.0,
     environment: Mapping[str, str] | None = None,
@@ -1230,6 +1298,11 @@ def enable_current(
 ) -> WatchState:
     env = os.environ if environment is None else environment
     context = current_watch_context(env, tmux_runner=tmux_runner)
+    resolved_probe_url = resolve_primary_probe_url(
+        context.codex_home,
+        configured_url=openai_probe_url,
+        environment=dict(env),
+    )
     root = Path(state_dir or default_state_dir())
     state_path = watch_state_path(root, context.thread_id)
     _secure_directory(state_path.parent)
@@ -1242,9 +1315,10 @@ def enable_current(
     if current is not None and current.enabled and _process_alive(current.watcher_pid):
         if _state_matches_context(current, context):
             return current
-        raise TmuxWatchError(
-            f"thread {context.thread_id} is already armed in pane {current.pane_id}"
-        )
+        if not _supersede_restarted_pane_watcher(state_path, current, context):
+            raise TmuxWatchError(
+                f"thread {context.thread_id} is already armed in pane {current.pane_id}"
+            )
     _supersede_pane_watchers(root, context, context.thread_id)
     log_source = initial_codex_log_cursor(context.codex_home, context.thread_id)
     instance_id = uuid.uuid4().hex
@@ -1262,7 +1336,7 @@ def enable_current(
         pane_command=context.pane.pane_command,
         session_offset=context.session_path.stat().st_size,
         watcher_pid=None,
-        openai_probe_url=openai_probe_url,
+        openai_probe_url=resolved_probe_url,
         public_probe_url=public_probe_url,
         probe_timeout=probe_timeout,
         updated_at=time.time(),
@@ -1456,9 +1530,10 @@ def _ccb_tmux_binding(environment: Mapping[str, str]) -> tuple[Path, str]:
     raw_codex_home = str(environment.get("CODEX_HOME") or "").strip()
     session_codex_home = str(payload.get("codex_home") or "").strip()
     if raw_codex_home and session_codex_home:
-        if Path(raw_codex_home).expanduser().resolve() != Path(
-            session_codex_home
-        ).expanduser().resolve():
+        if (
+            Path(raw_codex_home).expanduser().resolve()
+            != Path(session_codex_home).expanduser().resolve()
+        ):
             raise TmuxWatchError("CCB session Codex home does not match CODEX_HOME")
     return tmux_socket, pane_id
 
@@ -1599,12 +1674,25 @@ def watcher_main(
     log_cursor: int = 0,
 ) -> int:
     try:
-        return SessionWatcher(
+        watcher = SessionWatcher(
             state_file,
             instance_id,
             log_path=log_path,
             log_cursor=log_cursor,
-        ).run()
+        )
+        previous_handlers: dict[signal.Signals, Any] = {}
+
+        def stop(signum: int, _frame: Any) -> None:
+            watcher._stop_for_signal(signum)
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, stop)
+        try:
+            return watcher.run()
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
     except (OSError, ValueError, TmuxWatchError) as exc:
         print(f"codex-reconnect watcher failed: {exc}", file=sys.stderr)
         return 3

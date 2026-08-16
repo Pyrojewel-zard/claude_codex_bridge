@@ -17,6 +17,12 @@ operator: role version `0.2.0` includes `ccb-expert-reference`, role-level
 GitHub/source/manual/command/runtime/release references, and compact memory
 routing for source-backed CCB answers.
 
+The public inherited control-skill slice now also materializes
+`ccb-diagnose` (user alias `$ccb_diagnose`) beside `ccb-clear` for the managed
+Codex, Claude, Droid, Gemini, Grok, Kimi, and Qoder providers. Its workflow is
+pane-first for named-agent incidents, uses bounded recovery gates, and asks
+before any redacted GitHub issue submission.
+
 ## Last Landed
 
 - 2026-06-09: Added reviewable draft Role Pack content under
@@ -88,6 +94,11 @@ routing for source-backed CCB answers.
   [decisions/006-future-modification-guardrails.md](decisions/006-future-modification-guardrails.md):
   new behavior must use canonical `agentroles.ccb_self`, and maintenance
   heartbeat remains disabled by default unless manually enabled in config.
+- 2026-08-07: Materialized the inherited `ccb-diagnose` skill for all current
+  required-control providers, added installer/uninstaller lists and Grok
+  command permissions, and validated the projection/skill regression slice:
+  `59 passed`; all seven `quick_validate.py` checks passed; `bash -n install.sh`
+  and `git diff --check` passed.
 
 ## Active TODO
 
@@ -95,11 +106,13 @@ routing for source-backed CCB answers.
    provider-home materialization when source runtime validation is requested.
 2. Add handoff matrix tests for diagnose/recover/chain/config/comm-reply/expert
    routing.
-3. Define or implement the first structured MCP/control-plane helper surface.
+3. Define or implement the first structured MCP/control-plane helper surface
+   used by pane-first `ccb_diagnose` when a provider pane cannot be resolved.
 4. Decide whether non-self agents need a separate delegation stub; the full
    public inherited `ccb-config` source has been removed.
 5. Finish any remaining targeted/full 7.4.0 validation tied to the Role Pack
-   release line.
+   release line, including an installed-project smoke for inherited
+   `ccb-diagnose` discovery.
 
 ## Blocked By
 

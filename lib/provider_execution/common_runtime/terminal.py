@@ -23,15 +23,25 @@ def is_runtime_target_alive(backend: object, pane_id: str) -> bool:
     return False
 
 
-def interrupt_and_clear_runtime_target(backend: object, pane_id: str) -> None:
+def interrupt_and_clear_runtime_target(backend: object, pane_target: object) -> None:
     send_key = getattr(backend, 'send_key', None)
-    if not callable(send_key):
-        return
-    for key in ('C-c', 'Escape', 'C-u'):
+    if callable(send_key):
+        sent = False
+        for key in ('C-c', 'Escape', 'C-u'):
+            try:
+                result = send_key(pane_target, key)
+            except Exception:
+                continue
+            if result is not False:
+                sent = True
+        if sent:
+            return
+    send_text = getattr(backend, 'send_text', None)
+    if callable(send_text):
         try:
-            send_key(pane_id, key)
+            send_text(pane_target, '\x03\x1b\x15')
         except Exception:
-            continue
+            return
 
 
 __all__ = ['interrupt_and_clear_runtime_target', 'is_runtime_target_alive', 'send_prompt_to_runtime_target']

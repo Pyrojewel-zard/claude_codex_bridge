@@ -12,9 +12,18 @@ import threading
 from agents.config_loader import load_project_config
 from agents.models import AgentState
 from ccbd.api_models import JobStatus, TargetKind
+from platforms.windows.herdr.ccbd_surface_projection import (
+    build_herdr_runtime_surface_projection,
+    build_herdr_surface_projection,
+)
 from ccbd.models import MountState
 from ccbd.reload_drain_status import reload_drain_revision, reload_drain_status_payload
 from ccbd.project_focus.tmux import backend_for_namespace, refresh_sidebar_panes
+from ccbd.services.project_namespace_state_runtime.namespace_projection import (
+    NAMESPACE_BACKEND_FAMILY,
+    redacted_namespace_projection,
+    resolved_namespace_backend_family,
+)
 from ccbd.services.dispatcher_runtime import comms_recoverability_for_job
 from ccbd.system import parse_utc_timestamp, utc_now
 from execution_phase import derive_execution_phase, execution_phase_evidence_from_records
@@ -31,11 +40,15 @@ from provider_pane_status.claude_pane import (
 )
 from provider_pane_status.codex_session import CodexRuntimeStatus, compose_codex_runtime_status, read_codex_session_status
 from provider_pane_status.claude_session import (
+    ClaudeSessionStatus,
     ClaudeRuntimeStatus,
     claude_activity_status,
     compose_claude_runtime_status,
     read_claude_session_status,
 )
+from provider_control import provider_restart_pending_agents, read_provider_runtime_snapshot
+from provider_model_shortcuts import supported_provider_model_shortcuts
+from provider_thinking_shortcuts import provider_thinking_levels
 from storage.paths import PathLayout
 
 from .activity import (
@@ -640,6 +653,7 @@ def build_project_view(
     provider_runtime_by_agent = _provider_runtime_by_agent(deps.dispatcher)
     reload_drains = reload_drain_status_payload(deps)
     active_drain_by_agent = _active_reload_drains_by_agent(reload_drains)
+    pending_provider_restart_agents = provider_restart_pending_agents(deps.project_root)
 
     agents = [
         _agent_view(
@@ -658,6 +672,9 @@ def build_project_view(
             reload_drain=active_drain_by_agent.get(agent_name),
             codex_pane_progress=codex_pane_progress,
             claude_pane_progress=claude_pane_progress,
+            provider_restart_pending=(
+                agent_name.lower() in pending_provider_restart_agents
+            ),
         )
         for order, agent_name in enumerate(_agent_order(deps.config))
     ]
@@ -800,6 +817,7 @@ def _agent_view(
     reload_drain: dict[str, object] | None = None,
     codex_pane_progress: _CodexPaneProgressTracker | None = None,
     claude_pane_progress: _ClaudePaneProgressTracker | None = None,
+    provider_restart_pending: bool = False,
 ) -> dict[str, object]:
     spec = deps.config.agents[agent_name]
     runtime = deps.registry.get(agent_name)
@@ -823,28 +841,43 @@ def _agent_view(
     chain_child_agent = _callback_child_agent(callback_wait)
     pane_text = None
     provider_runtime_status = None
+    provider_session_status = None
     if provider_is_codex:
         pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
-        if pane_text is not None:
-            provider_runtime_status = _codex_runtime_status(
+        provider_session_status = read_codex_session_status(
+            _codex_session_root(
                 deps=deps,
                 agent_name=agent_name,
                 provider=spec.provider,
                 provider_profile=getattr(spec, 'provider_profile', None),
+            ),
+            work_dir=getattr(runtime, 'workspace_path', None) if runtime is not None else None,
+            min_mtime_s=_job_updated_epoch_for_session_floor(job),
+        )
+        if pane_text is not None:
+            provider_runtime_status = _codex_runtime_status(
+                agent_name=agent_name,
+                provider=spec.provider,
                 runtime=runtime,
                 pane_text=pane_text,
                 current_job=job,
                 generated_at=generated_at,
+                session_status=provider_session_status,
                 progress_tracker=codex_pane_progress,
             )
     elif provider_is_claude:
         pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
+        provider_session_status = read_claude_session_status(
+            _claude_transcript_path(runtime),
+            min_mtime_s=_job_updated_epoch_for_session_floor(job),
+        )
         provider_runtime_status = _claude_runtime_status(
             runtime=runtime,
             provider_activity=provider_activity,
             pane_text=pane_text,
             current_job=job,
             generated_at=generated_at,
+            session_status=provider_session_status,
             progress_tracker=claude_pane_progress,
         )
     elif provider_activity is None or _provider_activity_needs_pane_error_probe(provider_activity, generated_at):
@@ -896,7 +929,9 @@ def _agent_view(
     )
     record = {
         'name': agent_name,
+        'display_name': _agent_display_name(agent_name),
         'provider': spec.provider,
+        'provider_display_name': _display_name_token(spec.provider),
         'window': window_name,
         'order': order,
         'pane_id': getattr(runtime, 'pane_id', None) if runtime is not None else None,
@@ -913,12 +948,35 @@ def _agent_view(
         'workspace_path': getattr(runtime, 'workspace_path', None) if runtime is not None else None,
         'reload_drain': dict(reload_drain) if reload_drain is not None else None,
         'dispatch_blocked_by_reload_drain': reload_drain is not None,
+        'provider_control': _provider_control_record(
+            spec=spec,
+            runtime=runtime,
+            session_status=provider_session_status,
+            project_root=deps.project_root,
+            agent_name=agent_name,
+            restart_pending=provider_restart_pending,
+        ),
     }
     if provider_runtime is not None:
         record['provider_runtime'] = provider_runtime
+    projection = build_herdr_runtime_surface_projection(runtime)
+    if projection is not None:
+        record['herdr_surface_projection'] = projection
     if provider_runtime_status is not None:
         record['provider_runtime_status'] = provider_runtime_status.to_record()
     return record
+
+
+def _agent_display_name(agent_name: object) -> str:
+    return _display_name_token(agent_name)
+
+
+def _display_name_token(value: object) -> str:
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    words = text.replace('_', ' ').replace('-', ' ').split()
+    return ' '.join(word[:1].upper() + word[1:].lower() for word in words)
 
 
 def _is_codex_provider(provider: object) -> bool:
@@ -994,14 +1052,13 @@ def _provider_activity_is_current(provider_activity, *, job) -> bool:
 
 def _codex_runtime_status(
     *,
-    deps: ProjectViewDependencies,
     agent_name: str,
     provider: str,
-    provider_profile: object | None,
     runtime: object | None,
     pane_text: str | None,
     current_job,
     generated_at: str,
+    session_status,
     progress_tracker: _CodexPaneProgressTracker | None = None,
 ) -> CodexRuntimeStatus | None:
     if not _is_codex_provider(provider):
@@ -1010,16 +1067,6 @@ def _codex_runtime_status(
     pane_status = parse_codex_pane_status(
         pane_text,
         pane_dead=pane_state in {'missing', 'dead'},
-    )
-    session_status = read_codex_session_status(
-        _codex_session_root(
-            deps=deps,
-            agent_name=agent_name,
-            provider=provider,
-            provider_profile=provider_profile,
-        ),
-        work_dir=getattr(runtime, 'workspace_path', None) if runtime is not None else None,
-        min_mtime_s=_job_updated_epoch_for_session_floor(current_job),
     )
     raw_status = compose_codex_runtime_status(pane_status, session_status)
     if progress_tracker is not None:
@@ -1078,13 +1125,10 @@ def _claude_runtime_status(
     pane_text: str | None,
     current_job,
     generated_at: str,
+    session_status: ClaudeSessionStatus,
     progress_tracker: _ClaudePaneProgressTracker | None = None,
 ) -> ClaudeRuntimeStatus:
     activity_status = claude_activity_status(provider_activity, now=generated_at)
-    session_status = read_claude_session_status(
-        _claude_transcript_path(runtime),
-        min_mtime_s=_job_updated_epoch_for_session_floor(current_job),
-    )
     pane_state = _clean_pane_state(getattr(runtime, 'pane_state', None) if runtime is not None else None)
     pane_status = parse_claude_pane_status(
         pane_text,
@@ -1105,6 +1149,85 @@ def _claude_runtime_status(
             generated_at=generated_at,
         )
     return raw_status
+
+
+def _provider_control_record(
+    *,
+    spec,
+    runtime,
+    session_status,
+    project_root: Path,
+    agent_name: str,
+    restart_pending: bool = False,
+) -> dict[str, object]:
+    provider = str(getattr(spec, 'provider', '') or '').strip().lower()
+    session_path = None
+    if provider == 'codex':
+        session_path = getattr(session_status, 'latest_session_path', None)
+    elif provider == 'claude':
+        session_path = getattr(session_status, 'session_path', None)
+    snapshot = read_provider_runtime_snapshot(
+        provider,
+        session_path,
+        fallback_session_id=(
+            getattr(runtime, 'session_id', None)
+            if runtime is not None
+            else None
+        ),
+        project_root=project_root,
+        agent=agent_name,
+    )
+    configured_model = _clean_text(getattr(spec, 'model', None))
+    configured_thinking = _clean_text(getattr(spec, 'thinking', None))
+    model_shortcut = provider in set(supported_provider_model_shortcuts())
+    thinking_options = list(provider_thinking_levels(provider))
+    active_model = snapshot.active_model
+    active_thinking = snapshot.active_thinking
+    pending_model = (
+        configured_model
+        if configured_model is not None
+        and (
+            restart_pending
+            or (active_model is not None and configured_model != active_model)
+        )
+        else None
+    )
+    pending_thinking = (
+        configured_thinking
+        if configured_thinking is not None
+        and (
+            restart_pending
+            or (active_thinking is not None and configured_thinking != active_thinking)
+        )
+        else None
+    )
+    return {
+        'schema_version': 1,
+        'provider': provider,
+        'configured_model': configured_model,
+        'configured_thinking': configured_thinking,
+        'active_model': active_model,
+        'active_thinking': active_thinking,
+        'pending_model': pending_model,
+        'pending_thinking': pending_thinking,
+        'restart_pending': bool(restart_pending),
+        'session_id': snapshot.session_id,
+        'runtime_source': snapshot.source,
+        'runtime_revision': snapshot.source_revision,
+        'usage': snapshot.usage.to_record() if snapshot.usage is not None else None,
+        'capabilities': {
+            'model_catalog': model_shortcut,
+            'model_select': model_shortcut,
+            'thinking_select': bool(thinking_options),
+            'session_usage': provider in {'codex', 'claude'},
+            'account_quota': provider in {'codex', 'claude'},
+        },
+        'thinking_options': thinking_options,
+        # CCB launches both providers through managed tmux processes. A model
+        # mutation is persisted and then explicitly restarted; it is never
+        # presented as a live switch until the native runtime confirms one.
+        'mutation_mode': 'restart_required' if model_shortcut else 'unsupported',
+    }
 
 
 def _claude_transcript_path(runtime: object | None) -> Path | None:
@@ -1302,15 +1425,51 @@ def _namespace_view(*, config, sidebar_view_result, namespace, focus: dict[str, 
     sidebar['view'] = sidebar_view.to_record()
     if sidebar_view_error is not None:
         sidebar['view_error'] = sidebar_view_error
-    return {
+    namespace_projection = _redacted_namespace_view_projection(namespace)
+    record = {
         'epoch': namespace.namespace_epoch if namespace is not None else None,
         'socket_path': namespace.tmux_socket_path if namespace is not None else None,
         'session_name': namespace.tmux_session_name if namespace is not None else None,
+        **namespace_projection,
         'active_window': focus.get('active_window') or config.entry_window,
         'active_pane_id': focus.get('active_pane_id'),
         'entry_window': config.entry_window,
         'sidebar': sidebar,
     }
+    projection = _namespace_herdr_surface_projection(namespace)
+    if projection is not None:
+        record['herdr_surface_projection'] = projection
+    return record
+
+
+def _redacted_namespace_view_projection(namespace) -> dict[str, object]:
+    if namespace is None:
+        return {}
+    return redacted_namespace_projection(
+        {
+            'namespace_backend_family': getattr(namespace, 'namespace_backend_family', None),
+            'backend_impl': getattr(namespace, 'backend_impl', None),
+            'namespace_id': getattr(namespace, 'namespace_id', None),
+            'namespace_session_name': (
+                getattr(namespace, 'namespace_session_name', None)
+                or getattr(namespace, 'tmux_session_name', None)
+            ),
+            'namespace_ipc_kind': getattr(namespace, 'namespace_ipc_kind', None),
+            'namespace_ipc_ref': getattr(namespace, 'namespace_ipc_ref', None),
+            'namespace_restore_token': getattr(namespace, 'namespace_restore_token', None),
+        }
+    )
+
+
+def _namespace_herdr_surface_projection(namespace) -> dict[str, object] | None:
+    if namespace is None:
+        return None
+    namespace_ref = getattr(namespace, 'namespace_ref', None)
+    evidence = {
+        'backend_impl': getattr(namespace, 'backend_impl', None),
+        'namespace_ref': namespace_ref() if callable(namespace_ref) else None,
+    }
+    return build_herdr_surface_projection(evidence)
 
 
 def _current_sidebar_view(deps: ProjectViewDependencies):
@@ -1362,6 +1521,8 @@ def _tmux_snapshot(context: _ProjectViewBuildContext) -> dict[str, dict[str, obj
 
 def _collect_tmux_project_view_facts(context: _ProjectViewBuildContext) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
     namespace = context.namespace
+    if not _namespace_has_tmux_project_view_facts(namespace):
+        return {}, {}
     backend = context.namespace_backend()
     if namespace is None or backend is None:
         return {}, {}
@@ -1423,6 +1584,16 @@ def _collect_tmux_project_view_facts(context: _ProjectViewBuildContext) -> tuple
             continue
         result.setdefault(window_name, {})['sidebar_pane_id'] = pane_id
     return dict(focus), result
+
+
+def _namespace_has_tmux_project_view_facts(namespace) -> bool:
+    if namespace is None:
+        return False
+    family = resolved_namespace_backend_family(
+        getattr(namespace, 'backend_impl', None),
+        getattr(namespace, 'namespace_backend_family', None),
+    )
+    return family == NAMESPACE_BACKEND_FAMILY
 
 
 def _parse_tmux_project_view_outputs(

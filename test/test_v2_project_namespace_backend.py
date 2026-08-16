@@ -2,19 +2,34 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from ccbd.services.project_namespace_runtime.backend import (
+    apply_pane_identity,
+    kill_server,
+    kill_window,
     create_window,
     create_session,
     ensure_server_policy,
     ensure_window,
     find_window,
     list_windows,
+    namespace_state_fields,
     prepare_server,
+    remember_namespace_state_ref,
+    respawn_pane,
     session_alive,
+    split_pane,
     wait_for_root_pane,
+    window_root_pane,
+)
+from terminal_runtime.mux_backend_contract import (
+    MuxCommandErrorV2,
+    make_capabilities,
+    make_namespace_ref,
+    make_pane_ref,
 )
 from terminal_runtime.tmux_readiness import TmuxTransientServerUnavailable
 
@@ -101,6 +116,382 @@ class _FlakyBackend:
                 stderr='',
             )
         return subprocess.CompletedProcess(['tmux', *key], 0, stdout='', stderr='')
+
+
+class _FakeHerdrNamespaceBackend:
+    backend_impl = 'herdr'
+
+    def __init__(self, *, pane_spawn_status: str = 'supported') -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.namespace: dict[str, object] | None = None
+        self.windows: dict[str, dict[str, object]] = {}
+        self.panes: dict[str, dict[str, object]] = {}
+        self.pane_spawn_status = pane_spawn_status
+
+    def capabilities(self) -> dict[str, object]:
+        status = {
+            'session_attach': 'supported',
+            'pane_spawn': self.pane_spawn_status,
+            'send_input': 'supported',
+            'read_output': 'supported',
+            'kill_pane': 'supported',
+            'workspace_create': 'supported',
+            'workspace_list': 'supported',
+            'workspace_focus': self.pane_spawn_status,
+            'workspace_close': 'supported',
+            'workspace_metadata': 'supported',
+            'pane_metadata': 'supported',
+            'pane_list': 'supported',
+            'pane_split': 'supported',
+            'pane_run': 'supported',
+        }
+        return make_capabilities(
+            backend_impl='herdr',
+            command_status=status,  # type: ignore[arg-type]
+            semantic_status=status,  # type: ignore[arg-type]
+        )
+
+    def prepare_server(self) -> None:
+        self.calls.append(('prepare_server', None))
+
+    def ensure_server_policy(self) -> None:
+        self.calls.append(('ensure_server_policy', None))
+
+    def create_session(self, *, project_id: str, cwd: str, title: str) -> dict[str, object]:
+        self.calls.append(('create_session', {'project_id': project_id, 'cwd': cwd, 'title': title}))
+        self.namespace = make_namespace_ref(
+            backend_impl='herdr',
+            namespace_id='workspace-1',
+            session_name=title,
+            ipc_kind='herdr_socket',
+            ipc_ref='herdr://workspace-1',
+            restore_token='restore-1',
+        )
+        self.windows[title] = {'window_id': 'window-control', 'window_name': title, 'active': False}
+        return self.namespace
+
+    def namespace_ref(self, session_name: str, namespace_id: str) -> dict[str, object]:
+        self.calls.append(('namespace_ref', {'session_name': session_name, 'namespace_id': namespace_id}))
+        return make_namespace_ref(
+            backend_impl='herdr',
+            namespace_id=namespace_id,
+            session_name=session_name,
+            ipc_kind='herdr_socket',
+            ipc_ref=f'herdr://{namespace_id}',
+            restore_token=f'restore-{session_name}',
+        )
+
+    def list_windows(self, namespace: dict[str, object]) -> list[dict[str, object]]:
+        self.calls.append(('list_windows', namespace))
+        return list(self.windows.values())
+
+    def ensure_window(
+        self,
+        namespace: dict[str, object],
+        *,
+        window_name: str,
+        cwd: str,
+        select: bool,
+    ) -> dict[str, object]:
+        self.calls.append(('ensure_window', {'namespace': namespace, 'window_name': window_name, 'cwd': cwd, 'select': select}))
+        record = self.windows.setdefault(
+            window_name,
+            {'window_id': f'window-{len(self.windows) + 1}', 'window_name': window_name, 'active': False},
+        )
+        record['active'] = bool(select)
+        return record
+
+    def window_root_pane(self, namespace: dict[str, object], *, window_name: str) -> dict[str, object]:
+        self.calls.append(('window_root_pane', {'namespace': namespace, 'window_name': window_name}))
+        pane = make_pane_ref(
+            backend_impl='herdr',
+            pane_id='herdr-pane-root',
+            session_name=str(namespace['session_name']),
+            window_name=window_name,
+        )
+        self.panes[pane['pane_id']] = pane
+        return pane
+
+    def split_pane(
+        self,
+        pane: dict[str, object],
+        *,
+        direction: str = 'right',
+        percent: int = 50,
+        command: list[str] | None = None,
+        cwd: str = '',
+        env: dict[str, str] | None = None,
+        title: str = '',
+    ) -> dict[str, object]:
+        self.calls.append(('split_pane', {'pane': pane, 'direction': direction, 'percent': percent, 'command': command, 'cwd': cwd, 'env': env, 'title': title}))
+        child = make_pane_ref(
+            backend_impl='herdr',
+            pane_id='herdr-pane-child',
+            session_name=str(pane['session_name']),
+            window_name=pane.get('window_name'),  # type: ignore[arg-type]
+        )
+        self.panes[child['pane_id']] = child
+        return child
+
+    def respawn_pane(
+        self,
+        pane: dict[str, object],
+        *,
+        command: list[str],
+        cwd: str,
+        env: dict[str, str],
+    ) -> None:
+        self.calls.append(('respawn_pane', {'pane': pane, 'command': command, 'cwd': cwd, 'env': env}))
+
+    def set_pane_identity(
+        self,
+        pane: dict[str, object],
+        *,
+        title: str,
+        agent_label: str,
+        project_id: str,
+        order_index: int | None,
+        is_cmd: bool,
+        role: str | None,
+        slot_key: str | None,
+        window_name: str | None,
+        sidebar_instance: str | None,
+        session_id: str | None,
+        namespace_epoch: int | None,
+        managed_by: str | None,
+        provider_kind: str | None,
+    ) -> None:
+        self.calls.append(
+            (
+                'set_pane_identity',
+                {
+                    'pane': pane,
+                    'title': title,
+                    'agent_label': agent_label,
+                    'project_id': project_id,
+                    'order_index': order_index,
+                    'is_cmd': is_cmd,
+                    'role': role,
+                    'slot_key': slot_key,
+                    'window_name': window_name,
+                    'sidebar_instance': sidebar_instance,
+                    'session_id': session_id,
+                    'namespace_epoch': namespace_epoch,
+                    'managed_by': managed_by,
+                    'provider_kind': provider_kind,
+                },
+            )
+        )
+
+    def kill_window(self, namespace: dict[str, object], *, window_id: str | None, target: str) -> None:
+        self.calls.append(('kill_window', {'namespace': namespace, 'window_id': window_id, 'target': target}))
+
+    def destroy_namespace(self, namespace: dict[str, object]) -> None:
+        self.calls.append(('destroy_namespace', namespace))
+
+    def kill_server(self, namespace: dict[str, object]) -> None:
+        self.calls.append(('kill_server', namespace))
+
+    def namespace_alive(self, namespace: dict[str, object]) -> bool:
+        self.calls.append(('namespace_alive', namespace))
+        if namespace.get('backend_impl') != 'herdr':
+            raise MuxCommandErrorV2(
+                category='invalid-request',
+                backend_impl='herdr',
+                operation='session_alive',
+                detail='invalid Herdr namespace ref',
+            )
+        return True
+
+
+def test_v2_mux_backend_helpers_use_namespace_refs_without_tmux_fallback(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend()
+
+    prepare_server(backend)
+    create_session(backend, session_name='ccb-herdr', project_root=tmp_path, window_name='cmd')
+    ensure_server_policy(backend)
+    workspace = ensure_window(
+        backend,
+        session_name='ccb-herdr',
+        window_name='workspace',
+        project_root=tmp_path,
+        select=True,
+    )
+    windows = list_windows(backend, 'ccb-herdr')
+    found = find_window(backend, session_name='ccb-herdr', window_name='workspace')
+    root_pane = window_root_pane(backend, target_window='ccb-herdr:workspace')
+    child_pane = split_pane(
+        backend,
+        target=root_pane,
+        direction='right',
+        percent=50,
+        project_root=tmp_path,
+    )
+    respawn_pane(backend, pane_id=child_pane, command='echo ready', cwd=str(tmp_path))
+    apply_pane_identity(
+        backend,
+        pane_id=child_pane,
+        title='agent1',
+        agent_label='agent1',
+        project_id='proj-herdr',
+        slot_key='agent1',
+        window_name='workspace',
+        namespace_epoch=1,
+        managed_by='ccbd',
+    )
+    kill_window(backend, target='ccb-herdr:workspace')
+    assert kill_server(backend) is True
+
+    assert workspace.window_id == 'window-2'
+    assert [window.window_name for window in windows] == ['ccb-herdr', 'workspace']
+    assert found is not None
+    assert found.window_name == 'workspace'
+    assert root_pane == 'herdr-pane-root'
+    assert child_pane == 'herdr-pane-child'
+    assert not hasattr(backend, '_tmux_run')
+    assert [call[0] for call in backend.calls] == [
+        'prepare_server',
+        'create_session',
+        'ensure_server_policy',
+        'ensure_window',
+        'list_windows',
+        'list_windows',
+        'window_root_pane',
+        'split_pane',
+        'respawn_pane',
+        'set_pane_identity',
+        'kill_window',
+        'destroy_namespace',
+    ]
+
+
+def test_v2_mux_backend_helpers_rebuild_namespace_ref_for_requested_session(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend()
+    create_session(backend, session_name='ccb-old', project_root=tmp_path, window_name='cmd')
+
+    ensure_window(
+        backend,
+        session_name='ccb-new',
+        window_name='workspace',
+        project_root=tmp_path,
+        select=True,
+    )
+
+    ensure_call = backend.calls[-1]
+    assert ensure_call[0] == 'ensure_window'
+    assert ensure_call[1]['namespace']['session_name'] == 'ccb-new'  # type: ignore[index]
+    assert ('namespace_ref', {'session_name': 'ccb-new', 'namespace_id': 'ccb-new'}) in backend.calls
+
+
+def test_namespace_state_fields_rejects_cached_namespace_ref_for_different_session(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend()
+    create_session(backend, session_name='ccb-old', project_root=tmp_path, window_name='cmd')
+
+    fields = namespace_state_fields(
+        backend,
+        session_name='ccb-new',
+        tmux_socket_path='',
+    )
+
+    assert fields['namespace_backend_family'] == 'tmux-family'
+    assert fields['namespace_session_name'] is None
+    assert fields['namespace_restore_token'] is None
+
+
+def test_namespace_ref_aliases_do_not_retain_replaced_session(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend()
+    create_session(backend, session_name='ccb-old', project_root=tmp_path, window_name='cmd')
+    create_session(backend, session_name='ccb-new', project_root=tmp_path, window_name='cmd')
+
+    old_fields = namespace_state_fields(
+        backend,
+        session_name='ccb-old',
+        tmux_socket_path='',
+    )
+    new_fields = namespace_state_fields(
+        backend,
+        session_name='ccb-new',
+        tmux_socket_path='',
+    )
+
+    assert old_fields['namespace_restore_token'] is None
+    assert new_fields['namespace_session_name'] == 'ccb-new'
+    assert new_fields['namespace_restore_token'] == 'restore-1'
+
+
+def test_blank_namespace_ref_clears_previous_aliases(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend()
+    create_session(backend, session_name='ccb-old', project_root=tmp_path, window_name='cmd')
+
+    remember_namespace_state_ref(
+        backend,
+        SimpleNamespace(
+            tmux_session_name='',
+            namespace_ref=lambda: {
+                'backend_family': 'herdr-native',
+                'backend_impl': 'herdr',
+                'namespace_id': 'w-blank',
+                'session_name': '',
+                'ipc_kind': 'herdr_socket',
+                'ipc_ref': 'herdr://blank',
+                'restore_token': 'blank-token',
+            },
+        ),
+    )
+    fields = namespace_state_fields(
+        backend,
+        session_name='ccb-old',
+        tmux_socket_path='',
+    )
+
+    assert fields['namespace_session_name'] is None
+    assert fields['namespace_restore_token'] is None
+
+
+def test_herdr_backend_ignores_stale_tmux_namespace_state(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend()
+    remember_namespace_state_ref(
+        backend,
+        SimpleNamespace(
+            tmux_session_name='ccb-proj',
+            namespace_backend_family='tmux-family',
+            backend_impl='tmux',
+            namespace_ref=lambda: {
+                'backend_family': 'tmux-family',
+                'backend_impl': 'tmux',
+                'namespace_id': 'ccb-proj',
+                'session_name': 'ccb-proj',
+                'ipc_kind': 'psmux',
+                'ipc_ref': str(tmp_path / 'tmux.sock'),
+                'restore_token': None,
+            },
+        ),
+    )
+
+    assert session_alive(backend, 'ccb-proj') is True
+    assert ('namespace_ref', {'session_name': 'ccb-proj', 'namespace_id': 'ccb-proj'}) in backend.calls
+    alive_call = backend.calls[-1]
+    assert alive_call[0] == 'namespace_alive'
+    assert alive_call[1]['backend_impl'] == 'herdr'  # type: ignore[index]
+
+
+def test_v2_mux_backend_helper_capability_gap_fails_closed(tmp_path: Path) -> None:
+    backend = _FakeHerdrNamespaceBackend(pane_spawn_status='unsupported')
+    create_session(backend, session_name='ccb-herdr', project_root=tmp_path, window_name='cmd')
+
+    with pytest.raises(MuxCommandErrorV2) as exc_info:
+        ensure_window(
+            backend,
+            session_name='ccb-herdr',
+            window_name='workspace',
+            project_root=tmp_path,
+            select=True,
+        )
+
+    assert exc_info.value.category == 'unsupported'
+    assert exc_info.value.operation == 'ensure_window'
+    assert exc_info.value.evidence['unsupported_capabilities'] == ['workspace_focus']
+    assert [call[0] for call in backend.calls] == ['create_session']
 
 
 def test_prepare_server_then_create_session_and_server_policy_retry_transient_tmux_failures(monkeypatch, tmp_path: Path) -> None:

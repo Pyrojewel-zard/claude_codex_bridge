@@ -181,6 +181,38 @@ def test_usable_project_namespace_binding_accepts_declared_secondary_window() ->
     assert usable.tmux_window_name == 'review'
 
 
+def test_usable_project_namespace_binding_accepts_mux_runtime_ref_with_mux_pane_id() -> None:
+    binding = AgentBinding(
+        runtime_ref='mux:w7V:p3',
+        session_ref='session-41',
+        pane_id='w7V:p3',
+        active_pane_id='w7V:p3',
+        pane_state='unknown',
+        terminal='mux',
+    )
+
+    usable = usable_project_namespace_binding(
+        binding,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        workspace_window_id='@0',
+        agent_name='agent1',
+        project_id='proj-1',
+        window_name='main',
+        namespace_epoch=7,
+        assigned_pane_id='w7V:p3',
+        namespace_pane_records=None,
+        tmux_backend_factory=lambda socket_path=None: (_ for _ in ()).throw(
+            AssertionError('mux snapshot binding must not require tmux inspection')
+        ),
+        inspect_project_namespace_pane_fn=lambda backend, pane_id: None,
+        same_tmux_socket_path_fn=lambda left, right: False,
+    )
+
+    assert usable is not None
+    assert usable is binding
+
+
 def test_usable_project_namespace_binding_rejects_wrong_declared_window_or_epoch() -> None:
     binding = AgentBinding(
         runtime_ref='tmux:%41',

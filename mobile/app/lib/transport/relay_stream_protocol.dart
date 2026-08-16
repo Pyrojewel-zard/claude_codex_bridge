@@ -1,9 +1,9 @@
 import 'dart:convert';
 
 const relayInnerProtocolVersion = 1;
-const relayStreamInitialWindowBytes = 256 * 1024;
-const relayStreamMaxWindowBytes = 2 * 1024 * 1024;
 const relayStreamMaxMessageBytes = 512 * 1024;
+const relayStreamInitialWindowBytes = relayStreamMaxMessageBytes;
+const relayStreamMaxWindowBytes = 2 * 1024 * 1024;
 
 enum RelayInnerKind {
   request('request'),
@@ -198,6 +198,9 @@ const _unaryOperations = {
   'device',
   'list_projects',
   'get_project_view',
+  'get_agent_provider_control',
+  'get_agent_provider_quota',
+  'update_agent_provider_settings',
   'focus_agent',
   'focus_window',
   'terminal_history',
@@ -205,6 +208,8 @@ const _unaryOperations = {
   'submit_agent_message',
   'lifecycle',
   'open_terminal',
+  'open_host_terminal',
+  'terminate_host_terminal',
 };
 
 const _streamOperations = {

@@ -1,6 +1,49 @@
 # Mobile Tmux Control Implementation Status
 
-Date: 2026-07-22
+Date: 2026-08-12
+
+## Paseo-Aligned Provider Control Plane — Implemented And Accepted
+
+The source and Flutter implementation now expose selected-agent Provider,
+active/configured/pending model and thinking state, bounded Codex/Claude native
+session usage, a capability-driven model sheet, and separately loaded account
+quota. Model/thinking changes are scope-protected and fenced by project epoch,
+Provider identity, runtime revision, config revision, and idempotency key; the
+current truthful apply mode is `restart_required` and never auto-restarts an
+active task. Direct HTTP and encrypted Relay carry the same fixed contract.
+
+Paseo alignment is pinned to `getpaseo/paseo` commit `b599d38`; provenance and
+source-to-target mapping are recorded in `mobile/THIRD_PARTY_NOTICES.md` and
+[Decision 025](decisions/025-paseo-provider-control-alignment.md). The real
+server-wide Android Emulator matrix passed for dedicated Codex and Claude
+agents, including selection, native session usage, stale-mutation rejection,
+state isolation, and a retained-history `New context` divider. Full Flutter
+tests, analyze, debug/profile APK builds, and focused Python suites pass. The
+full non-blackbox Python run passed 6657 tests; its sole unrelated two-worker
+workflow smoke race passed immediately when rerun in isolation. See
+[the acceptance record](history/provider-control-plane-acceptance-20260812.md).
+
+## LAN Network Awareness And Recovery — Implemented, Physical Gate Pending
+
+The Android LAN reliability gap is now closed at source/build level. The app
+uses coarse, non-identifying network evidence to warn before a LAN claim and
+to explain reconnecting LAN routes; it preserves the paired profile, exposes
+Retry plus authenticated Diagnostics, and lets phone-hotspot users continue
+explicitly. Terminal WebSockets now use a 15-second client ping interval so a
+silent Wi-Fi half-open enters the existing cursor-resume path without input
+replay. Computer-side onboarding and the mobile README cover same-network,
+hotspot, guest/client isolation, VPN, firewall, and DHCP address changes.
+
+Verification on 2026-08-02: Flutter analyze passed; the full Flutter suite
+passed `736` tests with `1` existing skip; LAN/mobile Python CLI selection
+passed `34` tests with `52` deselected; and a debug APK built successfully.
+The APK is 179,363,174 bytes with SHA-256
+`0d960b2aabcf8834b7ccc50aa7189ad66fc4d3fd0b36d3f6fe93a43b5b7ae30c`,
+and packaged-permission inspection includes `ACCESS_NETWORK_STATE`.
+
+Release acceptance remains gated on the physical Android Wi-Fi/hotspot/
+guest-isolation/VPN/DHCP-change matrix recorded in
+[the LAN topic](topics/lan-network-awareness-and-recovery.md).
 
 ## Public Relay Packages A-D — In Progress
 

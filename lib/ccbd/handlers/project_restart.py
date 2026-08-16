@@ -3,17 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents.models import normalize_agent_name
+
 from ccbd.reload_runtime_mount_start import call_start_flow_for_additive_mount, start_options
 from ccbd.start_flow import run_start_flow
 from hapi_integration.command import hapi_enabled
-from provider_backends.pane_log_support.lifecycle_common import attach_pane_log
-from provider_backends.pane_log_support.lifecycle_recovery import respawn_existing_pane
-from provider_backends.pane_log_support.session import now_str
 from provider_core.registry import build_default_session_binding_map
-from provider_core.session_binding_evidence_runtime.loading import binding_search_roots, load_provider_session
+from provider_core.session_binding_evidence_runtime.loading import (
+    binding_search_roots,
+    load_provider_session,
+)
 from rolepacks.runtime_lookup import load_installed_role, tree_digest
 from rolepacks.sources import installed_role_metadata
-from terminal_runtime import TmuxBackend
+
+from ccbd.services.start_policy import recovery_start_options
 
 
 RESTART_PANES_REASON = 'manual_restart_panes'
@@ -83,6 +85,20 @@ def build_project_restart_agent_handler(app):
 
         result = dict(results[0]) if results else {'agent': agent_name, 'status': 'failed', 'reason': 'no_result'}
         restarted = str(result.get('status') or '') == 'restarted'
+        deferred = str(result.get('status') or '') in {'deferred', 'unsupported'}
+        if deferred:
+            return {
+                'status': 'unsupported',
+                'restart_status': 'deferred',
+                'agent_name': agent_name,
+                'restartable_agents': list(_configured_agent_names(app)),
+                'reason': str(result.get('reason') or 'deferred_to_provider_runtime_on_herdr'),
+                'busy_gate': busy_gate,
+                'old_runtime': old_runtime,
+                'new_runtime': _runtime_evidence(app.registry.get(agent_name)),
+                'result': result,
+                'recreate_reason': RESTART_AGENT_REASON,
+            }
         return {
             'status': 'ok' if restarted else 'failed',
             'restart_status': 'ok' if restarted else 'failed',
@@ -103,6 +119,22 @@ def build_project_restart_panes_handler(app):
     def handle(payload: dict) -> tuple[dict, object]:
         del payload
         agent_names = tuple(app.config.agents)
+        namespace = _load_project_namespace_or_none(app)
+        if _namespace_is_herdr(namespace):
+            results = _herdr_restart_deferred_results(agent_names, namespace=namespace)
+            restart_evidence = _herdr_restart_deferred_evidence(namespace, result_count=len(results))
+            return {
+                'status': 'unsupported',
+                'restart_status': 'deferred',
+                'agent_names': list(agent_names),
+                'restart_mode': 'provider_runtime_required',
+                'reason': 'deferred_to_provider_runtime_on_herdr',
+                'backend_impl': 'herdr',
+                'namespace_backend_family': getattr(namespace, 'namespace_backend_family', 'herdr-native'),
+                'restart_evidence': restart_evidence,
+                'results': list(results),
+                'recreate_reason': RESTART_PANES_REASON,
+            }, lambda: None
 
         def _after_response() -> None:
             try:
@@ -273,21 +305,71 @@ def restart_project_agent_panes_in_place(app, *, agent_names: tuple[str, ...]) -
     namespace = app.project_namespace.load()
     if namespace is None:
         raise RuntimeError('project namespace is not mounted')
-    backend = TmuxBackend(socket_path=namespace.tmux_socket_path)
+    if _namespace_is_herdr(namespace):
+        return _herdr_restart_deferred_results(agent_names, namespace=namespace)
     results: list[dict[str, object]] = []
     for agent_name in agent_names:
-        results.append(
-            _restart_agent_pane(
-                app,
-                backend=backend,
-                namespace=namespace,
-                agent_name=str(agent_name),
-            )
-        )
+        results.append(_restart_agent_pane(app, namespace=namespace, agent_name=str(agent_name)))
     return tuple(results)
 
 
-def _restart_agent_pane(app, *, backend, namespace, agent_name: str) -> dict[str, object]:
+def _load_project_namespace_or_none(app):
+    loader = getattr(getattr(app, 'project_namespace', None), 'load', None)
+    if not callable(loader):
+        return None
+    try:
+        return loader()
+    except Exception:
+        return None
+
+
+def _namespace_is_herdr(namespace) -> bool:
+    if namespace is None:
+        return False
+    return (
+        str(getattr(namespace, 'backend_impl', '') or '').strip() == 'herdr'
+        or str(getattr(namespace, 'namespace_backend_family', '') or '').strip() == 'herdr-native'
+    )
+
+
+def _herdr_restart_deferred_results(agent_names: tuple[str, ...], *, namespace) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            'agent': str(agent_name),
+            'status': 'deferred',
+            'reason': 'deferred_to_provider_runtime_on_herdr',
+            'backend_impl': 'herdr',
+            'namespace_backend_family': getattr(namespace, 'namespace_backend_family', 'herdr-native'),
+            'restart_mode': 'provider_runtime_required',
+            'restart_evidence': _herdr_restart_deferred_evidence(namespace, agent_name=str(agent_name)),
+        }
+        for agent_name in agent_names
+    )
+
+
+def _herdr_restart_deferred_evidence(
+    namespace,
+    *,
+    agent_name: str | None = None,
+    result_count: int | None = None,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        'backend_impl': 'herdr',
+        'namespace_backend_family': getattr(namespace, 'namespace_backend_family', 'herdr-native'),
+        'restart_surface': 'provider_runtime_required',
+        'restart_status': 'deferred',
+        'reason': 'deferred_to_provider_runtime_on_herdr',
+        'respawn_evidence': 'not_attempted',
+        'session_binding_evidence': 'not_attempted',
+    }
+    if agent_name is not None:
+        evidence['agent'] = agent_name
+    if result_count is not None:
+        evidence['result_count'] = result_count
+    return evidence
+
+
+def _restart_agent_pane(app, *, namespace, agent_name: str) -> dict[str, object]:
     runtime = app.registry.get(agent_name)
     session = _load_agent_provider_session(app, agent_name=agent_name, runtime=runtime)
     pane_id = _restart_pane_id(runtime=runtime, session=session)
@@ -305,25 +387,56 @@ def _restart_agent_pane(app, *, backend, namespace, agent_name: str) -> dict[str
             agent_name=agent_name,
             pane_id=pane_id,
         )
-    start_cmd = str(getattr(session, 'start_cmd', '') or '').strip()
-    if not start_cmd:
-        return {'agent': agent_name, 'status': 'skipped', 'reason': 'start_cmd_missing'}
-    error = respawn_existing_pane(
-        session,
-        backend,
-        pane_id,
-        start_cmd=start_cmd,
-        respawn=getattr(backend, 'respawn_pane', None),
-        now_str_fn=now_str,
-        attach_pane_log_fn=attach_pane_log,
-    )
-    if error is not None:
-        return {'agent': agent_name, 'status': 'failed', 'reason': error, 'pane_id': pane_id}
-    refreshed = app.runtime_service.refresh_provider_binding(agent_name, recover=True)
+    supervisor = getattr(app, 'runtime_supervisor', None)
+    start = getattr(supervisor, 'start', None)
+    if not callable(start):
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': 'runtime_supervisor_missing',
+            'pane_id': pane_id,
+        }
+    restore, auto_permission = _restart_start_options(app)
+    try:
+        summary = start(
+            agent_names=(agent_name,),
+            restore=restore,
+            auto_permission=auto_permission,
+            cleanup_tmux_orphans=False,
+            interactive_tmux_layout=True,
+            restart_agent_panes={agent_name: pane_id},
+            recreate_reason=RESTART_AGENT_REASON,
+        )
+    except Exception as exc:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': f'restart_start_failed: {exc}',
+            'pane_id': pane_id,
+        }
+    result = _find_start_result(summary, agent_name)
+    if result is None:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': 'restart_start_result_missing',
+            'pane_id': pane_id,
+        }
+    result_status = str(getattr(result, 'action', '') or '').strip().lower()
+    result_health = str(getattr(result, 'health', '') or '').strip().lower()
+    if result_status in {'failed', 'blocked', 'degraded'} or result_health in {'failed', 'degraded'}:
+        return {
+            'agent': agent_name,
+            'status': 'failed',
+            'reason': f'restart_start_{result_status or result_health or "unknown"}',
+            'pane_id': pane_id,
+        }
+    refreshed = app.registry.get(agent_name)
     return {
         'agent': agent_name,
         'status': 'restarted',
         'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id),
+        'action': str(getattr(result, 'action', '') or '').strip() or 'relaunched',
     }
 
 
@@ -362,6 +475,25 @@ def _restart_hapi_agent_generation(app, *, namespace, agent_name: str, pane_id: 
         'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id),
         'launch_generation': 'fresh',
     }
+
+
+def _restart_start_options(app) -> tuple[bool, bool]:
+    store = getattr(app, 'start_policy_store', None)
+    try:
+        policy = store.load() if store is not None else None
+    except Exception:
+        policy = None
+    if policy is None:
+        # Match the normal `ccb start` defaults when no recovery policy exists.
+        return True, True
+    return recovery_start_options(policy)
+
+
+def _find_start_result(summary, agent_name: str):
+    for result in tuple(getattr(summary, 'agent_results', ()) or ()):
+        if str(getattr(result, 'agent_name', '') or '').strip() == agent_name:
+            return result
+    return None
 
 
 def _restart_pane_id(*, runtime, session) -> str | None:

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 import json
 
 from .common import cleanup_csv, render_tmux_cleanup_summaries
-from .ops_views_common import binding_line
+from .ops_views_common import binding_line, herdr_surface_lines
 
 
 def render_agent_lifecycle(summary) -> tuple[str, ...]:
@@ -458,6 +458,7 @@ def render_layout(summary) -> tuple[str, ...]:
                 f'session={namespace.get("tmux_session_name", "")} '
                 f'workspace={namespace.get("workspace_window_name", "")}'
             )
+            lines.extend(herdr_surface_lines(namespace.get('herdr_surface_projection')))
     for window in tuple(payload.get('windows') or ()):
         if not isinstance(window, Mapping):
             continue
@@ -627,6 +628,36 @@ def render_clear(summary) -> tuple[str, ...]:
         if reason:
             detail += f' reason={reason}'
         lines.append(f'clear_agent: {detail}')
+    return tuple(lines)
+
+
+def render_compact(summary) -> tuple[str, ...]:
+    results = tuple(summary.get('results', ()) or ()) if isinstance(summary, Mapping) else ()
+    compacted_count = sum(1 for item in results if item.get('status') == 'compacted')
+    skipped_count = sum(1 for item in results if item.get('status') == 'skipped')
+    blocked_count = sum(1 for item in results if item.get('status') == 'blocked')
+    unsupported_count = sum(1 for item in results if item.get('status') == 'unsupported')
+    failed_count = sum(1 for item in results if item.get('status') == 'failed')
+    lines = [
+        f'compact_status: {summary.get("status", "unknown") if isinstance(summary, Mapping) else "unknown"}',
+        f'compacted_count: {compacted_count}',
+        f'skipped_count: {skipped_count}',
+        f'blocked_count: {blocked_count}',
+        f'unsupported_count: {unsupported_count}',
+        f'failed_count: {failed_count}',
+    ]
+    for item in results:
+        agent = str(item.get('agent') or '')
+        status = str(item.get('status') or '')
+        provider = str(item.get('provider') or '')
+        pane_id = str(item.get('pane_id') or '')
+        reason = str(item.get('reason') or '')
+        command = str(item.get('command') or '')
+        detail = f'compact_agent: agent={agent} status={status}'
+        for key, value in (('provider', provider), ('pane_id', pane_id), ('command', command), ('reason', reason)):
+            if value:
+                detail += f' {key}={value}'
+        lines.append(detail)
     return tuple(lines)
 
 
@@ -1146,6 +1177,7 @@ def render_ps(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'project_id: {payload["project_id"]}',
         f'ccbd_state: {payload["ccbd_state"]}',
     ]
+    lines.extend(herdr_surface_lines(payload.get('herdr_surface_projection')))
     for agent in payload['agents']:
         lines.append(
             f'agent: name={agent["agent_name"]} state={agent["state"]} provider={agent["provider"]} queue={agent["queue_depth"]}'
@@ -1156,6 +1188,7 @@ def render_ps(payload: Mapping[str, object]) -> tuple[str, ...]:
 
 __all__ = [
     'render_clear',
+    'render_compact',
     'render_cleanup',
     'render_config_validate',
     'render_doctor_bundle',

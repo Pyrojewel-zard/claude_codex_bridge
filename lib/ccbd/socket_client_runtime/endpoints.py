@@ -203,6 +203,10 @@ def _payload_project_clear_context(agent_names: tuple[str, ...] = ()) -> dict:
     return {'agent_names': [str(item) for item in tuple(agent_names or ()) if str(item).strip()]}
 
 
+def _payload_project_compact_context(agent_names: tuple[str, ...] = ()) -> dict:
+    return {'agent_names': [str(item) for item in tuple(agent_names or ()) if str(item).strip()]}
+
+
 def _payload_project_focus_window(window: str, *, namespace_epoch: int | None = None) -> dict:
     payload = {'window': window}
     if namespace_epoch is not None:
@@ -280,6 +284,7 @@ client_endpoints = {
     'project_restart_panes': ('project_restart_panes', _payload_project_restart_panes),
     'project_restart_agent': ('project_restart_agent', _payload_project_restart_agent),
     'project_clear_context': ('project_clear_context', _payload_project_clear_context),
+    'project_compact_context': ('project_compact_context', _payload_project_compact_context),
     'project_reload_config': ('project_reload_config', _payload_project_reload_config),
     'project_focus_window': ('project_focus_window', _payload_project_focus_window),
     'project_focus_agent': ('project_focus_agent', _payload_project_focus_agent),

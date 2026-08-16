@@ -41,7 +41,7 @@ class InstallTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn("0.3.3", version.stdout)
+            self.assertIn("0.3.6", version.stdout)
             subprocess.run(
                 install,
                 cwd=TOOL_ROOT,

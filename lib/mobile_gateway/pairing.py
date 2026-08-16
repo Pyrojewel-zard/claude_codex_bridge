@@ -887,6 +887,54 @@ class MobileGatewayPairingStore:
             )
             return updated
 
+    def revoke_host_terminal_handles(
+        self,
+        *,
+        device_id: str,
+        client_session_id: str,
+        reason: str = 'host_shell_terminated',
+    ) -> int:
+        requested_device = str(device_id or '').strip()
+        requested_session = str(client_session_id or '').strip()
+        if not requested_device or not requested_session:
+            raise MobileGatewayPairingError(
+                'host terminal device and client session are required',
+                status_code=400,
+                reason='invalid_host_terminal_target',
+            )
+        now = _iso(self._clock())
+        count = 0
+        with self._lock:
+            for record in self._terminal_state_by_id().values():
+                target_summary = record.get('target_summary')
+                if not isinstance(target_summary, dict):
+                    continue
+                if str(record.get('device_id') or '') != requested_device:
+                    continue
+                if str(record.get('project_id') or '') != '@host':
+                    continue
+                if str(target_summary.get('kind') or '') != 'host_shell':
+                    continue
+                if str(target_summary.get('client_session_id') or '') != requested_session:
+                    continue
+                if record.get('revoked_at') or record.get('closed_at'):
+                    continue
+                updated = dict(record)
+                updated['revoked_at'] = now
+                updated['revoked_reason'] = str(reason or 'host_shell_terminated')
+                _append_jsonl(self.terminal_tokens_path, updated)
+                count += 1
+                self._append_audit(
+                    event='terminal_revoked',
+                    result='ok',
+                    project_id='@host',
+                    device_id=requested_device,
+                    terminal_id=str(record.get('terminal_id') or ''),
+                    client_session_id=requested_session,
+                    reason=updated['revoked_reason'],
+                )
+        return count
+
     def _pairing_state_by_id(self) -> dict[str, dict[str, object]]:
         state: dict[str, dict[str, object]] = {}
         if not self.pairing_tokens_path.exists():

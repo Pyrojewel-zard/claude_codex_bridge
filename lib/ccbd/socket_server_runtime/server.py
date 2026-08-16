@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import queue
 import threading
+
+from ccbd.control_plane_transport import endpoint_from_legacy_socket_path
+from ccbd.control_plane_transport.factory import transport_for_legacy_socket_path
+from platforms.windows.control_plane.tcp import WindowsTcpControlPlaneTransport
 
 from .bootstrap_probe import bootstrap_readiness_probe
 from .lifecycle import listen_server, shutdown_server
@@ -11,6 +16,10 @@ from .protocol import handle_connection
 
 
 _CONNECTION_QUEUE_MAXSIZE = 128
+
+
+def _is_windows() -> bool:
+    return os.name == 'nt'
 
 
 class CcbdSocketServer:
@@ -27,12 +36,29 @@ class CcbdSocketServer:
         'project_restart_agent',
         'project_restart_panes',
         'project_clear_context',
+        'project_compact_context',
         'stop-all',
         'frontdesk_forward_planner',
     })
 
-    def __init__(self, socket_path: str | Path) -> None:
+    def __init__(self, socket_path: str | Path, *, control_plane_transport=None) -> None:
         self._socket_path = Path(socket_path)
+        if control_plane_transport is None:
+            transport = transport_for_legacy_socket_path(
+                self._socket_path,
+                prefer_windows=_is_windows(),
+            )
+            if _is_windows() and not isinstance(transport, WindowsTcpControlPlaneTransport):
+                transport = WindowsTcpControlPlaneTransport(None, legacy_socket_path=self._socket_path)
+            self._control_plane_transport = transport
+        else:
+            self._control_plane_transport = control_plane_transport
+        endpoint = getattr(self._control_plane_transport, 'endpoint', None)
+        self._control_plane_endpoint = (
+            dict(endpoint)
+            if isinstance(endpoint, dict)
+            else endpoint_from_legacy_socket_path(self._socket_path)
+        )
         self._handlers: dict[str, callable] = {}
         self._request_guard = None
         self._server = None
@@ -55,6 +81,10 @@ class CcbdSocketServer:
     @property
     def socket_path(self) -> Path:
         return self._socket_path
+
+    @property
+    def control_plane_endpoint(self) -> dict:
+        return dict(self._control_plane_endpoint)
 
     def register_handler(self, op: str, handler) -> None:
         if op in self._handlers:

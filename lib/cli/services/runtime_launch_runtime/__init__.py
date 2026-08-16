@@ -4,10 +4,13 @@ from .session_files import launch_session_id, pane_title_marker, session_filenam
 from .tmux_runtime import (
     best_effort_kill_tmux_pane,
     create_detached_tmux_pane,
-    launch_tmux_runtime,
+    launch_runtime,
     pane_meets_minimum_size,
     prepare_detached_tmux_server,
 )
+
+# 向后兼容别名
+launch_tmux_runtime = launch_runtime
 
 __all__ = [
     "best_effort_kill_tmux_pane",
@@ -15,8 +18,9 @@ __all__ = [
     "cleanup_stale_tmux_binding",
     "create_detached_tmux_pane",
     "ensure_agent_runtime",
+    "launch_runtime",
     "launch_session_id",
-    "launch_tmux_runtime",
+    "launch_tmux_runtime",  # backward compat alias
     "pane_meets_minimum_size",
     "pane_title_marker",
     "prepare_detached_tmux_server",

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 
+import '../../app/chat_background.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
 import '../../models/ccb_agent.dart';
 import '../../models/ccb_project.dart';
@@ -9,6 +10,7 @@ import '../../models/ccb_window.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/selected_agent_workspace.dart';
+import '../provider_control/provider_control_sheet.dart';
 import '../terminal/agent_terminal_workspace.dart';
 import '../../cache/mobile_snapshot_store.dart';
 import 'gateway_reconnecting_banner.dart';
@@ -53,6 +55,7 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
   const ProjectHomeServerProjectListHost({
     required this.projects,
     required this.onRefreshProjects,
+    required this.onOpenTerminal,
     required this.onOpenSettings,
     required this.onOpenProject,
     this.unreadProjectIds = const {},
@@ -62,6 +65,7 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
 
   final List<CcbProject> projects;
   final VoidCallback onRefreshProjects;
+  final VoidCallback onOpenTerminal;
   final VoidCallback onOpenSettings;
   final ValueChanged<CcbProject> onOpenProject;
   final Set<String> unreadProjectIds;
@@ -87,6 +91,12 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
                       tooltip: strings.refreshProjects,
                       onPressed: onRefreshProjects,
                       icon: const Icon(Icons.refresh),
+                    ),
+                    IconButton(
+                      key: const ValueKey('project-list-terminal-action'),
+                      tooltip: strings.openTerminal,
+                      onPressed: onOpenTerminal,
+                      icon: const Icon(Icons.terminal),
                     ),
                     IconButton(
                       key: const ValueKey('project-list-settings-action'),
@@ -219,6 +229,8 @@ class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
     this.conversationRefreshToken = 0,
     this.reconnectRetryIn,
     this.onRetryConnection,
+    this.terminalMode,
+    this.onTerminalModeChanged,
     super.key,
   });
 
@@ -245,6 +257,8 @@ class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
   final int conversationRefreshToken;
   final Duration? reconnectRetryIn;
   final VoidCallback? onRetryConnection;
+  final bool? terminalMode;
+  final ValueChanged<bool>? onTerminalModeChanged;
 
   @override
   State<ProjectHomeMobileChatScaffoldHost> createState() =>
@@ -255,16 +269,16 @@ class _ProjectHomeMobileChatScaffoldHostState
     extends State<ProjectHomeMobileChatScaffoldHost> {
   final SelectedAgentWorkspaceController _workspaceController =
       SelectedAgentWorkspaceController();
-  var _terminalMode = false;
-  var _terminalActivated = false;
+  var _localTerminalMode = false;
+
+  bool get _terminalMode => widget.terminalMode ?? _localTerminalMode;
 
   @override
   void didUpdateWidget(covariant ProjectHomeMobileChatScaffoldHost oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.view.project.id != widget.view.project.id ||
         widget.selectedAgent == null) {
-      _terminalMode = false;
-      _terminalActivated = false;
+      _localTerminalMode = false;
     }
     if (oldWidget.conversationRefreshToken != widget.conversationRefreshToken) {
       _workspaceController.refreshLatest();
@@ -286,7 +300,9 @@ class _ProjectHomeMobileChatScaffoldHostState
             : _terminalMode
             ? _showChat
             : _showTerminal;
-    return Scaffold(
+    final hasBackground = ccbWorkspaceBackgroundEnabled(context);
+    final scaffold = Scaffold(
+      backgroundColor: hasBackground ? Colors.transparent : null,
       body: SafeArea(
         child: Padding(
           key: const ValueKey('project-chat-screen'),
@@ -302,6 +318,7 @@ class _ProjectHomeMobileChatScaffoldHostState
                   onExpandAgents: widget.onExpandAgents,
                   onRefreshConversation: _workspaceController.refreshLatest,
                   onOpenTerminal: terminalAction,
+                  onOpenProviderControl: _providerControlAction,
                   terminalMode: _terminalMode,
                   onShowChat: _showChat,
                   onOpenConnectionDetails: widget.onOpenConnectionDetails,
@@ -309,11 +326,13 @@ class _ProjectHomeMobileChatScaffoldHostState
               else ...[
                 ProjectChatHeader(
                   view: widget.view,
+                  selectedAgent: selectedAgent,
                   onBack: widget.onBack,
                   onRefreshConversation: _workspaceController.refreshLatest,
                   onOpenTerminal: terminalAction,
                   terminalMode: _terminalMode,
                   onShowChat: _showChat,
+                  onOpenProviderControl: _providerControlAction,
                   onOpenConnectionDetails: widget.onOpenConnectionDetails,
                 ),
                 const SizedBox(height: 4),
@@ -376,7 +395,7 @@ class _ProjectHomeMobileChatScaffoldHostState
                     TickerMode(
                       enabled: _terminalMode,
                       child:
-                          _terminalActivated && selectedAgent != null
+                          _terminalMode && selectedAgent != null
                               ? AgentTerminalWorkspace(
                                 key: const ValueKey(
                                   'project-agent-terminal-mode',
@@ -387,6 +406,8 @@ class _ProjectHomeMobileChatScaffoldHostState
                                 terminalTransport: widget.terminalTransport,
                                 gatewayTerminal: widget.usePaneInputForMessages,
                                 active: _terminalMode,
+                                onUserScrollDirectionChanged:
+                                    widget.onTimelineScrollDirectionChanged,
                               )
                               : const SizedBox.shrink(),
                     ),
@@ -398,6 +419,7 @@ class _ProjectHomeMobileChatScaffoldHostState
         ),
       ),
     );
+    return CcbWorkspaceBackground(terminal: _terminalMode, child: scaffold);
   }
 
   void _showTerminal() {
@@ -430,19 +452,52 @@ class _ProjectHomeMobileChatScaffoldHostState
       );
       return;
     }
-    setState(() {
-      _terminalActivated = true;
-      _terminalMode = true;
-    });
+    _setTerminalMode(true);
+    widget.onCollapseAgents();
   }
 
   void _showChat() {
     if (!_terminalMode) {
       return;
     }
+    _setTerminalMode(false);
+  }
+
+  void _setTerminalMode(bool value) {
+    final callback = widget.onTerminalModeChanged;
+    if (callback != null) {
+      callback(value);
+      return;
+    }
     setState(() {
-      _terminalMode = false;
+      _localTerminalMode = value;
     });
+  }
+
+  VoidCallback? get _providerControlAction {
+    if (widget.selectedAgent == null ||
+        widget.selectedAgent!.providerControl == null ||
+        widget.repository is! MobileCcbProviderControlRepository) {
+      return null;
+    }
+    return _showProviderControl;
+  }
+
+  Future<void> _showProviderControl() async {
+    final agent = widget.selectedAgent;
+    final repository = widget.repository;
+    if (agent == null || repository is! MobileCcbProviderControlRepository) {
+      return;
+    }
+    final changed = await showProviderControlSheet(
+      context,
+      repository: repository as MobileCcbProviderControlRepository,
+      projectId: widget.view.project.id,
+      agent: agent,
+    );
+    if (changed) {
+      await widget.onRefreshView();
+    }
   }
 
   void _handleWindowSelected(String windowName) {
@@ -471,6 +526,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     required this.onExpandAgents,
     required this.onRefreshConversation,
     required this.onOpenTerminal,
+    required this.onOpenProviderControl,
     required this.terminalMode,
     required this.onShowChat,
     required this.onOpenConnectionDetails,
@@ -483,6 +539,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
   final VoidCallback onExpandAgents;
   final VoidCallback onRefreshConversation;
   final VoidCallback? onOpenTerminal;
+  final VoidCallback? onOpenProviderControl;
   final bool terminalMode;
   final VoidCallback onShowChat;
   final VoidCallback onOpenConnectionDetails;
@@ -542,6 +599,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
                                 selectedWindow: selectedWindow,
                                 selectedAgent: selectedAgent,
                                 agentCount: view.agents.length,
+                                pendingLabel: strings.providerPendingShort,
                               ),
                               key: const ValueKey(
                                 'mobile-agent-switcher-summary',
@@ -559,6 +617,14 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
                 ),
               ),
             ),
+            if (onOpenProviderControl != null)
+              IconButton(
+                key: const ValueKey('agent-provider-control-action'),
+                tooltip: strings.providerControl,
+                visualDensity: VisualDensity.compact,
+                onPressed: onOpenProviderControl,
+                icon: const Icon(Icons.tune),
+              ),
             IconButton(
               key: const ValueKey('mobile-agent-switcher-expand-action'),
               tooltip: 'Show agents',
@@ -623,6 +689,7 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     required CcbWindow? selectedWindow,
     required CcbAgent? selectedAgent,
     required int agentCount,
+    required String pendingLabel,
   }) {
     final agent = selectedAgent;
     if (agent == null) {
@@ -632,7 +699,13 @@ class _MobileCollapsedProjectBar extends StatelessWidget {
     if (window == null) {
       return agent.name;
     }
-    return '${window.label} / ${agent.name}';
+    final control = agent.providerControl;
+    final provider =
+        control == null
+            ? providerLabel(agent.provider)
+            : providerIdentityText(control);
+    final pending = control?.hasPendingChange == true ? ' · $pendingLabel' : '';
+    return '${window.label} / ${agent.name} · $provider$pending';
   }
 }
 
@@ -666,6 +739,8 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
     this.conversationRefreshToken = 0,
     this.reconnectRetryIn,
     this.onRetryConnection,
+    this.terminalMode = false,
+    this.onShowChat,
     super.key,
   });
 
@@ -697,72 +772,82 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
   final int conversationRefreshToken;
   final Duration? reconnectRetryIn;
   final VoidCallback? onRetryConnection;
+  final bool terminalMode;
+  final VoidCallback? onShowChat;
 
   @override
   Widget build(BuildContext context) {
-    final sidebars = switch (sidebarState) {
-      WideSidebarState.expanded => <Widget>[
-        SizedBox(
-          width: projectHomeWideProjectColumnWidth,
-          child: WideProjectColumn(
-            view: view,
-            selectedAgent: selectedAgent,
-            onProjectSelected: onOpenProject,
-            onOpenNotifications: onOpenNotifications,
-            onOpenConnectionDetails: onOpenConnectionDetails,
-            hasUnreadTaskCompletion: hasUnreadTaskCompletion,
-            hasWorkingAgents: hasWorkingAgents,
-          ),
-        ),
-        const VerticalDivider(width: 1),
-        SizedBox(
-          width: projectHomeWideAgentColumnWidth,
-          child: WideAgentColumn(
-            view: view,
-            selectedAgentName: selectedAgent?.name,
-            unreadAgentNames: unreadAgentNames,
-            onAgentSelected: onAgentSelected,
-          ),
-        ),
-      ],
-      WideSidebarState.projectCollapsed => <Widget>[
-        SizedBox(
-          width: projectHomeWideAgentColumnWidth,
-          child: WideAgentColumn(
-            view: view,
-            selectedAgentName: selectedAgent?.name,
-            unreadAgentNames: unreadAgentNames,
-            onShowProjects: onShowProjects,
-            onAgentSelected: onAgentSelected,
-          ),
-        ),
-      ],
-      WideSidebarState.allCollapsed => <Widget>[
-        SizedBox(
-          width: projectHomeWideCollapsedSidebarWidth,
-          child: WideCollapsedSidebarRail(
-            view: view,
-            selectedAgent: selectedAgent,
-            onExpand: onShowProjects,
-            onOpenNotifications: onOpenNotifications,
-            onOpenConnectionDetails: onOpenConnectionDetails,
-          ),
-        ),
-      ],
-    };
-    return Scaffold(
+    final activeAgent = selectedAgent;
+    final terminalUsesFullWidth = terminalMode && activeAgent != null;
+    final sidebars =
+        terminalUsesFullWidth
+            ? const <Widget>[]
+            : switch (sidebarState) {
+              WideSidebarState.expanded => <Widget>[
+                SizedBox(
+                  width: projectHomeWideProjectColumnWidth,
+                  child: WideProjectColumn(
+                    view: view,
+                    selectedAgent: selectedAgent,
+                    onProjectSelected: onOpenProject,
+                    onOpenNotifications: onOpenNotifications,
+                    onOpenConnectionDetails: onOpenConnectionDetails,
+                    hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+                    hasWorkingAgents: hasWorkingAgents,
+                  ),
+                ),
+                const VerticalDivider(width: 1),
+                SizedBox(
+                  width: projectHomeWideAgentColumnWidth,
+                  child: WideAgentColumn(
+                    view: view,
+                    selectedAgentName: selectedAgent?.name,
+                    unreadAgentNames: unreadAgentNames,
+                    onAgentSelected: onAgentSelected,
+                  ),
+                ),
+              ],
+              WideSidebarState.projectCollapsed => <Widget>[
+                SizedBox(
+                  width: projectHomeWideAgentColumnWidth,
+                  child: WideAgentColumn(
+                    view: view,
+                    selectedAgentName: selectedAgent?.name,
+                    unreadAgentNames: unreadAgentNames,
+                    onShowProjects: onShowProjects,
+                    onAgentSelected: onAgentSelected,
+                  ),
+                ),
+              ],
+              WideSidebarState.allCollapsed => <Widget>[
+                SizedBox(
+                  width: projectHomeWideCollapsedSidebarWidth,
+                  child: WideCollapsedSidebarRail(
+                    view: view,
+                    selectedAgent: selectedAgent,
+                    onExpand: onShowProjects,
+                    onOpenNotifications: onOpenNotifications,
+                    onOpenConnectionDetails: onOpenConnectionDetails,
+                  ),
+                ),
+              ],
+            };
+    final hasBackground = ccbWorkspaceBackgroundEnabled(context);
+    final scaffold = Scaffold(
+      backgroundColor: hasBackground ? Colors.transparent : null,
       body: SafeArea(
         child: Row(
           key: const ValueKey('wide-project-workspace'),
           children: [
             ...sidebars,
-            WideSidebarDragHandle(
-              sidebarState: sidebarState,
-              onToggle: onToggleSidebar,
-              onHorizontalDragStart: onHorizontalDragStart,
-              onHorizontalDragUpdate: onHorizontalDragUpdate,
-              onHorizontalDragEnd: onHorizontalDragEnd,
-            ),
+            if (!terminalUsesFullWidth)
+              WideSidebarDragHandle(
+                sidebarState: sidebarState,
+                onToggle: onToggleSidebar,
+                onHorizontalDragStart: onHorizontalDragStart,
+                onHorizontalDragUpdate: onHorizontalDragUpdate,
+                onHorizontalDragEnd: onHorizontalDragEnd,
+              ),
             Expanded(
               child: Padding(
                 key: const ValueKey('wide-project-chat-screen'),
@@ -771,14 +856,35 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                   children: [
                     ProjectChatHeader(
                       view: view,
+                      selectedAgent: selectedAgent,
                       onBack: null,
+                      terminalMode: terminalMode,
+                      onShowChat: onShowChat,
                       onOpenTerminal:
-                          selectedAgent == null
+                          selectedAgent == null || terminalMode
                               ? null
                               : () {
                                 onOpenTerminal(selectedAgent!.name);
                               },
                       onOpenConnectionDetails: onOpenConnectionDetails,
+                      onOpenProviderControl:
+                          selectedAgent?.providerControl != null &&
+                                  repository
+                                      is MobileCcbProviderControlRepository
+                              ? () async {
+                                final changed = await showProviderControlSheet(
+                                  context,
+                                  repository:
+                                      repository
+                                          as MobileCcbProviderControlRepository,
+                                  projectId: view.project.id,
+                                  agent: selectedAgent!,
+                                );
+                                if (changed) {
+                                  await onRefreshView();
+                                }
+                              }
+                              : null,
                     ),
                     if (onRetryConnection != null) ...[
                       const SizedBox(height: 4),
@@ -790,22 +896,36 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                     ],
                     const SizedBox(height: 4),
                     Expanded(
-                      child: SelectedAgentWorkspace(
-                        repository: repository,
-                        terminalTransport: terminalTransport,
-                        usePaneInputForMessages: usePaneInputForMessages,
-                        view: view,
-                        agent: selectedAgent,
-                        enableComposerCollapse: false,
-                        onRefreshView: onRefreshView,
-                        onUserScrollDirectionChanged: null,
-                        onProjectActivity: onProjectActivity,
-                        snapshotStore: snapshotStore,
-                        snapshotNamespace: snapshotNamespace,
-                        sendEnabled: sendEnabled,
-                        sendDisabledReason: sendDisabledReason,
-                        refreshToken: conversationRefreshToken,
-                      ),
+                      child:
+                          terminalMode && activeAgent != null
+                              ? AgentTerminalWorkspace(
+                                key: const ValueKey(
+                                  'wide-project-agent-terminal-mode',
+                                ),
+                                repository: repository,
+                                view: view,
+                                agent: activeAgent,
+                                terminalTransport: terminalTransport,
+                                gatewayTerminal: usePaneInputForMessages,
+                                active: true,
+                              )
+                              : SelectedAgentWorkspace(
+                                repository: repository,
+                                terminalTransport: terminalTransport,
+                                usePaneInputForMessages:
+                                    usePaneInputForMessages,
+                                view: view,
+                                agent: selectedAgent,
+                                enableComposerCollapse: false,
+                                onRefreshView: onRefreshView,
+                                onUserScrollDirectionChanged: null,
+                                onProjectActivity: onProjectActivity,
+                                snapshotStore: snapshotStore,
+                                snapshotNamespace: snapshotNamespace,
+                                sendEnabled: sendEnabled,
+                                sendDisabledReason: sendDisabledReason,
+                                refreshToken: conversationRefreshToken,
+                              ),
                     ),
                   ],
                 ),
@@ -815,5 +935,6 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
         ),
       ),
     );
+    return CcbWorkspaceBackground(terminal: terminalMode, child: scaffold);
   }
 }

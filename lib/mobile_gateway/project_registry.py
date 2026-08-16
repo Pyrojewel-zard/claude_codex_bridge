@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from ccbd.socket_client import CcbdClient
+from ccbd.control_plane_transport.endpoint_store import read_endpoint
 from storage.atomic import atomic_write_json
 
 
@@ -164,7 +165,7 @@ def discover_running_mobile_gateway_projects(
             socket_path = _ccbd_socket_path_for_project(project_root)
         except Exception:
             continue
-        if not socket_path.is_socket():
+        if not _control_plane_endpoint_is_structurally_valid(socket_path):
             continue
         discovered[project_id] = MobileGatewayProject(
             project_id=project_id,
@@ -213,7 +214,7 @@ def _project_from_record(record: dict[str, object]) -> MobileGatewayProject | No
     socket_path = Path(socket_text).expanduser()
     if not project_root.is_absolute() or not socket_path.is_absolute():
         return None
-    if not project_root.exists() or not socket_path.is_socket():
+    if not project_root.exists() or not _control_plane_endpoint_is_structurally_valid(socket_path):
         return None
     display_name = str(record.get('display_name') or '').strip() or None
     return MobileGatewayProject(
@@ -276,6 +277,30 @@ def _ccbd_socket_path_for_project(project_root: Path) -> Path:
     from storage.paths import PathLayout
 
     return PathLayout(project_root).ccbd_socket_path
+
+
+def _control_plane_endpoint_is_structurally_valid(socket_path: Path) -> bool:
+    # Linux, macOS, and WSL use the POSIX Unix-socket transport. Native Windows
+    # uses a regular-file marker plus a tcp_loopback descriptor. Keep those
+    # representations disjoint because CcbdClient selects transport by host OS.
+    if os.name != 'nt':
+        return socket_path.is_socket()
+    if not socket_path.is_file():
+        return False
+    try:
+        endpoint = read_endpoint(socket_path)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(endpoint, dict):
+        return False
+    if endpoint.get('kind') != 'tcp_loopback':
+        return False
+    # token 是 Windows TCP 控制平面认证的必要项，缺失则 CcbdClient 必然连不上。
+    if not str(endpoint.get('token_ref') or endpoint.get('auth_ref') or '').strip():
+        return False
+    # tcp_loopback 仅允许 127.0.0.1（与 WindowsTcpControlPlaneTransport 安全模型一致）。
+    host = str(endpoint.get('host') or '').strip() or '127.0.0.1'
+    return host == '127.0.0.1'
 
 
 __all__ = [

@@ -12,6 +12,7 @@ permissions:
 jobs:
   linux-x86_64:
     name: Linux x86_64 sidebar helper
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     runs-on: ubuntu-22.04
 
     steps:

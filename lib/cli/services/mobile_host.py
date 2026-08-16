@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import signal
 import shlex
 import shutil
 import socket
@@ -43,9 +44,14 @@ MOBILE_HOST_STOP_TIMEOUT_S = 2.0
 MOBILE_HOST_PORT_RELEASE_TIMEOUT_S = 3.0
 MOBILE_HOST_HEALTH_TIMEOUT_S = 10.0
 MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S = 2.0
+MOBILE_HOST_STATE_READY_TIMEOUT_S = MOBILE_HOST_HEALTH_TIMEOUT_S
 
 
 class MobileHostServiceError(RuntimeError):
+    pass
+
+
+class _MobileHostShutdown(RuntimeError):
     pass
 
 
@@ -120,6 +126,7 @@ def start_or_replace_mobile_host_service(
     monotonic_fn: Callable[[], float] = time.monotonic,
     lock_wait_timeout_s: float = MOBILE_HOST_LOCK_WAIT_TIMEOUT_S,
     rotate_pairing: bool = False,
+    force_restart: bool = False,
 ) -> MobileHostServiceResult:
     try:
         parsed_listen = parse_listen_address(
@@ -160,7 +167,7 @@ def start_or_replace_mobile_host_service(
                 state_dir=paths.state_dir,
                 process_cmdline_fn=process_cmdline_fn,
             ):
-                if _mobile_host_state_matches_request(
+                if not force_restart and _mobile_host_state_matches_request(
                     state,
                     listen=listen,
                     public_url=public_url,
@@ -274,10 +281,14 @@ def start_or_replace_mobile_host_service(
             if pid > 0:
                 _terminate_managed_mobile_host(pid, terminate_pid_tree_fn=terminate_pid_tree_fn)
             raise
-        state = _matching_spawned_state(
-            read_mobile_host_service_state(paths.state_path),
+        state = _wait_for_mobile_host_state_ready(
+            paths,
+            process=process,
             pid=pid,
             generation=generation,
+            timeout_s=MOBILE_HOST_STATE_READY_TIMEOUT_S,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
         )
         return MobileHostServiceResult(
             status='replaced' if replaced_pid is not None else 'started',
@@ -295,6 +306,61 @@ def start_or_replace_mobile_host_service(
         )
     finally:
         _release_mobile_host_lock(paths.lock_path, lock_fd)
+
+
+def restart_running_mobile_host_service(
+    *,
+    script_root: Path,
+    state_dir: Path | None = None,
+    process_exists_fn: Callable[[int], bool] = is_pid_alive,
+    process_cmdline_fn: Callable[[int], str] | None = None,
+    terminate_pid_tree_fn: Callable[..., bool] = terminate_pid_tree,
+    port_owner_fn: Callable[[str], PortOwner | None] | None = None,
+    spawn_fn: Callable[..., object] | None = None,
+    health_check_fn: Callable[[str], bool] | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> MobileHostServiceResult | None:
+    """Restart an active Host owned by this installation without rotating access."""
+    paths = mobile_host_service_paths(state_dir)
+    state = read_mobile_host_service_state(paths.state_path)
+    pid = _state_pid(state)
+    if pid is None or not process_exists_fn(pid):
+        return None
+    if not _mobile_host_process_uses_script_root(
+        pid,
+        state,
+        script_root=script_root,
+        process_cmdline_fn=process_cmdline_fn,
+    ):
+        return None
+
+    listen = _state_listen(state, listen='')
+    route_provider = _state_route_provider(state, fallback='')
+    if not listen or not route_provider:
+        raise MobileHostServiceError(
+            f'active mobile host service state is incomplete: {paths.state_path}'
+        )
+    public_url = _state_restart_public_url(state, route_provider=route_provider)
+    host_id = str((state or {}).get('host_id') or '').strip() or None
+    return start_or_replace_mobile_host_service(
+        script_root=script_root,
+        listen=listen,
+        public_url=public_url,
+        route_provider=route_provider,
+        state_dir=paths.state_dir,
+        host_id=host_id,
+        process_exists_fn=process_exists_fn,
+        process_cmdline_fn=process_cmdline_fn,
+        terminate_pid_tree_fn=terminate_pid_tree_fn,
+        port_owner_fn=port_owner_fn,
+        spawn_fn=spawn_fn,
+        health_check_fn=health_check_fn,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        rotate_pairing=False,
+        force_restart=True,
+    )
 
 
 def maybe_handle_mobile_host_serve_command(tokens: list[str], *, script_root: Path) -> int | None:
@@ -369,6 +435,11 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
                 'gateway_url': str(summary.get('gateway_url') or summary.get('local_gateway_url') or ''),
                 'route_provider': str(summary.get('route_provider') or args.route_provider or 'tailnet'),
                 **(
+                    {'public_url': str(args.public_url).strip()}
+                    if args.public_url
+                    else {}
+                ),
+                **(
                     {'relay_mode': relay_credentials.relay_mode}
                     if relay_credentials is not None
                     else {}
@@ -391,9 +462,17 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
             relay_runtime.stop()
         handle.close()
         return 1
+    previous_sigterm_handler = _install_mobile_host_sigterm_handler()
+    exit_code = 0
     try:
-        handle.serve_forever()
+        try:
+            handle.serve_forever()
+        except _MobileHostShutdown:
+            pass
+        except KeyboardInterrupt:
+            exit_code = 130
     finally:
+        _restore_mobile_host_sigterm_handler(previous_sigterm_handler)
         _remove_mobile_host_service_state_if_current(
             paths.state_path,
             pid=os.getpid(),
@@ -402,7 +481,29 @@ def run_mobile_host_serve_command(args, *, script_root: Path) -> int:
         if relay_runtime is not None:
             relay_runtime.stop()
         handle.close()
-    return 0
+    return exit_code
+
+
+def _install_mobile_host_sigterm_handler():
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _raise_mobile_host_shutdown)
+    except (AttributeError, ValueError):
+        return None
+    return previous
+
+
+def _restore_mobile_host_sigterm_handler(previous) -> None:
+    if previous is None:
+        return
+    try:
+        signal.signal(signal.SIGTERM, previous)
+    except (AttributeError, ValueError):
+        pass
+
+
+def _raise_mobile_host_shutdown(_signum, _frame) -> None:
+    raise _MobileHostShutdown()
 
 
 def mobile_host_service_paths(state_dir: Path | None = None) -> MobileHostServicePaths:
@@ -451,6 +552,9 @@ def detect_loopback_port_owner(listen: str) -> PortOwner | None:
         raise MobileHostServiceError(
             'mobile gateway listen port must be between 1 and 65535'
         )
+    owner = _detect_loopback_port_owner_netstat(host=host, port=port)
+    if owner is not None:
+        return owner
     owner = _detect_loopback_port_owner_ss(host=host, port=port)
     if owner is not None:
         return owner
@@ -459,6 +563,39 @@ def detect_loopback_port_owner(listen: str) -> PortOwner | None:
         return owner
     if _loopback_port_accepts_connection(host=host, port=port):
         return PortOwner(pid=0, command='unknown loopback listener')
+    return None
+
+
+def _detect_loopback_port_owner_netstat(*, host: str, port: int) -> PortOwner | None:
+    if os.name != 'nt':
+        return None
+    try:
+        result = subprocess.run(
+            ['netstat', '-ano', '-p', 'tcp'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in (result.stdout or '').splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[0].upper() != 'TCP':
+            continue
+        local_address = fields[1]
+        state = fields[3].upper()
+        if state != 'LISTENING':
+            continue
+        if not _listen_address_matches(local_address, host=host, port=port):
+            continue
+        try:
+            pid = int(fields[4])
+        except ValueError:
+            return PortOwner(pid=0, command='unknown loopback listener')
+        return PortOwner(pid=pid, command=_process_cmdline(pid))
     return None
 
 
@@ -617,6 +754,50 @@ def _wait_for_mobile_host_health(
     raise MobileHostServiceError(f'mobile host service did not become healthy: {local_gateway_url}/v1/health')
 
 
+def _wait_for_mobile_host_state_ready(
+    paths: MobileHostServicePaths,
+    *,
+    process: object,
+    pid: int,
+    generation: int,
+    timeout_s: float,
+    sleep_fn: Callable[[float], None],
+    monotonic_fn: Callable[[], float],
+) -> dict[str, object]:
+    deadline = monotonic_fn() + max(0.0, timeout_s)
+    last_state: dict[str, object] | None = None
+    while monotonic_fn() < deadline:
+        poll = getattr(process, 'poll', None)
+        if callable(poll):
+            exit_code = poll()
+            if exit_code is not None:
+                detail = (
+                    'mobile host service exited before publishing pairing state: '
+                    f'exit_code={exit_code}'
+                )
+                log_tail = _mobile_host_log_tail(paths.log_path)
+                if log_tail:
+                    detail += f'; log_tail={log_tail}'
+                raise MobileHostServiceError(detail)
+        state = _matching_spawned_state(
+            read_mobile_host_service_state(paths.state_path),
+            pid=pid,
+            generation=generation,
+        )
+        if state is not None:
+            last_state = state
+            if _state_pairing(state) is not None:
+                return state
+        sleep_fn(0.05)
+    if last_state is not None:
+        raise MobileHostServiceError(
+            f'mobile host service did not publish pairing state: {paths.state_path}'
+        )
+    raise MobileHostServiceError(
+        f'mobile host service did not publish matching state: {paths.state_path}'
+    )
+
+
 def _mobile_host_log_tail(path: Path, *, max_chars: int = 1200) -> str:
     try:
         text = Path(path).read_text(encoding='utf-8', errors='replace')
@@ -679,7 +860,7 @@ def _legacy_mobile_gateway_process(
 ) -> bool:
     """Recognize the pre-service foreground mobile gateway for safe takeover."""
     try:
-        tokens = shlex.split(cmdline)
+        tokens = shlex.split(cmdline, posix=os.name != 'nt')
     except ValueError:
         return False
     expected_script = str((Path(script_root) / 'ccb.py').expanduser().resolve())
@@ -707,6 +888,29 @@ def _legacy_mobile_gateway_process(
 def _process_cmdline(pid: int) -> str:
     if pid <= 0:
         return ''
+    if os.name == 'nt':
+        try:
+            command = [
+                'powershell',
+                '-NoProfile',
+                '-Command',
+                (
+                    'Get-CimInstance Win32_Process -Filter '
+                    f'"ProcessId = {pid}" | Select-Object -ExpandProperty CommandLine'
+                ),
+            ]
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=1.0,
+            )
+        except Exception:
+            return ''
+        if result.returncode != 0:
+            return ''
+        return (result.stdout or '').strip()
     proc_cmdline = Path('/proc') / str(pid) / 'cmdline'
     try:
         text = proc_cmdline.read_bytes().replace(b'\x00', b' ').decode('utf-8', errors='replace').strip()
@@ -725,6 +929,36 @@ def _process_cmdline(pid: int) -> str:
     except Exception:
         return ''
     return (result.stdout or '').strip()
+
+
+def _mobile_host_process_uses_script_root(
+    pid: int,
+    state: dict[str, object] | None,
+    *,
+    script_root: Path,
+    process_cmdline_fn: Callable[[int], str] | None,
+) -> bool:
+    expected_entrypoint = (Path(script_root).expanduser() / 'ccb.py').resolve()
+    recorded_entrypoint = str((state or {}).get('entrypoint') or '').strip()
+    if recorded_entrypoint:
+        try:
+            return Path(recorded_entrypoint).expanduser().resolve() == expected_entrypoint
+        except OSError:
+            return False
+
+    cmdline = (process_cmdline_fn or _process_cmdline)(pid)
+    try:
+        tokens = shlex.split(cmdline, posix=os.name != 'nt')
+    except ValueError:
+        return False
+    for token in tokens:
+        if not token.endswith('ccb.py'):
+            continue
+        try:
+            return Path(token).expanduser().resolve() == expected_entrypoint
+        except OSError:
+            return False
+    return False
 
 
 def _acquire_mobile_host_lock(
@@ -1048,6 +1282,26 @@ def _state_route_provider(state: dict[str, object] | None, *, fallback: str) -> 
     return value or str(fallback)
 
 
+def _state_restart_public_url(
+    state: dict[str, object] | None,
+    *,
+    route_provider: str,
+) -> str | None:
+    if str(route_provider).strip().lower() == 'relay':
+        return None
+    recorded = str((state or {}).get('public_url') or '').strip()
+    if recorded:
+        return recorded
+    gateway_url = _state_gateway_url(state, fallback='')
+    local_gateway_url = _state_local_gateway_url(
+        state,
+        listen=_state_listen(state, listen=''),
+    )
+    if gateway_url and gateway_url.rstrip('/') != local_gateway_url.rstrip('/'):
+        return gateway_url
+    return None
+
+
 def _state_pairing(state: dict[str, object] | None) -> dict[str, object] | None:
     pairing = (state or {}).get('pairing')
     if not isinstance(pairing, dict):
@@ -1137,6 +1391,7 @@ __all__ = [
     'mobile_host_service_paths',
     'read_mobile_host_service_state',
     'remove_mobile_host_service_state',
+    'restart_running_mobile_host_service',
     'run_mobile_host_serve_command',
     'start_or_replace_mobile_host_service',
     'write_mobile_host_service_state',

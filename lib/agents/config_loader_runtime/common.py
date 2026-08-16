@@ -28,6 +28,7 @@ ALLOWED_TOP_LEVEL_KEYS = {
     'loop',
     'config_ui',
     'hapi',
+    'runtime',
 }
 ALLOWED_PROVIDER_PROFILE_KEYS = {
     'mode',

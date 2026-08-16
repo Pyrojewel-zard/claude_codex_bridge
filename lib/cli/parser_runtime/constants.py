@@ -5,6 +5,7 @@ SUBCOMMANDS = {
     'cancel',
     'followup',
     'clear',
+    'compact',
     'cleanup',
     'kill',
     'ps',
@@ -36,6 +37,7 @@ SUBCOMMANDS = {
     'frontdesk',
     'reload',
     'restart',
+    'herdr',
 }
 
 ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode'}

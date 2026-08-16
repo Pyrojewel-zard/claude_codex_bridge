@@ -129,17 +129,21 @@ def test_foreground_start_refreshes_sidebar_with_current_cli_when_daemon_is_reus
         'cli.services.start.ProjectNamespaceController',
         lambda layout, project_id: controller,
     )
+    controller._backend_factory = lambda socket_path=None: backend
     monkeypatch.setattr(
         'cli.services.start.load_project_config',
         lambda root: SimpleNamespace(config=object()),
     )
     monkeypatch.setattr(
         'cli.services.start.build_namespace_topology_plan',
-        lambda config: topology_plan,
+        lambda config, namespace_state=None: topology_plan,
     )
     monkeypatch.setattr(
-        'cli.services.start.TmuxBackend',
-        lambda *, socket_path: seen.setdefault('backend_socket', socket_path) and backend,
+        'cli.services.start.build_backend',
+        lambda factory, *, socket_path, namespace_state=None: seen.setdefault(
+            'backend_socket', socket_path
+        )
+        and factory(socket_path=socket_path),
     )
 
     def refresh(

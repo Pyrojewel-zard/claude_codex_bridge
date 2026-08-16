@@ -23,9 +23,7 @@ def export_diagnostic_bundle(context, command) -> DiagnosticBundleSummary:
     storage_data, storage_error = _storage_payload(context)
     entries: list[DiagnosticBundleEntry] = []
 
-    support_dir = context.paths.ccbd_support_dir
-    support_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='bundle-', dir=str(support_dir)) as tmpdir:
+    with tempfile.TemporaryDirectory(prefix='ccb-support-bundle-') as tmpdir:
         stage_root = Path(tmpdir) / bundle_id
         stage_root.mkdir(parents=True, exist_ok=True)
         _write_generated_payloads(
@@ -44,6 +42,7 @@ def export_diagnostic_bundle(context, command) -> DiagnosticBundleSummary:
             context=context,
             generated_at=generated_at,
             bundle_id=bundle_id,
+            doctor_payload=doctor_data,
             doctor_error=doctor_error,
             storage_error=storage_error,
             entries=entries,
@@ -123,6 +122,7 @@ def _bundle_manifest(
     context,
     generated_at: str,
     bundle_id: str,
+    doctor_payload: dict[str, Any],
     doctor_error: str | None,
     storage_error: str | None,
     entries: list[DiagnosticBundleEntry],
@@ -136,6 +136,7 @@ def _bundle_manifest(
         'bundle_id': bundle_id,
         'doctor_error': doctor_error,
         'storage_error': storage_error,
+        'herdr_surface_projection_sources': _herdr_surface_projection_sources(doctor_payload),
         'entries': [
             {
                 'category': entry.category,
@@ -149,6 +150,16 @@ def _bundle_manifest(
             for entry in entries
         ],
     }
+
+
+def _herdr_surface_projection_sources(doctor_payload: dict[str, Any]) -> list[str]:
+    ccbd = doctor_payload.get('ccbd') if isinstance(doctor_payload, dict) else None
+    if not isinstance(ccbd, dict):
+        return []
+    projection = ccbd.get('herdr_surface_projection')
+    if isinstance(projection, dict) and projection.get('backend_impl') == 'herdr':
+        return ['generated/doctor.json:platforms.windows.herdr.ccbd_surface_projection']
+    return []
 
 
 def _bundle_summary(context, *, output_path: Path, bundle_id: str, doctor_error: str | None, entries: list[DiagnosticBundleEntry]) -> DiagnosticBundleSummary:

@@ -287,6 +287,7 @@ def test_keeper_releases_startup_lock_before_spawn_and_preserves_child_mounted_r
         starting = store.load()
         assert starting is not None
         assert starting.phase == 'starting'
+        assert starting.control_plane_endpoint is None
         child_mounted = starting.with_phase(
             'mounted',
             occurred_at='2026-07-17T00:00:02Z',
@@ -321,6 +322,12 @@ def test_keeper_releases_startup_lock_before_spawn_and_preserves_child_mounted_r
             generation=0,
             keeper_pid=779,
             socket_path=ctx.paths.ccbd_socket_path,
+            control_plane_endpoint={
+                'kind': 'unix_socket',
+                'address': str(ctx.paths.ccbd_socket_path),
+                'display': str(ctx.paths.ccbd_socket_path),
+                'legacy_socket_path': str(ctx.paths.ccbd_socket_path),
+            },
         )
     )
     state = KeeperState(

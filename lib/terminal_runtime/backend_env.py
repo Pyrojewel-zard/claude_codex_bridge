@@ -7,14 +7,26 @@ import subprocess
 import sys
 
 from terminal_runtime.env import subprocess_kwargs as _subprocess_kwargs
+from platforms.windows.os_platform import is_native_windows, is_wsl
 
 
 def get_backend_env() -> str | None:
-    """Get backend environment from explicit env or platform default."""
+    """Get backend environment from explicit env or platform default.
+
+    Uses the unified OS platform detection (``os_platform`` module) to
+    distinguish NativeWindows from WSL, rather than relying solely on
+    ``sys.platform``.
+    """
     v = (os.environ.get("CCB_BACKEND_ENV") or "").strip().lower()
     if v in {"wsl", "windows"}:
         return v
-    return "windows" if sys.platform == "win32" else None
+    if is_native_windows():
+        return "windows"
+    if is_wsl():
+        # WSL uses Linux tooling; backend_env is None (not needed).
+        # The explicit "wsl" value is only when CCB_BACKEND_ENV is set.
+        return None
+    return None
 
 
 def _run_wsl(

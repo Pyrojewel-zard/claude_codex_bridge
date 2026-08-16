@@ -5,6 +5,8 @@ _PROVIDER_THINKING_LEVELS = {
     # The installed Codex model catalog remains the model-specific authority.
     # This superset permits current and legacy Codex reasoning presets.
     'codex': ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
+    # Claude Code 2.1.220 exposes these values through --effort.
+    'claude': ('low', 'medium', 'high', 'xhigh', 'max'),
     'deepseek': ('off', 'high', 'max'),
 }
 
@@ -41,6 +43,8 @@ def provider_thinking_startup_args(provider: str, *, thinking: str | None) -> tu
     value = normalize_provider_thinking(normalized_provider, thinking)
     if normalized_provider == 'codex':
         return ('-c', f'model_reasoning_effort="{value}"')
+    if normalized_provider == 'claude':
+        return ('--effort', value)
     return ()
 
 
@@ -67,9 +71,15 @@ def startup_args_contain_thinking_flag(
     provider: str,
     startup_args: tuple[str, ...] | list[str],
 ) -> bool:
-    if str(provider or '').strip().lower() != 'codex':
-        return False
+    normalized_provider = str(provider or '').strip().lower()
     args = tuple(str(item) for item in startup_args)
+    if normalized_provider == 'claude':
+        return any(
+            arg == '--effort' or arg.startswith('--effort=')
+            for arg in args
+        )
+    if normalized_provider != 'codex':
+        return False
     for index, arg in enumerate(args):
         if arg in {'-c', '--config'} and index + 1 < len(args):
             if args[index + 1].lstrip().startswith('model_reasoning_effort='):

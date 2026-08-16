@@ -8,6 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 from ccbd.api_models import DeliveryScope, JobRecord, JobStatus, MessageEnvelope
+
+
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch) -> None:
+    """Pin runtime state under .ccb so artifact paths stay project-relative.
+
+    Production defaults to ~/.local/ccb relocation; covered in
+    test_path_relocation_defaults.py.
+    """
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 from jobs.store import JobStore
 from message_bureau import AttemptRecord, AttemptState, AttemptStore, MessageRecord, MessageState, MessageStore
 from storage.paths import PathLayout

@@ -1,3 +1,3 @@
 """Disconnect-only reconnection supervision for Codex CLI."""
 
-__version__ = "0.3.3"
+__version__ = "0.3.6"

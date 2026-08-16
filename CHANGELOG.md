@@ -1,5 +1,292 @@
 # Changelog
 
+## v8.6.7 (2026-08-16)
+
+- Added local CCB Mobile workspace background customization across project
+  chrome, agent chat, Agent Terminal, and standalone Computer Terminal.
+- Added private-storage image validation, replacement/removal cleanup, and
+  terminal readability scrims without uploading the selected image.
+- No pairing, conversation, or project migration is required.
+
+## v8.6.6 (2026-08-15)
+
+- Restarted an already-running installed Mobile Host after a successful
+  `ccb update`, preserving its route, host identity, and pairing instead of
+  leaving the old gateway process on stale code. Stopped and source-owned
+  Mobile Hosts remain untouched.
+- Raised the Relay stream's initial receive credit to the maximum valid
+  message size on both host and Flutter client, preventing large but valid
+  terminal-history snapshots from blocking before the first credit update.
+- Added one bounded Claude `Enter` retry when the current composer still holds
+  the exact dispatched prompt evidence, without treating pane history or the
+  retry itself as activation (PR #305).
+- Kept explicit Agent environment and Provider routing above inherited Claude
+  settings, and rebuilt reused bindings when the normalized Provider profile
+  changes without clearing conversation history (PRs #307 and #308).
+- Honored non-root Herdr split parents and added native-Windows `pwsh`,
+  `powershell`, `bash`, and `wincmd` shell panes while preserving the same
+  provider-qualified names as Agents (PRs #309 and #310).
+- No configuration, pairing, or conversation migration is required. Upgrade
+  both the CCB host and Mobile APK for the Relay terminal fix. Native Windows
+  x64 remains beta.
+
+## v8.6.5 (2026-08-14)
+
+- Reconstructed wrapped Agent terminal rows as logical lines before local
+  mobile reflow, so portrait and landscape widths use the device viewport
+  without resizing the desktop-owned tmux pane.
+- Replaced append-only full-screen terminal repaints with structured history
+  and mutable-screen projections. Prompt edits and Backspace now replace the
+  active row in place instead of accumulating stale lines in scrollback.
+- Kept backward-compatible terminal bytes on the wire while allowing current
+  Android clients to distinguish real scroll history from screen replacement.
+- Existing pairing and project state require no migration. Upgrade both the
+  CCB host and Mobile APK to activate the corrected projection protocol.
+
+## v8.6.4 (2026-08-14)
+
+- Reworked CCB Mobile Agent terminals as responsive local projections: phone
+  columns now follow the device viewport while the desktop tmux pane retains
+  its authoritative geometry.
+- Added inline full-width Agent terminal mode, persisted terminal font sizing,
+  and configurable shortcut ordering without cluttering the terminal surface.
+- Hardened LAN and Relay terminal lifecycle handling, including reconnect
+  coalescing, stale socket/stream cleanup, source-geometry notifications, and
+  clean gateway shutdown of active sessions.
+- Added fail-closed reattachment of persisted Windows Herdr namespace and pane
+  references, including capability intersection with stricter live evidence
+  (PR #304).
+- Existing pairing data requires no migration. Upgrade the CCB host and Mobile
+  APK together to use the complete terminal viewport protocol.
+
+## v8.6.3 (2026-08-13)
+
+- CCB Mobile now turns ordinary file links under the current Agent's
+  `.ccb/workspaces/<agent>/...` tree into authenticated download attachments,
+  including generated PDF reports.
+- The workspace exception remains fail-closed: other Agent workspaces, hidden
+  workspace paths, and the rest of `.ccb` runtime state are not exposed.
+- No project configuration, pairing, or stored-state migration is required.
+
+## v8.6.2 (2026-08-13)
+
+- Added fail-closed, exact command approvals for project-local tool-window
+  commands and Provider command templates, including the explicit
+  `ccb config approve-commands` workflow (Issue #299).
+- Preserved managed Codex conversation context when the current session record
+  is corrupt by selecting the latest valid recoverable session instead of
+  silently starting fresh.
+- Added visible-pane Cursor dispatch and completion evidence, Pi native session
+  history, and OMP Provider-configuration inheritance into managed homes.
+- Expanded CCB Mobile with multi-session host terminals and Relay
+  capability-negotiated Provider controls, while hardening native Windows
+  project registration, endpoint markers, TCP descriptors, and readiness.
+- Improved native Windows process liveness and command-line handling, Herdr
+  namespace teardown, and background launcher behavior; integrated PRs #298,
+  #300, #301, and #302.
+- Projects without the newly protected command fields require no migration.
+  Intentional configured commands must be approved once and reapproved after
+  an exact value change. Windows x64 remains beta.
+
+## v8.6.1 (2026-08-12)
+
+- Added capability-driven CCB Mobile Provider controls with explicit
+  configured/active/pending state, Codex/Claude session usage and optional
+  account quota, and guarded restart-required model/thinking changes.
+- Added a cross-project Mobile terminal launcher and customizable terminal
+  shortcut order, visibility, and defaults.
+- Added the built-in `ccb-compact` Skill and `ccb compact` command with busy
+  gating and fail-closed Provider-native command selection.
+- Replaced Config UI's hard-coded Role suggestions with the complete available
+  Role catalog, including `agentroles.mother` when present.
+- Preserved native-session boundaries in Mobile history, clipped wide terminal
+  snapshots to pane width, delivered combined text-plus-key terminal frames in
+  order, bound Provider mutation idempotency to its target, and refreshed the
+  WeChat community QR image.
+- No configuration or conversation migration is required. Windows x64 remains
+  beta and Provider model/thinking changes require a managed Agent restart.
+
+## v8.6.0 (2026-08-12)
+
+- Added the first native Windows x64 distribution to the stable CCB release:
+  native PE launchers, a checksum-validated PowerShell installer, and a
+  Windows-owned Herdr runtime and packaging lane. Windows support remains beta
+  and requires Python 3.10+, WezTerm, Git Bash, and Herdr 0.8.0+.
+- Restored Pi's validated native JSONL session after CCB restart, while keeping
+  fresh-context and explicit session controls unchanged.
+- Preserved Linux, macOS, WSL, npm, Sidebar, and Android stable publication
+  paths while isolating Windows code under platform-owned directories.
+- Fixed project-scoped tmux socket rebinding after backend cache reuse and made
+  non-interactive Windows installation honor `-Yes` when Herdr is absent.
+  Removed the backend import cycle that could block mobile/ccbd service imports.
+- No configuration or conversation migration is required.
+
+## v8.6.0-beta.3 (2026-08-11)
+
+- Made the Windows installer's `-Yes` and `CCB_INSTALL_ASSUME_YES=1` modes acknowledge the guarded missing-Herdr continuation without reading interactive input.
+- Hardened the remaining Herdr prompt against a null `Read-Host` result.
+- Supersedes `v8.6.0-beta.2`, whose native tests and ZIP build passed but whose archive installation stopped at the missing-Herdr prompt before a GitHub Release was created.
+
+## v8.6.0-beta.2 (2026-08-11)
+
+- Fixed the Windows release builder allowlist so it no longer requires the nonexistent `commands/` directory.
+- Added a regression check that every default payload directory exists before another immutable prerelease is tagged.
+- Rebound auto-selected tmux backends to each project's authoritative socket,
+  fixing the Linux, macOS, and WSL lifecycle regression introduced by PR #293.
+- Supersedes `v8.6.0-beta.1`, whose native tests passed but whose ZIP build was correctly blocked before a GitHub Release was created.
+
+## v8.6.0-beta.1 (2026-08-11)
+
+- Added an isolated native Windows x64 prerelease lane under `platforms/windows/` and `lib/platforms/windows/`.
+- Added native PE launchers for `ccb`, `ask`, `autonew`, and `ctx-transfer`, packaged as `ccb-windows-x86_64.zip` with a SHA256 sidecar.
+- Updated `install.ps1` to install from a validated Windows ZIP while retaining source-checkout installation.
+- Restored Linux/macOS workflows, executable modes, docs, and reconnect tests removed or rewritten by PR #293; prerelease tags do not trigger stable npm, sidebar, mobile, Linux, or macOS publication.
+- Marked this release as a Windows beta: Python 3.10+, WezTerm, Git Bash, and Herdr remain prerequisites, and the binaries are unsigned.
+
+## v8.5.7 (2026-08-08)
+
+- Keep the required `ccb-clear` control Skill and add `ccb-diagnose` for every
+  supported managed Agent. `$ccb_diagnose <agentname>` combines authoritative
+  runtime and job state with bounded deep Pane inspection, applies only guarded
+  recovery, verifies the result, and requires explicit approval before issue
+  submission.
+- Self-heal expired mailbox deliveries without replaying business work and
+  forward Provider no-terminal timeout settings to `ccbd` (PR #288). Remove
+  stale pre-activation Claude assistant bookkeeping so old busy turns cannot
+  contaminate newly queued requests.
+- Show communication short ids, Agent queue depth, and active job suffixes in
+  the sidebar; preserve Kiro settings under isolated `KIRO_HOME` without
+  copying sessions.
+- Resolve reconnect readiness probes against the active Codex Provider route,
+  extending guarded network/capacity recovery to custom Provider endpoints.
+- No configuration or conversation migration is required.
+
+## v8.5.6 (2026-08-06)
+
+### Continuous Provider Inheritance
+
+- **Explicit Authority Wins Per Dimension**: CCB uses configured API, token,
+  URL, route, account, and Provider profile values first. Only dimensions not
+  explicitly owned are read from the current external Provider environment or
+  login state.
+- **Restart Refreshes Without Reverse Effects**: a stopped Provider generation
+  is rebuilt from the current external snapshot and private projection. CCB
+  never writes the inherited result back to the user's shell, Provider home,
+  IDE, keyring, or remote login.
+- **Conversation History Survives Authority Changes**: same-authority launches
+  use native resume. Codex, Claude, and Gemini use a qualified fork/import path
+  when available; otherwise CCB records a linked continuation while preserving
+  the stable conversation, workspace, queue, session record, and transcript
+  history. The withdrawn v8.5.5 archive shape is recovered only with matching
+  ownership evidence.
+
+### Codex Reconnect
+
+- **Bundled Automatic Activation**: CCB installs and arms `codex-reconnect`
+  automatically for managed Codex panes after a concrete thread binding.
+- **Bounded Capacity Recovery**: terminal network and selected-model capacity
+  failures are classified only for the exact thread and pane, then receive at
+  most one literal `continue` after the existing safety and readiness gates.
+
+### Withdrawal And Compatibility
+
+- **v8.5.5 Withdrawn**: the GitHub release was withdrawn on 2026-08-05 after a
+  legacy-session migration regression made existing managed conversations
+  unavailable to native `resume`. v8.5.6 is the replacement; no manual clear or
+  history deletion is required.
+
+## v8.5.5 (2026-08-05)
+
+> Withdrawn from GitHub on 2026-08-05 after a legacy-session migration
+> regression made existing managed conversations unavailable to native resume.
+> Use v8.5.4 until the replacement release is published.
+
+### Provider State Refresh
+
+- **Restart Uses Current Provider Authority**: `ccb restart <agent>` now rebuilds
+  the Provider launch from the current profile, login, API key, endpoint, proxy,
+  and model state instead of replaying the command persisted when the pane was
+  first created. Switching accounts or API routes no longer requires
+  `ccb clear`.
+- **Cross-Authority Resume Is Blocked Safely**: Codex archives an incompatible
+  managed session binding before starting fresh; Claude and Gemini suppress
+  native resume when the saved session belongs to another Provider authority.
+  Provider login state and history files remain intact.
+- **Credentials Stay Private**: managed session metadata stores only an
+  Agent-private HMAC fingerprint of Provider authority inputs, never raw API
+  keys, tokens, endpoints, or proxy credentials.
+
+### Relay And Community
+
+- **New Relay Invitations Default To 1 GiB/Day**: newly issued Relay Host
+  invitations now allow 1 GiB per 24-hour quota window. Explicit
+  `--max-bytes-per-day` values and existing Host credentials are unchanged.
+- **Community QR Refreshed**: the WeChat group image and README cache key now
+  point to the current invitation image.
+
+## v8.5.4 (2026-08-03)
+
+### Ask Routing
+
+- **Chains Now Require A Real Dependency**: inherited ask guidance for every
+  supported Provider defaults to plain routing. `--chain` is reserved for an
+  active parent task that cannot finish without that exact child result;
+  communication tests, batch sends, notifications, and independent asks no
+  longer imply a chain dependency.
+- **Reply Delivery Cannot Become A False Parent**: control-plane
+  `reply_delivery` work is excluded from active-parent detection, so an
+  overlapping ordinary ask is not rejected or attached to an acknowledgement.
+
+### Agent History And Config UI
+
+- **History Cleanup Is Bounded Per Agent**: Config UI can scan or clean one
+  Agent or all Agents with 7/30/90-day retention. Current session bindings,
+  records inside the retention window, and each Provider's newest transcript
+  remain protected; deletion is restricted to the managed transcript allowlist.
+- **The Panel Is Focused Again**: the current Config UI keeps configuration,
+  activation review, and history cleanup while temporarily delisting the
+  read-only Agent communication-flow observer.
+
+### Mobile LAN Recovery
+
+- **LAN Failures Are Actionable**: Android uses coarse, non-identifying
+  connectivity evidence to warn before LAN pairing and explain reconnecting
+  LAN routes. Stored profiles are preserved, and users can Retry or open the
+  existing authenticated Diagnostics flow.
+- **Silent Terminal Disconnects Recover**: terminal WebSockets use a 15-second
+  client ping interval so Wi-Fi half-open connections enter the existing
+  reconnect/cursor-resume path without replaying input.
+- **Network Identity Stays Private**: CCB Mobile requests only
+  `ACCESS_NETWORK_STATE`; it does not read SSID, BSSID, location, or other
+  network identity. Computer-side onboarding now covers same-network, hotspot,
+  guest isolation, VPN, firewall, and DHCP address-change recovery.
+
+## v8.5.3 (2026-08-01)
+
+### Relay Capacity
+
+- **New Invitations Default To 200 MiB/Day**: newly issued Relay Host
+  invitations now allow 200 MiB per 24-hour quota window instead of
+  100 MiB. Explicit `--max-bytes-per-day` values still override the default;
+  existing Host credentials retain the quota issued with them.
+
+### Callback Repair Efficiency
+
+- **Large Ledgers No Longer Amplify Idle Reads**: callback-edge latest state
+  is cached from the append-only authority and safely invalidated on external
+  changes. Repair inspects only nonterminal candidates and scans each target's
+  job history at most once per tick, preventing historical callback growth
+  from causing sustained idle CPU and cached-read pressure.
+- **No Ledger Migration Required**: JSONL remains the durable authority and
+  existing ledgers are rebuilt into the derived in-memory view on restart.
+
+### Claude Agent Environment
+
+- **General Agent Variables Reach Claude**: non-API variables from
+  `agents.<name>.env`, including proxy and tool configuration paths, are now
+  exported to managed Claude launches. CCB-managed API credentials, endpoints,
+  and runtime-home overrides retain precedence (PR #284).
+
 ## v8.5.2 (2026-07-30)
 
 ### Bounded Pane Recovery

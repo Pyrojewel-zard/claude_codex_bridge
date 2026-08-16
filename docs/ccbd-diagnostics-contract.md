@@ -38,6 +38,16 @@ That means the diagnostics surface must answer at least:
 
 ## 3. Hard Contract
 
+### 3.0 Windows x64 release surface
+
+`ccb doctor` includes a `windows_x64_release_surface` record loaded from the
+installed release root. It is diagnostics, not runtime authority. The record
+must expose `release_install_entry`, `source_install_allowed`,
+`source_install_entry`, `update_entry`, `managed_python_status`,
+`native_helper_status`, and an actionable `next_action`. Missing, malformed,
+wrong-host, wrong-architecture, or WOW64 evidence fails closed to a blocked
+surface; it must not enable a Windows download or update route.
+
 ### 3.1 Project Scope
 
 - Diagnostics are scoped to one `.ccb` anchor.

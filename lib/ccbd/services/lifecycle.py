@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ccbd.control_plane_transport.endpoint import endpoint_from_legacy_socket_path, endpoint_from_record, endpoint_to_record
 from ccbd.models import MountState, SCHEMA_VERSION
 from storage.json_store import JsonStore
 from storage.paths import PathLayout
@@ -49,6 +50,7 @@ class CcbdLifecycle:
     config_signature: str | None = None
     socket_path: str | None = None
     socket_inode: int | None = None
+    control_plane_endpoint: dict[str, Any] | None = None
     namespace_epoch: int | None = None
     last_failure_reason: str | None = None
     shutdown_intent: str | None = None
@@ -98,6 +100,7 @@ class CcbdLifecycle:
             'config_signature': self.config_signature,
             'socket_path': self.socket_path,
             'socket_inode': self.socket_inode,
+            'control_plane_endpoint': self.control_plane_endpoint,
             'namespace_epoch': self.namespace_epoch,
             'last_failure_reason': self.last_failure_reason,
             'shutdown_intent': self.shutdown_intent,
@@ -125,6 +128,7 @@ class CcbdLifecycle:
             config_signature=_clean_text(payload.get('config_signature')),
             socket_path=_clean_text(payload.get('socket_path')),
             socket_inode=_clean_positive_int(payload.get('socket_inode')),
+            control_plane_endpoint=_control_plane_endpoint_from_record(payload),
             namespace_epoch=int(payload['namespace_epoch']) if payload.get('namespace_epoch') is not None else None,
             last_failure_reason=_clean_text(payload.get('last_failure_reason')),
             shutdown_intent=_clean_text(payload.get('shutdown_intent')),
@@ -163,6 +167,7 @@ def build_lifecycle(
     config_signature: str | None = None,
     socket_path: str | Path | None = None,
     socket_inode: int | None = None,
+    control_plane_endpoint: dict[str, Any] | None = None,
     namespace_epoch: int | None = None,
     last_failure_reason: str | None = None,
     shutdown_intent: str | None = None,
@@ -183,10 +188,36 @@ def build_lifecycle(
         config_signature=_clean_text(config_signature),
         socket_path=str(Path(socket_path)) if socket_path else None,
         socket_inode=_clean_positive_int(socket_inode),
+        control_plane_endpoint=_control_plane_endpoint_or_legacy(
+            control_plane_endpoint,
+            socket_path=socket_path,
+        ),
         namespace_epoch=int(namespace_epoch) if namespace_epoch is not None else None,
         last_failure_reason=_clean_text(last_failure_reason),
         shutdown_intent=_clean_text(shutdown_intent),
     )
+
+
+def _control_plane_endpoint_from_record(payload: dict[str, Any]) -> dict[str, Any] | None:
+    value = payload.get('control_plane_endpoint')
+    if isinstance(value, dict):
+        return endpoint_to_record(endpoint_from_record(value))
+    if 'control_plane_endpoint' in payload:
+        return None
+    socket_path = _clean_text(payload.get('socket_path'))
+    return _control_plane_endpoint_or_legacy(None, socket_path=socket_path)
+
+
+def _control_plane_endpoint_or_legacy(
+    control_plane_endpoint: dict[str, Any] | None,
+    *,
+    socket_path: str | Path | None,
+) -> dict[str, Any] | None:
+    if control_plane_endpoint:
+        return endpoint_to_record(endpoint_from_record(control_plane_endpoint))
+    if not socket_path or os.name == 'nt':
+        return None
+    return endpoint_to_record(endpoint_from_legacy_socket_path(socket_path))
 
 
 def lifecycle_from_inspection(
@@ -211,6 +242,7 @@ def lifecycle_from_inspection(
     generation = int(getattr(lease, 'generation', 0) or 0)
     owner_pid = int(getattr(lease, 'ccbd_pid', 0) or 0) or None
     socket_path = str(getattr(lease, 'socket_path', '') or '').strip() or None
+    control_plane_endpoint = getattr(lease, 'control_plane_endpoint', None)
     desired_state = 'stopped'
     phase = 'unmounted'
     socket_inode = None
@@ -230,6 +262,7 @@ def lifecycle_from_inspection(
         config_signature=_clean_text(getattr(lease, 'config_signature', None)) or config_signature,
         socket_path=socket_path,
         socket_inode=socket_inode,
+        control_plane_endpoint=control_plane_endpoint,
     )
 
 

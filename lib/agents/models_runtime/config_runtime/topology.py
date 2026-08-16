@@ -187,7 +187,22 @@ LAYOUT_TOOL_ALIASES: dict[str, dict[str, str]] = {
         'label': 'rich',
         'command': 'CCB_WORKBENCH_PROFILE=rich CCB_WORKBENCH_FORCE_RICH=1 ccb-workbench files',
     },
+    # Native-Windows-only shell panes: hold an interactive shell prompt with no
+    # coding CLI. Each alias `exec`s the chosen shell so it replaces the sh
+    # wrapper herdr uses to launch pane commands. `wincmd` avoids the reserved
+    # `cmd` topology keyword (which drives the built-in cmd-role pane).
+    'pwsh': {'label': 'pwsh', 'command': 'exec pwsh'},
+    'powershell': {'label': 'powershell', 'command': 'exec powershell'},
+    'bash': {'label': 'bash', 'command': 'exec bash'},
+    'wincmd': {'label': 'wincmd', 'command': 'exec cmd'},
 }
+
+# Aliases usable only on native Windows (not WSL/Linux/macOS). Recognized as
+# aliases on every platform so callers can emit a precise "native Windows only"
+# error rather than an opaque "unknown alias" / "must declare a provider".
+NATIVE_WINDOWS_ONLY_LAYOUT_TOOL_ALIASES: frozenset[str] = frozenset(
+    {'pwsh', 'powershell', 'bash', 'wincmd'}
+)
 
 
 def normalize_layout_tool_alias(value: object) -> str:
@@ -199,6 +214,10 @@ def normalize_layout_tool_alias(value: object) -> str:
 
 def is_layout_tool_alias(value: object) -> bool:
     return str(value or '').strip().lower() in LAYOUT_TOOL_ALIASES
+
+
+def is_native_windows_only_layout_tool_alias(value: object) -> bool:
+    return str(value or '').strip().lower() in NATIVE_WINDOWS_ONLY_LAYOUT_TOOL_ALIASES
 
 
 def layout_tool_alias_command(value: object) -> str:

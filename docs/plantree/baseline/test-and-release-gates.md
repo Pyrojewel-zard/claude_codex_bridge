@@ -67,3 +67,12 @@ should be confirmed before use:
   artifacts.
 - `CCB_SOURCE_RUNTIME_OK=1` is a diagnostics-only override and must not be used
   for ordinary source validation.
+
+## Continuous Integration Topology
+
+The active CI gate optimization and ownership map is maintained in
+[ci-test-gates](../plans/ci-test-gates/README.md). Its governing rule is to
+preserve each behavioral and platform boundary while avoiding repeated full
+suite execution for every OS-by-Python combination. Timing-sensitive tests
+must use deterministic synchronization rather than retries or relaxed
+assertions.

@@ -1,0 +1,14 @@
+[package]
+name = "ccb-windows-launcher"
+version = "8.6.6"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "ccb-windows-launcher"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

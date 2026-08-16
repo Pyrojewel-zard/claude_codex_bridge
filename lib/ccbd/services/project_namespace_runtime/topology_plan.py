@@ -65,7 +65,10 @@ class NamespaceTopologyPlan:
 
 
 def build_namespace_topology_plan(config, *, ccbd_socket_path: str | None = None, project_root: str | None = None) -> NamespaceTopologyPlan:
-    sidebar_enabled = config.sidebar.mode == 'every_window'
+    sidebar_enabled = (
+        config.sidebar.mode == 'every_window'
+        and getattr(config, 'runtime_mux_backend', None) != 'herdr'
+    )
     agent_windows = tuple(config.windows)
     tool_windows = tuple(getattr(config, 'tool_windows', ()) or ())
     windows = tuple((

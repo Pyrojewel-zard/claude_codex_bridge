@@ -37,10 +37,12 @@ from mobile_gateway.relay_host_connector import (
     RelayHostConnector,
     RelayHostConnectorConfig,
     RelayHostConnectorError,
+    _gateway_request,
 )
 from mobile_gateway.relay_service import ProductionRelayConfig, ProductionRelayService
 from mobile_gateway.relay_stream import (
     RELAY_STREAM_INITIAL_WINDOW_BYTES,
+    RELAY_STREAM_MAX_MESSAGE_BYTES,
     RelayInnerMessage,
     relay_inner_payload_size,
 )
@@ -76,6 +78,108 @@ def test_relay_host_connector_requires_safe_origins() -> None:
             host_signing_key=host_signing_key,
             host_crypto_private_key=host_crypto_key,
         )
+
+
+def test_relay_host_connector_maps_provider_control_without_proxy_escape() -> None:
+    read = _gateway_request(
+        'get_agent_provider_control',
+        {
+            'project_id': 'project/demo',
+            'agent': 'worker one',
+            'device_token': 'must-not-enter-path',
+        },
+    )
+    quota = _gateway_request(
+        'get_agent_provider_quota',
+        {'project_id': 'project/demo', 'agent': 'worker one'},
+    )
+    mutation = _gateway_request(
+        'update_agent_provider_settings',
+        {
+            'project_id': 'project/demo',
+            'agent': 'worker one',
+            'model': 'gpt-5.6-sol',
+            'thinking': 'xhigh',
+            'expected_revision': 'config-r1',
+            'expected_namespace_epoch': 7,
+            'expected_runtime_revision': 'runtime-r1',
+            'expected_provider': 'codex',
+            'idempotency_key': 'provider-idempotency-0001',
+            'device_token': 'must-not-forward',
+            'arbitrary_path': '/etc/passwd',
+        },
+    )
+    unbound_runtime_mutation = _gateway_request(
+        'update_agent_provider_settings',
+        {
+            'project_id': 'project/demo',
+            'agent': 'worker one',
+            'model': 'gpt-5.6-sol',
+            'thinking': 'medium',
+            'expected_revision': 'config-r2',
+            'expected_namespace_epoch': 7,
+            'expected_runtime_revision': None,
+            'expected_provider': 'codex',
+            'idempotency_key': 'provider-idempotency-0002',
+        },
+    )
+
+    assert read.method == 'GET'
+    assert read.path == '/v1/projects/project%2Fdemo/agents/worker%20one/provider-control'
+    assert read.query == {}
+    assert quota.method == 'GET'
+    assert quota.path == '/v1/projects/project%2Fdemo/agents/worker%20one/provider-quota'
+    assert mutation.method == 'POST'
+    assert mutation.path == read.path
+    assert json.loads((mutation.body or b'{}').decode('utf-8')) == {
+        'expected_namespace_epoch': 7,
+        'expected_provider': 'codex',
+        'expected_revision': 'config-r1',
+        'expected_runtime_revision': 'runtime-r1',
+        'idempotency_key': 'provider-idempotency-0001',
+        'model': 'gpt-5.6-sol',
+        'thinking': 'xhigh',
+    }
+    assert json.loads(
+        (unbound_runtime_mutation.body or b'{}').decode('utf-8')
+    )['expected_runtime_revision'] is None
+
+
+def test_relay_host_connector_maps_host_terminal_without_path_escape() -> None:
+    opened = _gateway_request(
+        'open_host_terminal',
+        {
+            'schema_version': 1,
+            'client_session_id': 'shell-2',
+            'display_name': 'Shell 2',
+            'geometry': {'columns': 100, 'rows': 30},
+            'device_token': 'must-not-forward',
+            'arbitrary_path': '/etc/passwd',
+        },
+    )
+    terminated = _gateway_request(
+        'terminate_host_terminal',
+        {
+            'schema_version': 1,
+            'client_session_id': 'shell-2',
+            'arbitrary_path': '/etc/passwd',
+        },
+    )
+
+    assert opened.method == 'POST'
+    assert opened.path == '/v1/terminals'
+    assert json.loads(opened.body or b'{}') == {
+        'schema_version': 1,
+        'client_session_id': 'shell-2',
+        'display_name': 'Shell 2',
+        'geometry': {'columns': 100, 'rows': 30},
+    }
+    assert terminated.method == 'POST'
+    assert terminated.path == '/v1/terminals/terminate'
+    assert json.loads(terminated.body or b'{}') == {
+        'schema_version': 1,
+        'client_session_id': 'shell-2',
+    }
 
 
 def test_relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path) -> None:
@@ -345,6 +449,15 @@ async def _relay_host_connector_proxies_encrypted_gateway_request(tmp_path: Path
             assert host_hello['payload']['server_fingerprint'] == host_fingerprint_for_public_key(
                 public_key_b64(host_crypto_key)
             )
+            assert (
+                'get_agent_provider_control'
+                in host_hello['payload']['unary_operations']
+            )
+            assert (
+                'update_agent_provider_settings'
+                in host_hello['payload']['unary_operations']
+            )
+            assert 'terminal' in host_hello['payload']['stream_operations']
 
             response = await _round_trip_gateway_request(
                 phone,
@@ -764,6 +877,76 @@ async def _relay_host_connector_revoked_host_reports_auth_diagnostic(tmp_path: P
 
 def test_relay_host_connector_streams_terminal_without_replaying_input(tmp_path: Path) -> None:
     asyncio.run(_relay_host_connector_streams_terminal_without_replaying_input(tmp_path))
+
+
+def test_relay_host_connector_streams_terminal_frame_above_legacy_window(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _relay_host_connector_streams_terminal_frame_above_legacy_window(tmp_path)
+    )
+
+
+async def _relay_host_connector_streams_terminal_frame_above_legacy_window(
+    tmp_path: Path,
+) -> None:
+    relay, issued = await _started_relay(tmp_path)
+    gateway = await _started_gateway(terminal_output_bytes=220 * 1024)
+    connector = RelayHostConnector(
+        RelayHostConnectorConfig(
+            relay_origin=_relay_origin(relay),
+            gateway_origin=gateway.origin,
+            host_id=issued.host_id,
+            host_signing_key=issued.private_key,
+            host_crypto_private_key=key_pair_from_private_bytes(bytes(range(101, 133))),
+            tls_context=_client_ssl(),
+            request_timeout_seconds=1.0,
+            stream_write_timeout_seconds=0.5,
+        )
+    )
+    task = asyncio.create_task(connector.connect_once())
+    try:
+        await _wait_for(lambda: connector.diagnostics()['state'] == 'registered')
+        async with aiohttp.ClientSession(raise_for_status=True) as client:
+            phone = await client.ws_connect(relay.url('/v2/phone'), ssl=_client_ssl())
+            phone_crypto, _ = await _open_phone_session(
+                phone,
+                issued=issued,
+                relay_origin=issued.relay_audience,
+                expected_host_public_key=public_key_b64(
+                    connector.config.host_crypto_private_key
+                ),
+            )
+            stream_id = 'terminal-large-history-1'
+            await _send_phone_inner(
+                phone,
+                phone_crypto,
+                outer_seq=2,
+                message=RelayInnerMessage(
+                    kind='stream_open',
+                    stream_id=stream_id,
+                    operation='terminal',
+                    credit_bytes=RELAY_STREAM_INITIAL_WINDOW_BYTES,
+                    payload={
+                        'terminal_id': 'term-demo',
+                        'terminal_token': 'terminal-token-demo',
+                    },
+                ),
+            )
+
+            opening = await _receive_until_kind(phone, phone_crypto, 'stream_data')
+            output = await _receive_until_kind(phone, phone_crypto, 'stream_data')
+            assert opening.payload['frame']['type'] == 'open'
+            assert output.payload['frame']['type'] == 'output'
+            output_size = relay_inner_payload_size(output.payload)
+            assert output_size > 256 * 1024
+            assert output_size <= RELAY_STREAM_MAX_MESSAGE_BYTES
+            assert len(_b64decode(str(output.payload['frame']['bytes_b64']))) == 220 * 1024
+    finally:
+        connector.stop()
+        await asyncio.wait_for(task, timeout=2)
+        await gateway.stop()
+        await relay.stop()
 
 
 async def _relay_host_connector_streams_terminal_without_replaying_input(tmp_path: Path) -> None:
@@ -1427,7 +1610,11 @@ class _GatewayStub:
         await self.runner.cleanup()
 
 
-async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
+async def _started_gateway(
+    *,
+    project_view_bytes: int = 0,
+    terminal_output_bytes: int = 0,
+) -> _GatewayStub:
     requests: list[tuple[str, str]] = []
     request_bodies: list[dict[str, object]] = []
     terminal_inputs: list[dict[str, object]] = []
@@ -1543,6 +1730,14 @@ async def _started_gateway(*, project_view_bytes: int = 0) -> _GatewayStub:
                 'last_input_seq': 0,
             }
         )
+        if terminal_output_bytes > 0:
+            await websocket.send_json(
+                {
+                    'type': 'output',
+                    'seq': 1,
+                    'bytes_b64': _b64(b'h' * terminal_output_bytes),
+                }
+            )
         async for incoming in websocket:
             if incoming.type != aiohttp.WSMsgType.TEXT:
                 continue

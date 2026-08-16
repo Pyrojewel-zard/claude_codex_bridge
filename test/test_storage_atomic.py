@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -299,3 +300,34 @@ def test_atomic_write_json_if_changed_reports_material_change(tmp_path: Path) ->
     assert atomic.atomic_write_json_if_changed(target, {'value': 1}) is False
     assert atomic.atomic_write_json_if_changed(target, {'value': 2}) is True
     assert json.loads(target.read_text(encoding='utf-8')) == {'value': 2}
+
+
+def test_windows_atomic_replace_retries_transient_sharing_failure(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / 'state.txt'
+    target.write_text('old', encoding='utf-8')
+    real_replace = os.replace
+    attempts = 0
+    sleeps: list[float] = []
+
+    def replace_after_sharing_failure(source, destination):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            error = PermissionError(5, 'Access is denied')
+            error.winerror = 32
+            raise error
+        return real_replace(source, destination)
+
+    os_proxy = SimpleNamespace(**vars(atomic.os))
+    os_proxy.name = 'nt'
+    os_proxy.replace = replace_after_sharing_failure
+    if hasattr(os_proxy, 'O_DIRECTORY'):
+        delattr(os_proxy, 'O_DIRECTORY')
+    monkeypatch.setattr(atomic, 'os', os_proxy)
+    monkeypatch.setattr(atomic.time, 'sleep', sleeps.append)
+
+    atomic.atomic_write_text(target, 'new')
+
+    assert target.read_text(encoding='utf-8') == 'new'
+    assert attempts == 3
+    assert sleeps == [0.025, 0.05]

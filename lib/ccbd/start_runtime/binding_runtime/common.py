@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+_PANE_RUNTIME_BACKENDS = frozenset({'tmux', 'mux', 'rmux', 'psmux', 'herdr'})
+
+
+def runtime_ref_backend(runtime_ref: str | None) -> str | None:
+    text = str(runtime_ref or '').strip()
+    if ':' not in text:
+        return None
+    backend, _sep, _pane_id = text.partition(':')
+    backend = backend.strip().lower()
+    return backend or None
+
+
+def runtime_ref_pane_id(runtime_ref: str | None) -> str | None:
+    text = str(runtime_ref or '').strip()
+    if ':' not in text:
+        return None
+    backend, _sep, pane_id = text.partition(':')
+    backend = backend.strip().lower()
+    pane_id = pane_id.strip()
+    if pane_id.startswith('title:'):
+        return None
+    if backend == 'tmux' and not pane_id.startswith('%'):
+        return None
+    return pane_id or None
+
+
+def is_pane_runtime_ref(runtime_ref: str | None) -> bool:
+    return runtime_ref_backend(runtime_ref) in _PANE_RUNTIME_BACKENDS
+
 
 def binding_pane_id(binding) -> str | None:
     pane_id = str(getattr(binding, 'active_pane_id', None) or getattr(binding, 'pane_id', None) or '').strip()
-    if not pane_id.startswith('%'):
-        return None
-    return pane_id
+    if pane_id:
+        return pane_id
+    return runtime_ref_pane_id(getattr(binding, 'runtime_ref', None))
 
 
 def tmux_backend_for_factory(tmux_backend_factory, *, socket_path: str):
@@ -60,6 +89,9 @@ def matching_project_namespace_record(
 
 __all__ = [
     'binding_pane_id',
+    'is_pane_runtime_ref',
     'matching_project_namespace_record',
+    'runtime_ref_backend',
+    'runtime_ref_pane_id',
     'tmux_backend_for_factory',
 ]

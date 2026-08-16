@@ -3,13 +3,28 @@ from __future__ import annotations
 from .common import build_tmux_backend, tmux_target_pane_id
 
 
-def binding_runtime_alive(binding, *, tmux_backend_cls) -> bool:
+def binding_runtime_alive(
+    binding,
+    *,
+    tmux_backend_cls,
+    herdr_liveness_check_fn=None,
+) -> bool:
     identity_state = str(getattr(binding, 'provider_identity_state', None) or '').strip().lower()
     if identity_state and identity_state not in {'match', 'rotated_in_process'}:
         return False
     runtime_ref = str(binding.runtime_ref or '').strip()
     if not runtime_ref:
         return False
+    # herdr (mux:) liveness: use actual herdr IPC probe when available,
+    # fallback to pane_state check
+    if runtime_ref.startswith('mux:'):
+        if herdr_liveness_check_fn is not None:
+            try:
+                return herdr_liveness_check_fn(binding)
+            except Exception:
+                pass
+        pane_state = str(getattr(binding, 'pane_state', '') or '').strip().lower()
+        return pane_state not in {'dead', 'missing'}
     if not runtime_ref.startswith('tmux:'):
         return True
     pane_state = str(binding.pane_state or '').strip().lower()

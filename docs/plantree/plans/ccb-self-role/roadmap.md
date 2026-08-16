@@ -100,6 +100,10 @@ Date: 2026-06-10
   six built-in skills including `ccb-expert-reference`, eleven role
   references including GitHub/source/manual/command/runtime/release indexes,
   compact expert routing memory, and passing `agent-roles-spec` tests.
+- Chose a single user-facing maintenance workflow,
+  `ccb_diagnose <agentname>`, with bounded recovery, verification, and
+  explicitly authorized redacted GitHub issue submission. See
+  [decisions/007-unified-diagnose-entrypoint.md](decisions/007-unified-diagnose-entrypoint.md).
 
 ## In Progress
 
@@ -114,6 +118,9 @@ Date: 2026-06-10
 2. Add the v1 structured MCP/control-plane diagnostic helper contracts.
 3. Add release/update awareness and knowledge-refresh once the first expert
    references prove useful.
+4. Extend and verify the materialized `ccb_diagnose` command/skill adapter,
+   including mandatory pane-first deep diagnosis, incident-bundle/fingerprint
+   handling, confirmation, and exit-status contracts.
 
 ## Deferred
 

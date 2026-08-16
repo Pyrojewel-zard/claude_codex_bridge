@@ -4,12 +4,18 @@ from dataclasses import dataclass, field
 import shlex
 from typing import Any
 
-from agents.models import layout_tool_alias_command, layout_tool_alias_label, parse_layout_spec
+from agents.models import (
+    AgentValidationError,
+    layout_tool_alias_command,
+    layout_tool_alias_label,
+    normalize_agent_name,
+    parse_layout_spec,
+)
 from terminal_runtime.placeholders import pane_placeholder_cmd
-from terminal_runtime.tmux_identity import apply_ccb_pane_identity
 from terminal_runtime.tmux_theme import tmux_theme_profile
+from project_command_trust import require_project_command_approval
 
-from .backend import create_window, session_window_target, split_pane, window_root_pane
+from .backend import apply_pane_identity, create_window, respawn_pane, session_window_target, split_pane, window_root_pane
 from .sidebar_helper import SIDEBAR_HELPER_ID_OPTION, sidebar_helper_fingerprint
 
 
@@ -130,10 +136,10 @@ def _maybe_create_sidebar(
         timeout_s=timeout_s,
     )
     _append_unique(result.created_panes, user_root)
-    _respawn_sidebar(backend, root_pane, getattr(sidebar, 'launch_args', ()), cwd=str(controller._layout.project_root))
-    apply_ccb_pane_identity(
+    _respawn_sidebar(backend, root_pane, getattr(sidebar, 'launch_args', ()), cwd=str(controller._layout.project_root), timeout_s=timeout_s)
+    apply_pane_identity(
         backend,
-        root_pane,
+        pane_id=root_pane,
         title='sidebar',
         agent_label='sidebar',
         project_id=controller._project_id,
@@ -145,8 +151,9 @@ def _maybe_create_sidebar(
         managed_by='ccbd',
     )
     helper_identity = sidebar_helper_fingerprint()
-    if helper_identity:
-        backend.set_pane_user_option(root_pane, SIDEBAR_HELPER_ID_OPTION, helper_identity)
+    setter = getattr(backend, 'set_pane_user_option', None)
+    if helper_identity and callable(setter):
+        setter(root_pane, SIDEBAR_HELPER_ID_OPTION, helper_identity)
     result.sidebar_panes[window_name] = root_pane
     return user_root
 
@@ -198,19 +205,24 @@ def _materialize_new_window_agents(
                 order_index=int(getattr(window, 'order', 0) or 0),
                 created_panes=created_panes,
                 result=result,
+                project_command_field=False,
             )
             return
         _append_unique(created_panes, pane_id)
-        agent_panes[item] = pane_id
-        apply_ccb_pane_identity(
+        try:
+            agent_name = normalize_agent_name(item)
+        except AgentValidationError:
+            agent_name = item
+        agent_panes[agent_name] = pane_id
+        apply_pane_identity(
             backend,
-            pane_id,
+            pane_id=pane_id,
             title=item,
-            agent_label=item,
+            agent_label=agent_name,
             project_id=controller._project_id,
-            order_index=style_index_by_agent.get(item),
+            order_index=style_index_by_agent.get(agent_name),
             role='agent',
-            slot_key=item,
+            slot_key=agent_name,
             window_name=str(window.name),
             namespace_epoch=namespace_epoch,
             managed_by='ccbd',
@@ -253,6 +265,7 @@ def _materialize_new_tool_window(
         order_index=int(getattr(window, 'order', 0) or 0),
         created_panes=created_panes,
         result=result,
+        project_command_field=True,
     )
 
 
@@ -269,19 +282,25 @@ def _materialize_new_tool_pane(
     order_index: int,
     created_panes: list[str],
     result: WindowPatchResult | None,
+    project_command_field: bool,
 ) -> None:
     command = str(command or '').strip() or pane_placeholder_cmd()
-    respawn = getattr(backend, 'respawn_pane', None)
-    if callable(respawn):
-        respawn(pane_id, cmd=command, cwd=str(controller._layout.project_root), remain_on_exit=True)
-    else:
-        runner = getattr(backend, '_tmux_run', None)
-        if callable(runner):
-            runner(['respawn-pane', '-k', '-t', pane_id, 'sh', '-lc', command], check=False)
-    _append_unique(created_panes, pane_id)
-    apply_ccb_pane_identity(
+    if project_command_field:
+        require_project_command_approval(
+            controller._layout.project_root,
+            field_path=f'tool_windows.{str(tool_name).strip().lower()}.command',
+            field_value=command,
+        )
+    respawn_pane(
         backend,
-        pane_id,
+        pane_id=pane_id,
+        command=command,
+        cwd=str(controller._layout.project_root),
+    )
+    _append_unique(created_panes, pane_id)
+    apply_pane_identity(
+        backend,
+        pane_id=pane_id,
         title=label,
         agent_label=label,
         project_id=controller._project_id,
@@ -358,17 +377,11 @@ def _user_pane_percent_for_sidebar(width: object) -> int:
     return 85
 
 
-def _respawn_sidebar(backend, pane_id: str, launch_args: tuple[str, ...], *, cwd: str) -> None:
+def _respawn_sidebar(backend, pane_id: str, launch_args: tuple[str, ...], *, cwd: str, timeout_s: float | None) -> None:
     args = tuple(launch_args or ())
     command = ' '.join(shlex.quote(str(part)) for part in args) if args else pane_placeholder_cmd()
     command = f'CCB_SIDEBAR_THEME_PROFILE={shlex.quote(tmux_theme_profile())} {command}'
-    respawn = getattr(backend, 'respawn_pane', None)
-    if callable(respawn):
-        respawn(pane_id, cmd=command, cwd=cwd, remain_on_exit=True)
-        return
-    runner = getattr(backend, '_tmux_run', None)
-    if callable(runner):
-        runner(['respawn-pane', '-k', '-t', pane_id, 'sh', '-lc', command], check=False)
+    respawn_pane(backend, pane_id=pane_id, command=command, cwd=cwd, timeout_s=timeout_s)
 
 
 def _append_unique(values: list[str], value: str) -> None:

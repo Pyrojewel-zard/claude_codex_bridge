@@ -179,6 +179,49 @@ plan-orchestrate = "planner:fake, helper:fake"
     }
 
 
+def test_layout_status_projects_herdr_namespace_surface(tmp_path: Path, monkeypatch) -> None:
+    import cli.services.layout_status as layout_status_service
+
+    project_root = tmp_path / 'repo-layout-herdr'
+    _write_config(project_root, 'agent1:codex\n')
+    paths = PathLayout(project_root)
+    ProjectNamespaceStateStore(paths).save(
+        ProjectNamespaceState(
+            project_id=paths.project_id,
+            namespace_epoch=4,
+            tmux_socket_path='',
+            tmux_session_name='ccb-herdr',
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            namespace_id='workspace-1',
+            namespace_session_name='ccb-herdr',
+            namespace_ipc_kind='herdr_socket',
+            namespace_ipc_ref='herdr://workspace-1',
+            namespace_restore_token='raw-secret-token',
+        )
+    )
+    context = SimpleNamespace(
+        project=SimpleNamespace(project_root=project_root, project_id=paths.project_id),
+        paths=paths,
+    )
+
+    monkeypatch.setattr(
+        layout_status_service,
+        'ping_local_state',
+        lambda _context: SimpleNamespace(mount_state='mounted', socket_connectable=True),
+    )
+
+    payload = layout_status_service.layout_status(context)
+
+    projection = payload['namespace']['herdr_surface_projection']
+    assert projection['backend_impl'] == 'herdr'
+    assert projection['capability_status'] == 'partial'
+    assert projection['support_tier_projection'] == 'experimental'
+    assert projection['support_tier_projection_source'] == 'validation_pending'
+    assert projection['evidence_refs']['namespace_ref']['namespace_id'] == 'workspace-1'
+    assert 'raw-secret-token' not in str(projection)
+
+
 def test_layout_arrange_requires_mounted_namespace(tmp_path: Path, monkeypatch) -> None:
     import cli.services.layout as layout_service
 

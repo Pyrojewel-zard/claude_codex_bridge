@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 
 import '../../models/ccb_agent.dart';
 import '../../models/ccb_project_view.dart';
@@ -17,6 +18,7 @@ class AgentTerminalWorkspace extends StatefulWidget {
     required this.terminalTransport,
     required this.gatewayTerminal,
     required this.active,
+    this.onUserScrollDirectionChanged,
     super.key,
   });
 
@@ -26,6 +28,7 @@ class AgentTerminalWorkspace extends StatefulWidget {
   final TerminalTransport? terminalTransport;
   final bool gatewayTerminal;
   final bool active;
+  final ValueChanged<ScrollDirection>? onUserScrollDirectionChanged;
 
   @override
   State<AgentTerminalWorkspace> createState() => _AgentTerminalWorkspaceState();
@@ -147,6 +150,7 @@ class _AgentTerminalWorkspaceState extends State<AgentTerminalWorkspace> {
               gatewayTerminal: widget.gatewayTerminal,
               showHeader: false,
               active: widget.active && !_validating,
+              onUserScrollDirectionChanged: widget.onUserScrollDirectionChanged,
             ),
           ),
         ),

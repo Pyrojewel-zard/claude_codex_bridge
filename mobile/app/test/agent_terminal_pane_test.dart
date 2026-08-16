@@ -22,13 +22,32 @@ void main() {
         'real history\r\nolder output\r\npane only\r\nprompt\$ ',
       );
       terminal.write('\x1b[?25l\x1b[H\x1b[2Jpane changed\r\nprompt\$ ');
+      terminal.write('\x1b[?25l\x1b[H\x1b[2Jpane final\r\nprompt\$ ');
 
       final text = terminal.buffer.getText();
       expect('real history'.allMatches(text), hasLength(1));
-      expect('pane changed'.allMatches(text), hasLength(1));
+      expect('pane changed'.allMatches(text), isEmpty);
+      expect('pane final'.allMatches(text), hasLength(1));
       expect('pane only'.allMatches(text), isEmpty);
     },
   );
+
+  test('locally wrapped source snapshots replace prior projected rows', () {
+    final terminal = Terminal(maxLines: 100);
+    terminal.resize(8, 3);
+
+    terminal.write(
+      '\x1b[?25l\x1b[3J\x1b[H\x1b[2J'
+      'first-wide-line\r\nfirst-tail',
+    );
+    terminal.write('\x1b[?25l\x1b[H\x1b[2Jsecond-wide-line\r\nsecond-tail');
+    terminal.write('\x1b[?25l\x1b[H\x1b[2Jthird-wide-line\r\nthird-tail');
+
+    final text = terminal.buffer.getText();
+    expect(text, isNot(contains('first-wide-line')));
+    expect(text, isNot(contains('second-wide-line')));
+    expect('third-wide-line'.allMatches(text), hasLength(1));
+  });
 
   testWidgets('terminal shortcuts stay collapsed under a floating plus', (
     tester,
@@ -46,8 +65,18 @@ void main() {
               onEscape: () => calls.add('esc'),
               onTab: () => calls.add('tab'),
               onCtrlC: () => calls.add('ctrl-c'),
+              onCtrlD: () => calls.add('ctrl-d'),
+              onCtrlU: () => calls.add('ctrl-u'),
+              onCtrlL: () => calls.add('ctrl-l'),
+              onDelete: () => calls.add('delete'),
+              onHome: () => calls.add('home'),
+              onEnd: () => calls.add('end'),
+              onPageUp: () => calls.add('page-up'),
+              onPageDown: () => calls.add('page-down'),
+              onArrowLeft: () => calls.add('left'),
               onArrowUp: () => calls.add('up'),
               onArrowDown: () => calls.add('down'),
+              onArrowRight: () => calls.add('right'),
             ),
           ),
         ),
@@ -64,6 +93,17 @@ void main() {
     expect(find.byKey(const ValueKey('terminal-key-keyboard')), findsNothing);
     expect(find.byKey(const ValueKey('terminal-key-tab')), findsOneWidget);
     expect(find.byKey(const ValueKey('terminal-key-ctrl-c')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-ctrl-d')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-ctrl-u')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-ctrl-l')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-delete')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-home')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-end')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-page-up')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('terminal-key-page-down')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('terminal-key-latest-output')),
       findsOneWidget,
@@ -73,10 +113,13 @@ void main() {
       find.byKey(const ValueKey('terminal-key-arrow-down')),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('terminal-key-arrow-left')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('terminal-key-arrow-left')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('terminal-key-arrow-right')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(find.byKey(const ValueKey('terminal-paste-button')), findsNothing);
     expect(find.byKey(const ValueKey('terminal-resize-button')), findsNothing);
@@ -113,8 +156,18 @@ void main() {
             onEscape: () => called = true,
             onTab: () => called = true,
             onCtrlC: () => called = true,
+            onCtrlD: () => called = true,
+            onCtrlU: () => called = true,
+            onCtrlL: () => called = true,
+            onDelete: () => called = true,
+            onHome: () => called = true,
+            onEnd: () => called = true,
+            onPageUp: () => called = true,
+            onPageDown: () => called = true,
+            onArrowLeft: () => called = true,
             onArrowUp: () => called = true,
             onArrowDown: () => called = true,
+            onArrowRight: () => called = true,
           ),
         ),
       ),
@@ -180,10 +233,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     expect(binding.testTextInput.isVisible, isFalse);
 
-    final scrollable = find.descendant(
-      of: terminal,
-      matching: find.byType(Scrollable),
-    );
+    final scrollable = _verticalTerminalScrollable(terminal);
     final position = tester.state<ScrollableState>(scrollable).position;
     await tester.drag(terminal, const Offset(0, -260));
     await tester.pumpAndSettle();
@@ -192,6 +242,256 @@ void main() {
     await tester.tap(terminal);
     await tester.pump(const Duration(milliseconds: 350));
     expect(binding.testTextInput.isVisible, isTrue);
+  });
+
+  testWidgets('agent pane reflows locally without resizing the source pane', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    Widget buildPane(double fontSize, {double width = 390}) {
+      return CcbTerminalShortcutPreferencesScope(
+        preferences: CcbTerminalShortcutPreferences(fontSize: fontSize),
+        onChanged: (_) {},
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: width,
+              height: 700,
+              child: AgentTerminalPane(
+                view: view,
+                target: view.terminalTargetForAgent('mobile'),
+                terminalTransport: transport,
+                gatewayTerminal: true,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildPane(13));
+    await tester.pumpAndSettle();
+    final session = transport.sessions.single;
+
+    session.setViewport(
+      const TerminalViewport(
+        geometry: TerminalGeometry(columns: 164, rows: 47),
+        resizePolicy: TerminalResizePolicy.fixedSource,
+        revision: 1,
+      ),
+    );
+    session.addOutput('${List.filled(150, 'x').join()}RIGHT_EDGE_164');
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 180));
+
+    expect(find.text('Fit'), findsNothing);
+    expect(find.text('1:1'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('terminal-viewport-toolbar')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('terminal-font-increase')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('terminal-horizontal-viewport')),
+      findsNothing,
+    );
+    expect(
+      tester.widget<TerminalView>(find.byType(TerminalView)).textStyle.fontSize,
+      13,
+    );
+    final localColumns =
+        tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .terminal
+            .viewWidth;
+    expect(localColumns, lessThan(164));
+    expect(
+      tester.widget<TerminalView>(find.byType(TerminalView)).autoResize,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<TerminalView>(find.byType(TerminalView))
+          .terminal
+          .buffer
+          .getText(),
+      contains('RIGHT_EDGE_164'),
+    );
+    expect(session.resized, isEmpty);
+
+    await tester.pumpWidget(buildPane(13, width: 700));
+    await tester.pumpAndSettle();
+    final landscapeColumns =
+        tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .terminal
+            .viewWidth;
+    expect(landscapeColumns, greaterThan(localColumns));
+    expect(session.resized, isEmpty);
+
+    final columnsBeforeFontChange = landscapeColumns;
+    await tester.pumpWidget(buildPane(15, width: 700));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TerminalView>(find.byType(TerminalView)).textStyle.fontSize,
+      15,
+    );
+    final columnsAfterFontChange =
+        tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .terminal
+            .viewWidth;
+    expect(columnsAfterFontChange, lessThan(columnsBeforeFontChange));
+    expect(session.resized, isEmpty);
+  });
+
+  testWidgets('projected prompt deletion replaces the current input row', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 390,
+            height: 700,
+            child: AgentTerminalPane(
+              view: view,
+              target: view.terminalTargetForAgent('mobile'),
+              terminalTransport: transport,
+              gatewayTerminal: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final session = transport.sessions.single;
+
+    session.addProjection(
+      history: 'older output\n',
+      screen: 'prompt\$ xxxxx',
+      sequence: 1,
+    );
+    await tester.pump();
+    session.addProjection(
+      history: 'older output\n',
+      screen: 'prompt\$ xxxx',
+      sequence: 2,
+    );
+    await tester.pump();
+    session.addProjection(
+      history: 'older output\n',
+      screen: 'prompt\$ xxx',
+      sequence: 3,
+    );
+    await tester.pumpAndSettle();
+
+    final text =
+        tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .terminal
+            .buffer
+            .getText();
+    expect(text, contains('older output'));
+    expect(text, contains('prompt\$ xxx'));
+    expect(text, isNot(contains('prompt\$ xxxx')));
+    expect('prompt\$ '.allMatches(text), hasLength(1));
+  });
+
+  testWidgets('terminal gestures do not override control panel font size', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    await tester.pumpWidget(
+      CcbTerminalShortcutPreferencesScope(
+        preferences: CcbTerminalShortcutPreferences(fontSize: 16),
+        onChanged: (_) {},
+        child: MaterialApp(
+          home: Scaffold(
+            body: AgentTerminalPane(
+              view: view,
+              target: view.terminalTargetForAgent('mobile'),
+              terminalTransport: transport,
+              gatewayTerminal: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final terminal = find.byKey(const ValueKey('ccb-live-terminal-view'));
+    final center = tester.getCenter(terminal);
+    final first = await tester.createGesture(pointer: 1);
+    final second = await tester.createGesture(pointer: 2);
+
+    await first.down(center - const Offset(25, 0));
+    await second.down(center + const Offset(25, 0));
+    await first.moveTo(center - const Offset(55, 0));
+    await second.moveTo(center + const Offset(55, 0));
+    await tester.pump(const Duration(milliseconds: 180));
+
+    expect(
+      tester.widget<TerminalView>(find.byType(TerminalView)).textStyle.fontSize,
+      16,
+    );
+    expect(
+      find.byKey(const ValueKey('terminal-horizontal-viewport')),
+      findsNothing,
+    );
+    expect(transport.sessions.single.resized, isEmpty);
+    await first.up();
+    await second.up();
+  });
+
+  testWidgets('control panel font applies across terminal layout remounts', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    Widget buildPane(Key key) {
+      return CcbTerminalShortcutPreferencesScope(
+        preferences: CcbTerminalShortcutPreferences(fontSize: 14),
+        onChanged: (_) {},
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 390,
+              height: 700,
+              child: AgentTerminalPane(
+                key: key,
+                view: view,
+                target: view.terminalTargetForAgent('mobile'),
+                terminalTransport: transport,
+                gatewayTerminal: true,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildPane(const ValueKey('narrow-terminal')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TerminalView>(find.byType(TerminalView)).textStyle.fontSize,
+      14,
+    );
+
+    await tester.pumpWidget(buildPane(const ValueKey('wide-terminal')));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TerminalView>(find.byType(TerminalView)).textStyle.fontSize,
+      14,
+    );
   });
 
   testWidgets('live terminal pane does not echo terminal report replies', (
@@ -246,13 +546,55 @@ void main() {
 
     final session = transport.sessions.single;
     await _expandTerminalShortcuts(tester);
-    await tester.tap(find.byKey(const ValueKey('terminal-key-tab')));
-    await tester.tap(find.byKey(const ValueKey('terminal-key-escape')));
+    for (final id in [
+      'tab',
+      'escape',
+      'enter',
+      'backspace',
+      'ctrl-a',
+      'ctrl-d',
+      'ctrl-e',
+      'ctrl-k',
+      'ctrl-u',
+      'ctrl-l',
+      'ctrl-r',
+      'ctrl-w',
+      'ctrl-z',
+      'delete',
+      'home',
+      'page-up',
+      'arrow-left',
+      'arrow-right',
+      'page-down',
+      'end',
+    ]) {
+      final shortcut = find.byKey(ValueKey('terminal-key-$id'));
+      await tester.ensureVisible(shortcut);
+      await tester.tap(shortcut);
+    }
     await tester.pump();
 
     expect(session.written, [
       [9],
       [27],
+      [13],
+      [127],
+      [1],
+      [4],
+      [5],
+      [11],
+      [21],
+      [12],
+      [18],
+      [23],
+      [26],
+      [27, 91, 51, 126],
+      [27, 91, 72],
+      [27, 91, 53, 126],
+      [27, 91, 68],
+      [27, 91, 67],
+      [27, 91, 54, 126],
+      [27, 91, 70],
     ]);
   });
 
@@ -311,10 +653,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final scrollable = find.descendant(
-      of: terminal,
-      matching: find.byType(Scrollable),
-    );
+    final scrollable = _verticalTerminalScrollable(terminal);
     final position = tester.state<ScrollableState>(scrollable).position;
     expect(position.pixels, closeTo(position.maxScrollExtent, 0.1));
 
@@ -642,6 +981,17 @@ void main() {
     expect(session.reconnectCount, 0);
     expect(transport.sessions, hasLength(1));
   });
+}
+
+Finder _verticalTerminalScrollable(Finder terminal) {
+  return find.descendant(
+    of: terminal,
+    matching: find.byWidgetPredicate(
+      (widget) =>
+          widget is Scrollable &&
+          axisDirectionToAxis(widget.axisDirection) == Axis.vertical,
+    ),
+  );
 }
 
 Future<void> _expandTerminalShortcuts(WidgetTester tester) async {

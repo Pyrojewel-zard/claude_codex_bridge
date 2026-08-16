@@ -164,6 +164,13 @@ Out of scope:
 - `.ccb/ccb.config` is the highest-priority forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When `.ccb/ccb.config` is absent, `~/.ccb/ccb.config` is the user-level forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When both files are absent, the built-in default config is the forward authority for the desired agent mount set and foreground layout.
+- Before CLI startup performs provider/backend probing, it must inspect the two
+  project-local executable config fields defined by the layout contract and
+  obtain a matching user-state approval in an interactive terminal. ccbd is a
+  non-interactive enforcement boundary: bootstrap must reject missing or stale
+  approval before publishing runtime state or materializing the service graph.
+  Reload and the final tool/provider shell execution sinks must re-check the
+  exact current authority to close config-to-execution races.
 - The built-in default desired set contains exactly one `demo` agent in the
   `main` window. Its provider is the first locally available supported CLI in
   built-in priority order (`codex`, `claude`, `gemini`, then optional
@@ -287,12 +294,22 @@ Managed Codex session authority rules:
   routes, and a bound Codex session under such a route is reusable only after
   that concrete binding is stamped with matching bound-session authority
 - startup must treat the active managed Codex `sessions/` directory as
-  reusable authority, not mere residue, because Codex may auto-continue the
-  newest conversation found there even without explicit `resume`
-- when the managed Codex session namespace authority is missing or incompatible
-  with the current route authority, startup must rotate that `sessions/`
-  directory out of the active namespace before launch and scrub stale bound
-  session fields from project authority
+  Agent-owned conversation history, not credential authority and not mere
+  residue
+- missing private-HMAC namespace metadata in the canonical Agent-managed home
+  is legacy evidence to adopt when its paths and any older route proof remain
+  compatible; it is not positive mismatch evidence
+- when authority changes inside that canonical namespace, startup must retain
+  the `sessions/` tree in place so native history remains visible, record the
+  prior binding in the stable CCB conversation history, and prevent that
+  incompatible binding from automatic resume
+- startup may rotate/archive a session tree only when its home/root is outside
+  the validated Agent-managed namespace or other ownership evidence is unsafe;
+  authority change alone is not an archive instruction
+- withdrawn-v8.5.5 `*-global` or matching legacy-route archives may be merged
+  back after exact old-binding/path ownership checks; if authority changed in
+  the meantime, the recovered binding is historical linked-continuation
+  evidence rather than the current resume target
 - provider-base workspace files such as `.codex-session` remain unscoped evidence only unless no explicit configured-agent binding exists
 - startup and restore must persist and reuse the effective managed `codex_home` and derived `codex_session_root` when available
 - restore must not scan or adopt global `~/.codex/sessions` merely because a manual Codex conversation shares the same `work_dir`
@@ -307,6 +324,23 @@ Managed Claude session authority rules:
 - provider-base workspace files such as `.claude-session` remain unscoped evidence only unless no explicit configured-agent binding exists
 - startup and restore must persist and reuse the effective managed Claude home and derived roots when available
 - restore must not scan or adopt global `~/.claude/projects` merely because a manual Claude conversation shares the same `work_dir`
+
+Managed conversation continuity rules:
+
+- `ccb_session_id` identifies one launch generation; it must not be reused as
+  Provider credential authority
+- `ccb_conversation_id` remains stable across stopped Provider launches and
+  authority generations for the same configured Agent conversation
+- session authority records must retain the authority generation, continuity
+  status, resume compatibility, and prior Provider bindings without secret
+  material
+- same-authority generations may use Provider-native resume after path and
+  binding checks; known or unproven cross-authority bindings become linked
+  continuations while their native transcripts remain in the Agent-managed
+  history root
+- linked continuation preserves history and prevents an automatic clear, but
+  it must not be described as lossless native context import until the exact
+  Provider/version import path is qualified
 
 Managed provider startup mutation rules:
 
@@ -449,8 +483,9 @@ Managed provider startup mutation rules:
   `incomplete` rather than completed. Older event shapes fail closed.
 - managed Qoder and Qoder CLI CN startup must resolve the final explicit or
   managed `--config-dir` before projecting skills; optional system skills, Role
-  skills, and packaged `ask`/`ccb-clear` controls target that same effective
-  root for both visible and headless execution. The released provider key
+  skills, and packaged `ask`/`ccb-clear`/`ccb-compact`/`ccb-diagnose` controls
+  target that same effective root for both visible and headless execution. The
+  released provider key
   `qoderclicn` remains stable. An explicit config root equal to the source
   account's `.qoder` or `.qoder-cn` root remains external user authority and
   must not be mutated by CCB projection.
@@ -465,8 +500,15 @@ Managed provider startup mutation rules:
   `auth.v2.key`
 - managed Cursor must set `AGENT_CLI_CREDENTIAL_STORE=file`; on macOS it may
   read Cursor's split token services and create only the private
-  `<managed-home>/.cursor/auth.json`. Managed Copilot must set
-  `COPILOT_DISABLE_KEYTAR=1`.
+  `<managed-home>/.cursor/auth.json`. New Cursor asks execute in the exact
+  managed visible pane by default so configured startup/model arguments and
+  pane continuity remain authoritative. CCB defers delivery until the pane is
+  stably idle, binds the turn to an exact `CCB_REQ_ID` in a top-level Cursor
+  transcript under that managed home, and completes only from a later matching
+  `turn_ended` record; stale and subagent transcripts are not terminal
+  authority. `CCB_CURSOR_EXECUTION_MODE=headless` is the explicit rollback
+  path, and interrupted pane jobs remain resubmit-required. Managed Copilot
+  must set `COPILOT_DISABLE_KEYTAR=1`.
 - managed Kiro may snapshot the known source SQLite database only through a
   read-only connection and retain only auth/config tables. Kiro must fail
   closed on macOS while its current CLI exposes no private credential-store
@@ -639,12 +681,16 @@ Lifecycle startup mutation rules:
   Delayed shutdown finalization must confirm that the same project still has a
   live shutdown intent and remains stopped; it is a no-op after a later start
   has cleared the intent or published a running transaction
-- keeper readiness accepts a child only when the ping comes from the exact
-  spawned PID and daemon instance and the response independently reports the
-  expected lease generation plus a matching `mounted/running` lifecycle,
-  startup id, and mounted startup stage.  The ping itself is linearly ordered
-  after the final publication gate opens; serving-process memory or a mounted
-  file observed while that gate is held is not sufficient authority
+- keeper readiness accepts a child only when the ping reports a positive
+  serving PID and a non-empty daemon instance and independently proves the
+  expected startup id and lease/lifecycle generation plus a matching
+  `mounted/running` lifecycle and mounted startup stage. The serving PID need
+  not equal the immediate `Popen.pid`: a Windows venv launcher or another
+  process wrapper may re-exec the daemon under a different PID. The startup
+  transaction identity and generation fences remain authoritative. The ping
+  itself is linearly ordered after the final publication gate opens; serving-
+  process memory or a mounted file observed while that gate is held is not
+  sufficient authority
 - if readiness waiting fails or times out, keeper must terminate and reap only
   the independently spawned child process group before recording the failed
   attempt; a late child must not remain able to publish authority
@@ -905,6 +951,14 @@ Project namespace compatibility:
 - `cmd` bootstrap must directly `exec` the resolved user shell and must not depend on shell-language-specific inline bootstrap snippets that assume the wrapper shell is POSIX-compatible
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - provider-specific live runtime identity proof may further narrow that reuse gate
+- a persisted resolved Provider profile further narrows binding reuse:
+  - if its provider, Agent identity, normalized explicit runtime home, API/env
+    authority, MCP/plugin projection, inheritance flags, inherited-skill
+    filters, or skill overlays differ from the current desired profile,
+    startup must reject the reused binding and run normal managed Provider
+    preparation before relaunch
+  - rejecting a binding for profile drift must preserve restore policy and
+    conversation history; it is not conversation clear authority
 - for project-namespace reuse, exact membership means:
   - same project-owned tmux socket
   - same authoritative tmux session
@@ -929,6 +983,10 @@ Project namespace compatibility:
   - if provider live-identity proof is merely unavailable or `unknown`, startup may still reuse that legacy instance-scoped binding
   - if provider live-identity proof is explicitly `mismatch`, startup must reject it and relaunch
   - inferred default-server socket facts must not override an otherwise valid instance-scoped legacy binding
+- native Herdr layout materialization must split from the exact requested
+  `parent_pane`, including a non-root parent; redirecting a requested child
+  split back to the workspace root changes the declared topology and is not a
+  valid compatibility fallback
 
 ### 5.6 Runtime Supervision Is A Daemon Responsibility
 

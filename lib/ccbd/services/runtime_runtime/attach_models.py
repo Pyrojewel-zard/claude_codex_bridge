@@ -17,6 +17,12 @@ class AttachRuntimeValues:
     runtime_root: str | None
     runtime_pid: int | None
     terminal_backend: str | None
+    provider_runtime_backend_ref: dict[str, object] | None
+    namespace_ref: dict[str, object] | None
+    pane_ref: dict[str, object] | None
+    namespace_restore_token_present: bool
+    herdr_auto_restore_mode: str | None
+    herdr_agent_state_ref: str | None
     pane_id: str | None
     active_pane_id: str | None
     pane_title_marker: str | None

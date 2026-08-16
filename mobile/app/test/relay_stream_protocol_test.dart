@@ -28,6 +28,25 @@ void main() {
     expect(relayInnerPayloadSize(const {'data': 'abc'}), 14);
   });
 
+  test('relay inner protocol admits the fixed provider control operations', () {
+    for (final operation in const [
+      'get_agent_provider_control',
+      'get_agent_provider_quota',
+      'update_agent_provider_settings',
+    ]) {
+      final request = RelayInnerMessage.request(
+        requestId: 'request-$operation',
+        operation: operation,
+        payload: const {'project_id': 'project-demo', 'agent': 'worker1'},
+      );
+
+      expect(
+        RelayInnerMessage.decode(request.encode()).toJson(),
+        request.toJson(),
+      );
+    }
+  });
+
   test(
     'relay inner protocol rejects downgrade and arbitrary proxy operation',
     () {
@@ -102,5 +121,19 @@ void main() {
       ),
       throwsFormatException,
     );
+  });
+
+  test('default receive window accepts every valid single message', () {
+    final opened = RelayInnerMessage.streamOpen(
+      streamId: 'stream-demo-0001',
+      operation: 'terminal',
+      payload: const {},
+    );
+
+    expect(
+      relayStreamInitialWindowBytes,
+      greaterThanOrEqualTo(relayStreamMaxMessageBytes),
+    );
+    expect(opened.creditBytes, relayStreamInitialWindowBytes);
   });
 }

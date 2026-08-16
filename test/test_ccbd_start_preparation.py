@@ -165,6 +165,326 @@ def test_prepare_start_agents_skips_provider_preparation_for_reused_binding(
     assert prepared[0].effective_command is None
 
 
+def test_prepare_start_agents_restarts_reused_binding_when_provider_profile_drifts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-start-prep-profile-drift'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        '\n'.join(
+            [
+                'agent1:claude',
+                '',
+                '[agents.agent1.provider_profile.env]',
+                'ANTHROPIC_AUTH_TOKEN = "token-new"',
+                'ANTHROPIC_BASE_URL = "https://example.test"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    bootstrap_project(project_root)
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=False)
+    context = CliContextBuilder().build(command, cwd=project_root, bootstrap_if_missing=False)
+    config = load_project_config(project_root).config
+    paths = PathLayout(project_root)
+    runtime_dir = paths.agent_provider_runtime_dir('agent1', 'claude')
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / 'provider-profile.json').write_text(
+        json.dumps(
+            {
+                'provider': 'claude',
+                'agent_name': 'agent1',
+                'mode': 'inherit',
+                'profile_root': str(paths.provider_profiles_dir / 'agent1' / 'claude'),
+                'runtime_home': None,
+                'env': {},
+                'inherit_api': True,
+                'inherit_auth': True,
+                'inherit_config': True,
+                'inherit_skills': True,
+                'inherit_commands': True,
+                'inherit_memory': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    binding = SimpleNamespace(runtime_ref='mux:w1:p1')
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path=None,
+        tmux_session_name=None,
+        workspace_window_id=None,
+        resolve_agent_binding_fn=lambda **kwargs: binding,
+        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert [call['agent_name'] for call in calls] == ['agent1']
+    assert calls[0]['refresh_profile'] is True
+    assert prepared[0].binding is None
+    assert prepared[0].raw_binding is binding
+    assert prepared[0].stale_binding is True
+    assert prepared[0].provider_prepared is True
+    assert prepared[0].binding_reject_reason == 'provider_profile_changed'
+
+
+def test_provider_profile_reject_reason_accepts_agent_env_api_credentials(
+    tmp_path: Path,
+) -> None:
+    from ccbd.start_preparation import _provider_profile_reject_reason
+
+    spec = SimpleNamespace(
+        provider='claude',
+        env={'ANTHROPIC_API_KEY': 'sk-agent-level'},
+        provider_profile=SimpleNamespace(
+            mode='inherit',
+            home=None,
+            env={},
+            mcp_servers={},
+            plugins={},
+            inherit_api=True,
+            inherit_auth=True,
+            inherit_config=True,
+            inherit_skills=True,
+            inherit_commands=True,
+            inherit_memory=True,
+            inherited_skill_include=(),
+            inherited_skill_exclude=(),
+            skill_overlays={},
+        ),
+    )
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / 'provider-profile.json').write_text(
+        json.dumps(
+            {
+                'provider': 'claude',
+                'agent_name': 'agent1',
+                'mode': 'inherit',
+                'profile_root': None,
+                'runtime_home': None,
+                'env': {'ANTHROPIC_API_KEY': 'sk-agent-level'},
+                'inherit_api': True,
+                'inherit_auth': True,
+                'inherit_config': True,
+                'inherit_skills': True,
+                'inherit_commands': True,
+                'inherit_memory': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    paths = SimpleNamespace(agent_provider_runtime_dir=lambda agent_name, provider: runtime_dir)
+
+    assert _provider_profile_reject_reason(paths=paths, spec=spec, agent_name='agent1') is None
+
+
+def test_provider_profile_reject_reason_normalizes_relative_runtime_home(
+    tmp_path: Path,
+) -> None:
+    from ccbd.start_preparation import _provider_profile_reject_reason
+
+    project_root = tmp_path / 'repo-relative-profile-home'
+    paths = PathLayout(project_root)
+    runtime_dir = paths.agent_provider_runtime_dir('agent1', 'codex')
+    runtime_dir.mkdir(parents=True)
+    resolved_home = (project_root / 'profiles' / 'agent1-codex').resolve()
+    spec = SimpleNamespace(
+        provider='codex',
+        env={},
+        provider_profile=SimpleNamespace(
+            mode='isolated',
+            home='profiles/agent1-codex',
+            env={},
+            mcp_servers={},
+            plugins={},
+            inherit_api=True,
+            inherit_auth=True,
+            inherit_config=True,
+            inherit_skills=True,
+            inherit_commands=True,
+            inherit_memory=True,
+            inherited_skill_include=(),
+            inherited_skill_exclude=(),
+            skill_overlays={},
+        ),
+    )
+    (runtime_dir / 'provider-profile.json').write_text(
+        json.dumps(
+            {
+                'provider': 'codex',
+                'agent_name': 'agent1',
+                'mode': 'isolated',
+                'profile_root': str(resolved_home),
+                'runtime_home': str(resolved_home),
+                'env': {},
+                'inherit_api': True,
+                'inherit_auth': True,
+                'inherit_config': True,
+                'inherit_skills': True,
+                'inherit_commands': True,
+                'inherit_memory': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    assert _provider_profile_reject_reason(
+        paths=paths,
+        spec=spec,
+        agent_name='agent1',
+    ) is None
+
+
+def test_prepare_start_agents_forced_restart_rebuilds_provider_state(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-forced-restart')
+    binding = SimpleNamespace(runtime_ref='tmux:%1')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: calls.append(kwargs['agent_name']),
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path=None,
+        tmux_session_name=None,
+        workspace_window_id=None,
+        resolve_agent_binding_fn=lambda **kwargs: binding,
+        project_binding_filter_fn=lambda candidate, **kwargs: candidate,
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+        force_restart_agents=('agent1',),
+    )
+
+    assert calls == ['agent1']
+    assert prepared[0].binding is None
+    assert prepared[0].raw_binding is binding
+    assert prepared[0].stale_binding is True
+    assert prepared[0].provider_prepared is True
+    assert prepared[0].effective_command is not None
+    assert prepared[0].binding_reject_reason == 'manual_restart'
+
+
+def test_prepare_start_agents_treats_empty_tmux_socket_path_as_missing(monkeypatch, tmp_path: Path) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-empty-tmux')
+    binding = SimpleNamespace(runtime_ref='mux:w4M:p3')
+    called: list[tuple[bool, str | None]] = []
+
+    def resolve_agent_binding_fn(*, ensure_usable: bool, **kwargs):
+        del kwargs
+        called.append((ensure_usable, None))
+        return binding
+
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: None,
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path='',
+        tmux_session_name='',
+        workspace_window_id=None,
+        resolve_agent_binding_fn=resolve_agent_binding_fn,
+        project_binding_filter_fn=lambda candidate, **kwargs: (_ for _ in ()).throw(
+            AssertionError('tmux filter must not run for empty socket path')
+        ),
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert prepared[0].binding is binding
+    assert prepared[0].binding_reject_reason is None
+    assert called == [(False, None), (True, None)]
+
+
+def test_prepare_start_agents_uses_assigned_pane_fallback_for_mux_binding_without_tmux_socket(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-mux-fallback')
+    raw_binding = SimpleNamespace(
+        runtime_ref='mux:w4M:p3',
+        pane_id='w4M:p3',
+        active_pane_id='w4M:p3',
+        pane_state='unknown',
+    )
+    calls: list[bool] = []
+
+    def resolve_agent_binding_fn(*, ensure_usable: bool, **kwargs):
+        del kwargs
+        calls.append(ensure_usable)
+        return raw_binding if not ensure_usable else None
+
+    monkeypatch.setattr(
+        'ccbd.start_preparation.prepare_provider_workspace',
+        lambda **kwargs: None,
+    )
+
+    prepared = prepare_start_agents(
+        targets=('agent1',),
+        config=config,
+        paths=paths,
+        context=context,
+        project_root=project_root,
+        project_id=context.project.project_id,
+        tmux_socket_path='',
+        tmux_session_name='',
+        workspace_window_id=None,
+        namespace_agent_panes={'agent1': 'w4M:p3'},
+        resolve_agent_binding_fn=resolve_agent_binding_fn,
+        project_binding_filter_fn=lambda candidate, **kwargs: (_ for _ in ()).throw(
+            AssertionError('tmux filter must not run for empty socket path')
+        ),
+        restore_state_builder=lambda restore_mode: AgentRestoreState(
+            restore_mode=RestoreMode(restore_mode),
+            last_checkpoint=None,
+            conversation_summary='pending restore',
+        ),
+    )
+
+    assert prepared[0].binding is raw_binding
+    assert prepared[0].binding_reject_reason is None
+    assert calls == [False, True]
+
+
 def test_prepare_start_agents_prepares_missing_binding_once(monkeypatch, tmp_path: Path) -> None:
     project_root, context, config, paths = _single_codex_project(tmp_path, 'repo-start-prep-launch')
     calls: list[str] = []
@@ -340,6 +660,7 @@ workspace_mode = "inplace"
 def test_prepare_start_agents_rejects_duplicate_effective_provider_homes(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-start-prep-duplicate-provider-home'
     shared_home = tmp_path / 'shared-codex-home'
+    shared_home_toml = str(shared_home).replace('\\', '\\\\')
     (project_root / '.ccb').mkdir(parents=True)
     (project_root / '.ccb' / 'ccb.config').write_text(
         f"""version = 2
@@ -354,7 +675,7 @@ permission = "manual"
 
 [agents.agent1.provider_profile]
 mode = "isolated"
-home = "{shared_home}"
+home = "{shared_home_toml}"
 
 [agents.agent2]
 provider = "codex"
@@ -365,7 +686,7 @@ permission = "manual"
 
 [agents.agent2.provider_profile]
 mode = "isolated"
-home = "{shared_home}"
+home = "{shared_home_toml}"
 """,
         encoding='utf-8',
     )

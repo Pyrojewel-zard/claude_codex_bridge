@@ -39,6 +39,27 @@ def test_relay_inner_protocol_round_trips_fixed_request_and_stream_frames() -> N
 
 
 @pytest.mark.parametrize(
+    'operation',
+    (
+        'get_agent_provider_control',
+        'get_agent_provider_quota',
+        'update_agent_provider_settings',
+    ),
+)
+def test_relay_inner_protocol_allows_only_fixed_provider_control_operations(
+    operation: str,
+) -> None:
+    request = RelayInnerMessage(
+        kind='request',
+        request_id=f'request-{operation}',
+        operation=operation,
+        payload={'project_id': 'project-demo', 'agent': 'worker1'},
+    )
+
+    assert RelayInnerMessage.from_bytes(request.to_bytes()) == request
+
+
+@pytest.mark.parametrize(
     ('payload', 'code'),
     [
         (
@@ -130,6 +151,10 @@ def test_relay_inner_protocol_rejects_oversized_and_non_object_payloads() -> Non
 
     with pytest.raises(RelayStreamProtocolError, match='bad_request'):
         RelayInnerMessage.from_bytes(json.dumps(['not', 'an', 'object']).encode())
+
+
+def test_relay_initial_window_can_accept_every_valid_single_message() -> None:
+    assert RELAY_STREAM_INITIAL_WINDOW_BYTES >= RELAY_STREAM_MAX_MESSAGE_BYTES
 
 
 def test_relay_inner_error_codes_are_fixed_and_redacted() -> None:

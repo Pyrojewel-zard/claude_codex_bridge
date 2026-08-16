@@ -4,6 +4,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/ccb_terminal_target.dart';
 import '../models/readable_terminal_history.dart';
 import 'route_provider.dart';
@@ -103,6 +104,38 @@ abstract interface class GatewayPresenceTransport {
     String? terminalId,
     bool userActivity = false,
   });
+}
+
+abstract interface class GatewayProviderControlTransport {
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  });
+
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  });
+
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  });
+}
+
+abstract interface class GatewayHostTerminalTransport {
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  );
+
+  Future<void> terminateHostTerminal({required String clientSessionId});
 }
 
 class GatewayFileUploadResult {
@@ -272,6 +305,34 @@ class GatewayTerminalOpenRequest {
   }
 }
 
+class GatewayHostTerminalOpenRequest {
+  const GatewayHostTerminalOpenRequest({
+    required this.clientSessionId,
+    required this.displayName,
+    this.geometry = const TerminalGeometry(),
+    this.schemaVersion = 1,
+  });
+
+  final String clientSessionId;
+  final String displayName;
+  final TerminalGeometry geometry;
+  final int schemaVersion;
+
+  Map<String, Object?> toJson() {
+    return {
+      'schema_version': schemaVersion,
+      'client_session_id': clientSessionId,
+      'display_name': displayName,
+      'geometry': {
+        'columns': geometry.columns,
+        'rows': geometry.rows,
+        'pixel_width': geometry.pixelWidth,
+        'pixel_height': geometry.pixelHeight,
+      },
+    };
+  }
+}
+
 class GatewayTerminalTarget {
   GatewayTerminalTarget({
     required this.projectId,
@@ -393,12 +454,18 @@ class GatewayTerminalFrame {
     required String token,
     int? resumeCursor,
     int? lastInputSequence,
+    TerminalViewport? viewport,
   }) {
     return GatewayTerminalFrame._(GatewayTerminalFrameType.open, {
       'terminal_id': terminalId,
       'token': token,
       if (resumeCursor != null) 'resume_cursor': resumeCursor,
       if (lastInputSequence != null) 'last_input_seq': lastInputSequence,
+      if (viewport != null) ...{
+        'geometry': _terminalGeometryJson(viewport.geometry),
+        'resize_policy': viewport.resizePolicy.wireName,
+        'geometry_revision': viewport.revision,
+      },
     });
   }
 
@@ -433,14 +500,35 @@ class GatewayTerminalFrame {
     });
   }
 
+  factory GatewayTerminalFrame.geometry(TerminalViewport viewport) {
+    return GatewayTerminalFrame._(GatewayTerminalFrameType.geometry, {
+      ..._terminalGeometryJson(viewport.geometry),
+      'resize_policy': viewport.resizePolicy.wireName,
+      'revision': viewport.revision,
+    });
+  }
+
   factory GatewayTerminalFrame.output({
     required int sequence,
     required List<int> bytes,
+    List<int>? projectionScreenBytes,
+    List<int>? projectionHistoryBytes,
+    List<int>? projectionHistoryAppendBytes,
+    bool projectionHistoryReset = false,
   }) {
     _requirePositiveSequence(sequence);
     return GatewayTerminalFrame._(GatewayTerminalFrameType.output, {
       'seq': sequence,
       'bytes_b64': base64Encode(bytes),
+      if (projectionScreenBytes != null) ...{
+        'render_mode': 'replace_snapshot',
+        'screen_b64': base64Encode(projectionScreenBytes),
+        'history_reset': projectionHistoryReset,
+      },
+      if (projectionHistoryBytes != null)
+        'history_b64': base64Encode(projectionHistoryBytes),
+      if (projectionHistoryAppendBytes != null)
+        'history_append_b64': base64Encode(projectionHistoryAppendBytes),
     });
   }
 
@@ -468,6 +556,11 @@ class GatewayTerminalFrame {
         token: _jsonText(json['token']),
         resumeCursor: _jsonOptionalInt(json['resume_cursor']),
         lastInputSequence: _jsonOptionalInt(json['last_input_seq']),
+        viewport: _optionalTerminalViewport(
+          json,
+          geometryKey: 'geometry',
+          revisionKey: 'geometry_revision',
+        ),
       ),
       GatewayTerminalFrameType.input => GatewayTerminalFrame.input(
         sequence: _requiredJsonInt(json['seq'], 'seq'),
@@ -485,9 +578,23 @@ class GatewayTerminalFrame {
           pixelHeight: _jsonInt(json['pixel_height']),
         ),
       ),
+      GatewayTerminalFrameType.geometry => GatewayTerminalFrame.geometry(
+        _requiredTerminalViewport(json),
+      ),
       GatewayTerminalFrameType.output => GatewayTerminalFrame.output(
         sequence: _requiredJsonInt(json['seq'], 'seq'),
         bytes: base64Decode(_requiredJsonText(json['bytes_b64'], 'bytes_b64')),
+        projectionScreenBytes:
+            _jsonText(json['render_mode']) == 'replace_snapshot'
+                ? base64Decode(
+                  _requiredJsonText(json['screen_b64'], 'screen_b64'),
+                )
+                : null,
+        projectionHistoryBytes: _optionalBase64Bytes(json['history_b64']),
+        projectionHistoryAppendBytes: _optionalBase64Bytes(
+          json['history_append_b64'],
+        ),
+        projectionHistoryReset: json['history_reset'] == true,
       ),
       GatewayTerminalFrameType.closed => GatewayTerminalFrame.closed(
         _requiredJsonText(json['reason'], 'reason'),
@@ -508,6 +615,7 @@ enum GatewayTerminalFrameType {
   input('input'),
   paste('paste'),
   resize('resize'),
+  geometry('geometry'),
   output('output'),
   closed('closed'),
   error('error');
@@ -526,6 +634,52 @@ enum GatewayTerminalFrameType {
   }
 }
 
+Map<String, Object?> _terminalGeometryJson(TerminalGeometry geometry) {
+  return {
+    'columns': geometry.columns,
+    'rows': geometry.rows,
+    'pixel_width': geometry.pixelWidth,
+    'pixel_height': geometry.pixelHeight,
+  };
+}
+
+TerminalViewport? _optionalTerminalViewport(
+  Map<String, Object?> json, {
+  String? geometryKey,
+  String revisionKey = 'revision',
+}) {
+  final geometryValue = geometryKey == null ? json : json[geometryKey];
+  if (geometryValue == null || geometryValue is! Map) {
+    return null;
+  }
+  final geometry = {
+    for (final entry in geometryValue.entries)
+      entry.key.toString(): entry.value,
+  };
+  final policyText = _jsonText(json['resize_policy']).trim();
+  if (policyText.isEmpty) {
+    return null;
+  }
+  return TerminalViewport(
+    geometry: TerminalGeometry(
+      columns: _requiredJsonInt(geometry['columns'], 'columns'),
+      rows: _requiredJsonInt(geometry['rows'], 'rows'),
+      pixelWidth: _jsonInt(geometry['pixel_width']),
+      pixelHeight: _jsonInt(geometry['pixel_height']),
+    ),
+    resizePolicy: TerminalResizePolicy.fromWireName(policyText),
+    revision: _jsonInt(json[revisionKey]),
+  );
+}
+
+TerminalViewport _requiredTerminalViewport(Map<String, Object?> json) {
+  final viewport = _optionalTerminalViewport(json);
+  if (viewport == null) {
+    throw const FormatException('gateway terminal geometry frame is invalid');
+  }
+  return viewport;
+}
+
 void _requireText(String? value, String name) {
   if (!_hasText(value)) {
     throw ArgumentError.value(value, name, 'required');
@@ -541,6 +695,11 @@ void _requirePositiveSequence(int sequence) {
 bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
 
 String _jsonText(Object? value) => (value ?? '').toString();
+
+List<int>? _optionalBase64Bytes(Object? value) {
+  final text = _jsonText(value).trim();
+  return text.isEmpty ? null : base64Decode(text);
+}
 
 String _requiredJsonText(Object? value, String name) {
   final text = _jsonText(value).trim();

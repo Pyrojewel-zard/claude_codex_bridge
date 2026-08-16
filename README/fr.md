@@ -6,7 +6,7 @@
 **Coordonne Codex, Claude, Gemini et d'autres agents CLI dans des workflows visibles, contrôlables et reprenables directement**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.2-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -182,9 +182,9 @@ Cette commande guide l'installation et la configuration.
 <details>
 <summary><b>Détails de l'app mobile, frontière de sécurité et source</b></summary>
 
-CCB 8.5.2 inclut le code source Flutter de CCB Mobile dans [`mobile/`](../mobile/) et publie l'APK Android via GitHub Releases :
+CCB 8.6.6 inclut le code source Flutter de CCB Mobile dans [`mobile/`](../mobile/) et publie l'APK Android via GitHub Releases :
 
-- [Télécharger l'APK CCB Mobile v8.5.2](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.2/ccb-mobile-v8.5.2.apk)
+- [Télécharger l'APK CCB Mobile v8.6.6](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
 - Source de l'app : [`mobile/app`](../mobile/app)
 - Source du gateway serveur : [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -247,7 +247,7 @@ Pour la configuration courante du projet, utilisez le panneau **⚙ Paramètres*
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png" alt="Groupe WeChat" width="240">
+  <img src="../assets/weixin.png?v=0a86422d" alt="Groupe WeChat" width="240">
 </p>
 
 <a id="community"></a>

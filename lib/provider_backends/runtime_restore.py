@@ -9,6 +9,12 @@ from storage.path_helpers import runtime_project_anchor_from_path
 class ProviderRestoreTarget:
     run_cwd: Path
     has_history: bool
+    # A linked continuation is a new native Provider generation seeded from
+    # the previous local transcript.  These fields are optional so adapters
+    # that do not support native forking retain the historical contract.
+    continuation_session_id: str | None = None
+    continuation_session_path: Path | None = None
+    continuation_mode: str | None = None
 
 
 @dataclass(frozen=True)

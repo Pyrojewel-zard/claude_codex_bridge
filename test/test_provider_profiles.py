@@ -994,7 +994,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_optional_tree_
     )
 
     assert not (target_home / 'skills.ccb-projection.json').exists()
-    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
         assert (target_home / 'skills' / f'{skill_name}.ccb-projection.json').is_file()
     assert (source_skills / 'broken-role-skill').is_symlink()
@@ -1019,7 +1019,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is
     )
 
     assert not (target_home / 'skills' / 'optional').exists()
-    for skill_name in ('ask', 'ccb-clear', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
 
 
@@ -2467,6 +2467,78 @@ def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path
     assert trust['customApiKeyResponses']['approved'] == ['system-api-key']
 
 
+def test_materialize_claude_home_config_drops_inherited_base_url_when_profile_sets_its_own(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'system-token',
+                    'ANTHROPIC_BASE_URL': 'https://system.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    profile = ProviderProfileSpec(
+        env={
+            'ANTHROPIC_AUTH_TOKEN': 'agent-token',
+            'ANTHROPIC_BASE_URL': 'https://agent.example.test',
+        },
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home, profile=profile)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'ANTHROPIC_BASE_URL' not in payload.get('env', {})
+    assert 'ANTHROPIC_AUTH_TOKEN' not in payload.get('env', {})
+    assert payload.get('theme') == 'light'
+
+
+def test_materialize_claude_home_config_drops_inherited_env_when_agent_sets_its_own(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_MODEL': 'deepseek-v4-pro[1M]',
+                    'ANTHROPIC_DEFAULT_OPUS_MODEL': 'deepseek-v4-pro[1M]',
+                    'MCP_TIMEOUT': '30000',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    extra_env = {
+        'ANTHROPIC_MODEL': 'claude-opus-4-8[1M]',
+        'ANTHROPIC_DEFAULT_OPUS_MODEL': 'claude-opus-4-8[1M]',
+    }
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home, extra_env=extra_env)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'ANTHROPIC_MODEL' not in payload.get('env', {})
+    assert 'ANTHROPIC_DEFAULT_OPUS_MODEL' not in payload.get('env', {})
+    assert payload.get('env', {}).get('MCP_TIMEOUT') == '30000'
+    assert payload.get('theme') == 'light'
+
+
 def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(
     monkeypatch,
     tmp_path: Path,
@@ -2859,6 +2931,115 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         and call[call.index('-s') + 1] == 'Claude Code-credentials'
         for call in calls
     )
+
+
+def test_materialize_claude_home_config_observes_macos_keychain_logout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    calls: list[list[str]] = []
+    external_logged_in = True
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def fake_run(argv, **_kwargs):
+        nonlocal external_logged_in
+        call = [str(part) for part in argv]
+        calls.append(call)
+        command = call[1]
+        service = call[call.index('-s') + 1]
+        if (
+            command == 'find-generic-password'
+            and service == 'Claude Code-credentials'
+            and external_logged_in
+        ):
+            return Result(
+                0,
+                json.dumps({'claudeAiOauth': {'refreshToken': 'external-refresh'}}),
+            )
+        if command in {'add-generic-password', 'delete-generic-password'}:
+            return Result(0)
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    managed_service = claude_home_runtime._managed_macos_keychain_service(layout)
+    assert layout.credentials_path.is_file()
+
+    external_logged_in = False
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert not layout.credentials_path.exists()
+    manifest = json.loads(
+        (target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8')
+    )
+    assert manifest['status'] == 'source_auth_absent'
+    assert manifest['projected_files'] == []
+    assert any(
+        call[1] == 'delete-generic-password'
+        and call[call.index('-s') + 1] == managed_service
+        for call in calls
+    )
+    assert not any(
+        call[1] in {'add-generic-password', 'delete-generic-password'}
+        and call[call.index('-s') + 1] in claude_home_runtime._macos_keychain_services()
+        for call in calls
+    )
+
+
+def test_materialize_claude_home_config_keychain_error_preserves_projection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    external_state = 'present'
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def fake_run(argv, **_kwargs):
+        command = str(argv[1])
+        service = str(argv[argv.index('-s') + 1])
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            if external_state == 'present':
+                return Result(
+                    0,
+                    json.dumps({'claudeAiOauth': {'refreshToken': 'external-refresh'}}),
+                )
+            return Result(36)
+        if command == 'add-generic-password':
+            return Result(0)
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    projected = layout.credentials_path.read_bytes()
+    external_state = 'error'
+
+    with pytest.raises(RuntimeError, match='cannot determine external Claude Keychain login state'):
+        materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert layout.credentials_path.read_bytes() == projected
 
 
 def test_materialize_claude_home_config_does_not_project_macos_keychain_preferences(
@@ -3362,6 +3543,7 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
 
     assert 'name: ask' in (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'commands' / 'ask.md').read_text(encoding='utf-8') == 'ask command\n'
     assert (layout.claude_dir / 'skills' / 'ask.ccb-projection.json').is_file()
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
@@ -3524,6 +3706,7 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     assert (target_home / 'sessions').is_dir()
     assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
 
 
@@ -4038,6 +4221,7 @@ def test_materialize_claude_home_config_respects_inherit_skills_without_disablin
     assert not (layout.claude_dir / 'skills' / 'review').exists()
     assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     memory_text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
     assert '# CCB Managed Agent Memory' in memory_text
     assert 'claude-md' in memory_text
@@ -4227,7 +4411,159 @@ def test_materialize_claude_home_config_refreshes_source_auth_over_managed_auth(
     assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
 
 
-def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_not_inherited(tmp_path: Path) -> None:
+def test_materialize_claude_home_config_removes_only_source_owned_auth_after_logout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_credentials = source_home / '.claude' / '.credentials.json'
+    source_auth = source_home / '.config' / 'claude-code' / 'auth.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_auth.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'source-token',
+                    'ANTHROPIC_API_KEY': 'source-api-key',
+                    'ANTHROPIC_BASE_URL': 'https://source.example.test',
+                }
+            }
+        ),
+        encoding='utf-8',
+    )
+    source_credentials.write_text(
+        '{"claudeAiOauth":{"refreshToken":"source-refresh"}}\n',
+        encoding='utf-8',
+    )
+    source_auth.write_text('{"accessToken":"source-access"}\n', encoding='utf-8')
+    for index, path in enumerate((source_settings, source_credentials, source_auth), start=1):
+        path.chmod(0o600 + index)
+        timestamp_ns = 1_700_000_000_000_000_000 + index
+        os.utime(path, ns=(timestamp_ns, timestamp_ns))
+    source_snapshot = {
+        path: (
+            path.read_bytes(),
+            path.stat().st_mode & 0o777,
+            path.stat().st_mtime_ns,
+        )
+        for path in (source_settings, source_credentials, source_auth)
+    }
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert layout.credentials_path.is_file()
+    assert layout.auth_path.is_file()
+    manifest_path = target_home / '.ccb-auth-projection.json'
+    first_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    assert manifest_path.stat().st_mode & 0o777 == 0o600
+    assert first_manifest['status'] == 'inherited_auth'
+    assert first_manifest['projected_files'] == [
+        '.claude/.credentials.json',
+        '.config/claude-code/auth.json',
+    ]
+    assert first_manifest['projected_env_keys'] == [
+        'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN',
+    ]
+    assert all(
+        (
+            path.read_bytes(),
+            path.stat().st_mode & 0o777,
+            path.stat().st_mtime_ns,
+        )
+        == snapshot
+        for path, snapshot in source_snapshot.items()
+    )
+
+    source_credentials.unlink()
+    source_auth.unlink()
+    source_settings.write_text('{}\n', encoding='utf-8')
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'env' not in settings
+    assert not layout.credentials_path.exists()
+    assert not layout.auth_path.exists()
+    second_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    assert second_manifest['status'] == 'source_auth_absent'
+    assert second_manifest['projected_files'] == []
+    assert second_manifest['projected_env_keys'] == []
+    assert source_settings.read_text(encoding='utf-8') == '{}\n'
+    assert source_snapshot[source_credentials][0] == (
+        b'{"claudeAiOauth":{"refreshToken":"source-refresh"}}\n'
+    )
+    assert source_snapshot[source_auth][0] == b'{"accessToken":"source-access"}\n'
+
+
+def test_materialize_claude_home_config_preserves_unmarked_auth_with_malformed_manifest(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    target_credentials = target_home / '.claude' / '.credentials.json'
+    target_credentials.parent.mkdir(parents=True)
+    target_credentials.write_text(
+        '{"claudeAiOauth":{"refreshToken":"agent-private"}}\n',
+        encoding='utf-8',
+    )
+    (target_home / '.ccb-auth-projection.json').write_text(
+        '{malformed',
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert json.loads(layout.credentials_path.read_text(encoding='utf-8')) == {
+        'claudeAiOauth': {'refreshToken': 'agent-private'}
+    }
+    manifest = json.loads(
+        (target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8')
+    )
+    assert manifest['status'] == 'agent_private_or_unmanaged'
+    assert manifest['projected_files'] == []
+
+
+def test_materialize_claude_home_config_source_read_error_preserves_projection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_credentials = source_home / '.claude' / '.credentials.json'
+    source_credentials.parent.mkdir(parents=True)
+    source_credentials.write_text(
+        '{"claudeAiOauth":{"refreshToken":"source-refresh"}}\n',
+        encoding='utf-8',
+    )
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    projected = layout.credentials_path.read_bytes()
+
+    original_lstat = Path.lstat
+
+    def fail_source_lstat(path: Path):
+        if path == source_credentials:
+            raise PermissionError('simulated source read failure')
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, 'lstat', fail_source_lstat)
+
+    with pytest.raises(RuntimeError, match='cannot inspect inherited Claude auth source'):
+        materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert layout.credentials_path.read_bytes() == projected
+
+
+def test_materialize_claude_home_config_preserves_unmarked_private_auth_when_auth_is_not_inherited(
+    tmp_path: Path,
+) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     target_settings = target_home / '.claude' / 'settings.json'
@@ -4256,9 +4592,16 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     )
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
-    assert payload == {'allowedTools': []}
-    assert not layout.auth_path.exists()
-    assert not layout.credentials_path.exists()
+    assert payload == {
+        'allowedTools': [],
+        'env': {'ANTHROPIC_AUTH_TOKEN': 'managed-token'},
+    }
+    assert json.loads(layout.auth_path.read_text(encoding='utf-8')) == {
+        'refresh_token': 'stale-token'
+    }
+    assert json.loads(layout.credentials_path.read_text(encoding='utf-8')) == {
+        'claudeAiOauth': {'refreshToken': 'stale-token'}
+    }
 
 
 def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(
@@ -4489,6 +4832,199 @@ def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_aut
     assert json.loads((layout.gemini_dir / 'google_accounts.json').read_text(encoding='utf-8'))['active'] == 'user@example.test'
 
 
+def test_materialize_gemini_home_config_removes_only_source_owned_auth_after_logout(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_accounts = source_home / '.gemini' / 'google_accounts.json'
+    source_settings.parent.mkdir(parents=True)
+    source_settings.write_text(
+        json.dumps({'security': {'auth': {'selectedType': 'oauth-personal'}}}) + '\n',
+        encoding='utf-8',
+    )
+    source_oauth.write_text('{"refresh_token":"source-refresh"}\n', encoding='utf-8')
+    source_accounts.write_text('{"active":"source@example.test"}\n', encoding='utf-8')
+    source_paths = (source_settings, source_oauth, source_accounts)
+    for index, path in enumerate(source_paths, start=1):
+        path.chmod(0o600 + index)
+        timestamp_ns = 1_700_000_100_000_000_000 + index
+        os.utime(path, ns=(timestamp_ns, timestamp_ns))
+    source_snapshot = {
+        path: (
+            path.read_bytes(),
+            path.stat().st_mode & 0o777,
+            path.stat().st_mtime_ns,
+        )
+        for path in source_paths
+    }
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    manifest_path = target_home / '.ccb-auth-projection.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    assert manifest_path.stat().st_mode & 0o777 == 0o600
+    assert manifest['status'] == 'inherited_auth'
+    assert manifest['projected_files'] == ['google_accounts.json', 'oauth_creds.json']
+    assert manifest['projected_selected_type'] == 'oauth-personal'
+    assert all(
+        (
+            path.read_bytes(),
+            path.stat().st_mode & 0o777,
+            path.stat().st_mtime_ns,
+        )
+        == source_snapshot[path]
+        for path in source_paths
+    )
+
+    source_oauth.unlink()
+    source_accounts.unlink()
+    source_settings.write_text('{}\n', encoding='utf-8')
+    materialize_gemini_home_config(target_home, source_home=source_home)
+
+    settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert settings.get('security', {}).get('auth', {}).get('selectedType') is None
+    assert not (layout.gemini_dir / 'oauth_creds.json').exists()
+    assert not (layout.gemini_dir / 'google_accounts.json').exists()
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    assert manifest['status'] == 'source_auth_absent'
+    assert manifest['projected_files'] == []
+    assert manifest['projected_selected_type'] is None
+
+
+def test_materialize_gemini_home_config_preserves_unmarked_auth_with_malformed_manifest(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    target_settings = target_home / '.gemini' / 'settings.json'
+    target_oauth = target_home / '.gemini' / 'oauth_creds.json'
+    target_settings.parent.mkdir(parents=True)
+    target_settings.write_text(
+        '{"security":{"auth":{"selectedType":"oauth-personal"}}}\n',
+        encoding='utf-8',
+    )
+    target_oauth.write_text('{"refresh_token":"agent-private"}\n', encoding='utf-8')
+    (target_home / '.ccb-auth-projection.json').write_text(
+        '{malformed',
+        encoding='utf-8',
+    )
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    assert json.loads(target_oauth.read_text(encoding='utf-8')) == {
+        'refresh_token': 'agent-private'
+    }
+    settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert settings['security']['auth']['selectedType'] == 'oauth-personal'
+    manifest = json.loads(
+        (target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8')
+    )
+    assert manifest['status'] == 'agent_private_or_unmanaged'
+    assert manifest['projected_files'] == []
+
+
+def test_materialize_gemini_home_config_source_read_error_preserves_projection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_settings.parent.mkdir(parents=True)
+    source_settings.write_text(
+        '{"security":{"auth":{"selectedType":"oauth-personal"}}}\n',
+        encoding='utf-8',
+    )
+    source_oauth.write_text('{"refresh_token":"source-refresh"}\n', encoding='utf-8')
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+    projected = (layout.gemini_dir / 'oauth_creds.json').read_bytes()
+    manifest_path = target_home / '.ccb-auth-projection.json'
+    manifest = manifest_path.read_bytes()
+    original_lstat = Path.lstat
+
+    def fail_source_lstat(path: Path):
+        if path == source_oauth:
+            raise PermissionError('simulated source read failure')
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, 'lstat', fail_source_lstat)
+
+    with pytest.raises(RuntimeError, match='cannot inspect inherited Gemini auth source'):
+        materialize_gemini_home_config(target_home, source_home=source_home)
+
+    assert (layout.gemini_dir / 'oauth_creds.json').read_bytes() == projected
+    assert manifest_path.read_bytes() == manifest
+
+
+def test_materialize_gemini_home_config_explicit_credential_suppresses_external_auth(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_gemini = source_home / '.gemini'
+    source_gemini.mkdir(parents=True)
+    (source_gemini / 'settings.json').write_text(
+        json.dumps(
+            {
+                'env': {
+                    'GOOGLE_API_KEY': 'source-key',
+                    'GOOGLE_GEMINI_BASE_URL': 'https://source.example.test',
+                    'GOOGLE_CLOUD_PROJECT': 'source-project',
+                },
+                'security': {'auth': {'selectedType': 'oauth-personal'}},
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    (source_gemini / '.env').write_text(
+        '\n'.join(
+            (
+                'GOOGLE_API_KEY=source-key',
+                'GOOGLE_GEMINI_BASE_URL=https://source.example.test',
+                'GOOGLE_CLOUD_PROJECT=source-project',
+            )
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    (source_gemini / 'oauth_creds.json').write_text(
+        '{"refresh_token":"source-refresh"}\n',
+        encoding='utf-8',
+    )
+    profile = ProviderProfileSpec(
+        env={
+            'GEMINI_API_KEY': 'explicit-key',
+            'GOOGLE_GEMINI_BASE_URL': 'https://explicit.example.test',
+        }
+    )
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        profile=profile,
+        source_home=source_home,
+    )
+
+    settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert settings['security']['auth']['selectedType'] == 'gemini-api-key'
+    assert settings['env'] == {'GOOGLE_CLOUD_PROJECT': 'source-project'}
+    dotenv = (layout.gemini_dir / '.env').read_text(encoding='utf-8')
+    assert 'GOOGLE_CLOUD_PROJECT="source-project"' in dotenv
+    assert 'GOOGLE_API_KEY' not in dotenv
+    assert 'GOOGLE_GEMINI_BASE_URL' not in dotenv
+    assert not (layout.gemini_dir / 'oauth_creds.json').exists()
+    manifest = json.loads(
+        (target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8')
+    )
+    assert manifest['status'] == 'explicit_api_authority'
+    assert manifest['projected_files'] == []
+
+
 def test_materialize_gemini_home_config_imports_system_keyring_oauth_one_way(
     monkeypatch,
     tmp_path: Path,
@@ -4521,11 +5057,11 @@ def test_materialize_gemini_home_config_imports_system_keyring_oauth_one_way(
     monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
     monkeypatch.setattr(gemini_home_runtime, '_system_home_root', lambda: source_home)
 
-    def fake_read(service: str, account: str, **_kwargs) -> str:
+    def fake_read(service: str, account: str, **_kwargs):
         keyring_calls.append((service, account))
-        return stored
+        return gemini_home_runtime.KeyringReadResult('present', value=stored)
 
-    monkeypatch.setattr(gemini_home_runtime, 'read_keyring_password', fake_read)
+    monkeypatch.setattr(gemini_home_runtime, 'read_keyring_password_state', fake_read)
 
     layout = materialize_gemini_home_config(target_home)
 
@@ -4544,6 +5080,47 @@ def test_materialize_gemini_home_config_imports_system_keyring_oauth_one_way(
     assert source_settings.is_file()
 
 
+def test_materialize_gemini_home_config_keyring_error_preserves_projection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.gemini' / 'settings.json'
+    source_settings.parent.mkdir(parents=True)
+    source_settings.write_text(
+        '{"security":{"auth":{"selectedType":"oauth-personal"}}}\n',
+        encoding='utf-8',
+    )
+    stored = json.dumps(
+        {
+            'token': {
+                'accessToken': 'source-access',
+                'refreshToken': 'source-refresh',
+            }
+        }
+    )
+    external_state = 'present'
+
+    def fake_read(*_args, **_kwargs):
+        if external_state == 'present':
+            return gemini_home_runtime.KeyringReadResult('present', value=stored)
+        return gemini_home_runtime.KeyringReadResult('error', detail='simulated keyring failure')
+
+    monkeypatch.delenv('CCB_SOURCE_HOME', raising=False)
+    monkeypatch.setattr(gemini_home_runtime, '_system_home_root', lambda: source_home)
+    monkeypatch.setattr(gemini_home_runtime, 'read_keyring_password_state', fake_read)
+
+    layout = materialize_gemini_home_config(target_home)
+    projected = (layout.gemini_dir / 'oauth_creds.json').read_bytes()
+    external_state = 'error'
+
+    with pytest.raises(RuntimeError, match='cannot determine external Gemini keyring login state'):
+        materialize_gemini_home_config(target_home)
+
+    assert (layout.gemini_dir / 'oauth_creds.json').read_bytes() == projected
+
+
 def test_materialize_gemini_home_config_does_not_query_keyring_for_fixture_source(
     monkeypatch,
     tmp_path: Path,
@@ -4558,7 +5135,7 @@ def test_materialize_gemini_home_config_does_not_query_keyring_for_fixture_sourc
     )
     monkeypatch.setattr(
         gemini_home_runtime,
-        'read_keyring_password',
+        'read_keyring_password_state',
         lambda *_args, **_kwargs: pytest.fail('explicit fixture must not query OS keyring'),
     )
 
@@ -4572,6 +5149,7 @@ def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_w
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.gemini' / 'settings.json'
     source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_accounts = source_home / '.gemini' / 'google_accounts.json'
     source_settings.parent.mkdir(parents=True, exist_ok=True)
     source_settings.write_text(
         json.dumps(
@@ -4592,11 +5170,8 @@ def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_w
         json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
-    target_oauth = target_home / '.gemini' / 'oauth_creds.json'
-    target_oauth.parent.mkdir(parents=True, exist_ok=True)
-    target_oauth.write_text('{"refresh_token":"stale-token"}\n', encoding='utf-8')
-    target_accounts = target_home / '.gemini' / 'google_accounts.json'
-    target_accounts.write_text('{"active":"stale@example.test"}\n', encoding='utf-8')
+    source_accounts.write_text('{"active":"source@example.test"}\n', encoding='utf-8')
+    materialize_gemini_home_config(target_home, source_home=source_home)
 
     layout = materialize_gemini_home_config(
         target_home,
@@ -4645,6 +5220,53 @@ def test_materialize_gemini_home_config_strips_api_auth_selection_when_api_not_i
     assert payload.get('env') is None
     assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
     assert not (layout.gemini_dir / '.env').exists()
+
+
+def test_materialize_gemini_env_refresh_preserves_agent_private_values(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home-env-refresh'
+    target_home = tmp_path / 'managed-home-env-refresh'
+    source_env = source_home / '.gemini' / '.env'
+    source_env.parent.mkdir(parents=True)
+    source_env.write_text('GEMINI_API_KEY=source-a\n', encoding='utf-8')
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+    target_env = layout.gemini_dir / '.env'
+    target_env.write_text(
+        target_env.read_text(encoding='utf-8') + 'AGENT_PRIVATE_VALUE="keep-me"\n',
+        encoding='utf-8',
+    )
+    source_env.write_text('GEMINI_API_KEY=source-b\n', encoding='utf-8')
+
+    materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = gemini_home_runtime._read_env_file(target_env)
+    manifest = json.loads((target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8'))
+    assert payload == {
+        'AGENT_PRIVATE_VALUE': 'keep-me',
+        'GEMINI_API_KEY': 'source-b',
+    }
+    assert manifest['projected_env_keys'] == ['GEMINI_API_KEY']
+
+
+def test_materialize_gemini_env_removes_only_manifest_owned_values(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home-env-logout'
+    target_home = tmp_path / 'managed-home-env-logout'
+    source_env = source_home / '.gemini' / '.env'
+    source_env.parent.mkdir(parents=True)
+    source_env.write_text('GOOGLE_API_KEY=source-key\n', encoding='utf-8')
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+    target_env = layout.gemini_dir / '.env'
+    target_env.write_text(
+        target_env.read_text(encoding='utf-8') + 'AGENT_PRIVATE_VALUE="keep-me"\n',
+        encoding='utf-8',
+    )
+    source_env.unlink()
+
+    materialize_gemini_home_config(target_home, source_home=source_home)
+
+    assert gemini_home_runtime._read_env_file(target_env) == {
+        'AGENT_PRIVATE_VALUE': 'keep-me',
+    }
 
 
 def test_materialize_gemini_home_config_preserves_runtime_hooks(tmp_path: Path) -> None:

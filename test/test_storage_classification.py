@@ -199,6 +199,7 @@ def test_provider_home_classifier_preserves_secret_precedence_and_unknowns(tmp_p
         ('kiro', ('data', 'kiro-cli', 'data.sqlite3')),
         ('mimo', ('.mimocode', 'token.json')),
         ('opencode', ('data', 'opencode', 'account.json')),
+        ('omp', ('.omp', 'agent', 'agent.db')),
         ('crush', ('data', 'providers.json')),
         ('zai', ('.zai', 'user-settings.json')),
     ),
@@ -215,6 +216,39 @@ def test_auth_bearing_mixed_provider_files_are_secret(
         f'agents/agent1/provider-state/{provider}/home/{"/".join(remainder)}',
         provider,
         'agent1',
+        remainder,
+        size=3,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == 'secret'
+    assert entry.reason == 'provider_mixed_auth_state'
+
+
+@pytest.mark.parametrize(
+    'name',
+    (
+        'agent.db-wal',
+        'agent.db-shm',
+        'config.yml',
+        'config.yaml',
+        'models.yml',
+        'models.yaml',
+        'models.json',
+        'oauth.json',
+        'settings.json',
+    ),
+)
+def test_omp_auth_capable_projection_files_are_secret(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    remainder = ('.omp', 'agent', name)
+    entry = classify_provider_home(
+        tmp_path.joinpath(*remainder),
+        f'agents/omp1/provider-state/omp/home/{"/".join(remainder)}',
+        'omp',
+        'omp1',
         remainder,
         size=3,
         root_kind='project',
@@ -373,6 +407,7 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     _write(pi_state / 'sessions' / 'session.jsonl', '{}\n')
     _write(grok_state / 'home' / '.grok' / 'sessions' / 'session.jsonl', '{}\n')
     _write(grok_state / 'home' / '.grok' / 'skills' / 'ask' / 'SKILL.md', '# ask\n')
+    _write(grok_state / 'home' / '.grok' / 'skills' / 'ccb-diagnose' / 'SKILL.md', '# diagnose\n')
     _write(grok_state / 'home' / '.grok' / 'skills' / 'help' / 'SKILL.md', '# help\n')
     _write(droid_state / 'home' / '.factory' / 'auth.v2.file', 'ciphertext\n')
     _write(droid_state / 'home' / '.factory' / 'auth.v2.key', 'key\n')
@@ -485,6 +520,7 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     assert records['agents/agent13/provider-state/grok/home/.grok/sessions/session.jsonl']['storage_class'] == 'session'
     assert records['agents/agent13/provider-state/grok/home/.grok/sessions/session.jsonl']['reason'] == 'native_cli_provider_state'
     assert records['agents/agent13/provider-state/grok/home/.grok/skills/ask/SKILL.md']['storage_class'] == 'projected_config'
+    assert records['agents/agent13/provider-state/grok/home/.grok/skills/ccb-diagnose/SKILL.md']['storage_class'] == 'projected_config'
     assert records['agents/agent13/provider-state/grok/home/.grok/skills/help/SKILL.md']['storage_class'] == 'session'
     assert records['agents/agent14/provider-state/droid/home/.factory/auth.v2.file']['storage_class'] == 'secret'
     assert records['agents/agent14/provider-state/droid/home/.factory/auth.v2.key']['storage_class'] == 'secret'

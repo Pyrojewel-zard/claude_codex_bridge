@@ -18,11 +18,26 @@ def _namespace_blocked_reason(controller, current) -> tuple[str, str] | None:
         return ('project_id_mismatch', 'project namespace project_id does not match controller project_id')
     if getattr(current, 'namespace_epoch', None) is None:
         return ('namespace_epoch_missing', 'project namespace epoch is missing')
-    if str(getattr(current, 'tmux_socket_path', '') or '').strip() == '':
-        return ('tmux_socket_path_missing', 'project namespace tmux socket path is missing')
     if str(getattr(current, 'tmux_session_name', '') or '').strip() == '':
         return ('tmux_session_name_missing', 'project namespace tmux session name is missing')
+    if _is_herdr_namespace(current):
+        if str(getattr(current, 'namespace_id', '') or '').strip() == '':
+            return ('namespace_id_missing', 'project namespace id is missing')
+        if str(getattr(current, 'namespace_ipc_ref', '') or '').strip() == '':
+            return ('namespace_ipc_ref_missing', 'project namespace IPC reference is missing')
+        if str(getattr(current, 'namespace_ipc_kind', '') or '').strip() == '':
+            return ('namespace_ipc_kind_missing', 'project namespace IPC kind is missing')
+        return None
+    if str(getattr(current, 'tmux_socket_path', '') or '').strip() == '':
+        return ('tmux_socket_path_missing', 'project namespace tmux socket path is missing')
     return None
+
+
+def _is_herdr_namespace(current) -> bool:
+    return (
+        str(getattr(current, 'backend_impl', '') or '').strip() == 'herdr'
+        or str(getattr(current, 'namespace_backend_family', '') or '').strip() == 'herdr-native'
+    )
 
 
 __all__ = ['ready_namespace_or_blocked']

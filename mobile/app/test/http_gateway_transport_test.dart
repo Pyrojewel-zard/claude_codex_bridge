@@ -16,6 +16,7 @@ void main() {
   final fileNameHeaders = <String?>[];
   final contentTypes = <String?>[];
   final terminalMessages = <Map<String, Object?>>[];
+  final terminalConnectionMessages = <List<Map<String, Object?>>>[];
   final projectListPayloads = <Map<String, Object?>>[];
 
   setUp(() async {
@@ -27,6 +28,7 @@ void main() {
     fileNameHeaders.clear();
     contentTypes.clear();
     terminalMessages.clear();
+    terminalConnectionMessages.clear();
     projectListPayloads.clear();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
@@ -42,13 +44,17 @@ void main() {
       if (request.uri.path == '/v1/terminals/term_demo_mobile') {
         bodies.add('');
         final socket = await WebSocketTransformer.upgrade(request);
+        final connectionMessages = <Map<String, Object?>>[];
+        terminalConnectionMessages.add(connectionMessages);
         socket.listen((message) {
           final decoded = jsonDecode(message.toString());
           if (decoded is Map) {
-            terminalMessages.add({
+            final parsed = {
               for (final entry in decoded.entries)
                 entry.key.toString(): entry.value,
-            });
+            };
+            terminalMessages.add(parsed);
+            connectionMessages.add(parsed);
           }
           if (decoded is Map && decoded['type'] == 'open') {
             socket.add(
@@ -82,14 +88,14 @@ void main() {
       bodies.add(body);
       final payload =
           request.uri.path == '/v1/projects' && projectListPayloads.isNotEmpty
-          ? _GatewayResponse(projectListPayloads.removeAt(0))
-          : _payloadForRequest(
-              request.method,
-              request.uri.path,
-              body,
-              authorization,
-              request.headers.value(HttpHeaders.hostHeader),
-            );
+              ? _GatewayResponse(projectListPayloads.removeAt(0))
+              : _payloadForRequest(
+                request.method,
+                request.uri.path,
+                body,
+                authorization,
+                request.headers.value(HttpHeaders.hostHeader),
+              );
       request.response.headers.contentType = ContentType.json;
       request.response.statusCode = payload.statusCode;
       request.response.write(jsonEncode(payload.body));
@@ -122,6 +128,10 @@ void main() {
     expect(health.serverTime, DateTime.utc(2026, 6, 18));
     expect(health.capabilities, {'http_json', 'project_view'});
     expect(requests, ['/v1/health']);
+  });
+
+  test('terminal WebSocket heartbeat is enabled by default', () {
+    expect(transport.terminalPingInterval, const Duration(seconds: 15));
   });
 
   test(
@@ -260,6 +270,72 @@ void main() {
         isNot(contains('tmux.sock')),
       );
       expect(requests, ['/v1/projects/proj-demo/view']);
+    },
+  );
+
+  test(
+    'reads and updates provider control with complete fencing fields',
+    () async {
+      final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+      final authed = HttpGatewayTransport(
+        profile: GatewayHostProfile(
+          hostId: 'host-demo',
+          deviceId: 'device-demo',
+          routeProvider: RouteProvider(
+            kind: RouteProviderKind.lan,
+            gatewayUrl: baseUrl,
+          ),
+          scopes: {'view', 'provider_settings'},
+        ),
+        deviceToken: 'device-secret',
+      );
+      try {
+        final details = await authed.getAgentProviderControl(
+          projectId: 'proj-demo',
+          agentName: 'mobile',
+        );
+        final quota = await authed.getAgentProviderQuota(
+          projectId: 'proj-demo',
+          agentName: 'mobile',
+        );
+        final result = await authed.updateAgentProviderSettings(
+          projectId: 'proj-demo',
+          agentName: 'mobile',
+          model: 'gpt-5.6-sol',
+          thinking: 'xhigh',
+          expectedRevision: 'config-r1',
+          expectedNamespaceEpoch: 4,
+          expectedProvider: 'codex',
+          expectedRuntimeRevision: 'runtime-r1',
+          idempotencyKey: 'provider-idempotency-0001',
+        );
+
+        expect(details.control.activeModel, 'gpt-5.5');
+        expect(details.accountUsage, isNull);
+        expect(quota.windows.single.usedPct, 25);
+        expect(result.status, 'pending_restart');
+        expect(requests, [
+          '/v1/projects/proj-demo/agents/mobile/provider-control',
+          '/v1/projects/proj-demo/agents/mobile/provider-quota',
+          '/v1/projects/proj-demo/agents/mobile/provider-control',
+        ]);
+        expect(authorizations, [
+          'Bearer device-secret',
+          'Bearer device-secret',
+          'Bearer device-secret',
+        ]);
+        expect(jsonDecode(bodies.last), {
+          'model': 'gpt-5.6-sol',
+          'thinking': 'xhigh',
+          'expected_revision': 'config-r1',
+          'expected_namespace_epoch': 4,
+          'expected_provider': 'codex',
+          'expected_runtime_revision': 'runtime-r1',
+          'idempotency_key': 'provider-idempotency-0001',
+        });
+      } finally {
+        authed.close(force: true);
+      }
     },
   );
 
@@ -541,6 +617,42 @@ void main() {
     }
   });
 
+  test('opens and terminates a host terminal through host routes', () async {
+    final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+    final authed = HttpGatewayTransport(
+      profile: GatewayHostProfile(
+        hostId: 'host-demo',
+        deviceId: 'device-demo',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: baseUrl,
+        ),
+        scopes: {'view', 'host_terminal'},
+      ),
+      deviceToken: 'device-secret',
+    );
+    try {
+      final request = const GatewayHostTerminalOpenRequest(
+        clientSessionId: 'shell-2',
+        displayName: 'Shell 2',
+        geometry: TerminalGeometry(columns: 100, rows: 30),
+      );
+
+      final handle = await authed.openHostTerminal(request);
+      await authed.terminateHostTerminal(clientSessionId: 'shell-2');
+
+      expect(handle.targetSummary.projectId, '@host');
+      expect(requests, ['/v1/terminals', '/v1/terminals/terminate']);
+      expect(jsonDecode(bodies.first), request.toJson());
+      expect(jsonDecode(bodies.last), {
+        'schema_version': 1,
+        'client_session_id': 'shell-2',
+      });
+    } finally {
+      authed.close(force: true);
+    }
+  });
+
   test('streams terminal frames through gateway websocket', () async {
     final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
     final authed = HttpGatewayTransport(
@@ -696,6 +808,77 @@ void main() {
   });
 
   test(
+    'canceling a superseded terminal stream keeps the current socket',
+    () async {
+      final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+      final authed = HttpGatewayTransport(
+        profile: GatewayHostProfile(
+          hostId: 'host-demo',
+          deviceId: 'device-demo',
+          routeProvider: RouteProvider(
+            kind: RouteProviderKind.lan,
+            gatewayUrl: baseUrl,
+          ),
+          scopes: {'view', 'focus', 'terminal_input'},
+        ),
+        deviceToken: 'device-secret',
+      );
+      StreamSubscription<GatewayTerminalFrame>? firstSubscription;
+      StreamSubscription<GatewayTerminalFrame>? secondSubscription;
+      try {
+        final handle = await authed.openTerminal(
+          GatewayTerminalOpenRequest(
+            target: GatewayTerminalTarget(
+              projectId: 'proj-demo',
+              namespaceEpoch: 4,
+              kind: CcbTerminalTargetKind.agent,
+              agent: 'mobile',
+              window: 'main',
+            ),
+          ),
+        );
+        firstSubscription = authed.terminalFrames(handle).listen((_) {});
+        await _waitFor(
+          () =>
+              terminalConnectionMessages.length == 1 &&
+              terminalConnectionMessages.first.isNotEmpty,
+        );
+
+        secondSubscription = authed
+            .terminalFrames(handle, resumeCursor: 1)
+            .listen((_) {});
+        await _waitFor(
+          () =>
+              terminalConnectionMessages.length == 2 &&
+              terminalConnectionMessages.last.isNotEmpty,
+        );
+
+        await firstSubscription.cancel();
+        firstSubscription = null;
+        await authed.sendTerminalFrame(
+          handle,
+          GatewayTerminalFrame.input(sequence: 9, bytes: [0x78]),
+        );
+        await _waitFor(
+          () => terminalConnectionMessages.last.any(
+            (message) => message['type'] == 'input' && message['seq'] == 9,
+          ),
+        );
+
+        expect(terminalConnectionMessages.last.last, {
+          'type': 'input',
+          'seq': 9,
+          'bytes_b64': base64Encode([0x78]),
+        });
+      } finally {
+        await firstSubscription?.cancel();
+        await secondSubscription?.cancel();
+        authed.close(force: true);
+      }
+    },
+  );
+
+  test(
     'fails closed for missing routes and disconnected terminal sends',
     () async {
       await expectLater(
@@ -806,6 +989,99 @@ _GatewayResponse _payloadForRequest(
       },
     });
   }
+  if (method == 'POST' && path == '/v1/terminals') {
+    return _GatewayResponse({
+      'schema_version': 1,
+      'terminal_id': 'term_host_2',
+      'terminal_token': 'host-terminal-secret',
+      'expires_at': '2026-06-18T00:05:00Z',
+      'websocket_url':
+          'ws://${host ?? "127.0.0.1:8787"}/v1/terminals/term_host_2',
+      'target_epoch': 0,
+      'target_summary': {'project_id': '@host'},
+    });
+  }
+  if (method == 'POST' && path == '/v1/terminals/terminate') {
+    return _GatewayResponse({
+      'schema_version': 1,
+      'status': 'ok',
+      'client_session_id': 'shell-2',
+      'terminated': true,
+    });
+  }
+  if (path == '/v1/projects/proj-demo/agents/mobile/provider-control') {
+    if (authorization != 'Bearer device-secret') {
+      return _GatewayResponse({
+        'status': 'error',
+        'error': 'device scope denied',
+      }, 403);
+    }
+    if (method == 'POST') {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map ||
+          decoded['expected_namespace_epoch'] != 4 ||
+          decoded['expected_revision'] != 'config-r1' ||
+          decoded['expected_runtime_revision'] != 'runtime-r1' ||
+          decoded['idempotency_key'] != 'provider-idempotency-0001') {
+        return _GatewayResponse({
+          'status': 'error',
+          'error': 'stale provider settings',
+        }, 409);
+      }
+      return _GatewayResponse({
+        'status': 'pending_restart',
+        'agent': 'mobile',
+        'provider': 'codex',
+        'configured_model': decoded['model'],
+        'configured_thinking': decoded['thinking'],
+        'config_revision': 'config-r2',
+        'changed': true,
+        'restart_required': true,
+        'idempotency_key': decoded['idempotency_key'],
+        'namespace_epoch': 4,
+      });
+    }
+    return _GatewayResponse({
+      'project_id': 'proj-demo',
+      'agent': 'mobile',
+      'namespace_epoch': 4,
+      'config_revision': 'config-r1',
+      'provider_control': {
+        'provider': 'codex',
+        'configured_model': 'gpt-5.5',
+        'active_model': 'gpt-5.5',
+        'runtime_revision': 'runtime-r1',
+        'capabilities': {'model_select': true, 'account_quota': true},
+        'mutation_mode': 'restart_required',
+      },
+      'provider_catalog': {
+        'id': 'codex',
+        'model_shortcut': true,
+        'models': [
+          {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
+        ],
+      },
+    });
+  }
+  if (path == '/v1/projects/proj-demo/agents/mobile/provider-quota') {
+    if (authorization != 'Bearer device-secret') {
+      return _GatewayResponse({
+        'status': 'error',
+        'error': 'device scope denied',
+      }, 403);
+    }
+    return _GatewayResponse({
+      'project_id': 'proj-demo',
+      'agent': 'mobile',
+      'account_usage': {
+        'provider_id': 'codex',
+        'status': 'available',
+        'windows': [
+          {'id': 'weekly', 'label': 'Weekly', 'used_pct': 25},
+        ],
+      },
+    });
+  }
   if (method == 'POST' && path == '/v1/projects/proj-demo/lifecycle') {
     if (authorization != 'Bearer device-secret') {
       return _GatewayResponse({
@@ -896,43 +1172,43 @@ _GatewayResponse _payloadForRequest(
     '/v1/devices/me' =>
       authorization == 'Bearer device-secret'
           ? _GatewayResponse({
-              'schema_version': 1,
-              'status': 'ok',
-              'device': {
-                'device_id': 'dev-demo',
-                'name': 'Pixel Fold',
-                'project_id': 'proj-demo',
-                'pairing_id': 'pair-demo',
-                'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
-                'route_provider': 'cloudflare_tunnel',
-                'gateway_url': 'http://${host ?? "127.0.0.1:8787"}',
-                'created_at': '2026-06-18T00:00:00Z',
-                'last_seen_at': '2026-06-18T00:01:00Z',
-                'revoked': false,
-                'revoked_at': null,
-              },
-            })
+            'schema_version': 1,
+            'status': 'ok',
+            'device': {
+              'device_id': 'dev-demo',
+              'name': 'Pixel Fold',
+              'project_id': 'proj-demo',
+              'pairing_id': 'pair-demo',
+              'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
+              'route_provider': 'cloudflare_tunnel',
+              'gateway_url': 'http://${host ?? "127.0.0.1:8787"}',
+              'created_at': '2026-06-18T00:00:00Z',
+              'last_seen_at': '2026-06-18T00:01:00Z',
+              'revoked': false,
+              'revoked_at': null,
+            },
+          })
           : _GatewayResponse({
-              'schema_version': 1,
-              'status': 'error',
-              'error': 'device token required',
-            }, 401),
+            'schema_version': 1,
+            'status': 'error',
+            'error': 'device token required',
+          }, 401),
     '/v1/devices/me/presence' =>
       authorization == 'Bearer device-secret'
           ? _GatewayResponse({
-              'schema_version': 1,
-              'status': 'ok',
-              'presence': {
-                'device_id': 'dev-demo',
-                'visible': true,
-                'freshness': 'fresh',
-              },
-            })
+            'schema_version': 1,
+            'status': 'ok',
+            'presence': {
+              'device_id': 'dev-demo',
+              'visible': true,
+              'freshness': 'fresh',
+            },
+          })
           : _GatewayResponse({
-              'schema_version': 1,
-              'status': 'error',
-              'error': 'device token required',
-            }, 401),
+            'schema_version': 1,
+            'status': 'error',
+            'error': 'device token required',
+          }, 401),
     '/v1/projects' => _GatewayResponse({
       'schema_version': 1,
       'projects': [

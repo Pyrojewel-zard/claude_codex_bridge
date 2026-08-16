@@ -1,7 +1,7 @@
 # Codex Reconnect
 
-Date: 2026-07-26
-Status: Tmux primary mode 0.3.3 integrated into CCB; real-fault requalification open
+Date: 2026-08-05
+Status: CCB automatic activation implemented; real-fault requalification open
 Mode: Execute ready
 
 ## Plan State
@@ -15,14 +15,17 @@ Mode: Execute ready
 - [Decision 004: unify the session command as reconnect](decisions/004-session-command-reconnect.md)
 - [Decision 005: standalone repository authority](decisions/005-standalone-repository-authority.md)
 - [Decision 006: tmux session watcher and input injection](decisions/006-tmux-session-watcher-and-input-injection.md)
+- [Decision 007: CCB automatic installation and activation](decisions/007-ccb-automatic-install-and-activation.md)
 
 ## Purpose
 
-Provide an independent, opt-in supervisor for terminal network disconnects and
+Provide an independent supervisor for terminal network disconnects and
 selected-model service overload in an interactive Codex CLI already running in
-tmux. It must leave the native `codex` executable and all Codex arguments
-untouched, bind recovery to the exact thread and pane, and fail closed when
-identity or input safety cannot be proved.
+tmux. Standalone Codex use remains opt-in. CCB-managed Codex sessions install
+the bundled command and arm recovery automatically after authoritative session
+binding. Both modes must leave the native `codex` executable and all Codex
+arguments untouched, bind recovery to the exact thread and pane, and fail
+closed when identity or input safety cannot be proved.
 
 The authoritative product repository is
 [`SeemSeam/codex-reconnect`](https://github.com/SeemSeam/codex-reconnect), with
@@ -44,6 +47,11 @@ The installed user skill maps those exact invocations to
 `codex-reconnect on/off`. `on` outside tmux or a valid CCB-managed tmux binding
 is an immediate error and does not start a watcher. The CLI retains `status`
 for diagnostics, but it is not part of the skill's user-facing contract.
+
+For CCB-managed Codex, `on` is also invoked automatically by the CCB bridge
+only after the managed session file contains a concrete Codex thread binding.
+One successful automatic activation is attempted per bridge/thread. Later
+`$reconnect off` and circuit-open state are not undone by background polling.
 
 ## Frozen Scope
 
@@ -80,8 +88,10 @@ Out of scope:
 - Codex internal retry is authoritative; `willRetry=true` never creates a
   duplicate user turn.
 - A matching terminal `task_complete` is required before recovery begins.
-- Network continuation requires two consecutive successful OpenAI/Codex HTTPS
-  probes. Public HTTPS is diagnostic only; ICMP is not a readiness signal.
+- Network continuation requires two consecutive successful HTTPS probes against
+  the active Codex provider route. The managed Codex config route takes
+  precedence over ambient API route variables; the standard OpenAI route is the
+  fallback. Public HTTPS is diagnostic only; ICMP is not a readiness signal.
 - All newly persisted session events are drained again before injection. Newer
   user or turn progress cancels recovery.
 - The tmux socket, pane id, pane pid, foreground command, and Codex empty-input
@@ -107,7 +117,7 @@ native Codex TUI in a tmux pane
        v                            ^
 owner-only background watcher -- tmux socket / exact pane binding
        |
-       +-- OpenAI/Codex HTTPS readiness probes
+       +-- active-provider HTTPS readiness probes
        +-- owner-only state and redacted audit log
 ```
 
@@ -124,7 +134,7 @@ the default activation path and the global skill does not use it.
 
 ```text
 OFF
-  -> ARMING                    exact $reconnect on in a valid tmux Codex
+  -> ARMING                    exact $reconnect on, or bound CCB auto-activation
 
 ARMING
   -> ARMED                     empty-input cursor state observed
@@ -154,15 +164,22 @@ RECOVERY_SENT
 
 ## Qualification Boundary
 
-The 51-test deterministic suite, repeated JSONL/SQLite/input-race regression,
-user-level skill
-discovery, non-tmux failure, atomic real-tmux input smoke, and an installed
+The 59-test deterministic suite, repeated JSONL/SQLite/input-race regression,
+user-level skill discovery, non-tmux failure, atomic real-tmux input smoke, and an installed
 end-to-end tmux watcher smoke with real OpenAI HTTPS readiness probes pass. A
 real 0.3.1 disconnect exposed a rotating-placeholder false negative. A real
 0.3.2 recovery then proved that immediate literal input plus Enter can leave
 `continue` unsubmitted as a multiline draft. Version 0.3.3 adopts the CCB
 buffer-paste/delay/Enter path and has produced a real Codex `user_message` and
-new `task_started` turn.
+new `task_started` turn. Version 0.3.4 additionally accepts Codex 0.145.0's
+nested `task_complete.error` capacity shape and its exact capacity wording.
+Version 0.3.5 waits through delayed prompt readiness, safely supersedes the
+same thread/socket/pane watcher after a managed pane PID restart, and records
+owner-instance `off` state when the watcher receives `SIGTERM` or `SIGINT`.
+Version 0.3.6 resolves the primary readiness probe from the active Codex
+Provider in the managed `CODEX_HOME/config.toml`, falls back to ambient API
+route variables only when the config has no route, and deduplicates the same
+terminal failure observed through both JSONL and SQLite.
 
 Production qualification still requires an inspectable real Codex network
 interruption and an organically occurring `serverOverloaded` event. Tests must
@@ -170,8 +187,12 @@ not intentionally create real provider pressure.
 
 CCB source integration additionally passes managed-home skill projection,
 source-test command-shim, CCB session-pointer binding, symlinked managed SQLite
-validation, terminal-error retention, and real isolated managed-Codex
-`on -> armed -> off` qualification.
+validation, terminal-error retention, and real isolated managed-Codex automatic
+activation. A real source-runtime project retained the same Codex thread across
+CCB restart, replaced the old pane-generation watcher, reached `armed`, and
+finished normal project shutdown with `phase=unmounted`, reconnect `status=off`,
+and zero managed runtime processes.
 
-Version 0.3.3 is published on `origin/main` as commit
-[`1134122`](https://github.com/SeemSeam/codex-reconnect/commit/113412276abdea3d42d183477798307000fac307).
+Version 0.3.6 source is published on `origin/main` as commit
+[`94ec479`](https://github.com/SeemSeam/codex-reconnect/commit/94ec4799c719ce182cbd7073576aa0a37e6aeb39).
+No 0.3.6 tag or GitHub Release has been created.

@@ -6,6 +6,12 @@ from pathlib import Path
 from agents.models import AgentSpec
 from provider_backends.gemini.comm_runtime.project_hash import project_hash_candidates
 from provider_backends.gemini.home_layout import gemini_layout_from_session_data
+from provider_backends.session_authority import (
+    current_provider_authority_fingerprint,
+    linked_continuation_pending,
+    provider_authority_matches,
+    rebind_provider_session_authority,
+)
 from provider_backends.runtime_restore import ProviderRestoreTarget, resolve_restore_context
 from .home import resolve_gemini_home_layout
 
@@ -30,17 +36,58 @@ def resolve_gemini_restore_target(
         return default_target
 
     profile = load_profile_fn(runtime_dir)
+    authority_fingerprint = current_provider_authority_fingerprint('gemini', profile, runtime_dir)
     managed_layout = resolve_gemini_home_layout(runtime_dir, profile)
     session = load_project_session_fn(context.workspace_path, instance=context.session_instance)
     if session is not None:
+        data = getattr(session, 'data', {}) or {}
+        if not provider_authority_matches(
+            data,
+            'gemini',
+            authority_fingerprint,
+            allow_legacy_missing=True,
+        ):
+            rebind_provider_session_authority(
+                session,
+                'gemini',
+                authority_fingerprint,
+                native_resume_compatible=False,
+            )
+            continuation_path = linked_continuation_session_path(
+                data,
+                managed_root=managed_layout.tmp_root,
+            )
+            return ProviderRestoreTarget(
+                run_cwd=existing_dir(getattr(session, 'work_dir', '')) or context.workspace_path,
+                has_history=False,
+                continuation_session_path=continuation_path,
+                continuation_mode='import' if continuation_path is not None else None,
+            )
+        if linked_continuation_pending(data, 'gemini'):
+            continuation_path = linked_continuation_session_path(
+                data,
+                managed_root=managed_layout.tmp_root,
+            )
+            return ProviderRestoreTarget(
+                run_cwd=existing_dir(getattr(session, 'work_dir', '')) or context.workspace_path,
+                has_history=False,
+                continuation_session_path=continuation_path,
+                continuation_mode='import' if continuation_path is not None else None,
+            )
         session_cwd = existing_dir(getattr(session, "work_dir", ""))
-        gemini_root = session_gemini_root(getattr(session, 'data', {}) or {})
+        gemini_root = session_gemini_root(data)
         if (
             session_cwd is not None
             and gemini_root is not None
             and _is_within_root(gemini_root, managed_layout.tmp_root)
             and gemini_has_history(session_cwd, gemini_root=gemini_root)
         ):
+            rebind_provider_session_authority(
+                session,
+                'gemini',
+                authority_fingerprint,
+                native_resume_compatible=True,
+            )
             return ProviderRestoreTarget(run_cwd=session_cwd, has_history=True)
 
     for candidate in candidate_dirs(context.workspace_path, context.project_root):
@@ -79,8 +126,10 @@ def gemini_has_history(work_dir: Path, *, gemini_root: Path | None = None) -> bo
         return False
     for project_hash in project_hash_candidates(work_dir, root=gemini_root):
         chats_dir = gemini_root / project_hash / "chats"
-        if chats_dir.is_dir() and any(chats_dir.glob("session-*.json")):
-            return True
+        if chats_dir.is_dir():
+            for pattern in ('session-*.json', 'session-*.jsonl'):
+                if any(chats_dir.glob(pattern)):
+                    return True
     return False
 
 
@@ -105,6 +154,29 @@ def session_gemini_root(data: dict[str, object]) -> Path | None:
     if layout is None:
         return None
     return layout.tmp_root
+
+
+def linked_continuation_session_path(
+    data: dict[str, object],
+    *,
+    managed_root: Path,
+) -> Path | None:
+    raw = str(
+        data.get('old_gemini_session_path')
+        or data.get('gemini_session_path')
+        or ''
+    ).strip()
+    if not raw:
+        return None
+    try:
+        candidate = Path(raw).expanduser()
+    except Exception:
+        return None
+    if candidate.suffix not in {'.json', '.jsonl'}:
+        return None
+    if not candidate.is_file() or not _is_within_root(candidate, managed_root):
+        return None
+    return candidate
 
 
 def _is_within_root(candidate: Path, managed_root: Path) -> bool:
@@ -134,6 +206,7 @@ __all__ = [
     "existing_dir",
     "gemini_has_history",
     "gemini_root_dir",
+    "linked_continuation_session_path",
     "resolve_gemini_restore_target",
     "session_gemini_root",
 ]

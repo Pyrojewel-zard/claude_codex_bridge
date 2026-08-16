@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 
+from provider_execution.completion_authority import annotate_completion_authority
+
 from .models import ExecutionUpdate
 from .persistence import persist_submission
 from .reliability import apply_reliability_progress, timeout_poll_result
@@ -98,6 +100,8 @@ def process_active_job(
             if timeout_result is not None:
                 result = timeout_result
 
+    result = _annotate_poll_result_authority(result)
+
     with _transition_lock(service):
         if service._active.get(job_id) is not submission:
             return
@@ -132,6 +136,21 @@ def terminal_pending_decision(decision):
 
 def should_emit_update(result) -> bool:
     return bool(result.items or result.decision is not None)
+
+
+def _annotate_poll_result_authority(result):
+    decision = annotate_completion_authority(
+        result.submission,
+        result.decision,
+        authority='provider_execution',
+    )
+    if decision is result.decision:
+        return result
+    return type(result)(
+        submission=result.submission,
+        items=result.items,
+        decision=decision,
+    )
 
 
 def _transition_lock(service):

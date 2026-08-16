@@ -54,6 +54,7 @@ void main() {
         child: ProjectHomeServerProjectListHost(
           projects: const [],
           onRefreshProjects: () {},
+          onOpenTerminal: () {},
           onOpenSettings: () {},
           onOpenProject: (_) {},
         ),

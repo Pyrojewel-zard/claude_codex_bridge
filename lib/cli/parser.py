@@ -15,12 +15,14 @@ from .parser_runtime import (
     parse_cancel,
     parse_followup,
     parse_clear,
+    parse_compact,
     parse_cleanup,
     parse_config,
     parse_doctor,
     parse_fault,
     parse_frontdesk,
     parse_global_options,
+    parse_herdr,
     parse_inbox,
     parse_kill,
     parse_layout,
@@ -55,6 +57,7 @@ _COMMAND_PARSERS = {
     'cancel': parse_cancel,
     'followup': parse_followup,
     'clear': parse_clear,
+    'compact': parse_compact,
     'cleanup': parse_cleanup,
     'kill': parse_kill,
     'layout': parse_layout,
@@ -82,6 +85,7 @@ _COMMAND_PARSERS = {
     'fault': parse_fault,
     'reload': parse_reload,
     'restart': parse_restart,
+    'herdr': parse_herdr,
 }
 
 

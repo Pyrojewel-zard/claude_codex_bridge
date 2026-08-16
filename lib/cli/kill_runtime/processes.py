@@ -28,6 +28,8 @@ def kill_pid(pid: int, *, force: bool = False) -> bool:
 def is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _is_pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -39,6 +41,28 @@ def is_pid_alive(pid: int) -> bool:
     if _proc_pid_state(pid) == "Z":
         return False
     return True
+
+
+def _is_pid_alive_windows(pid: int) -> bool:
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return False
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+    if not handle:
+        return False
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return int(exit_code.value) == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def terminate_pid_tree(

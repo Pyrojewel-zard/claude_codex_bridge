@@ -46,3 +46,73 @@ def test_phase2_clear_sends_request_and_renders_summary(monkeypatch, tmp_path: P
         'clear_agent: agent=agent1 status=cleared pane_id=%1\n'
     )
     assert stderr.getvalue() == ''
+
+
+def test_phase2_compact_sends_request_and_renders_summary(monkeypatch, tmp_path: Path) -> None:
+    import cli.phase2 as phase2_module
+
+    fake_context = SimpleNamespace(project=SimpleNamespace(project_root=tmp_path, project_id='proj-compact'))
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    monkeypatch.setattr(phase2_module, '_build_context', lambda command, cwd, out: fake_context)
+    monkeypatch.setattr(phase2_module, 'ensure_bootstrap_project_config', lambda project_root: None)
+
+    def _compact_agent_context(context, command):
+        calls.append((context.project.project_id, command.agent_names))
+        return {
+            'status': 'ok',
+            'results': [
+                {'agent': 'agent1', 'status': 'compacted', 'provider': 'codex', 'command': '/compact'},
+            ],
+        }
+
+    monkeypatch.setattr(phase2_module, 'compact_agent_context', _compact_agent_context)
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = maybe_handle_phase2(
+        ['compact', 'agent1'],
+        cwd=tmp_path,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert code == 0
+    assert calls == [('proj-compact', ('agent1',))]
+    assert stdout.getvalue() == (
+        'compact_status: ok\n'
+        'compacted_count: 1\n'
+        'skipped_count: 0\n'
+        'blocked_count: 0\n'
+        'unsupported_count: 0\n'
+        'failed_count: 0\n'
+        'compact_agent: agent=agent1 status=compacted provider=codex command=/compact\n'
+    )
+    assert stderr.getvalue() == ''
+
+
+def test_phase2_compact_returns_nonzero_when_operation_is_blocked(monkeypatch, tmp_path: Path) -> None:
+    import cli.phase2 as phase2_module
+
+    fake_context = SimpleNamespace(project=SimpleNamespace(project_root=tmp_path, project_id='proj-compact'))
+    monkeypatch.setattr(phase2_module, '_build_context', lambda command, cwd, out: fake_context)
+    monkeypatch.setattr(phase2_module, 'ensure_bootstrap_project_config', lambda project_root: None)
+    monkeypatch.setattr(
+        phase2_module,
+        'compact_agent_context',
+        lambda context, command: {
+            'status': 'blocked',
+            'results': [
+                {'agent': 'agent1', 'status': 'blocked', 'reason': 'agent_has_outstanding_work'},
+            ],
+        },
+    )
+
+    code = maybe_handle_phase2(
+        ['compact', 'agent1'],
+        cwd=tmp_path,
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+
+    assert code == 1

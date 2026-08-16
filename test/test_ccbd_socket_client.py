@@ -5,7 +5,7 @@ import errno
 import pytest
 
 from ccbd.socket_client import CcbdClient, CcbdClientError
-from ccbd.socket_client_runtime.transport import connect_socket
+from ccbd.socket_client_runtime.transport import connect_socket, recv_response_line
 
 
 def test_ccbd_client_uses_stable_default_timeout(tmp_path) -> None:
@@ -131,6 +131,16 @@ def test_ccbd_client_project_clear_context_endpoint_builds_payload(monkeypatch, 
     assert calls == [('project_clear_context', {'agent_names': ['agent1', 'agent2']})]
 
 
+def test_ccbd_client_project_compact_context_endpoint_builds_payload(monkeypatch, tmp_path) -> None:
+    client = CcbdClient(tmp_path / "ccbd.sock")
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(client, 'request', lambda op, payload=None: calls.append((op, payload)) or {'ok': True})
+
+    client.project_compact_context(('agent1', 'agent2'))
+
+    assert calls == [('project_compact_context', {'agent_names': ['agent1', 'agent2']})]
+
+
 def test_ccbd_client_project_sidebar_click_endpoint_builds_payload(monkeypatch, tmp_path) -> None:
     client = CcbdClient(tmp_path / 'ccbd.sock')
     calls: list[tuple[str, dict]] = []
@@ -158,7 +168,18 @@ def test_ccbd_client_request_wraps_socket_connect_errors(monkeypatch, tmp_path) 
         client.request('ping', {})
 
 
+def test_recv_response_line_returns_only_first_frame() -> None:
+    class _Socket:
+        def recv(self, size: int) -> bytes:
+            del size
+            return b'{"ok": true, "payload": {}}\n' + (b'x' * (2 * 1024 * 1024))
+
+    assert recv_response_line(_Socket()) == b'{"ok": true, "payload": {}}\n'
+
+
 def test_connect_socket_retries_transient_connect_errors_within_timeout(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'posix')
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.AF_UNIX', object(), raising=False)
     current = {'t': 0.0}
     attempts: list[object] = []
     sleeps: list[float] = []
@@ -179,14 +200,14 @@ def test_connect_socket_retries_transient_connect_errors_within_timeout(monkeypa
         def close(self) -> None:
             self.closed = True
 
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.time.monotonic', lambda: current['t'])
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.time.monotonic', lambda: current['t'])
 
     def _sleep(seconds: float) -> None:
         sleeps.append(seconds)
         current['t'] += float(seconds)
 
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.time.sleep', _sleep)
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.socket.socket', lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.time.sleep', _sleep)
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.socket', lambda *args, **kwargs: _FakeSocket())
 
     sock = connect_socket(tmp_path / 'ccbd.sock', timeout_s=0.5)
 
@@ -196,6 +217,8 @@ def test_connect_socket_retries_transient_connect_errors_within_timeout(monkeypa
 
 
 def test_connect_socket_does_not_retry_non_transient_errors(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'posix')
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.AF_UNIX', object(), raising=False)
     attempts = 0
 
     class _FakeSocket:
@@ -211,7 +234,7 @@ def test_connect_socket_does_not_retry_non_transient_errors(monkeypatch, tmp_pat
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.socket.socket', lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.socket', lambda *args, **kwargs: _FakeSocket())
 
     with pytest.raises(CcbdClientError, match='Permission denied'):
         connect_socket(tmp_path / 'ccbd.sock', timeout_s=0.5)
@@ -220,6 +243,8 @@ def test_connect_socket_does_not_retry_non_transient_errors(monkeypatch, tmp_pat
 
 
 def test_connect_socket_caps_transient_connect_retries(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr('ccbd.control_plane_transport.factory.os.name', 'posix')
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.AF_UNIX', object(), raising=False)
     current = {'t': 0.0}
     attempts = 0
 
@@ -236,13 +261,13 @@ def test_connect_socket_caps_transient_connect_retries(monkeypatch, tmp_path) ->
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.time.monotonic', lambda: current['t'])
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.time.monotonic', lambda: current['t'])
 
     def _sleep(seconds: float) -> None:
         current['t'] += float(seconds)
 
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.time.sleep', _sleep)
-    monkeypatch.setattr('ccbd.socket_client_runtime.transport.socket.socket', lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.time.sleep', _sleep)
+    monkeypatch.setattr('ccbd.control_plane_transport.unix.socket.socket', lambda *args, **kwargs: _FakeSocket())
 
     with pytest.raises(CcbdClientError, match='No such file or directory'):
         connect_socket(tmp_path / 'ccbd.sock', timeout_s=0.5)

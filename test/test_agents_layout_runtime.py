@@ -56,6 +56,27 @@ def test_prune_layout_preserves_branch_shape_when_possible() -> None:
     assert pruned.render() == 'cmd; agent2:claude'
 
 
+def test_prune_layout_is_case_insensitive_on_agent_name() -> None:
+    # include_names 来自 normalize_agent_name（小写），布局 leaf 保留原始大小写（Main_Code）。
+    # 修复前 'main_code' 匹配不上 'Main_Code'，被裁剪为 None →
+    # "layout_spec does not include any visible panes"（2026-08-06 采集暴露）。
+    layout = parse_layout_spec('Main_Code:codex, code_reviewer:codex')
+
+    pruned = prune_layout(layout, include_names=('main_code',))
+
+    assert pruned is not None
+    assert pruned.render() == 'Main_Code:codex'
+
+
+def test_prune_layout_keeps_mixed_case_layout_after_normalized_include() -> None:
+    layout = parse_layout_spec('Main_Code:codex, code_reviewer:codex')
+
+    pruned = prune_layout(layout, include_names=('main_code', 'code_reviewer'))
+
+    assert pruned is not None
+    assert pruned.render() == 'Main_Code:codex, code_reviewer:codex'
+
+
 def test_build_balanced_layout_adds_cmd_leaf_first() -> None:
     layout = build_balanced_layout(
         ('agent1', 'agent2', 'agent3'),

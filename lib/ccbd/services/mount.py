@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from dataclasses import replace
 
+from ccbd.control_plane_transport.endpoint import endpoint_from_legacy_socket_path, endpoint_from_record, endpoint_to_record
 from ccbd.models import CcbdLease, MountState, SCHEMA_VERSION
 from ccbd.system import current_uid, parse_utc_timestamp, read_boot_id, utc_now
 from storage.json_store import JsonStore
@@ -46,6 +47,7 @@ class MountManager:
         config_signature: str | None = None,
         keeper_pid: int | None = None,
         daemon_instance_id: str | None = None,
+        control_plane_endpoint: dict | None = None,
     ) -> CcbdLease:
         timestamp = started_at or self._clock()
         lease = CcbdLease(
@@ -68,6 +70,11 @@ class MountManager:
                 (str(daemon_instance_id).strip() or None)
                 if daemon_instance_id is not None
                 else None
+            ),
+            control_plane_endpoint=endpoint_to_record(
+                endpoint_from_record(control_plane_endpoint)
+                if control_plane_endpoint
+                else endpoint_from_legacy_socket_path(socket_path)
             ),
         )
         self._store.save(self._layout.ccbd_lease_path, lease, serializer=lambda value: value.to_record())
@@ -208,6 +215,11 @@ def _lease_from_record(record: dict) -> CcbdLease:
         config_signature=str(record.get('config_signature') or '').strip() or None,
         keeper_pid=int(record['keeper_pid']) if record.get('keeper_pid') else None,
         daemon_instance_id=str(record.get('daemon_instance_id') or '').strip() or None,
+        control_plane_endpoint=endpoint_to_record(
+            endpoint_from_record(
+                record.get('control_plane_endpoint') or {'socket_path': record['socket_path']}
+            )
+        ),
         api_version=int(record.get('api_version', 2)),
     )
 

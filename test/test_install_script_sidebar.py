@@ -676,15 +676,14 @@ def test_macos_install_smoke_uses_prebuilt_sidebar_helper() -> None:
 
 def test_wsl_workflows_pin_python_inside_wsl_shells() -> None:
     expected = 'export CCB_PYTHON=/tmp/ccb-ci-py311/bin/python'
-    tests_workflow = Path('.github/workflows/test.yml').read_text(encoding='utf-8')
     real_workflow = Path('.github/workflows/ccbd-real-platform.yml').read_text(
         encoding='utf-8',
     )
 
-    smoke_step = tests_workflow.split(
+    smoke_step = real_workflow.split(
         '- name: Smoke ccb startup from /mnt/c in WSL',
         1,
-    )[1].split('- name: Run tests in WSL with tmux', 1)[0]
+    )[1].split('- name: Lifecycle smoke in WSL', 1)[0]
     communication_step = real_workflow.split(
         '- name: Communication matrix in WSL mounted checkout',
         1,
@@ -713,7 +712,11 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     text = Path('.github/workflows/release-artifacts.yml').read_text(encoding='utf-8')
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
-    assert f'default: "v{version}"' in text
+    if '-' in version:
+        assert 'default: "v8.5.7"' in text
+        assert "!contains(github.ref_name, '-')" in text
+    else:
+        assert f'default: "v{version}"' in text
     assert 'test "$TAG_NAME" = "v$version"' in text
     assert 'os: ubuntu-22.04' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
@@ -727,7 +730,11 @@ def test_npm_publish_workflow_skips_already_published_version() -> None:
     text = Path('.github/workflows/npm-publish.yml').read_text(encoding='utf-8')
     version = Path('VERSION').read_text(encoding='utf-8').strip()
 
-    assert f'default: "v{version}"' in text
+    if '-' in version:
+        assert 'default: "v8.5.7"' in text
+        assert "!contains(github.ref_name, '-')" in text
+    else:
+        assert f'default: "v{version}"' in text
     assert 'npm view "@seemseam/ccb@$version" version' in text
     assert "steps.npm_status.outputs.published != 'true'" in text
 

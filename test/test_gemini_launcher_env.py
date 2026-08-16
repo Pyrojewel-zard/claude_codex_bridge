@@ -45,6 +45,39 @@ def test_build_gemini_env_prefix_clears_non_inherited_api_and_exports_filtered_k
     ) in prefix
 
 
+def test_build_gemini_env_prefix_clears_only_explicitly_owned_alias_groups() -> None:
+    profile = ResolvedProviderProfile(
+        provider='gemini',
+        agent_name='agent1',
+        env={
+            'GOOGLE_API_KEY': 'explicit-key',
+            'GOOGLE_GEMINI_BASE_URL': 'https://explicit.example.test',
+            'GOOGLE_CLOUD_PROJECT': 'explicit-project',
+        },
+        inherit_api=True,
+    )
+
+    prefix = build_gemini_env_prefix(profile=profile)
+
+    for key in (
+        'GEMINI_API_KEY',
+        'GOOGLE_API_KEY',
+        'GOOGLE_APPLICATION_CREDENTIALS',
+        'GOOGLE_API_BASE',
+        'GOOGLE_GEMINI_BASE_URL',
+        'GOOGLE_VERTEX_BASE_URL',
+        'GOOGLE_CLOUD_PROJECT',
+    ):
+        assert f'unset {key}' in prefix
+    assert 'unset GEMINI_MODEL' not in prefix
+    assert 'unset GOOGLE_CLOUD_LOCATION' not in prefix
+    assert (
+        'export GOOGLE_API_KEY=explicit-key '
+        'GOOGLE_CLOUD_PROJECT=explicit-project '
+        'GOOGLE_GEMINI_BASE_URL=https://explicit.example.test'
+    ) in prefix
+
+
 def _spec(name: str = 'agent1') -> AgentSpec:
     return AgentSpec(
         name=name,

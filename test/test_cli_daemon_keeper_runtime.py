@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 from pathlib import Path
+import subprocess
 import time
 from types import SimpleNamespace
 
@@ -76,6 +77,10 @@ def test_spawn_keeper_process_uses_lib_root_keeper_main(tmp_path: Path, monkeypa
     expected_script = Path(keeper_runtime.__file__).resolve().parents[3] / 'ccbd' / 'keeper_main.py'
     assert call['cmd'][1] == str(expected_script)
     assert str(expected_script.parent.parent) in str(call['env']['PYTHONPATH'])
+    assert call['start_new_session'] is True
+    if os.name == 'nt':
+        assert call['creationflags'] & getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
+        assert call['creationflags'] & getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
 
 
 def test_ensure_keeper_started_replaces_state_for_unrelated_live_pid(tmp_path: Path) -> None:

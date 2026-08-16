@@ -8,6 +8,33 @@ import 'package:ccb_mobile/ccb_mobile.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:test/test.dart';
 
+const _relayHarnessUnaryOperations = {
+  'pair_claim',
+  'health',
+  'device',
+  'list_projects',
+  'get_project_view',
+  'get_agent_provider_control',
+  'get_agent_provider_quota',
+  'update_agent_provider_settings',
+  'focus_agent',
+  'focus_window',
+  'terminal_history',
+  'agent_conversation',
+  'submit_agent_message',
+  'lifecycle',
+  'open_terminal',
+  'open_host_terminal',
+  'terminate_host_terminal',
+};
+
+const _relayHarnessStreamOperations = {
+  'terminal',
+  'notifications',
+  'file_upload',
+  'file_download',
+};
+
 void main() {
   test(
     'socket relay transport handshakes and opens encrypted project view',
@@ -130,6 +157,114 @@ void main() {
     },
   );
 
+  test(
+    'provider control preserves fenced settings over encrypted relay',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+      );
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+
+      final details = await transport.getAgentProviderControl(
+        projectId: 'proj-demo',
+        agentName: 'worker1',
+      );
+      final quota = await transport.getAgentProviderQuota(
+        projectId: 'proj-demo',
+        agentName: 'worker1',
+      );
+      final result = await transport.updateAgentProviderSettings(
+        projectId: 'proj-demo',
+        agentName: 'worker1',
+        model: 'gpt-5.6-sol',
+        thinking: 'xhigh',
+        expectedRevision: 'config-r1',
+        expectedNamespaceEpoch: 7,
+        expectedProvider: 'codex',
+        expectedRuntimeRevision: 'runtime-r1',
+        idempotencyKey: 'provider-idempotency-0001',
+      );
+
+      expect(details.control.activeModel, 'gpt-5.5');
+      expect(details.accountUsage, isNull);
+      expect(quota.windows.single.usedPct, 25);
+      expect(result.status, 'pending_restart');
+      expect(relay.requests.map((request) => request['operation']), [
+        'get_agent_provider_control',
+        'get_agent_provider_quota',
+        'update_agent_provider_settings',
+      ]);
+      expect(relay.requests.last['payload'], {
+        'project_id': 'proj-demo',
+        'agent': 'worker1',
+        'model': 'gpt-5.6-sol',
+        'thinking': 'xhigh',
+        'expected_revision': 'config-r1',
+        'expected_namespace_epoch': 7,
+        'expected_provider': 'codex',
+        'expected_runtime_revision': 'runtime-r1',
+        'idempotency_key': 'provider-idempotency-0001',
+        'device_token': 'device-secret',
+      });
+    },
+  );
+
+  test(
+    'rejects provider controls before sending to an older relay host',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+        unaryOperations: const {'health', 'get_project_view'},
+      );
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+
+      await expectLater(
+        transport.getAgentProviderControl(
+          projectId: 'proj-demo',
+          agentName: 'worker1',
+        ),
+        throwsA(
+          isA<RelayGatewayException>().having(
+            (error) => error.message,
+            'message',
+            'operation_not_allowed',
+          ),
+        ),
+      );
+      expect(relay.requests, isEmpty);
+    },
+  );
+
   test('fails closed on host fingerprint mismatch', () async {
     final hostSeed = List<int>.generate(32, (index) => index + 101);
     final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
@@ -233,6 +368,10 @@ void main() {
     expect(frames.first.type, GatewayTerminalFrameType.open);
     expect(frames.last.type, GatewayTerminalFrameType.output);
     expect(
+      relay.streamOpens.single['credit_bytes'],
+      relayStreamMaxMessageBytes,
+    );
+    expect(
       utf8.decode(base64Decode(frames.last.payload['bytes_b64']! as String)),
       'relay-input',
     );
@@ -243,6 +382,117 @@ void main() {
         'bytes_b64': base64Encode(utf8.encode('relay-input')),
       },
     ]);
+  });
+
+  test(
+    'canceling a superseded relay terminal stream keeps the current stream',
+    () async {
+      final hostSeed = List<int>.generate(32, (index) => index + 101);
+      final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+      final hostFingerprint = await hostFingerprintForPublicKey(
+        hostPublicKeyB64,
+      );
+      final relay = await _RelaySocketHarness.start(
+        hostSeed: hostSeed,
+        hostFingerprint: hostFingerprint,
+      );
+      addTearDown(relay.stop);
+      final transport = RelaySocketGatewayTransport(
+        profile: await _profile(
+          relayOrigin: relay.origin,
+          hostFingerprint: hostFingerprint,
+        ),
+        deviceToken: 'device-secret',
+        allowInsecureLoopbackForTests: true,
+      );
+      addTearDown(() => transport.close(force: true));
+      final handle = await transport.openTerminal(
+        GatewayTerminalOpenRequest(
+          target: GatewayTerminalTarget(
+            projectId: 'proj-demo',
+            namespaceEpoch: 7,
+            kind: CcbTerminalTargetKind.agent,
+            agent: 'worker1',
+            window: 'main',
+            paneId: '%7',
+          ),
+        ),
+      );
+      final first = transport.terminalFrames(handle).listen((_) {});
+      addTearDown(first.cancel);
+      await _waitFor(
+        () =>
+            relay.streamOpens
+                .where((item) => item['operation'] == 'terminal')
+                .length ==
+            1,
+      );
+      final second = transport
+          .terminalFrames(handle, resumeCursor: 1)
+          .listen((_) {});
+      addTearDown(second.cancel);
+      await _waitFor(
+        () =>
+            relay.streamOpens
+                .where((item) => item['operation'] == 'terminal')
+                .length ==
+            2,
+      );
+
+      await first.cancel();
+      await transport.sendTerminalFrame(
+        handle,
+        GatewayTerminalFrame.input(
+          sequence: 9,
+          bytes: utf8.encode('current-relay-stream'),
+        ),
+      );
+      await _waitFor(
+        () => relay.terminalFrames.any(
+          (frame) => frame['type'] == 'input' && frame['seq'] == 9,
+        ),
+      );
+
+      expect(relay.terminalFrames.last, {
+        'type': 'input',
+        'seq': 9,
+        'bytes_b64': base64Encode(utf8.encode('current-relay-stream')),
+      });
+    },
+  );
+
+  test('host terminal open and terminate use relay unary operations', () async {
+    final hostSeed = List<int>.generate(32, (index) => index + 101);
+    final hostPublicKeyB64 = await _publicKeyB64(hostSeed);
+    final hostFingerprint = await hostFingerprintForPublicKey(hostPublicKeyB64);
+    final relay = await _RelaySocketHarness.start(
+      hostSeed: hostSeed,
+      hostFingerprint: hostFingerprint,
+    );
+    addTearDown(relay.stop);
+    final transport = RelaySocketGatewayTransport(
+      profile: await _profile(
+        relayOrigin: relay.origin,
+        hostFingerprint: hostFingerprint,
+      ),
+      deviceToken: 'device-secret',
+      allowInsecureLoopbackForTests: true,
+    );
+    addTearDown(() => transport.close(force: true));
+
+    final handle = await transport.openHostTerminal(
+      const GatewayHostTerminalOpenRequest(
+        clientSessionId: 'shell-2',
+        displayName: 'Shell 2',
+      ),
+    );
+    await transport.terminateHostTerminal(clientSessionId: 'shell-2');
+
+    expect(handle.targetSummary.projectId, '@host');
+    expect(
+      relay.requests.map((request) => request['operation']),
+      containsAllInOrder(['open_host_terminal', 'terminate_host_terminal']),
+    );
   });
 
   test(
@@ -568,6 +818,8 @@ class _RelaySocketHarness {
     required this.hostSeed,
     required this.hostFingerprint,
     required this.closeAfterFirstUnaryResponse,
+    required this.unaryOperations,
+    required this.streamOperations,
   });
 
   final HttpServer server;
@@ -575,6 +827,8 @@ class _RelaySocketHarness {
   final List<int> hostSeed;
   final String hostFingerprint;
   final bool closeAfterFirstUnaryResponse;
+  final Set<String> unaryOperations;
+  final Set<String> streamOperations;
   final visibleFrames = <String>[];
   final requests = <Map<String, Object?>>[];
   final streamOpens = <Map<String, Object?>>[];
@@ -589,6 +843,8 @@ class _RelaySocketHarness {
     required List<int> hostSeed,
     required String hostFingerprint,
     bool closeAfterFirstUnaryResponse = false,
+    Set<String> unaryOperations = _relayHarnessUnaryOperations,
+    Set<String> streamOperations = _relayHarnessStreamOperations,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final harness = _RelaySocketHarness._(
@@ -597,6 +853,8 @@ class _RelaySocketHarness {
       hostSeed: hostSeed,
       hostFingerprint: hostFingerprint,
       closeAfterFirstUnaryResponse: closeAfterFirstUnaryResponse,
+      unaryOperations: unaryOperations,
+      streamOperations: streamOperations,
     );
     server.listen(harness._handle);
     return harness;
@@ -629,6 +887,8 @@ class _RelaySocketHarness {
       hostId: _text(clientHello.payload['host_id']),
       serverFingerprint: hostFingerprint,
       hostPublicKeyB64: hostPublicKeyB64,
+      unaryOperations: unaryOperations,
+      streamOperations: streamOperations,
     );
     final schedule = await RelayV2KeySchedule.derive(
       localPrivateKeyBytes: hostSeed,
@@ -694,6 +954,62 @@ class _RelaySocketHarness {
                 'status': 200,
                 'body': switch (message.operation) {
                   'get_project_view' => demoProjectViewFixture,
+                  'get_agent_provider_control' => {
+                    'project_id': 'proj-demo',
+                    'agent': 'worker1',
+                    'namespace_epoch': 7,
+                    'config_revision': 'config-r1',
+                    'provider_control': {
+                      'provider': 'codex',
+                      'configured_model': 'gpt-5.5',
+                      'configured_thinking': 'medium',
+                      'active_model': 'gpt-5.5',
+                      'active_thinking': 'medium',
+                      'runtime_revision': 'runtime-r1',
+                      'mutation_mode': 'restart_required',
+                      'capabilities': {
+                        'model_catalog': true,
+                        'model_select': true,
+                        'thinking_select': true,
+                        'session_usage': true,
+                        'account_quota': true,
+                      },
+                    },
+                    'provider_catalog': {
+                      'id': 'codex',
+                      'model_shortcut': true,
+                      'models': [
+                        {
+                          'id': 'gpt-5.5',
+                          'label': 'GPT-5.5',
+                          'reasoning_levels': ['low', 'medium', 'xhigh'],
+                        },
+                      ],
+                    },
+                  },
+                  'get_agent_provider_quota' => {
+                    'project_id': 'proj-demo',
+                    'agent': 'worker1',
+                    'account_usage': {
+                      'provider_id': 'codex',
+                      'status': 'available',
+                      'windows': [
+                        {'id': 'weekly', 'label': 'Weekly', 'used_pct': 25},
+                      ],
+                    },
+                  },
+                  'update_agent_provider_settings' => {
+                    'status': 'pending_restart',
+                    'agent': 'worker1',
+                    'provider': 'codex',
+                    'configured_model': 'gpt-5.6-sol',
+                    'configured_thinking': 'xhigh',
+                    'config_revision': 'config-r2',
+                    'changed': true,
+                    'restart_required': true,
+                    'idempotency_key': 'provider-idempotency-0001',
+                    'namespace_epoch': 7,
+                  },
                   'health' => {
                     'schema_version': 1,
                     'status': 'ok',
@@ -720,6 +1036,21 @@ class _RelaySocketHarness {
                       'agent': 'worker1',
                       'window': 'main',
                     },
+                  },
+                  'open_host_terminal' => {
+                    'terminal_id': 'terminal-host-demo',
+                    'terminal_token': 'terminal-host-token-demo',
+                    'expires_at': '2026-07-22T01:00:00Z',
+                    'websocket_url':
+                        'wss://loopback.invalid/v1/terminals/terminal-host-demo',
+                    'target_epoch': 0,
+                    'target_summary': {'project_id': '@host'},
+                  },
+                  'terminate_host_terminal' => {
+                    'schema_version': 1,
+                    'status': 'ok',
+                    'client_session_id': 'shell-2',
+                    'terminated': true,
                   },
                   'pair_claim' => {
                     'device_token': 'paired-device-secret',
@@ -756,6 +1087,7 @@ class _RelaySocketHarness {
           streamOpens.add({
             'stream_id': message.streamId,
             'operation': message.operation,
+            'credit_bytes': message.creditBytes,
             'payload': message.payload,
           });
           await sendInner(
@@ -1019,6 +1351,19 @@ Future<void> _verifyPhoneProof(
     ),
     isTrue,
   );
+}
+
+Future<void> _waitFor(
+  bool Function() predicate, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!predicate()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('condition was not met', timeout);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
 }
 
 Future<String> _publicKeyB64(List<int> privateKeyBytes) async {

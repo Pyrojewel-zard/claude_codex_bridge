@@ -171,6 +171,18 @@ show_in_sidebar = true
   \item \cfg{show_in_sidebar} 可选，默认 true。
 \end{itemize}
 
+项目配置中的 \cfg{tool_windows.<name>.command} 会在本机 shell 中执行；
+\cfg{agents.<name>.provider_command_template} 也会包装 provider 启动命令。
+CCB 首次看到这些项目级命令字段时，会在交互启动中逐项显示字段和值并要求明确批准。
+批准凭据保存在仓库外的用户状态目录；无关配置变更不会重复询问，命令字段新增或修改后必须重新批准：
+
+\begin{lstlisting}
+ccb config approve-commands
+\end{lstlisting}
+
+非交互启动、ccbd 恢复和 reload 在缺少有效批准时都会 fail closed。
+\cmd{ccb -s} 只控制 provider 自动权限，不会跳过该检查。
+
 \section{sidebar}
 
 sidebar 配置示例：

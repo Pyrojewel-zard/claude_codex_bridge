@@ -6,7 +6,7 @@ from agents.models import AgentState
 from agents.models import build_project_layout_plan
 from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.project_namespace_pane import inspect_project_namespace_pane
-from ccbd.services.project_namespace_runtime.backend import build_backend
+from ccbd.services.project_namespace_runtime.backend import build_backend, remember_namespace_state_ref
 from ccbd.start_runtime.layout import cmd_bootstrap_command
 from terminal_runtime.placeholders import pane_placeholder_argv
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
@@ -36,6 +36,11 @@ def reconcile_cmd_slot(ctx: RuntimeSupervisionContext) -> str | None:
         return 'namespace-unavailable'
     backend = _build_namespace_backend(namespace_controller, namespace)
     if backend is None:
+        return request_cmd_workspace_reflow(ctx)
+    if _namespace_backend_impl(namespace) == 'herdr':
+        record = _inspect_herdr_cmd_record(ctx, backend, namespace)
+        if cmd_slot_matches_namespace(ctx, namespace, record):
+            return 'healthy'
         return request_cmd_workspace_reflow(ctx)
     try:
         root_pane_id = _load_root_pane_id(namespace_controller, namespace)
@@ -226,10 +231,42 @@ def _load_namespace(namespace_controller: ProjectNamespaceController):
 
 def _build_namespace_backend(namespace_controller: ProjectNamespaceController, namespace):
     try:
-        return build_backend(
+        backend = build_backend(
             namespace_controller._backend_factory,
             socket_path=str(getattr(namespace, 'tmux_socket_path', None) or '').strip(),
+            namespace_state=namespace,
         )
+        remember_namespace_state_ref(backend, namespace)
+        return backend
+    except Exception:
+        return None
+
+
+def _inspect_herdr_cmd_record(ctx: RuntimeSupervisionContext, backend, namespace):
+    lister = getattr(backend, 'list_panes_by_user_options', None)
+    if not callable(lister):
+        return None
+    window_name = str(getattr(namespace, 'workspace_window_name', None) or '').strip()
+    expected = {
+        '@ccb_project_id': ctx.project_id,
+        '@ccb_role': 'cmd',
+        '@ccb_slot': 'cmd',
+        '@ccb_managed_by': 'ccbd',
+        '@ccb_namespace_epoch': str(getattr(namespace, 'namespace_epoch', '') or ''),
+    }
+    if window_name:
+        expected['@ccb_window'] = window_name
+    try:
+        matches = [str(pane_id or '').strip() for pane_id in lister(expected)]
+    except Exception:
+        return None
+    matches = [pane_id for pane_id in matches if pane_id]
+    if len(matches) != 1:
+        return None
+    try:
+        return inspect_project_namespace_pane(backend, matches[0])
+    except TmuxTransientServerUnavailable:
+        raise
     except Exception:
         return None
 
@@ -261,6 +298,10 @@ def _load_root_pane_id(namespace_controller: ProjectNamespaceController, namespa
         return None
     pane_text = str(pane_id or '').strip()
     return pane_text if pane_text.startswith('%') else None
+
+
+def _namespace_backend_impl(namespace) -> str:
+    return str(getattr(namespace, 'backend_impl', '') or '').strip()
 
 
 __all__ = ['reconcile_cmd_slot']

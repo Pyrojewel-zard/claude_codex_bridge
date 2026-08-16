@@ -7,6 +7,7 @@ import '../models/ccb_agent_conversation.dart';
 import '../models/ccb_project.dart';
 import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
+import '../models/ccb_provider_control.dart';
 import '../models/readable_terminal_history.dart';
 import 'gateway_transport.dart';
 import 'route_provider.dart';
@@ -28,15 +29,22 @@ class HttpGatewayTransport
     implements
         GatewayTransport,
         GatewayFilePathUploader,
-        GatewayPresenceTransport {
+        GatewayPresenceTransport,
+        GatewayProviderControlTransport,
+        GatewayHostTerminalTransport {
   HttpGatewayTransport({
     required this.profile,
     String? deviceToken,
     HttpClient? httpClient,
     Duration timeout = const Duration(seconds: 5),
+    this.terminalPingInterval = const Duration(seconds: 15),
     Duration projectListWarmupRetryDelay = const Duration(milliseconds: 200),
     int projectListWarmupMaxAttempts = 16,
-  }) : _httpClient = httpClient ?? HttpClient(),
+  }) : assert(
+         terminalPingInterval == null || terminalPingInterval > Duration.zero,
+         'terminalPingInterval must be positive when enabled',
+       ),
+       _httpClient = httpClient ?? HttpClient(),
        _deviceToken = deviceToken,
        _timeout = timeout,
        _projectListWarmupRetryDelay = projectListWarmupRetryDelay,
@@ -48,9 +56,10 @@ class HttpGatewayTransport
   final HttpClient _httpClient;
   final String? _deviceToken;
   final Duration _timeout;
+  final Duration? terminalPingInterval;
   final Duration _projectListWarmupRetryDelay;
   final int _projectListWarmupMaxAttempts;
-  final Map<String, Future<WebSocket>> _terminalSockets = {};
+  final Map<String, _TerminalSocketConnection> _terminalSockets = {};
 
   Uri get _baseUrl => profile.routeProvider.gatewayUrl;
 
@@ -90,9 +99,8 @@ class HttpGatewayTransport
 
   @override
   Future<List<CcbProject>> listProjects() async {
-    final attempts = _projectListWarmupMaxAttempts < 1
-        ? 1
-        : _projectListWarmupMaxAttempts;
+    final attempts =
+        _projectListWarmupMaxAttempts < 1 ? 1 : _projectListWarmupMaxAttempts;
     for (var attempt = 0; attempt < attempts; attempt += 1) {
       final json = await _getJson('/v1/projects');
       final projects = json['projects'];
@@ -123,6 +131,63 @@ class HttpGatewayTransport
     final encoded = Uri.encodeComponent(projectId);
     final json = await _getJson('/v1/projects/$encoded/view');
     return CcbProjectView.fromProjectViewPayload(json);
+  }
+
+  @override
+  Future<CcbProviderControlDetails> getAgentProviderControl({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final encodedProject = Uri.encodeComponent(projectId);
+    final encodedAgent = Uri.encodeComponent(agentName);
+    final json = await _getJson(
+      '/v1/projects/$encodedProject/agents/$encodedAgent/provider-control',
+    );
+    return CcbProviderControlDetails.fromJson(json);
+  }
+
+  @override
+  Future<CcbProviderAccountUsage> getAgentProviderQuota({
+    required String projectId,
+    required String agentName,
+  }) async {
+    final encodedProject = Uri.encodeComponent(projectId);
+    final encodedAgent = Uri.encodeComponent(agentName);
+    final json = await _getJson(
+      '/v1/projects/$encodedProject/agents/$encodedAgent/provider-quota',
+    );
+    return CcbProviderAccountUsage.fromJson(
+      _objectMap(json['account_usage'], 'account_usage'),
+    );
+  }
+
+  @override
+  Future<CcbProviderSettingsResult> updateAgentProviderSettings({
+    required String projectId,
+    required String agentName,
+    required String model,
+    String? thinking,
+    required String expectedRevision,
+    required int expectedNamespaceEpoch,
+    required String expectedProvider,
+    String? expectedRuntimeRevision,
+    required String idempotencyKey,
+  }) async {
+    final encodedProject = Uri.encodeComponent(projectId);
+    final encodedAgent = Uri.encodeComponent(agentName);
+    final json = await _postJson(
+      '/v1/projects/$encodedProject/agents/$encodedAgent/provider-control',
+      {
+        'model': model,
+        if (_hasText(thinking)) 'thinking': thinking,
+        'expected_revision': expectedRevision,
+        'expected_namespace_epoch': expectedNamespaceEpoch,
+        'expected_provider': expectedProvider,
+        'expected_runtime_revision': expectedRuntimeRevision,
+        'idempotency_key': idempotencyKey,
+      },
+    );
+    return CcbProviderSettingsResult.fromJson(json);
   }
 
   @override
@@ -161,13 +226,14 @@ class HttpGatewayTransport
     int maxLines = 200,
   }) async {
     final encoded = Uri.encodeComponent(projectId);
-    final query = Uri(
-      queryParameters: {
-        'agent': agent,
-        'namespace_epoch': namespaceEpoch.toString(),
-        'max_lines': maxLines.toString(),
-      },
-    ).query;
+    final query =
+        Uri(
+          queryParameters: {
+            'agent': agent,
+            'namespace_epoch': namespaceEpoch.toString(),
+            'max_lines': maxLines.toString(),
+          },
+        ).query;
     final json = await _getJson(
       '/v1/projects/$encoded/terminal-history?$query',
     );
@@ -185,13 +251,14 @@ class HttpGatewayTransport
   }) async {
     final encodedProject = Uri.encodeComponent(projectId);
     final encodedAgent = Uri.encodeComponent(agent);
-    final query = Uri(
-      queryParameters: {
-        'namespace_epoch': namespaceEpoch.toString(),
-        'limit': limit.toString(),
-        if (_hasText(cursor)) 'cursor': cursor!,
-      },
-    ).query;
+    final query =
+        Uri(
+          queryParameters: {
+            'namespace_epoch': namespaceEpoch.toString(),
+            'limit': limit.toString(),
+            if (_hasText(cursor)) 'cursor': cursor!,
+          },
+        ).query;
     final json = await _getJson(
       '/v1/projects/$encodedProject/agents/$encodedAgent/conversation?$query',
     );
@@ -237,11 +304,28 @@ class HttpGatewayTransport
   }
 
   @override
+  Future<GatewayTerminalHandle> openHostTerminal(
+    GatewayHostTerminalOpenRequest request,
+  ) async {
+    final json = await _postJson('/v1/terminals', request.toJson());
+    return _terminalHandle(json);
+  }
+
+  @override
+  Future<void> terminateHostTerminal({required String clientSessionId}) async {
+    await _postJson('/v1/terminals/terminate', {
+      'schema_version': 1,
+      'client_session_id': clientSessionId,
+    });
+  }
+
+  @override
   Stream<GatewayTerminalFrame> terminalFrames(
     GatewayTerminalHandle handle, {
     int? resumeCursor,
   }) {
     late StreamController<GatewayTerminalFrame> controller;
+    late _TerminalSocketConnection connection;
     controller = StreamController<GatewayTerminalFrame>(
       onListen: () async {
         try {
@@ -249,8 +333,14 @@ class HttpGatewayTransport
             handle.websocketUrl.toString(),
             customClient: _httpClient,
           ).timeout(_timeout);
-          _terminalSockets[handle.terminalId] = socketFuture;
+          connection = _TerminalSocketConnection(socketFuture);
+          _terminalSockets[handle.terminalId] = connection;
           final socket = await socketFuture;
+          // dart:io closes the WebSocket when a ping is not answered within
+          // one interval. That turns silent Wi-Fi half-open connections into
+          // the existing terminal reconnect/resume path without replaying
+          // input frames.
+          socket.pingInterval = terminalPingInterval;
           socket.add(
             jsonEncode(
               GatewayTerminalFrame.open(
@@ -270,7 +360,7 @@ class HttpGatewayTransport
             },
             onError: controller.addError,
             onDone: () {
-              _terminalSockets.remove(handle.terminalId);
+              _forgetTerminalSocket(handle.terminalId, connection);
               if (!controller.isClosed) {
                 controller.close();
               }
@@ -278,14 +368,15 @@ class HttpGatewayTransport
             cancelOnError: false,
           );
         } catch (error, stackTrace) {
-          _terminalSockets.remove(handle.terminalId);
+          _forgetTerminalSocket(handle.terminalId, connection);
           controller.addError(error, stackTrace);
           await controller.close();
         }
       },
       onCancel: () async {
-        final socket = await _terminalSockets.remove(handle.terminalId);
-        await socket?.close();
+        _forgetTerminalSocket(handle.terminalId, connection);
+        final socket = await connection.socket;
+        await socket.close();
       },
     );
     return controller.stream;
@@ -296,12 +387,21 @@ class HttpGatewayTransport
     GatewayTerminalHandle handle,
     GatewayTerminalFrame frame,
   ) async {
-    final socketFuture = _terminalSockets[handle.terminalId];
-    if (socketFuture == null) {
+    final connection = _terminalSockets[handle.terminalId];
+    if (connection == null) {
       throw StateError('gateway terminal WebSocket is not connected');
     }
-    final socket = await socketFuture.timeout(_timeout);
+    final socket = await connection.socket.timeout(_timeout);
     socket.add(jsonEncode(frame.toJson()));
+  }
+
+  void _forgetTerminalSocket(
+    String terminalId,
+    _TerminalSocketConnection connection,
+  ) {
+    if (identical(_terminalSockets[terminalId], connection)) {
+      _terminalSockets.remove(terminalId);
+    }
   }
 
   @override
@@ -418,8 +518,8 @@ class HttpGatewayTransport
   }
 
   void close({bool force = false}) {
-    for (final socketFuture in _terminalSockets.values) {
-      socketFuture.then((socket) => socket.close()).ignore();
+    for (final connection in _terminalSockets.values) {
+      connection.socket.then((socket) => socket.close()).ignore();
     }
     _terminalSockets.clear();
     _httpClient.close(force: force);
@@ -476,6 +576,12 @@ class HttpGatewayTransport
       );
     }
   }
+}
+
+class _TerminalSocketConnection {
+  const _TerminalSocketConnection(this.socket);
+
+  final Future<WebSocket> socket;
 }
 
 DateTime _dateTime(Object? value) {
@@ -570,9 +676,10 @@ GatewayTerminalFrame _terminalFrameFromMessage(Object? message) {
   final text = switch (message) {
     final String value => value,
     final List<int> value => utf8.decode(value),
-    _ => throw FormatException(
-      'gateway terminal WebSocket sent unsupported message',
-    ),
+    _ =>
+      throw FormatException(
+        'gateway terminal WebSocket sent unsupported message',
+      ),
   };
   final decoded = jsonDecode(text);
   if (decoded is Map) {

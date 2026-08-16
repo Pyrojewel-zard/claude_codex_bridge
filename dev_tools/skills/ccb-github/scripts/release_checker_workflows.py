@@ -79,7 +79,11 @@ def check_dev_branch_workflows(
     default_branch = repo_default_branch_fn(root, repo, warnings)
     required = required_dev_workflows(branch, default_branch)
     if "Cross-Platform Compatibility Test" not in required:
-        warn(warnings, f"Cross-Platform Compatibility Test is not required for branch {branch!r}; it only runs on main/dev, PRs, or manual dispatch")
+        warn(
+            warnings,
+            f"Cross-Platform Compatibility Test is not required for branch {branch!r}; "
+            "it only runs on main/dev or manual dispatch",
+        )
 
     deadline = time.monotonic() + max(wait_seconds, 0)
     latest_by_name: dict[str, dict[str, object]] = {}
@@ -121,7 +125,10 @@ def check_dev_branch_workflows(
             fail(
                 issues,
                 f"No GitHub Actions run found for current commit {head[:12]}: {workflow_name}",
-                fix="push the branch and wait for GitHub Actions, or confirm this workflow is intentionally not triggered",
+                fix=(
+                    "open or update the pull request, manually dispatch the workflow, "
+                    "or push main/dev and wait for GitHub Actions"
+                ),
             )
             continue
         if item.get("status") != "completed" or item.get("conclusion") != "success":

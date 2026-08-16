@@ -25,7 +25,7 @@ from provider_execution.reliability import (
     CompletionReliabilityPolicy,
     adapter_reliability_policy,
 )
-from provider_execution.service import ExecutionService
+from provider_execution.service import ExecutionService, interrupt_active_submission
 from provider_execution.service_runtime.persistence import persist_submission
 from provider_execution.service_runtime.polling import poll_updates
 from provider_execution.service_runtime.restore import restore_submission
@@ -164,6 +164,116 @@ def test_execution_service_cancel_evidence_is_best_effort_and_requires_reply() -
     assert empty_service.capture_cancel_evidence("job_1") is None
 
 
+def test_interrupt_active_submission_prefers_structured_pane_ref() -> None:
+    calls: list[tuple[object, str]] = []
+
+    class Backend:
+        def send_key(self, pane_target, key: str) -> None:
+            calls.append((pane_target, key))
+
+    pane_ref = {
+        'backend_impl': 'herdr',
+        'session_name': 'ccb-demo',
+        'namespace_id': 'ns-1',
+        'pane_id': 'pane-1',
+    }
+    submission = replace(
+        _submission(),
+        runtime_state={
+            'backend': Backend(),
+            'pane_id': 'legacy-pane-id',
+            'pane_ref': pane_ref,
+        },
+    )
+
+    interrupt_active_submission(submission)
+
+    assert calls == [
+        (pane_ref, 'C-c'),
+        (pane_ref, 'Escape'),
+        (pane_ref, 'C-u'),
+    ]
+
+
+def test_interrupt_active_submission_uses_control_input_without_send_key() -> None:
+    calls: list[tuple[object, str]] = []
+
+    class Backend:
+        def send_text(self, pane_target, text: str) -> None:
+            calls.append((pane_target, text))
+
+    pane_ref = {
+        'backend_impl': 'herdr',
+        'session_name': 'ccb-demo',
+        'namespace_id': 'ns-1',
+        'pane_id': 'pane-1',
+    }
+    submission = replace(
+        _submission(),
+        runtime_state={
+            'backend': Backend(),
+            'pane_ref': pane_ref,
+        },
+    )
+
+    interrupt_active_submission(submission)
+
+    assert calls == [(pane_ref, '\x03\x1b\x15')]
+
+
+def test_interrupt_active_submission_uses_pane_id_for_tmux_family_pane_ref() -> None:
+    calls: list[tuple[object, str]] = []
+
+    class Backend:
+        def send_key(self, pane_target, key: str) -> None:
+            calls.append((pane_target, key))
+
+    submission = replace(
+        _submission(),
+        runtime_state={
+            'backend': Backend(),
+            'pane_id': '%1',
+            'pane_ref': {
+                'backend_impl': 'tmux',
+                'pane_id': '%99',
+                'session_name': 'ccb-demo',
+            },
+        },
+    )
+
+    interrupt_active_submission(submission)
+
+    assert calls == [
+        ('%1', 'C-c'),
+        ('%1', 'Escape'),
+        ('%1', 'C-u'),
+    ]
+
+
+def test_interrupt_active_submission_falls_back_when_herdr_pane_ref_incomplete() -> None:
+    calls: list[tuple[object, str]] = []
+
+    class Backend:
+        def send_text(self, pane_target, text: str) -> None:
+            calls.append((pane_target, text))
+
+    submission = replace(
+        _submission(),
+        runtime_state={
+            'backend': Backend(),
+            'pane_id': 'legacy-pane-1',
+            'pane_ref': {
+                'backend_impl': 'herdr',
+                'pane_id': 'pane-1',
+            },
+        },
+    )
+
+    interrupt_active_submission(submission)
+
+    assert calls == [('legacy-pane-1', '\x03\x1b\x15')]
+
+
 def test_poll_updates_processes_terminal_result_and_cleans_active_state(monkeypatch) -> None:
     submission = _submission()
     result = SimpleNamespace(submission=submission, items=(_item(),), decision=_decision())
@@ -184,10 +294,39 @@ def test_poll_updates_processes_terminal_result_and_cleans_active_state(monkeypa
 
     assert len(updates) == 1
     assert updates[0].job_id == "job_1"
-    assert updates[0].decision is result.decision
+    assert updates[0].decision is not None
+    assert updates[0].decision.status is result.decision.status
+    assert updates[0].decision.diagnostics["completion_source_kind"] == "protocol_event_stream"
     assert service._active == {}
     assert service._runtime_contexts == {}
-    assert persisted == [("job_1", result.decision, result.items)]
+    assert persisted == [("job_1", updates[0].decision, result.items)]
+
+
+def test_poll_updates_enriches_terminal_decision_with_exact_completion_source_kind(monkeypatch) -> None:
+    submission = replace(_submission(), source_kind=CompletionSourceKind.SESSION_SNAPSHOT)
+    result = SimpleNamespace(submission=submission, items=(), decision=_decision())
+    service = SimpleNamespace(
+        _clock=lambda: "2026-04-06T00:00:01Z",
+        _pending_replays={},
+        _active={"job_1": submission},
+        _runtime_contexts={"job_1": _runtime_context()},
+        _registry={"fake": SimpleNamespace(poll=lambda current, now: result)},
+    )
+    persisted: list[CompletionDecision | None] = []
+    monkeypatch.setattr(
+        "provider_execution.service_runtime.polling.persist_submission",
+        lambda service, job_id, pending_decision=None, pending_items=(): persisted.append(pending_decision),
+    )
+
+    updates = poll_updates(service)
+
+    assert len(updates) == 1
+    decision = updates[0].decision
+    assert decision is not None
+    assert decision.diagnostics["completion_authority"] == "provider_execution"
+    assert decision.diagnostics["completion_source_kind"] == "session_snapshot"
+    assert decision.diagnostics["completion_source"] == "provider_native_log"
+    assert persisted == [decision]
 
 
 def test_poll_updates_keeps_terminal_pending_replay_until_acknowledged() -> None:
@@ -471,6 +610,15 @@ def test_active_runtime_snapshots_expose_bounded_safe_state() -> None:
             runtime_state={
                 'backend': object(),
                 'reader': object(),
+                'pane_ref': {
+                    'backend_impl': 'herdr',
+                    'session_name': 'ccb-demo',
+                    'namespace_id': 'ns-1',
+                    'pane_id': 'pane-1',
+                    'restore_token': 'secret-token',
+                    'ipc_ref': 'secret-ipc',
+                    'nested': {'token': 'secret'},
+                },
                 'prompt_text': 'large private prompt',
                 'reply_buffer': 'partial private reply',
                 'request_anchor': 'CCB_REQ_ID: job_1',
@@ -493,10 +641,18 @@ def test_active_runtime_snapshots_expose_bounded_safe_state() -> None:
     assert snapshot['job_id'] == 'job_1'
     assert snapshot['provider'] == 'codex'
     assert snapshot['source_kind'] == 'protocol_event_stream'
+    assert snapshot['completion_source_kind'] == 'protocol_event_stream'
     assert snapshot['primary_authority'] == 'protocol_log'
     assert snapshot['no_terminal_timeout_s'] == 900.0
     assert snapshot['no_terminal_deadline_at'] == '2026-04-06T00:15:00Z'
     assert runtime_state['request_anchor'] == 'CCB_REQ_ID: job_1'
+    assert runtime_state['pane_ref'] == {
+        'agent_slug': None,
+        'backend_impl': 'herdr',
+        'pane_id': 'pane-1',
+        'session_name': 'ccb-demo',
+        'window_name': None,
+    }
     assert runtime_state['delivery_state'] == 'pending_anchor'
     assert runtime_state['delivery_timeout_deadline_at'] == '2026-04-06T00:02:00Z'
     assert 'backend' not in runtime_state
