@@ -648,7 +648,11 @@ def _projected_auth_file_payload(root: Path, provider: str) -> dict[str, str]:
             name = f'.gemini/{name}'
         if name not in allowed:
             continue
-        content = _read_optional_regular_file(Path(root).expanduser() / name, label=f'{provider} projected auth')
+        content = _read_optional_regular_file(
+            Path(root).expanduser() / name,
+            label=f'{provider} projected auth',
+            follow_symlink=True,
+        )
         if content is not None:
             selected[name] = content.hex()
     return selected
@@ -676,7 +680,7 @@ def _selected_dotenv_values(path: Path, *, allowed: set[str]) -> dict[str, str]:
     return selected
 
 
-def _read_optional_regular_file(path: Path, *, label: str) -> bytes | None:
+def _read_optional_regular_file(path: Path, *, label: str, follow_symlink: bool = False) -> bytes | None:
     source = Path(path).expanduser()
     try:
         metadata = source.lstat()
@@ -684,10 +688,16 @@ def _read_optional_regular_file(path: Path, *, label: str) -> bytes | None:
         return None
     except OSError as exc:
         raise RuntimeError(f'cannot inspect {label} source: {source}: {exc}') from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+    if stat.S_ISLNK(metadata.st_mode):
+        if not follow_symlink:
+            raise RuntimeError(f'{label} source must be a regular file: {source}')
+    elif not stat.S_ISREG(metadata.st_mode):
         raise RuntimeError(f'{label} source must be a regular file: {source}')
     try:
         return source.read_bytes()
+    except FileNotFoundError:
+        # A projected symlink whose target disappeared is equivalent to absence.
+        return None
     except OSError as exc:
         raise RuntimeError(f'cannot read {label} source: {source}: {exc}') from exc
 

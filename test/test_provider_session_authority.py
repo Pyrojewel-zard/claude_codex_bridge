@@ -79,6 +79,72 @@ def test_keyring_owned_projection_changes_inherited_authority_fingerprint(
     assert second != first
 
 
+def test_projected_symlink_auth_is_followed_not_rejected(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # Fork projection writes managed-home auth as a symlink back to the real
+    # source credential.  Authority fingerprinting must follow it (the CCB
+    # projection owns that copy) instead of rejecting it as a non-regular
+    # file, or every `ccb` start fails on a symlinked .credentials.json.
+    runtime_dir = _runtime_dir(tmp_path, 'claude')
+    managed_home = runtime_dir.parent.parent / 'provider-state' / 'claude' / 'home'
+    source_home = tmp_path / 'source-home-login'
+    source_home.mkdir(parents=True)
+    source_creds = source_home / '.claude' / '.credentials.json'
+    source_creds.parent.mkdir(parents=True)
+    source_creds.write_text('{"refresh_token":"real-login-a"}\n', encoding='utf-8')
+    managed_claude = managed_home / '.claude'
+    managed_claude.mkdir(parents=True)
+    projected = managed_claude / '.credentials.json'
+    projected.symlink_to(source_creds)
+    (managed_home / '.ccb-auth-projection.json').write_text(
+        '{"schema_version":1,"record_type":"ccb_claude_auth_projection",'
+        '"projected_files":[".claude/.credentials.json"],"keyring_projected":false}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+
+    # Must not raise "claude projected auth source must be a regular file".
+    fingerprint = current_provider_authority_fingerprint('claude', None, runtime_dir)
+    assert fingerprint
+
+    # Rotating the real credential the symlink points at changes the
+    # fingerprint, proving the content was actually read through the link.
+    source_creds.write_text('{"refresh_token":"real-login-b"}\n', encoding='utf-8')
+    rotated = current_provider_authority_fingerprint('claude', None, runtime_dir)
+    assert rotated != fingerprint
+
+
+def test_broken_projected_symlink_counts_as_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = _runtime_dir(tmp_path, 'claude')
+    managed_home = runtime_dir.parent.parent / 'provider-state' / 'claude' / 'home'
+    source_home = tmp_path / 'source-home-broken'
+    source_home.mkdir(parents=True)
+    managed_claude = managed_home / '.claude'
+    managed_claude.mkdir(parents=True)
+    target = source_home / '.claude' / '.credentials.json'
+    (managed_claude / '.credentials.json').symlink_to(target)
+    (managed_home / '.ccb-auth-projection.json').write_text(
+        '{"schema_version":1,"record_type":"ccb_claude_auth_projection",'
+        '"projected_files":[".claude/.credentials.json"],"keyring_projected":false}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+
+    # A dangling projection link is equivalent to absence: fingerprinting must
+    # not raise, and must still be stable / deterministic.
+    fingerprint = current_provider_authority_fingerprint('claude', None, runtime_dir)
+    assert fingerprint
+    again = current_provider_authority_fingerprint('claude', None, runtime_dir)
+    assert again == fingerprint
+
+
 def test_unmarked_managed_auth_does_not_override_external_authority(
     monkeypatch,
     tmp_path: Path,
