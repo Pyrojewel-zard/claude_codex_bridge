@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import shlex
+import subprocess
+from pathlib import Path
+
+from hapi_integration.command import render_recorded_hapi_command
 from provider_backends.codex.start_cmd_runtime.parsing import (
     extract_resume_session_id,
     looks_like_bare_resume_cmd,
 )
-from provider_backends.codex.start_cmd_runtime.rewriting import strip_resume_start_cmd
+from provider_backends.codex.start_cmd_runtime.rewriting import (
+    build_resume_start_cmd,
+    strip_resume_start_cmd,
+)
 
 
 def test_extract_resume_session_id_prefers_regex_match() -> None:
@@ -50,3 +58,25 @@ def test_strip_resume_start_cmd_removes_resume_suffix_from_shell_wrapped_command
         'export CODEX_HOME=/tmp/home CODEX_SESSION_ROOT=/tmp/home/sessions; '
         'codex -m gpt-5.4'
     )
+
+
+def test_build_resume_start_cmd_preserves_quoted_hapi_script() -> None:
+    rendered = render_recorded_hapi_command(
+        wrapper_argv=['hapi', 'codex', '--started-by', 'terminal'],
+        record_path=Path('/tmp/ccb-hapi-wrapper.json'),
+        launch_session_id='launch-session',
+    )
+    command = f'export CODEX_HOME=/tmp/home; {rendered}'
+
+    rewritten = build_resume_start_cmd(command, 'resume-session')
+
+    result = subprocess.run(
+        ['/bin/bash', '-n'],
+        input=rewritten,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    parts = shlex.split(rewritten)
+    assert parts[-2:] == ['resume', 'resume-session']

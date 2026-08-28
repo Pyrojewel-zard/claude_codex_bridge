@@ -40,10 +40,51 @@ def strip_resume_start_cmd(command: object) -> str:
 
 
 def split_last_shell_segment(command: str) -> tuple[str, str]:
-    prefix, separator, tail = str(command or '').rpartition(';')
-    if not separator:
-        return '', str(command or '').strip()
+    raw = str(command or '').strip()
+    separator_index = _last_top_level_separator(raw, ';')
+    if separator_index < 0:
+        return '', raw
+    prefix = raw[:separator_index]
+    tail = raw[separator_index + 1:]
+    if not prefix.strip() or not tail.strip():
+        return '', raw
     return prefix.strip(), tail.strip()
+
+
+def _last_top_level_separator(command: str, separator: str) -> int:
+    """Return the last separator outside shell quotes.
+
+    Resume commands can contain a quoted ``sh -c`` script (notably the HAPI
+    wrapper), whose body legitimately contains semicolons.  A plain
+    ``str.rpartition(';')`` therefore cuts the command inside that script and
+    leaves an unterminated quote.  This small scanner is intentionally limited
+    to the quoting rules needed for command segmentation; tokenization and
+    validation remain delegated to ``shlex`` below.
+    """
+    quote: str | None = None
+    escaped = False
+    last_index = -1
+    for index, char in enumerate(str(command or '')):
+        if escaped:
+            escaped = False
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+            continue
+        if quote == '"':
+            if char == '\\':
+                escaped = True
+            elif char == '"':
+                quote = None
+            continue
+        if char == '\\':
+            escaped = True
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == separator:
+            last_index = index
+    return last_index
 
 
 def strip_resume_from_codex_segment(segment: str) -> str | None:
