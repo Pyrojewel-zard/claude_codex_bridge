@@ -1,16 +1,17 @@
 # Provider Authentication Authority Roadmap
 
-Date: 2026-08-06
+Date: 2026-08-18
 
 ## Status Summary
 
-- Current status: the v8.5.5 compatibility repair and continuous-inheritance
-  slice are published as CCB v8.5.6 from tag commit `58b49c12`, with GitHub
-  Release assets and npm `latest` at `@seemseam/ccb@8.5.6`.
+- Current status: Issue #319 is published in CCB `v8.6.10` from release commit
+  `705c932ec`, with annotated tag, bilingual GitHub Release assets, and npm
+  `latest` at `@seemseam/ccb@8.6.10`.
 - Current phase: qualify organic reconnect faults and continue the remaining
   credential-writer and Provider-capability boundaries.
-- Next target: organic real-fault qualification and the arbitrary
-  `provider_profile.home` writable-state boundary.
+- Next target: complete the macOS platform gate for Issue #319, then continue
+  organic real-fault qualification and the arbitrary `provider_profile.home`
+  writable-state boundary.
 
 ## Done
 
@@ -82,6 +83,11 @@ Date: 2026-08-06
 - Bundled `codex-reconnect` installation, automatic activation, shutdown, and
   bounded capacity/network continuation are integrated and covered by focused
   tests.
+- Issue #319 repair is published in `v8.6.10`: stopped macOS Claude restarts
+  refresh an existing Agent-derived Keychain item only when the inherited
+  source projection changed, preserve a private Claude refresh when it did not,
+  never follow a symlinked CCB projection, and fail closed on private Keychain
+  inspection errors.
 - An external inherited-state source-runtime project advanced authority
   generation without changing its stable CCB conversation, preserved the old
   transcript in place, produced a native Codex fork with matching user-message

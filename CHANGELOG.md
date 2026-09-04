@@ -1,5 +1,44 @@
 # Changelog
 
+## v8.6.10 (2026-08-18)
+
+- Fixed Issue #319: after an external Claude OAuth re-login, a stopped managed
+  restart now refreshes the existing Agent-private Keychain credential instead
+  of retaining a revoked token and returning 401.
+- Preserved a Claude-private Keychain refresh when the inherited source is
+  unchanged; external Claude Keychain services remain read-only.
+- Added fail-closed handling for symlinked CCB credential projections and
+  private Keychain inspection errors. No project, conversation, pairing, or
+  configuration migration is required.
+
+## v8.6.9 (2026-08-17)
+
+- Added the official DeepSeek Harness as the separate Developer Preview
+  provider `dsh`, with loopback HTTP/WebSocket transport, exact native request
+  and turn completion, observer-only restore, native clear/compact handling,
+  and agent-private account, skill, and runtime state.
+- Fixed Issue #318 by making managed AGY 1.1.13 select its private file token
+  store immediately, without a keyring timeout or writes to the source user
+  HOME.
+- Reverted Windows PR behavior that had crossed into shared Linux/macOS
+  runtime modules, then added a trusted-base native-only Windows PR gate that
+  rejects shared client, release, Mobile, npm, and generic-test changes.
+- No project, conversation, pairing, or configuration migration is required.
+  DeepSeek Harness remains optional and does not change the existing
+  `deepseek` / `deepcode` provider.
+
+## v8.6.8 (2026-08-17)
+
+- Added adjustable workspace-surface opacity for local CCB Mobile backgrounds
+  and extended the selected image across the project list and workspace chrome.
+- Opened expanded long replies at their bottom, kept the latest bubble visible,
+  and moved downloadable attachments into normal in-bubble message content.
+- Hardened native Windows and Herdr runtime handling for non-UTF-8 process
+  output, foreground Provider detection, pane authority, and deferred cleanup
+  of still-running Agent state (PRs #314, #315, and #317; PR #316 superseded
+  by the hardened cross-platform test correction).
+- No pairing, conversation, project, or configuration migration is required.
+
 ## v8.6.7 (2026-08-16)
 
 - Added local CCB Mobile workspace background customization across project

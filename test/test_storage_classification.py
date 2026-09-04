@@ -314,6 +314,37 @@ def test_qoder_config_skills_are_projected(
     assert entry.reason == 'qoder_skill_projection'
 
 
+@pytest.mark.parametrize(
+    ('remainder', 'storage_class'),
+    (
+        (('.credentials.yaml',), 'secret'),
+        (('.env',), 'secret'),
+        (('settings.yaml',), 'projected_config'),
+        (('AGENTS.md',), 'projected_config'),
+        (('skills', 'ask', 'SKILL.md'), 'projected_config'),
+        (('sessions', 'session-1.jsonl'), 'session'),
+        (('.cache', 'catalog.json'), 'rebuildable_cache'),
+    ),
+)
+def test_dsh_managed_home_storage_boundaries(
+    tmp_path: Path,
+    remainder: tuple[str, ...],
+    storage_class: str,
+) -> None:
+    path = tmp_path.joinpath(*remainder)
+    entry = classify_provider_home(
+        path,
+        f'agents/dsh1/provider-state/dsh/home/{"/".join(remainder)}',
+        'dsh',
+        'dsh1',
+        remainder,
+        size=3,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == storage_class
+
+
 def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     ccb = project_root / '.ccb'
@@ -683,18 +714,23 @@ def test_path_layout_keeps_legacy_external_cache_read_only(tmp_path: Path, monke
     assert not cache_dir.exists()
 
 
-def test_path_layout_ensures_user_provider_cache_manifest(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize('provider', ('gemini', 'pi'))
+def test_path_layout_ensures_user_provider_cache_manifest(
+    tmp_path: Path,
+    monkeypatch,
+    provider: str,
+) -> None:
     project_root = tmp_path / 'repo'
     xdg_cache = tmp_path / 'xdg-cache'
     monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
     layout = PathLayout(project_root)
 
-    cache_dir = layout.ensure_provider_user_cache_dir('gemini', created_at='2026-07-23T00:00:00Z')
+    cache_dir = layout.ensure_provider_user_cache_dir(provider, created_at='2026-07-23T00:00:00Z')
     manifest = json.loads((cache_dir / 'MANIFEST.json').read_text(encoding='utf-8'))
 
-    assert cache_dir == xdg_cache / 'ccb' / 'provider-cache' / 'gemini'
+    assert cache_dir == xdg_cache / 'ccb' / 'provider-cache' / provider
     assert manifest['record_type'] == 'ccb_user_provider_cache_manifest'
-    assert manifest['provider'] == 'gemini'
+    assert manifest['provider'] == provider
     assert manifest['scope'] == 'user'
     assert manifest['entries'] == []
     assert not (xdg_cache / 'ccb' / 'projects').exists()

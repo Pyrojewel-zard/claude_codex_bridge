@@ -55,11 +55,38 @@ Date: 2026-08-12
   Android manifest, Windows PE x86-64 launchers, npm `latest`, and a clean
   npm-installed CLI and `ccb compact` help smoke.
 
+## v8.6.8 isolation remediation
+
+- Audited the four post-`v8.6.7` Windows/Herdr feature commits against the
+  accepted ownership boundary. Every commit crossed into shared, Unix, or
+  generic test files and is rejected by the new diff policy.
+- Landed exact reverse patches in `7d74e92a8` for `92dae890d`, `0eb15c4b1`,
+  `f87f995ff`, and `67a95fea1`. The two later PR merge commits contain no
+  additional effective change, so reverting those merge objects would not
+  remove the cherry-picked behavior.
+- Preserved the Mobile changes, release/version history, Windows newline-test
+  skip, and unrelated test-mock corrections in `v8.6.8`.
+- Added and landed the dedicated Windows PR isolation workflow and checker in
+  `23d62228f`. It detects
+  Windows scope from changed paths, diff markers, and commit subjects; blocks
+  shared/Linux/macOS/npm/Mobile paths; and freezes the existing shared-to-
+  Windows reverse-import inventory against expansion.
+- Hardened and landed the native-only gate in `702870c1b`: global release
+  metadata is no longer exempt, Windows API markers and `from platforms import
+  windows` imports are detected, and the workflow executes the checker from the
+  trusted base revision under `pull_request_target`.
+- Local Linux verification passed. Real macOS and affected-host Windows
+  validation remain external CI/manual gates.
+- Detailed evidence: [evidence/v8.6.8-windows-pr-isolation-audit.md](evidence/v8.6.8-windows-pr-isolation-audit.md).
+
 ## Next after stable publication
 
-1. Install the ZIP on a real user Windows x64 machine.
-2. Validate WezTerm + Herdr startup, pane creation, capture, restart, kill, and
+1. Make the dedicated isolation workflow a required PR check alongside the
+   existing Ubuntu and
+   macOS test lanes on future Windows PRs.
+2. Install the next immutable ZIP on a real user Windows x64 machine.
+3. Validate WezTerm + Herdr startup, pane creation, capture, restart, kill, and
    Codex/Claude provider workflows.
-3. Record failures without upgrading the support tier prematurely.
-4. Cut a new immutable release for fixes; do not move an already published
+4. Record failures without upgrading the support tier prematurely.
+5. Cut a new immutable release for fixes; do not move an already published
    stable or beta tag.

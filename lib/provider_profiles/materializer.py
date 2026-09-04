@@ -43,6 +43,10 @@ _API_ENV_KEYS = {
         'DEEPCODE_API_KEY',
         'DEEPCODE_BASE_URL',
     },
+    'dsh': {
+        'DEEPSEEK_API_KEY',
+        'DEEPSEEK_BASE_URL',
+    },
 }
 
 
@@ -216,6 +220,8 @@ def _materialize_codex_profile(
             shared_cache_root=layout.shared_cache_dir,
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=runtime_dir / 'codex-memory-projection.json',
+            model=spec.model,
+            model_catalog_json=profile_spec.env.get('model_catalog_json'),
         )
 
     return ResolvedProviderProfile(

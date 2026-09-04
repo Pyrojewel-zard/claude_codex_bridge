@@ -1,6 +1,6 @@
 # Provider Authentication Authority Implementation Status
 
-Date: 2026-08-06
+Date: 2026-08-18
 
 ## Current Phase
 
@@ -26,6 +26,15 @@ linked continuation evidence instead of being hidden from history.
 
 ## Last Landed
 
+- Issue #319 macOS Claude OAuth re-login repair was published in CCB `v8.6.10`
+  from implementation commit `84f2bc73c` and release commit `705c932ec`, with
+  annotated tag `v8.6.10`, GitHub Release assets, and npm
+  `@seemseam/ccb@8.6.10`. On stopped restart, CCB compares the inherited source
+  payload with the prior CCB-owned `.credentials.json` projection and updates
+  only the matching Agent-derived Keychain service when the source changed. An
+  unchanged source preserves a managed Claude refresh performed in that private
+  service. External Claude Keychain services remain read-only; symlinked
+  projections and private Keychain inspection errors fail closed.
 - v8.5.5 was withdrawn from GitHub on 2026-08-05 after its first startup moved
   all pre-HMAC Codex sessions out of the active namespace.
 - Codex now adopts compatible pre-HMAC namespaces in place and restores the
@@ -74,6 +83,21 @@ private-login decisions. An unqualified Provider must use linked continuation
 rather than block local history continuity.
 
 ## Last Verified
+
+- Issue #319 regression tests: `4 passed`.
+- Provider/restart/authority/storage regression matrix: `406 passed`.
+- Full source suite in the qualification environment: `7170 passed, 3
+  skipped, 4 subtests passed` (the initial 27 environment-only failures passed
+  when rerun with the qualification interpreter and `aiohttp` on `PATH`).
+- `py_compile` and `git diff --check` passed for the current local patch.
+- Real macOS Keychain qualification is still unavailable on this Linux host;
+  the macOS behavior remains covered by deterministic fakes and remains a
+  platform-owner qualification item after publication.
+- v8.6.10 release verification: Release Artifacts run `32123813089`, Native
+  Windows run `32123813069`, Release Sidebar run `32123813053`, and npm OIDC
+  run `32123813131` all completed successfully. The public release contains
+  Linux/macOS, Windows, Mobile, sidebar, and checksum assets; npm `latest`
+  resolves to `8.6.10`.
 
 - `/home/bfly/yunwei/ccb_source/ccb_test --diagnose` passed from the external
   `/home/bfly/yunwei/test_ccb2` project root.

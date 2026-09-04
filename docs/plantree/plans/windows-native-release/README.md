@@ -11,9 +11,11 @@ Unix/npm ownership.
 
 ## Current target
 
-- Version/tag: `v8.6.1`
-- Status: published stable CCB release; Windows artifact remains beta. All
-  platform publication workflows and downloaded-asset verification passed.
+- Version/tag: `v8.6.8`
+- Status: the published release remains immutable. Local corrective rollback
+  `7d74e92a8`, isolation gate `23d62228f`, and strict-gate hardening
+  `702870c1b` remove and guard against Windows/Herdr changes that cross shared
+  Linux/macOS ownership; the Windows artifact remains beta.
 - Artifact: `ccb-windows-x86_64.zip`
 - Installer: root `install.ps1`, implemented by
   `platforms/windows/installer/install.ps1`
@@ -37,6 +39,13 @@ Unix/npm ownership.
   frozen isolation and publication boundaries.
 - [decisions/002-stable-ccb-with-windows-beta-asset.md](decisions/002-stable-ccb-with-windows-beta-asset.md):
   stable tag and Windows support-tier boundary.
+- [decisions/003-windows-pr-diff-isolation.md](decisions/003-windows-pr-diff-isolation.md):
+  fail-closed changed-file and reverse-dependency boundary for Windows PRs.
+- [decisions/004-trusted-base-native-only-gate.md](decisions/004-trusted-base-native-only-gate.md):
+  trusted-base execution and strict native-only ownership for future Windows
+  PRs.
+- [evidence/v8.6.8-windows-pr-isolation-audit.md](evidence/v8.6.8-windows-pr-isolation-audit.md):
+  commit-level findings, rollback scope, verification, and residual risks.
 
 ## Acceptance boundary
 

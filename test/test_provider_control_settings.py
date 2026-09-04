@@ -14,6 +14,12 @@ from provider_control import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep path assertions anchored under the temporary project's .ccb."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 def _write_v2_project(root: Path) -> Path:
     config = root / '.ccb' / 'ccb.config'
     config.parent.mkdir(parents=True)

@@ -245,7 +245,16 @@ def test_claude_launcher_hapi_enabled_decorates_argv(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(
         claude_launcher,
         '_resolve_claude_restore_target',
-        lambda **kwargs: type('T', (), {'run_cwd': runtime_dir, 'has_history': False})(),
+        lambda **kwargs: type(
+            'T',
+            (),
+            {
+                'run_cwd': runtime_dir,
+                'has_history': False,
+                'continuation_mode': None,
+                'continuation_session_id': None,
+            },
+        )(),
     )
     monkeypatch.setenv('CLAUDE_START_CMD', '/opt/provider/custom-claude --profile managed')
 
@@ -388,7 +397,16 @@ def _claude_launcher_for_auto_permission(tmp_path, monkeypatch):
     monkeypatch.setattr(
         claude_launcher,
         '_resolve_claude_restore_target',
-        lambda **kwargs: type('T', (), {'run_cwd': runtime_dir, 'has_history': False})(),
+        lambda **kwargs: type(
+            'T',
+            (),
+            {
+                'run_cwd': runtime_dir,
+                'has_history': False,
+                'continuation_mode': None,
+                'continuation_session_id': None,
+            },
+        )(),
     )
 
     spec = _claude_spec_for_hapi('reviewer')
@@ -453,7 +471,16 @@ def test_claude_launcher_hapi_disabled_unchanged(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         claude_launcher,
         '_resolve_claude_restore_target',
-        lambda **kwargs: type('T', (), {'run_cwd': runtime_dir, 'has_history': False})(),
+        lambda **kwargs: type(
+            'T',
+            (),
+            {
+                'run_cwd': runtime_dir,
+                'has_history': False,
+                'continuation_mode': None,
+                'continuation_session_id': None,
+            },
+        )(),
     )
 
     spec = _claude_spec_for_hapi('reviewer')

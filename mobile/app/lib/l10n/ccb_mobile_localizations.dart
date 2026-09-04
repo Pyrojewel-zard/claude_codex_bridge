@@ -164,6 +164,9 @@ class CcbMobileLocalizations {
           ? '选择一张本机图片作为聊天和终端的全屏背景。图片只保存在此设备，不会上传到 CCB。'
           : 'Choose a local image as the full-screen background for chats and terminals. It stays on this device and is never uploaded to CCB.';
 
+  String get chatBackgroundSurfaceOpacity =>
+      isChinese ? '内容表面不透明度' : 'Content surface opacity';
+
   String get chooseChatBackground => isChinese ? '选择图片' : 'Choose image';
 
   String get replaceChatBackground => isChinese ? '更换图片' : 'Replace image';
@@ -302,6 +305,37 @@ class CcbMobileLocalizations {
 
   String get projects => isChinese ? '项目' : 'Projects';
 
+  String hostsOnline(int online, int total) =>
+      isChinese ? '$total 台主机，$online 台在线' : '$online of $total hosts online';
+
+  String get hostOffline => isChinese ? '离线' : 'Offline';
+
+  String get hostOnline => isChinese ? '在线' : 'Online';
+
+  String get hostConnecting => isChinese ? '连接中' : 'Connecting';
+
+  String hostProjectCount(int count) =>
+      isChinese ? '$count 个项目' : (count == 1 ? '1 project' : '$count projects');
+
+  String get hostNoProjects =>
+      isChinese ? '该电脑暂无项目' : 'No projects on this computer';
+
+  String get renameHost => isChinese ? '重命名电脑' : 'Rename computer';
+
+  String get hostNameLabel => isChinese ? '电脑名称' : 'Computer name';
+
+  String get hostNameHelp =>
+      isChinese
+          ? '仅保存在本机，用于区分已配对的多台电脑'
+          : 'Stored on this phone only, to tell paired computers apart';
+
+  String get useAutomaticHostName => isChinese ? '恢复默认' : 'Use default';
+
+  String get save => isChinese ? '保存' : 'Save';
+
+  String get hostRenameFailed =>
+      isChinese ? '无法保存电脑名称' : 'Could not save the computer name';
+
   String get openTerminal => isChinese ? '打开终端' : 'Open Terminal';
 
   String get computerTerminal => isChinese ? '电脑终端' : 'Computer terminal';
@@ -327,6 +361,15 @@ class CcbMobileLocalizations {
 
   String get chooseTerminalProject =>
       isChinese ? '选择项目和终端' : 'Choose a project and terminal';
+
+  String get chooseTerminalHost =>
+      isChinese ? '选择要打开终端的电脑' : 'Choose the computer to open';
+
+  String get hostTerminalScopeMissing =>
+      isChinese ? '未启用终端权限' : 'Terminal access not enabled';
+
+  String get noHostTerminalTargets =>
+      isChinese ? '没有可打开终端的电脑' : 'No computer can open a terminal';
 
   String get windows => isChinese ? '窗口' : 'Windows';
 

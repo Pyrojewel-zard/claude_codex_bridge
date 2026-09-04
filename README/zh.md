@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.10-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -15,6 +15,7 @@
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
   <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness">
   <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
@@ -45,7 +46,8 @@
 ## 为什么用 CCB？
 
 - 强稳定的 agent 间通信能力，支持 `A -> B -> C`、`A,B -> C`、`A -> B,C` 等复杂协作关系。
-- 每个 agent 都是完整原生终端，支持可见的界面排布和直接接管。
+- 交互式 CLI agent 是完整原生终端，支持可见排布和直接接管；服务型 provider
+  保留明确的受管 host/log 界面，但不会伪装成终端 request 协议。
 - 后台 daemon 持续运行，可以脱离前台界面保持项目状态。
 - Hub 能力：一个命令同时并发运行多家 CLI provider。
 - 手机远程控制器：跨 provider 语音操控、文件传输和远程终端访问。
@@ -75,6 +77,23 @@ CLI，并只提示一次可安全管理的更新。可使用 `--providers check`
 本次跳过。选择“暂不更新”后，下次 `ccb update` 会再次提示；选择“跳过此
 版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
 provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
+
+官方 DeepSeek Harness 以独立的 Developer Preview provider key `dsh`
+接入（`deepseek` 仍表示 Deep Code CLI）。使用受支持的 Node runtime 安装其
+npm 包，然后在 Config UI 选择 `dsh`，或使用 `research:dsh` 这样的 Agent
+leaf：
+
+```bash
+npm install -g @deepseek-ai/dsh
+dsh --version
+```
+
+CCB 会在 loopback 上启动 `dsh web`，并通过 DSH 的结构化
+HTTP/WebSocket carrier 通信。当前 POSIX 运行时可以把该服务放在受管 pane
+中，但 pane 仅承担 lifecycle/log 所有权；prompt、reply、原生结束判定、
+`ccb compact` 和恢复都不依赖终端输入或 pane 文本启发式。请在用户自有 DSH
+状态或 CCB provider profile/API 控制中配置
+`DEEPSEEK_API_KEY`，并按需配置 `DEEPSEEK_BASE_URL`；CCB 不会自动获取凭据。
 
 版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
 manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
@@ -211,9 +230,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.6 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.10 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
+- [下载 CCB Mobile v8.6.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -284,7 +303,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=0a86422d" alt="CCB 微信技术群 2" width="240">
+  <img src="../assets/weixin.png?v=7335e843" alt="CCB 微信技术群 2" width="240">
 </p>
 
 > 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
@@ -302,12 +321,21 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
-<summary><b>v8.6.6</b> - Mobile 连续性与 Provider 安全恢复</summary>
+<summary><b>v8.6.10</b> - Claude OAuth 重登录隔离</summary>
 
-- `ccb update` 后自动重启正在运行的已安装版 Mobile Host，保留配对信息；同时避免合法的大型 Relay 终端历史快照在首次额度更新前卡住。
-- 仅当当前输入框仍包含本任务的精确证据时，才为首次 Enter 丢失的 Claude 提示补发一次 Enter；Pane 历史不会触发补发（PR #305）。
-- 显式 Agent 环境变量和 Provider 路由优先于继承的 Claude settings；Provider profile 变化时重建复用绑定，但不清除对话历史（PR #307、#308）。
-- Herdr 严格按指定的非根父 Pane 分割；原生 Windows 新增 `pwsh`、`powershell`、`bash`、`wincmd` shell Pane，同时保留带 Provider 后缀的同名 Agent（PR #309、#310）。
+- 外部 OAuth 重新登录后，受管重启会刷新 Agent 私有 Claude Keychain 凭据，避免继续使用已撤销 token（Issue #319）。
+- 继承源凭据未变化时保留 Claude 私有 Keychain 自行刷新的值；外部 Claude Keychain service 始终只读。
+- CCB 凭据投影为 symlink 或私有 Keychain 检查异常时 fail closed。无需迁移项目、对话、配对或配置。
+
+</details>
+
+<details>
+<summary><b>v8.6.9</b> - DeepSeek Harness、AGY 启动与 Windows 隔离</summary>
+
+- 以独立 Developer Preview provider `dsh` 接入官方 DeepSeek Harness，通过 loopback HTTP/WebSocket 服务与精确 native turn 证据工作。
+- 让受管 AGY 1.1.13 立即选择私有文件 token 存储，避免 keyring 超时，同时不写入用户源 HOME（Issue #318）。
+- 撤销 Windows PR 对 Linux/macOS 共享运行时代码的越界改动，并新增基于可信 base 的原生 Windows 专用 PR 门禁，阻止后续跨平台污染。
+- 将 DSH clear、compact、精确 session 恢复、凭据、skills 与运行时状态限制在 provider-native、Agent 私有边界内。
 
 </details>
 
