@@ -200,11 +200,22 @@ def atomic_write_text_if_changed(path: Path, text: str, *, encoding: str = 'utf-
     target = Path(path)
     collect_metrics = startup_operation_collection_active()
     try:
-        if target.read_text(encoding=encoding) == text:
+        existing_text = target.read_text(encoding=encoding)
+        existing_bytes = None
+        if collect_metrics:
+            existing_bytes = len(existing_text.encode(encoding))
+            _record_atomic_read_metrics(collect_metrics, read_bytes=existing_bytes)
+        if existing_text == text:
             if collect_metrics:
-                record_startup_operation('atomic_durable_write_skip_count')
+                assert existing_bytes is not None
+                counts = {
+                    'atomic_durable_write_skip_count': 1,
+                    'atomic_durable_write_skip_byte_count': existing_bytes,
+                }
                 if in_startup_operation_scope('provider_prepare'):
-                    record_startup_operation('provider_prepare_atomic_write_skip_count')
+                    counts['provider_prepare_atomic_write_skip_count'] = 1
+                    counts['provider_prepare_atomic_write_skip_byte_count'] = existing_bytes
+                record_startup_operations(counts)
             return False
     except FileNotFoundError:
         pass
@@ -212,6 +223,19 @@ def atomic_write_text_if_changed(path: Path, text: str, *, encoding: str = 'utf-
         pass
     atomic_write_text(target, text, encoding=encoding)
     return True
+
+
+def _record_atomic_read_metrics(collect_metrics: bool, *, read_bytes: int) -> None:
+    if not collect_metrics:
+        return
+    counts = {
+        'atomic_durable_read_count': 1,
+        'atomic_durable_read_byte_count': max(0, int(read_bytes)),
+    }
+    if in_startup_operation_scope('provider_prepare'):
+        counts['provider_prepare_atomic_read_count'] = 1
+        counts['provider_prepare_atomic_read_byte_count'] = max(0, int(read_bytes))
+    record_startup_operations(counts)
 
 
 def atomic_write_json_if_changed(path: Path, payload: Any, *, encoding: str = 'utf-8') -> bool:

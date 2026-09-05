@@ -380,6 +380,8 @@ def start_agent_runtime(
                 provider_prepare_ms=provider_prepare_ms,
                 provider_prepare_count=int(bool(provider_prepared)),
                 timings_ms=timings_ms,
+                input_readiness_status='not_observed_at_startup',
+                native_session_id_status=_native_session_id_status(binding_state.agent_action),
             ),
             actions_taken=tuple(actions_taken),
             socket_name=binding_state.socket_name or (namespace_socket_path if namespace_pane_id else None),
@@ -542,8 +544,14 @@ def _record_failed_agent_result(
             provider_prepare_ms=provider_prepare_ms,
             provider_prepare_count=int(bool(provider_prepared)),
             timings_ms=dict(timings_ms),
+            input_readiness_status='not_observed_at_startup',
+            native_session_id_status='not_observed_after_startup_failure',
         ),
     )
+
+
+def _native_session_id_status(action: str) -> str:
+    return 'pending' if action in {'launched', 'relaunched'} else 'not_observed_at_startup'
 
 
 __all__ = ['start_agent_runtime']

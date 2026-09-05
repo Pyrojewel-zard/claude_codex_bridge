@@ -6,6 +6,10 @@ from pathlib import Path
 from provider_core.pathing import session_filename_for_agent
 from provider_sessions.files import safe_write_session
 from provider_profiles.codex_home_config import codex_api_authority
+from runtime_observability import (
+    record_startup_operations,
+    startup_operation_collection_active,
+)
 from storage.locks import file_lock
 from storage.path_helpers import runtime_project_anchor_from_path
 
@@ -31,9 +35,11 @@ def load_resume_session_id(
 ) -> str | None:
     session_path = preferred_session_path(spec, runtime_dir)
     if session_path is None:
+        record_startup_operations({'session_decision_no_binding_count': 1})
         return None
     data = read_session_payload(session_path)
     if data is None:
+        record_startup_operations({'session_decision_history_unusable_count': 1})
         return None
     authority_matches = _provider_authority_matches(
         data,
@@ -46,8 +52,10 @@ def load_resume_session_id(
         runtime_dir=runtime_dir,
         current_fingerprint=current_fingerprint,
     ):
+        record_startup_operations({'session_decision_authority_rejected_count': 1})
         return None
     if not _resume_session_binding_is_usable(data):
+        record_startup_operations({'session_decision_binding_rejected_count': 1})
         return None
     repaired = _repair_invalid_native_fork_binding(data)
     if repaired is not None:
@@ -62,6 +70,7 @@ def load_resume_session_id(
             # A claimed native fork without matching parent evidence is not a
             # safe resume target.  Do not resume the blank/corrupt binding when
             # the repair could not be made durable.
+            record_startup_operations({'session_decision_repair_rejected_count': 1})
             return None
         data = repaired_data
     descendant = _latest_linear_descendant(data, binding='current')
@@ -80,8 +89,19 @@ def load_resume_session_id(
             # cannot be persisted atomically.
             pass
     if not _resume_session_provider_is_compatible(data, runtime_dir=runtime_dir, profile=profile):
+        record_startup_operations({'session_decision_provider_rejected_count': 1})
         return None
-    return payload_resume_session_id(data)
+    session_id = payload_resume_session_id(data)
+    record_startup_operations(
+        {
+            (
+                'session_decision_resume_count'
+                if session_id is not None
+                else 'session_decision_no_resume_id_count'
+            ): 1,
+        }
+    )
+    return session_id
 
 
 def load_linked_continuation_session_id(
@@ -93,9 +113,11 @@ def load_linked_continuation_session_id(
     """Return a transcript that should seed a new native Codex fork."""
     session_path = preferred_session_path(spec, runtime_dir)
     if session_path is None:
+        record_startup_operations({'session_decision_no_binding_count': 1})
         return None
     data = read_session_payload(session_path)
     if not isinstance(data, dict):
+        record_startup_operations({'session_decision_history_unusable_count': 1})
         return None
     if str(data.get('ccb_resume_compatibility') or '').strip() != 'linked_continuation':
         return None
@@ -109,6 +131,7 @@ def load_linked_continuation_session_id(
     if not old_id or old_path is None or session_root is None:
         return None
     if not old_path.is_file() or not _is_within(old_path, session_root):
+        record_startup_operations({'session_decision_binding_rejected_count': 1})
         return None
     descendant = _latest_linear_descendant(data, binding='old')
     if descendant is not None:
@@ -120,6 +143,7 @@ def load_linked_continuation_session_id(
         ok, _error = safe_write_session(session_path, payload)
         if ok:
             old_id = descendant_id
+    record_startup_operations({'session_decision_linked_continuation_count': 1})
     return old_id
 
 
@@ -205,10 +229,18 @@ def _latest_linear_descendant(
         return None
 
     children: dict[str, list[tuple[str, Path]]] = {}
+    record_startup_operations({'session_history_directory_scan_attempt_count': 1})
     try:
         paths = sorted(session_root.glob('**/*.jsonl'))
     except OSError:
+        record_startup_operations({'session_history_directory_scan_failure_count': 1})
         return None
+    record_startup_operations(
+        {
+            'session_history_directory_scan_count': 1,
+            'session_history_candidate_file_count': len(paths),
+        }
+    )
     for path in paths:
         if not path.is_file() or is_codex_subagent_log(path):
             continue
@@ -301,17 +333,36 @@ def state_dir_for_runtime_dir(runtime_dir: Path) -> Path | None:
 def preferred_session_path(spec, runtime_dir: Path) -> Path | None:
     candidates = (agent_session_path(spec, runtime_dir),)
     for session_path in candidates:
+        record_startup_operations({'session_history_binding_path_probe_count': 1})
         if session_path is not None and session_path.is_file():
             return session_path
     return None
 
 
 def read_session_payload(session_path: Path) -> dict | None:
+    record_startup_operations({'session_history_payload_read_attempt_count': 1})
     try:
-        data = json.loads(session_path.read_text(encoding='utf-8'))
+        raw = session_path.read_text(encoding='utf-8')
     except Exception:
+        record_startup_operations({'session_history_payload_read_failure_count': 1})
         return None
-    return data if isinstance(data, dict) else None
+    counts = {
+        'session_history_payload_read_count': 1,
+        'session_history_payload_parse_attempt_count': 1,
+    }
+    if startup_operation_collection_active():
+        counts['session_history_payload_read_byte_count'] = len(raw.encode('utf-8'))
+    record_startup_operations(counts)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        record_startup_operations({'session_history_payload_parse_failure_count': 1})
+        return None
+    if not isinstance(data, dict):
+        record_startup_operations({'session_history_payload_type_rejected_count': 1})
+        return None
+    record_startup_operations({'session_history_payload_parse_count': 1})
+    return data
 
 
 def payload_resume_session_id(data: dict) -> str | None:

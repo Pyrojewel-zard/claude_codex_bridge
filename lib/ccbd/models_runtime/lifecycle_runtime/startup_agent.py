@@ -38,6 +38,8 @@ class CcbdStartupAgentResult:
     provider_prepare_ms: float | None = None
     provider_prepare_count: int = 0
     timings_ms: dict[str, float] | None = None
+    input_readiness_status: str | None = None
+    native_session_id_status: str | None = None
 
     def __post_init__(self) -> None:
         if self.agent_name == '':
@@ -76,6 +78,8 @@ class CcbdStartupAgentResult:
             'provider_prepare_ms': self.provider_prepare_ms,
             'provider_prepare_count': self.provider_prepare_count,
             'timings_ms': dict(self.timings_ms or {}),
+            'input_readiness_status': self.input_readiness_status,
+            'native_session_id_status': self.native_session_id_status,
         }
 
     def summary_token(self) -> str:
@@ -111,6 +115,8 @@ class CcbdStartupAgentResult:
             provider_prepare_ms=_coerce_float(record.get('provider_prepare_ms')),
             provider_prepare_count=max(0, coerce_int(record.get('provider_prepare_count')) or 0),
             timings_ms=_clean_timings(record.get('timings_ms')),
+            input_readiness_status=clean_text(record.get('input_readiness_status')),
+            native_session_id_status=clean_text(record.get('native_session_id_status')),
         )
 
 

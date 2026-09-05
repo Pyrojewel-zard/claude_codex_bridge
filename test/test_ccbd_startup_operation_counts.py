@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccbd.models import CcbdStartupReport
+from ccbd.models import CcbdStartupAgentResult, CcbdStartupReport
 from ccbd.start_preparation import PreparedStartAgent, _prepare_provider_launch_set
 from ccbd.supervisor_runtime.reporting import record_startup_report
 from cli.services.tmux_project_cleanup_runtime.cleanup import cleanup_project_tmux_orphans_by_socket
@@ -15,6 +15,11 @@ from runtime_observability import (
     record_startup_operation,
     startup_operation_counts,
     startup_operation_scope,
+)
+from provider_backends.claude.launcher_runtime.history import latest_session_id_for_candidates
+from provider_backends.codex.launcher_runtime.session_paths import (
+    load_resume_session_id,
+    read_session_payload,
 )
 from storage.atomic import atomic_write_text, atomic_write_text_if_changed
 from terminal_runtime import TmuxBackend
@@ -62,13 +67,67 @@ def test_atomic_startup_counts_distinguish_write_skip_and_provider_prepare_scope
             assert atomic_write_text_if_changed(target, 'hello') is False
 
     assert collector.snapshot() == {
+        'atomic_durable_read_byte_count': 5,
+        'atomic_durable_read_count': 1,
         'atomic_durable_write_attempt_count': 1,
         'atomic_durable_write_byte_count': 5,
         'atomic_durable_write_count': 1,
+        'atomic_durable_write_skip_byte_count': 5,
         'atomic_durable_write_skip_count': 1,
+        'provider_prepare_atomic_read_byte_count': 5,
+        'provider_prepare_atomic_read_count': 1,
         'provider_prepare_atomic_write_byte_count': 5,
         'provider_prepare_atomic_write_count': 1,
+        'provider_prepare_atomic_write_skip_byte_count': 5,
         'provider_prepare_atomic_write_skip_count': 1,
+    }
+
+
+def test_session_history_counters_classify_payload_and_absent_binding(tmp_path: Path) -> None:
+    ccb_dir = tmp_path / '.ccb'
+    runtime_dir = ccb_dir / 'agents' / 'demo' / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    session_path = ccb_dir / '.codex-demo-session'
+    payload = '{"codex_session_id":"sid-1"}'
+    session_path.write_text(payload, encoding='utf-8')
+
+    with collect_startup_operations() as collector:
+        assert read_session_payload(session_path) == {'codex_session_id': 'sid-1'}
+        assert load_resume_session_id(SimpleNamespace(name='missing'), runtime_dir) is None
+
+    assert collector.snapshot() == {
+        'session_decision_no_binding_count': 1,
+        'session_history_binding_path_probe_count': 1,
+        'session_history_payload_parse_attempt_count': 1,
+        'session_history_payload_parse_count': 1,
+        'session_history_payload_read_attempt_count': 1,
+        'session_history_payload_read_byte_count': len(payload.encode('utf-8')),
+        'session_history_payload_read_count': 1,
+    }
+
+
+def test_session_history_counters_classify_parse_failure_and_claude_absence(tmp_path: Path) -> None:
+    malformed = tmp_path / 'malformed-session.json'
+    malformed.write_text('{', encoding='utf-8')
+    missing_project = tmp_path / 'missing-project'
+    home_dir = tmp_path / 'home'
+
+    with collect_startup_operations() as collector:
+        assert read_session_payload(malformed) is None
+        assert latest_session_id_for_candidates(
+            candidates=[missing_project],
+            home_dir=home_dir,
+            project_binding_fn=lambda work_dir: (home_dir / 'projects' / 'missing', work_dir),
+        ) == (None, False, None)
+
+    assert collector.snapshot() == {
+        'session_history_directory_absent_count': 1,
+        'session_history_directory_probe_count': 1,
+        'session_history_payload_parse_attempt_count': 1,
+        'session_history_payload_parse_failure_count': 1,
+        'session_history_payload_read_attempt_count': 1,
+        'session_history_payload_read_byte_count': 1,
+        'session_history_payload_read_count': 1,
     }
 
 
@@ -248,3 +307,27 @@ def test_startup_report_operation_counts_are_backward_compatible_and_sanitized()
     restored = CcbdStartupReport.from_record(record)
     assert restored.operation_counts == {'valid_count': 2}
     assert restored.summary_fields()['startup_last_operation_counts'] == {'valid_count': 2}
+
+
+def test_startup_agent_readiness_evidence_marks_native_id_pending_without_exposing_it() -> None:
+    report = _startup_report(
+        agent_results=(
+            CcbdStartupAgentResult(
+                agent_name='demo',
+                provider='codex',
+                action='launched',
+                health='healthy',
+                workspace_path='/workspace',
+                input_readiness_status='not_observed_at_startup',
+                native_session_id_status='pending',
+            ),
+        ),
+    )
+
+    record = report.to_record()
+    agent = record['agent_results'][0]
+    assert agent['input_readiness_status'] == 'not_observed_at_startup'
+    assert agent['native_session_id_status'] == 'pending'
+    assert 'native_session_id' not in agent
+    restored = CcbdStartupReport.from_record(record)
+    assert restored.agent_results[0].native_session_id_status == 'pending'

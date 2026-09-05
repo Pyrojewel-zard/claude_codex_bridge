@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from runtime_observability import record_startup_operations
+
 
 @dataclass
 class ClaudeHistoryLocator:
@@ -86,9 +88,17 @@ def latest_session_id_for_candidates(*, candidates: list[Path], home_dir: Path, 
 
     for work_dir in candidates:
         project_dir, matched_cwd = project_binding_fn(work_dir)
+        record_startup_operations({'session_history_directory_probe_count': 1})
         if not project_dir.exists():
+            record_startup_operations({'session_history_directory_absent_count': 1})
             continue
         session_files = list(project_dir.glob("*.jsonl"))
+        record_startup_operations(
+            {
+                'session_history_directory_scan_count': 1,
+                'session_history_candidate_file_count': len(session_files),
+            }
+        )
         if not session_files:
             continue
         has_any_history = True
@@ -107,11 +117,23 @@ def latest_session_id_for_candidates(*, candidates: list[Path], home_dir: Path, 
         # Since this home_dir is already isolated per-agent, any history found here belongs to this agent.
         projects_root = home_dir / ".claude" / "projects"
         if projects_root.exists():
+            record_startup_operations(
+                {
+                    'session_history_fallback_directory_scan_attempt_count': 1,
+                    'session_history_fallback_directory_scan_count': 1,
+                }
+            )
             fallback_cwd = candidates[0] if candidates else None
             for project_dir in projects_root.iterdir():
                 if not project_dir.is_dir():
                     continue
                 session_files = list(project_dir.glob("*.jsonl"))
+                record_startup_operations(
+                    {
+                        'session_history_directory_scan_count': 1,
+                        'session_history_candidate_file_count': len(session_files),
+                    }
+                )
                 if not session_files:
                     continue
                 has_any_history = True

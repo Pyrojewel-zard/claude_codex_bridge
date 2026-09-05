@@ -7661,6 +7661,12 @@ def _agent_metrics_for_record(report: Mapping[str, Any] | None) -> list[dict[str
                     else None
                 ),
                 "timings_ms": _duration_mapping_for_record(result.get("timings_ms")),
+                "input_readiness_status": (
+                    str(result.get("input_readiness_status") or "").strip() or None
+                ),
+                "native_session_id_status": (
+                    str(result.get("native_session_id_status") or "").strip() or None
+                ),
             }
         )
     return metrics

@@ -220,6 +220,36 @@ def _raw_resource_profile(*, wall_ms: float = 5.0) -> dict[str, object]:
     }
 
 
+def test_agent_metrics_preserve_redacted_readiness_evidence(runner) -> None:
+    metrics = runner._agent_metrics_for_record(
+        {
+            'agent_results': [
+                {
+                    'provider': 'codex',
+                    'action': 'launched',
+                    'health': 'healthy',
+                    'input_readiness_status': 'not_observed_at_startup',
+                    'native_session_id_status': 'pending',
+                }
+            ]
+        }
+    )
+
+    assert metrics == [
+        {
+            'provider': 'codex',
+            'action': 'launched',
+            'health': 'healthy',
+            'duration_ms': None,
+            'provider_prepare_ms': None,
+            'provider_prepare_count': None,
+            'timings_ms': {},
+            'input_readiness_status': 'not_observed_at_startup',
+            'native_session_id_status': 'pending',
+        }
+    ]
+
+
 def _write_mounted_round(
     project: Path,
     *,
