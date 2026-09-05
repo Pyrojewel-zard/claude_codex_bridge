@@ -9,6 +9,16 @@ from ccbd.models_runtime.common import CcbdModelError
 from .common import clean_text, coerce_int
 
 
+_INPUT_READINESS_STATUSES = frozenset({'not_observed_at_startup'})
+_NATIVE_SESSION_ID_STATUSES = frozenset(
+    {
+        'pending',
+        'not_observed_at_startup',
+        'not_observed_after_startup_failure',
+    }
+)
+
+
 @dataclass(frozen=True)
 class CcbdStartupAgentResult:
     agent_name: str
@@ -78,8 +88,14 @@ class CcbdStartupAgentResult:
             'provider_prepare_ms': self.provider_prepare_ms,
             'provider_prepare_count': self.provider_prepare_count,
             'timings_ms': dict(self.timings_ms or {}),
-            'input_readiness_status': self.input_readiness_status,
-            'native_session_id_status': self.native_session_id_status,
+            'input_readiness_status': _clean_status(
+                self.input_readiness_status,
+                allowed=_INPUT_READINESS_STATUSES,
+            ),
+            'native_session_id_status': _clean_status(
+                self.native_session_id_status,
+                allowed=_NATIVE_SESSION_ID_STATUSES,
+            ),
         }
 
     def summary_token(self) -> str:
@@ -115,8 +131,14 @@ class CcbdStartupAgentResult:
             provider_prepare_ms=_coerce_float(record.get('provider_prepare_ms')),
             provider_prepare_count=max(0, coerce_int(record.get('provider_prepare_count')) or 0),
             timings_ms=_clean_timings(record.get('timings_ms')),
-            input_readiness_status=clean_text(record.get('input_readiness_status')),
-            native_session_id_status=clean_text(record.get('native_session_id_status')),
+            input_readiness_status=_clean_status(
+                record.get('input_readiness_status'),
+                allowed=_INPUT_READINESS_STATUSES,
+            ),
+            native_session_id_status=_clean_status(
+                record.get('native_session_id_status'),
+                allowed=_NATIVE_SESSION_ID_STATUSES,
+            ),
         )
 
 
@@ -139,6 +161,13 @@ def _clean_timings(value: object) -> dict[str, float]:
         if parsed is not None:
             timings[str(key)] = parsed
     return timings
+
+
+def _clean_status(value: object, *, allowed: frozenset[str]) -> str | None:
+    if not isinstance(value, str):
+        return None
+    status = value.strip()
+    return status if status in allowed else None
 
 
 __all__ = ['CcbdStartupAgentResult']

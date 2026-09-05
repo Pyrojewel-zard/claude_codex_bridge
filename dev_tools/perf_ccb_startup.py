@@ -125,6 +125,14 @@ READINESS_POINT_NAMES = (
     "T5_foreground_attached",
     "T6_fully_warm",
 )
+INPUT_READINESS_STATUSES = frozenset({'not_observed_at_startup'})
+NATIVE_SESSION_ID_STATUSES = frozenset(
+    {
+        'pending',
+        'not_observed_at_startup',
+        'not_observed_after_startup_failure',
+    }
+)
 AGENT_TIMING_KEYS = frozenset(
     {
         "prepare_launch_context",
@@ -7661,15 +7669,24 @@ def _agent_metrics_for_record(report: Mapping[str, Any] | None) -> list[dict[str
                     else None
                 ),
                 "timings_ms": _duration_mapping_for_record(result.get("timings_ms")),
-                "input_readiness_status": (
-                    str(result.get("input_readiness_status") or "").strip() or None
+                "input_readiness_status": _redacted_status(
+                    result.get("input_readiness_status"),
+                    allowed=INPUT_READINESS_STATUSES,
                 ),
-                "native_session_id_status": (
-                    str(result.get("native_session_id_status") or "").strip() or None
+                "native_session_id_status": _redacted_status(
+                    result.get("native_session_id_status"),
+                    allowed=NATIVE_SESSION_ID_STATUSES,
                 ),
             }
         )
     return metrics
+
+
+def _redacted_status(value: object, *, allowed: frozenset[str]) -> str | None:
+    if not isinstance(value, str):
+        return None
+    status = value.strip()
+    return status if status in allowed else None
 
 
 def _finite_nonnegative_or_none(value: object) -> float | None:

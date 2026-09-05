@@ -250,6 +250,25 @@ def test_agent_metrics_preserve_redacted_readiness_evidence(runner) -> None:
     ]
 
 
+def test_agent_metrics_drop_untrusted_readiness_text(runner) -> None:
+    metrics = runner._agent_metrics_for_record(
+        {
+            'agent_results': [
+                {
+                    'provider': 'codex',
+                    'action': 'launched',
+                    'health': 'healthy',
+                    'input_readiness_status': '/private/session/transcript.jsonl',
+                    'native_session_id_status': 'native-session-id-secret',
+                }
+            ]
+        }
+    )
+
+    assert metrics[0]['input_readiness_status'] is None
+    assert metrics[0]['native_session_id_status'] is None
+
+
 def _write_mounted_round(
     project: Path,
     *,

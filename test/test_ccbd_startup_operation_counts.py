@@ -131,6 +131,34 @@ def test_session_history_counters_classify_parse_failure_and_claude_absence(tmp_
     }
 
 
+def test_session_history_counters_classify_payload_read_failure_without_absence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ccb_dir = tmp_path / '.ccb'
+    runtime_dir = ccb_dir / 'agents' / 'demo' / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    session_path = ccb_dir / '.codex-demo-session'
+    session_path.write_text('{"codex_session_id":"sid-1"}', encoding='utf-8')
+    original_read_text = Path.read_text
+
+    def unreadable_read_text(path: Path, *args, **kwargs):
+        if path == session_path:
+            raise OSError('simulated session read failure')
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', unreadable_read_text)
+    with collect_startup_operations() as collector:
+        assert load_resume_session_id(SimpleNamespace(name='demo'), runtime_dir) is None
+
+    assert collector.snapshot() == {
+        'session_decision_history_unusable_count': 1,
+        'session_history_binding_path_probe_count': 1,
+        'session_history_payload_read_attempt_count': 1,
+        'session_history_payload_read_failure_count': 1,
+    }
+
+
 def test_tmux_counts_only_proven_subprocess_spawns_on_success_and_failure(monkeypatch) -> None:
     outcomes = iter(
         (
@@ -331,3 +359,29 @@ def test_startup_agent_readiness_evidence_marks_native_id_pending_without_exposi
     assert 'native_session_id' not in agent
     restored = CcbdStartupReport.from_record(record)
     assert restored.agent_results[0].native_session_id_status == 'pending'
+
+
+def test_startup_agent_readiness_evidence_drops_untrusted_text() -> None:
+    report = _startup_report(
+        agent_results=(
+            CcbdStartupAgentResult(
+                agent_name='demo',
+                provider='codex',
+                action='launched',
+                health='healthy',
+                workspace_path='/workspace',
+                input_readiness_status='/private/session/transcript.jsonl',
+                native_session_id_status='native-session-id-secret',
+            ),
+        ),
+    )
+
+    record = report.to_record()
+    agent = record['agent_results'][0]
+    assert agent['input_readiness_status'] is None
+    assert agent['native_session_id_status'] is None
+    agent['input_readiness_status'] = 'native-id-from-import'
+    agent['native_session_id_status'] = '/private/session/from-import.jsonl'
+    restored = CcbdStartupReport.from_record(record)
+    assert restored.agent_results[0].input_readiness_status is None
+    assert restored.agent_results[0].native_session_id_status is None

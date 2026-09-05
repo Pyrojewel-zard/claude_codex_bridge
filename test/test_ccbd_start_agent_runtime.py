@@ -473,6 +473,8 @@ def test_start_agent_runtime_skips_current_reused_pane_identity() -> None:
 
     assert execution.agent_result.action == 'attached'
     assert execution.actions_taken == ('reuse_binding:agent1',)
+    assert execution.agent_result.input_readiness_status == 'not_observed_at_startup'
+    assert execution.agent_result.native_session_id_status == 'not_observed_at_startup'
 
 
 def test_start_agent_runtime_relaunches_and_tracks_project_socket_pane() -> None:
@@ -516,6 +518,8 @@ def test_start_agent_runtime_relaunches_and_tracks_project_socket_pane() -> None
     assert execution.agent_result.provider_prepare_count == 1
     assert execution.agent_result.provider_prepare_ms == 12.5
     assert execution.agent_result.binding_reject_reason == 'namespace_epoch_mismatch'
+    assert execution.agent_result.input_readiness_status == 'not_observed_at_startup'
+    assert execution.agent_result.native_session_id_status == 'pending'
 
 
 def test_start_agent_runtime_launches_herdr_assigned_pane_even_with_existing_binding() -> None:
@@ -597,6 +601,8 @@ def test_start_agent_runtime_launches_herdr_assigned_pane_even_with_existing_bin
     )
     assert runtime_service.attach_calls[-1]['terminal_backend'] == 'herdr'
     assert runtime_service.attach_calls[-1]['pane_id'] == 'w1:p3'
+    assert execution.agent_result.input_readiness_status == 'not_observed_at_startup'
+    assert execution.agent_result.native_session_id_status == 'pending'
 
 
 def test_start_agent_runtime_records_exact_boundary_timings(monkeypatch) -> None:
@@ -748,6 +754,8 @@ def test_start_agent_runtime_attaches_structured_failure_without_wrapping(monkey
     assert failed.provider_prepare_count == 1
     assert failed.provider_prepare_ms == 2.0
     assert failed.duration_ms == 11.0
+    assert failed.input_readiness_status == 'not_observed_at_startup'
+    assert failed.native_session_id_status == 'not_observed_after_startup_failure'
     assert failed.timings_ms == {
         'prepare_launch_context': 0.0,
         'pane_and_runtime_facts': 0.0,
