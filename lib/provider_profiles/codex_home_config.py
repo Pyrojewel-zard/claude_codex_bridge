@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import hmac
+import io
 import importlib
 import json
 import os
@@ -42,7 +43,7 @@ from provider_core.projected_assets import (
 from provider_core.source_home import current_provider_source_home
 from rolepacks.projection import project_role_skills_to_home
 from project.ids import compute_project_id
-from storage.atomic import atomic_write_text
+from storage.atomic import atomic_write_text, atomic_write_text_if_changed
 from storage.paths import PathLayout
 
 
@@ -129,6 +130,15 @@ class CodexAuthRefreshResult:
     changed_files: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _CodexSourceConfigSnapshot:
+    exists: bool
+    valid: bool
+    parser_available: bool
+    text: str
+    payload: dict[str, object]
+
+
 def materialize_codex_home_config(
     target_home: Path,
     *,
@@ -148,7 +158,21 @@ def materialize_codex_home_config(
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
     source_config = source_home / 'config.toml'
-    _preflight_codex_auth_sources(source_home, source_config=source_config, profile=profile)
+    source_snapshot = _read_codex_source_config_snapshot(
+        source_config,
+        required=bool(
+            codex_api_authority(profile) is not None
+            or _inherits_config(profile)
+            or _inherits_api(profile)
+            or _inherits_external_auth(profile)
+        ),
+    )
+    _preflight_codex_auth_sources(
+        source_home,
+        source_config=source_config,
+        profile=profile,
+        source_snapshot=source_snapshot,
+    )
     target_home = ensure_private_inheritance_directory(target_home, source_home)
     ensure_private_directory(target_home / 'sessions')
 
@@ -157,74 +181,86 @@ def materialize_codex_home_config(
         target_config.unlink()
     authority = codex_api_authority(profile)
     inherited_assets_enabled = not _role_command_policy_disables_inherited_assets(command_policy)
+    preserve_unparsed_source = bool(
+        authority is None
+        and _inherits_config(profile)
+        and _inherits_api(profile)
+        and source_snapshot.exists
+        and not source_snapshot.parser_available
+        and not _profile_mcp_servers(profile)
+        and not _profile_plugins(profile)
+    )
+    raw_config_text = None
 
     if authority is not None:
-        _write_codex_api_authority_config(
-            target_config,
-            authority,
-            profile=profile,
-            source_config=source_config,
+        payload = _managed_codex_config_payload_from_source(
+            source_snapshot.payload,
+            authority=authority,
+        )
+        _merge_codex_plugin_overrides(payload, profile=profile)
+        _merge_codex_mcp_server_overrides(payload, profile=profile)
+        _trust_managed_codex_project_paths(
+            payload,
             project_root=project_root,
             workspace_path=workspace_path,
         )
-    elif _inherits_config(profile) and _inherits_api(profile) and _source_config_valid(source_config):
-        if source_config.is_file():
-            payload = _read_source_config_payload(source_config)
-            if payload or _profile_mcp_servers(profile) or _profile_plugins(profile):
-                _write_managed_codex_config(
-                    target_config,
-                    payload,
-                    profile=profile,
-                    project_root=project_root,
-                    workspace_path=workspace_path,
-                )
-            else:
-                _sync_file(source_config, target_config)
-                _append_managed_codex_feature_overrides(target_config)
-                _append_managed_codex_project_trust(target_config, project_root=project_root, workspace_path=workspace_path)
-        else:
-            _write_managed_config_stub(
-                target_config,
-                profile=profile,
-                project_root=project_root,
-                workspace_path=workspace_path,
-            )
+    elif preserve_unparsed_source:
+        raw_config_text = _merge_managed_codex_startup_update_override(source_snapshot.text)
+        raw_config_text = _merge_managed_codex_feature_overrides(raw_config_text)
+        raw_config_text = _merge_managed_codex_project_trust(
+            raw_config_text,
+            project_root=project_root,
+            workspace_path=workspace_path,
+        )
+        payload = {}
+    elif _inherits_config(profile) and _inherits_api(profile) and source_snapshot.valid:
+        payload = _build_managed_codex_config_payload(
+            source_snapshot.payload,
+            profile=profile,
+            project_root=project_root,
+            workspace_path=workspace_path,
+        )
     else:
-        _write_managed_config_stub(
-            target_config,
+        payload = _build_managed_codex_config_payload(
+            {},
             profile=profile,
             project_root=project_root,
             workspace_path=workspace_path,
         )
 
-    _install_role_command_mcp_server(
-        target_config,
+    role_command_applied = _apply_role_command_mcp_server(
+        payload,
         command_policy=command_policy,
         project_root=project_root,
         agent_name=agent_name,
         runtime_dir=runtime_dir,
     )
+    if role_command_applied:
+        raw_config_text = None
     configured_model_catalog = (
         model_catalog_json
         if model_catalog_json is not None
         else _profile_env(profile).get(_CODEX_MODEL_CATALOG_JSON_KEY)
     )
     model_catalog_name = _codex_model_catalog_sidecar_name(
-        configured_model_catalog or _read_source_config_payload(target_config).get(_CODEX_MODEL_CATALOG_JSON_KEY)
+        configured_model_catalog or payload.get(_CODEX_MODEL_CATALOG_JSON_KEY)
     )
     if configured_model_catalog and model_catalog_name is None:
         raise RuntimeError(
             f'Codex {_CODEX_MODEL_CATALOG_JSON_KEY} must reference a safe .json file name'
         )
     if model_catalog_name is not None:
-        _set_codex_model_catalog_json(target_config, model_catalog_name)
+        _set_codex_model_catalog_payload(payload, model_catalog_name)
+        raw_config_text = None
         _materialize_config_sidecars(
             source_home,
             target_home,
             required_names=(model_catalog_name,),
         )
     if model is not None:
-        _set_codex_model(target_config, model)
+        _set_codex_model_payload(payload, model)
+        if str(model or '').strip():
+            raw_config_text = None
 
     previous_auth_projection = _read_auth_projection_manifest(target_home)
     _materialize_auth_file(
@@ -237,6 +273,7 @@ def materialize_codex_home_config(
         source_home,
         target_home,
         source_config=source_config,
+        source_config_text=source_snapshot.text,
         profile=profile,
         authority=authority,
         previous_projection=previous_auth_projection,
@@ -292,12 +329,31 @@ def materialize_codex_home_config(
         workspace_path=workspace_path,
     )
     if inherited_assets_enabled:
-        _install_codex_inherited_hooks(
-            target_home,
-            target_config,
-            source_home=source_home,
+        hooks_path = Path(target_home).expanduser() / 'hooks.json'
+        event_groups = _allowed_inherited_codex_hooks(source_home)
+        hooks_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(
+            hooks_path,
+            json.dumps({'hooks': event_groups}, ensure_ascii=False, indent=2) + '\n',
         )
-    _bind_source_test_command_path(target_config, project_root=project_root)
+        if raw_config_text is not None:
+            raw_config_text = _replace_managed_codex_hook_state_block(
+                raw_config_text,
+                _codex_hook_state_table(hooks_path=hooks_path, event_groups=event_groups),
+            )
+        else:
+            _merge_codex_hook_state_payload(
+                payload,
+                hooks_path=hooks_path,
+                event_groups=event_groups,
+            )
+    if raw_config_text is None:
+        _bind_source_test_command_path_payload(payload, project_root=project_root)
+    atomic_write_text_if_changed(
+        target_config,
+        raw_config_text if raw_config_text is not None else _render_toml_document(payload),
+        encoding='utf-8',
+    )
     record_memory_projection_event(
         memory_result,
         provider='codex',
@@ -322,6 +378,23 @@ def _bind_source_test_command_path(
     ):
         return
     payload = _read_source_config_payload(target_config)
+    if _bind_source_test_command_path_payload(payload, project_root=project_root):
+        target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _bind_source_test_command_path_payload(
+    payload: dict[str, object],
+    *,
+    project_root: Path | None,
+) -> bool:
+    if os.environ.get('CCB_TEST_ENTRYPOINT') != '1' or project_root is None:
+        return False
+    command_dir = Path(project_root).expanduser().resolve() / '.ccb' / 'bin'
+    if not all(
+        (command_dir / name).is_file()
+        for name in ('ask', 'ccb', 'codex-reconnect')
+    ):
+        return False
     raw_policy = payload.get('shell_environment_policy')
     policy = _clone_mapping(raw_policy) if isinstance(raw_policy, dict) else {}
     raw_configured = policy.get('set')
@@ -336,7 +409,7 @@ def _bind_source_test_command_path(
     configured['PATH'] = os.pathsep.join(path_parts)
     policy['set'] = configured
     payload['shell_environment_policy'] = policy
-    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+    return True
 
 
 def repair_codex_activity_hooks(
@@ -539,22 +612,69 @@ def _preflight_codex_auth_sources(
     *,
     source_config: Path,
     profile,
-) -> None:
+    source_snapshot: _CodexSourceConfigSnapshot | None = None,
+) -> _CodexSourceConfigSnapshot:
     reads_source_config = bool(
         _inherits_config(profile)
         or _inherits_api(profile)
         or _inherits_external_auth(profile)
     )
-    if reads_source_config and _probe_regular_source_file(source_config):
-        if not _source_config_valid(source_config):
-            raise RuntimeError(
-                f'cannot parse inherited Codex config source: {source_config}'
-            )
+    snapshot = source_snapshot or _read_codex_source_config_snapshot(
+        source_config,
+        required=reads_source_config,
+    )
+    if reads_source_config and snapshot.exists and not snapshot.valid:
+        raise RuntimeError(
+            f'cannot parse inherited Codex config source: {source_config}'
+        )
     if not _inherits_external_auth(profile):
-        return
-    names = {'auth.json', *_codex_auth_sidecar_names(source_home, source_config)}
+        return snapshot
+    names = {
+        'auth.json',
+        *_codex_auth_sidecar_names(
+            source_home,
+            source_config,
+            source_config_text=snapshot.text,
+        ),
+    }
     for name in sorted(names):
         _probe_regular_source_file(Path(source_home) / name)
+    return snapshot
+
+
+def _read_codex_source_config_snapshot(
+    config_path: Path,
+    *,
+    required: bool,
+) -> _CodexSourceConfigSnapshot:
+    source = Path(config_path).expanduser()
+    try:
+        metadata = source.lstat()
+    except FileNotFoundError:
+        return _CodexSourceConfigSnapshot(False, True, True, '', {})
+    except OSError as exc:
+        if required:
+            raise RuntimeError(f'cannot inspect inherited Codex source: {source}: {exc}') from exc
+        return _CodexSourceConfigSnapshot(False, False, True, '', {})
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        if required:
+            raise RuntimeError(f'inherited Codex source must be a regular file: {source}')
+        return _CodexSourceConfigSnapshot(False, False, True, '', {})
+    try:
+        text = source.read_text(encoding='utf-8')
+    except (OSError, UnicodeError) as exc:
+        if required:
+            raise RuntimeError(f'cannot read inherited Codex source: {source}: {exc}') from exc
+        return _CodexSourceConfigSnapshot(True, False, True, '', {})
+    if _import_optional_toml_reader() is None:
+        return _CodexSourceConfigSnapshot(True, True, False, text, {})
+    try:
+        payload = _parse_codex_toml_text(text)
+    except Exception as exc:
+        if required:
+            raise RuntimeError(f'cannot parse inherited Codex config source: {source}') from exc
+        return _CodexSourceConfigSnapshot(True, False, True, text, {})
+    return _CodexSourceConfigSnapshot(True, True, True, text, payload)
 
 
 def _probe_regular_source_file(path: Path) -> bool:
@@ -605,10 +725,12 @@ def _write_managed_config_stub(
     workspace_path: Path | None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = _disable_interactive_migration_features({})
-    _merge_codex_plugin_overrides(payload, profile=profile)
-    _merge_codex_mcp_server_overrides(payload, profile=profile)
-    _trust_managed_codex_project_paths(payload, project_root=project_root, workspace_path=workspace_path)
+    payload = _build_managed_codex_config_payload(
+        {},
+        profile=profile,
+        project_root=project_root,
+        workspace_path=workspace_path,
+    )
     rendered = _render_toml_document(payload)
     target.write_text(rendered, encoding='utf-8')
 
@@ -622,12 +744,32 @@ def _write_managed_codex_config(
     workspace_path: Path | None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
+    sanitized = _build_managed_codex_config_payload(
+        payload,
+        profile=profile,
+        project_root=project_root,
+        workspace_path=workspace_path,
+    )
+    target.write_text(_render_toml_document(sanitized), encoding='utf-8')
+
+
+def _build_managed_codex_config_payload(
+    payload: dict[str, object],
+    *,
+    profile,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
     sanitized = _disable_interactive_migration_features(payload)
     _strip_unmanaged_hook_config(sanitized)
     _merge_codex_plugin_overrides(sanitized, profile=profile)
     _merge_codex_mcp_server_overrides(sanitized, profile=profile)
-    _trust_managed_codex_project_paths(sanitized, project_root=project_root, workspace_path=workspace_path)
-    target.write_text(_render_toml_document(sanitized), encoding='utf-8')
+    _trust_managed_codex_project_paths(
+        sanitized,
+        project_root=project_root,
+        workspace_path=workspace_path,
+    )
+    return sanitized
 
 
 def _append_managed_codex_feature_overrides(target: Path) -> None:
@@ -797,9 +939,13 @@ def _toml_key_name(line: str) -> str | None:
     return raw_key if _BARE_TOML_KEY_RE.match(raw_key) else None
 
 
-def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority) -> dict[str, object]:
+def _managed_codex_config_payload_from_source(
+    source_payload: dict[str, object],
+    *,
+    authority: CodexApiAuthority,
+) -> dict[str, object]:
     payload = {'model_provider': authority.provider_id}
-    inherited_payload = _strip_route_authority(_read_source_config_payload(source_config))
+    inherited_payload = _strip_route_authority(source_payload)
     for key, value in inherited_payload.items():
         payload[key] = value
     payload['model_providers'] = {
@@ -811,6 +957,13 @@ def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAut
         }
     }
     return _disable_interactive_migration_features(payload)
+
+
+def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority) -> dict[str, object]:
+    return _managed_codex_config_payload_from_source(
+        _read_source_config_payload(source_config),
+        authority=authority,
+    )
 
 
 def _disable_interactive_migration_features(payload: dict[str, object]) -> dict[str, object]:
@@ -849,6 +1002,26 @@ def _install_role_command_mcp_server(
     agent_name: str | None,
     runtime_dir: Path | None,
 ) -> None:
+    payload = _read_source_config_payload(target_config)
+    if not _apply_role_command_mcp_server(
+        payload,
+        command_policy=command_policy,
+        project_root=project_root,
+        agent_name=agent_name,
+        runtime_dir=runtime_dir,
+    ):
+        return
+    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _apply_role_command_mcp_server(
+    payload: dict[str, object],
+    *,
+    command_policy,
+    project_root: Path | None,
+    agent_name: str | None,
+    runtime_dir: Path | None,
+) -> bool:
     provider_tools = dict(getattr(command_policy, 'provider_tools', ()) or ())
     tool_name = str(provider_tools.get('codex') or '').strip()
     actor = str(agent_name or '').strip().lower()
@@ -858,14 +1031,13 @@ def _install_role_command_mcp_server(
         'ccb_task_detailer': 'ccb_task_detailer_replan_planner',
     }
     if allowed_tools.get(actor) != tool_name:
-        return
+        return False
     if project_root is None or runtime_dir is None:
         raise RuntimeError('Codex role command capability requires project and runtime identity')
     resolved_project = Path(project_root).expanduser().resolve()
     server = Path(__file__).resolve().parents[2] / 'mcp' / 'ccb-role-command' / 'server.py'
     if not server.is_file():
         raise RuntimeError(f'Codex role command MCP server is missing: {server}')
-    payload = _read_source_config_payload(target_config)
     payload['approval_policy'] = 'never'
     payload['sandbox_mode'] = 'read-only'
     features = _clone_mapping(payload.get('features')) if isinstance(payload.get('features'), dict) else {}
@@ -906,7 +1078,7 @@ def _install_role_command_mcp_server(
         },
         'env': server_env,
     }}
-    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+    return True
 
 
 def _merge_codex_plugin_overrides(payload: dict[str, object], *, profile) -> None:
@@ -1013,43 +1185,33 @@ def _import_optional_toml_reader():
     return None
 
 
+def _parse_codex_toml_text(text: str) -> dict[str, object]:
+    reader = _import_optional_toml_reader()
+    if reader is None:
+        return {}
+    if hasattr(reader, 'loads'):
+        payload = reader.loads(text)
+    elif hasattr(reader, 'load'):  # pragma: no cover - defensive fallback
+        payload = reader.load(io.BytesIO(text.encode('utf-8')))
+    else:  # pragma: no cover - unsupported parser shim
+        return {}
+    return _clone_mapping(payload) if isinstance(payload, dict) else {}
+
+
 def _read_source_config_payload(config_path: Path) -> dict[str, object]:
     try:
         if not config_path.is_file():
             return {}
-        reader = _import_optional_toml_reader()
-        if reader is None:
-            return {}
-        if getattr(reader, '__name__', '') == 'toml':
-            payload = reader.loads(config_path.read_text(encoding='utf-8'))
-        elif hasattr(reader, 'load'):
-            with config_path.open('rb') as handle:
-                payload = reader.load(handle)
-        elif hasattr(reader, 'loads'):  # pragma: no cover - defensive fallback
-            payload = reader.loads(config_path.read_text(encoding='utf-8'))
-        else:  # pragma: no cover - unsupported parser shim
-            return {}
+        return _parse_codex_toml_text(config_path.read_text(encoding='utf-8'))
     except Exception:
         return {}
-    return _clone_mapping(payload) if isinstance(payload, dict) else {}
 
 
 def _source_config_valid(config_path: Path) -> bool:
     try:
         if not config_path.is_file():
             return True
-        reader = _import_optional_toml_reader()
-        if reader is None:
-            return True
-        if getattr(reader, '__name__', '') == 'toml':
-            reader.loads(config_path.read_text(encoding='utf-8'))
-        elif hasattr(reader, 'load'):
-            with config_path.open('rb') as handle:
-                reader.load(handle)
-        elif hasattr(reader, 'loads'):  # pragma: no cover - defensive fallback
-            reader.loads(config_path.read_text(encoding='utf-8'))
-        else:  # pragma: no cover - unsupported parser shim
-            return True
+        _parse_codex_toml_text(config_path.read_text(encoding='utf-8'))
         return True
     except Exception:
         return False
@@ -1191,6 +1353,7 @@ def _materialize_auth_sidecars(
     target_home: Path,
     *,
     source_config: Path,
+    source_config_text: str | None = None,
     profile,
     authority: CodexApiAuthority | None,
     previous_projection: dict[str, object],
@@ -1198,7 +1361,11 @@ def _materialize_auth_sidecars(
     source_home = Path(source_home).expanduser()
     target_home = Path(target_home).expanduser()
     previous_sidecars = _manifest_sidecars(previous_projection)
-    requested_sidecars = _codex_auth_sidecar_names(source_home, source_config)
+    requested_sidecars = _codex_auth_sidecar_names(
+        source_home,
+        source_config,
+        source_config_text=source_config_text,
+    )
 
     if not _inherits_external_auth(profile):
         _remove_projected_auth_sidecars(target_home, previous_sidecars)
@@ -1243,9 +1410,15 @@ def _materialize_auth_sidecars(
     )
 
 
-def _codex_auth_sidecar_names(source_home: Path, source_config: Path) -> set[str]:
+def _codex_auth_sidecar_names(
+    source_home: Path,
+    source_config: Path,
+    *,
+    source_config_text: str | None = None,
+) -> set[str]:
     names = set(_CODEX_AUTH_SIDECAR_FILENAMES)
-    for match in _CODEX_AUTH_SIDECAR_REF_RE.finditer(_safe_read_text(source_config)):
+    config_text = _safe_read_text(source_config) if source_config_text is None else str(source_config_text)
+    for match in _CODEX_AUTH_SIDECAR_REF_RE.finditer(config_text):
         name = str(match.group('name') or '').strip()
         if _is_safe_codex_auth_sidecar_name(name):
             names.add(name)
@@ -1279,8 +1452,12 @@ def _materialize_config_sidecars(
 
 def _set_codex_model_catalog_json(target_config: Path, name: str) -> None:
     payload = _read_source_config_payload(target_config)
-    payload[_CODEX_MODEL_CATALOG_JSON_KEY] = name
+    _set_codex_model_catalog_payload(payload, name)
     target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _set_codex_model_catalog_payload(payload: dict[str, object], name: str) -> None:
+    payload[_CODEX_MODEL_CATALOG_JSON_KEY] = name
 
 
 def _set_codex_model(target_config: Path, model: str) -> None:
@@ -1288,8 +1465,14 @@ def _set_codex_model(target_config: Path, model: str) -> None:
     if not normalized:
         return
     payload = _read_source_config_payload(target_config)
-    payload['model'] = normalized
+    _set_codex_model_payload(payload, normalized)
     target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _set_codex_model_payload(payload: dict[str, object], model: str) -> None:
+    normalized = str(model or '').strip()
+    if normalized:
+        payload['model'] = normalized
 
 
 def _codex_model_catalog_sidecar_name(value: object) -> str | None:
@@ -1823,6 +2006,7 @@ def _install_codex_inherited_hooks(
     target_config: Path,
     *,
     source_home: Path | None = None,
+    config_payload: dict[str, object] | None = None,
 ) -> None:
     hooks_path = Path(target_home).expanduser() / 'hooks.json'
     event_groups = _allowed_inherited_codex_hooks(source_home)
@@ -1832,11 +2016,18 @@ def _install_codex_inherited_hooks(
         hooks_path,
         json.dumps(hooks_payload, ensure_ascii=False, indent=2) + '\n',
     )
-    _merge_codex_hook_state(
-        target_config,
-        hooks_path=hooks_path,
-        event_groups=event_groups,
-    )
+    if config_payload is not None:
+        _merge_codex_hook_state_payload(
+            config_payload,
+            hooks_path=hooks_path,
+            event_groups=event_groups,
+        )
+    else:
+        _merge_codex_hook_state(
+            target_config,
+            hooks_path=hooks_path,
+            event_groups=event_groups,
+        )
 
 
 def _allowed_inherited_codex_hooks(source_home: Path | None) -> dict[str, list[dict[str, object]]]:
@@ -2018,6 +2209,46 @@ def _merge_codex_hook_state(
     hooks_path: Path,
     event_groups: dict[str, list[dict[str, object]]],
 ) -> None:
+    state_table = _codex_hook_state_table(hooks_path=hooks_path, event_groups=event_groups)
+    target_config.parent.mkdir(parents=True, exist_ok=True)
+    existing_text = _safe_read_text(target_config)
+    payload = _read_source_config_payload(target_config)
+    if not payload and existing_text.strip():
+        target_config.write_text(
+            _replace_managed_codex_hook_state_block(existing_text, state_table),
+            encoding='utf-8',
+        )
+        return
+    _merge_codex_hook_state_payload(
+        payload,
+        hooks_path=hooks_path,
+        event_groups=event_groups,
+        state_table=state_table,
+    )
+    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _merge_codex_hook_state_payload(
+    payload: dict[str, object],
+    *,
+    hooks_path: Path,
+    event_groups: dict[str, list[dict[str, object]]],
+    state_table: dict[str, object] | None = None,
+) -> None:
+    if state_table is None:
+        state_table = _codex_hook_state_table(hooks_path=hooks_path, event_groups=event_groups)
+    hooks_payload = payload.get('hooks')
+    hooks_table = hooks_payload if isinstance(hooks_payload, dict) else {}
+    if hooks_table is not hooks_payload:
+        payload['hooks'] = hooks_table
+    hooks_table['state'] = state_table
+
+
+def _codex_hook_state_table(
+    *,
+    hooks_path: Path,
+    event_groups: dict[str, list[dict[str, object]]],
+) -> dict[str, object]:
     state_table: dict[str, object] = {}
     source_path = str(Path(hooks_path).expanduser())
     for event_name, groups in event_groups.items():
@@ -2034,21 +2265,7 @@ def _merge_codex_hook_state(
                     'enabled': True,
                     'trusted_hash': _codex_command_hook_hash(event_label, group, handler),
                 }
-    target_config.parent.mkdir(parents=True, exist_ok=True)
-    existing_text = _safe_read_text(target_config)
-    payload = _read_source_config_payload(target_config)
-    if not payload and existing_text.strip():
-        target_config.write_text(
-            _replace_managed_codex_hook_state_block(existing_text, state_table),
-            encoding='utf-8',
-        )
-        return
-    hooks_payload = payload.get('hooks')
-    hooks_table = hooks_payload if isinstance(hooks_payload, dict) else {}
-    if hooks_table is not hooks_payload:
-        payload['hooks'] = hooks_table
-    hooks_table['state'] = state_table
-    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+    return state_table
 
 
 def _replace_managed_codex_hook_state_block(text: str, state_table: dict[str, object]) -> str:
