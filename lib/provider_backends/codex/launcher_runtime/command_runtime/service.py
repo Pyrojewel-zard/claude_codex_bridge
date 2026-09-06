@@ -22,6 +22,8 @@ from provider_backends.codex.session_authority import (
 from provider_profiles.codex_home_config import codex_api_authority
 
 from ..session_paths import session_file_for_runtime_dir
+from ..session_decision import resolve_session_start
+from provider_backends.session_start import SessionStartReason
 
 
 def build_start_cmd(
@@ -178,33 +180,24 @@ def _codex_args(
             ]
         )
     codex_args.extend(spec.startup_args)
-    if should_restore_provider_history(spec.restore_default, cli_restore=command.restore):
-        session_id = load_resume_session_id_fn(
-            spec,
-            runtime_dir,
-            profile,
-            current_fingerprint=current_provider_authority_fingerprint(profile, runtime_dir=runtime_dir),
-            current_memory_fingerprint=current_memory_projection_fingerprint(runtime_dir),
-        )
-        if session_id:
-            codex_args.extend(['resume', session_id])
-        elif load_linked_continuation_session_id_fn is not None:
-            continuation_id = load_linked_continuation_session_id_fn(
-                spec,
-                runtime_dir,
-                current_fingerprint=current_provider_authority_fingerprint(
-                    profile,
-                    runtime_dir=runtime_dir,
-                ),
-            )
-            if (
-                continuation_id
-                and supports_session_fork_fn is not None
-                and supports_session_fork_fn(tuple(provider_start_parts))
-            ):
-                codex_args.extend(['fork', continuation_id])
-                if launch_context is not None:
-                    launch_context['ccb_continuation_launch_mode'] = 'fork'
+    decision, session_args = resolve_session_start(
+        spec, runtime_dir,
+        restore=should_restore_provider_history(spec.restore_default, cli_restore=command.restore),
+        profile=profile,
+        authority_fingerprint_fn=current_provider_authority_fingerprint,
+        memory_fingerprint_fn=current_memory_projection_fingerprint,
+        resume_fn=load_resume_session_id_fn,
+        linked_fn=load_linked_continuation_session_id_fn,
+        supports_fork_fn=(
+            (lambda: supports_session_fork_fn(tuple(provider_start_parts)))
+            if supports_session_fork_fn is not None else None
+        ),
+    )
+    codex_args.extend(session_args)
+    if launch_context is not None:
+        launch_context['session_start_decision'] = decision
+        if decision.reason is SessionStartReason.FORK:
+            launch_context['ccb_continuation_launch_mode'] = 'fork'
     return codex_args
 
 

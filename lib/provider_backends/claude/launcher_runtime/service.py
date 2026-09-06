@@ -87,6 +87,7 @@ def build_start_cmd(
         runtime_dir=runtime_dir,
         restore=should_restore_provider_history(spec.restore_default, cli_restore=command.restore),
     )
+    launch_context['session_start_decision'] = getattr(restore_target, 'session_start_decision', None)
     home_overrides = prepare_home_overrides_fn(
         runtime_dir,
         profile,

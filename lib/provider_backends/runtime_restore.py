@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from storage.path_helpers import runtime_project_anchor_from_path
+from .session_start import SessionStartDecision
 
 @dataclass(frozen=True)
 class ProviderRestoreTarget:
@@ -15,6 +16,7 @@ class ProviderRestoreTarget:
     continuation_session_id: str | None = None
     continuation_session_path: Path | None = None
     continuation_mode: str | None = None
+    session_start_decision: SessionStartDecision | None = None
 
 
 @dataclass(frozen=True)

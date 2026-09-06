@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
+from provider_backends.session_start import SessionStartDecision, SessionStartReason
 
 from provider_core.pathing import session_filename_for_agent
 from provider_sessions.files import safe_write_session
@@ -41,6 +43,24 @@ def load_resume_session_id(
     if data is None:
         record_startup_operations({'session_decision_history_unusable_count': 1})
         return None
+    return resolve_resume_payload(
+        session_path, data, runtime_dir=runtime_dir, profile=profile,
+        current_fingerprint=current_fingerprint,
+        current_memory_fingerprint=current_memory_fingerprint,
+    )[0]
+
+
+def resolve_resume_payload(
+    session_path: Path,
+    data: dict,
+    *,
+    runtime_dir: Path,
+    profile=None,
+    current_fingerprint: str | None = None,
+    current_memory_fingerprint: str | None = None,
+) -> tuple[str | None, SessionStartDecision]:
+    invalid = SessionStartDecision(SessionStartReason.UNKNOWN_INVALID)
+    incompatible = SessionStartDecision(SessionStartReason.NEW_INCOMPATIBLE)
     authority_matches = _provider_authority_matches(
         data,
         profile=profile,
@@ -53,10 +73,10 @@ def load_resume_session_id(
         current_fingerprint=current_fingerprint,
     ):
         record_startup_operations({'session_decision_authority_rejected_count': 1})
-        return None
+        return None, incompatible
     if not _resume_session_binding_is_usable(data):
         record_startup_operations({'session_decision_binding_rejected_count': 1})
-        return None
+        return None, invalid
     repaired = _repair_invalid_native_fork_binding(data)
     if repaired is not None:
         repaired_id, repaired_path = repaired
@@ -71,7 +91,7 @@ def load_resume_session_id(
             # safe resume target.  Do not resume the blank/corrupt binding when
             # the repair could not be made durable.
             record_startup_operations({'session_decision_repair_rejected_count': 1})
-            return None
+            return None, invalid
         data = repaired_data
     descendant = _latest_linear_descendant(data, binding='current')
     if descendant is not None:
@@ -90,7 +110,7 @@ def load_resume_session_id(
             pass
     if not _resume_session_provider_is_compatible(data, runtime_dir=runtime_dir, profile=profile):
         record_startup_operations({'session_decision_provider_rejected_count': 1})
-        return None
+        return None, incompatible
     session_id = payload_resume_session_id(data)
     record_startup_operations(
         {
@@ -101,7 +121,7 @@ def load_resume_session_id(
             ): 1,
         }
     )
-    return session_id
+    return session_id, SessionStartDecision(SessionStartReason.RESUME) if session_id else invalid
 
 
 def load_linked_continuation_session_id(
@@ -119,6 +139,17 @@ def load_linked_continuation_session_id(
     if not isinstance(data, dict):
         record_startup_operations({'session_decision_history_unusable_count': 1})
         return None
+    return resolve_linked_continuation_payload(
+        session_path, data, current_fingerprint=current_fingerprint,
+    )
+
+
+def resolve_linked_continuation_payload(
+    session_path: Path,
+    data: dict,
+    *,
+    current_fingerprint: str,
+) -> str | None:
     if str(data.get('ccb_resume_compatibility') or '').strip() != 'linked_continuation':
         return None
     if str(data.get('codex_provider_authority_fingerprint') or '').strip() != str(current_fingerprint or '').strip():
@@ -334,14 +365,24 @@ def preferred_session_path(spec, runtime_dir: Path) -> Path | None:
     candidates = (agent_session_path(spec, runtime_dir),)
     for session_path in candidates:
         record_startup_operations({'session_history_binding_path_probe_count': 1})
-        if session_path is not None and session_path.is_file():
+        if session_path is None:
+            continue
+        try:
+            session_path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # Uncertain is not absent. Let the normal reader report failure.
             return session_path
+        return session_path
     return None
 
 
 def read_session_payload(session_path: Path) -> dict | None:
     record_startup_operations({'session_history_payload_read_attempt_count': 1})
     try:
+        if not stat.S_ISREG(session_path.stat().st_mode):
+            raise OSError('session binding is not a regular file')
         raw = session_path.read_text(encoding='utf-8')
     except Exception:
         record_startup_operations({'session_history_payload_read_failure_count': 1})

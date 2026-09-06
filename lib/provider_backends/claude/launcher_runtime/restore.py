@@ -11,8 +11,15 @@ from provider_backends.session_authority import (
     stored_provider_authority_fingerprint,
 )
 from provider_backends.runtime_restore import ProviderRestoreTarget, resolve_restore_context
+from provider_backends.session_start import (
+    SessionStartDecision,
+    SessionStartReason,
+    create_pristine_managed_home,
+)
 
 from .history import ClaudeHistoryLocator
+from .home import _managed_isolated_home
+from .session_paths import session_file_for_runtime_dir
 
 
 def resolve_claude_restore_target(
@@ -37,8 +44,20 @@ def resolve_claude_restore_target(
         return default_target
 
     profile = load_profile_fn(runtime_dir)
-    authority_fingerprint = current_provider_authority_fingerprint('claude', profile, runtime_dir)
     home_layout = claude_home_layout_fn(runtime_dir, profile)
+    if (
+        home_layout.home_root == _managed_isolated_home(runtime_dir)
+        and create_pristine_managed_home(
+            home_layout.home_root,
+            binding_path=session_file_for_runtime_dir(runtime_dir),
+        )
+    ):
+        return ProviderRestoreTarget(
+            run_cwd=context.workspace_path,
+            has_history=False,
+            session_start_decision=SessionStartDecision(SessionStartReason.NEW_PRISTINE),
+        )
+    authority_fingerprint = current_provider_authority_fingerprint('claude', profile, runtime_dir)
     session_target = project_session_restore_target_fn(
         context.workspace_path,
         context.session_instance,
