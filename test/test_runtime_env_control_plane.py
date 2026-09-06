@@ -125,6 +125,21 @@ def test_control_plane_env_keeps_managed_provider_no_terminal_timeouts(monkeypat
     assert env['CCB_GEMINI_NO_TERMINAL_TIMEOUT_S'] == '1800'
 
 
+def test_control_plane_env_keeps_startup_budget_contract(monkeypatch) -> None:
+    values = {
+        'CCB_STARTUP_TRANSACTION_TIMEOUT_S': '7.5',
+        'CCB_STARTUP_PROGRESS_STALL_TIMEOUT_S': '2.0',
+        'CCB_KEEPER_READY_TIMEOUT_S': '1.25',
+        'CCB_CONTROL_PLANE_RPC_TIMEOUT_S': '0.25',
+    }
+    for env_name, value in values.items():
+        monkeypatch.setenv(env_name, value)
+
+    env = control_plane_env()
+
+    assert {name: env[name] for name in values} == values
+
+
 def test_control_plane_env_keeps_mobile_host_state_override(monkeypatch) -> None:
     monkeypatch.setenv('CCB_MOBILE_HOST_STATE_HOME', '/tmp/ccb-mobile-state')
 

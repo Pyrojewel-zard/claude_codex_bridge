@@ -5,6 +5,7 @@ import time
 from ccbd.daemon_process import CcbdProcessError, spawn_ccbd_process
 from ccbd.models import LeaseHealth
 from ccbd.services.ownership import OwnershipGuard
+from ccbd.startup_deadline import deadline_after, remaining_budget
 from cli.kill_runtime.processes import is_pid_alive, kill_pid
 
 from .lease import mark_inspected_lease_unmounted
@@ -67,8 +68,8 @@ def wait_for_daemon_release(
     timeout_s: float,
     inspect_daemon_fn,
 ) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    deadline = deadline_after(timeout_s)
+    while remaining_budget(deadline) > 0.0:
         _, _, inspection = inspect_daemon_fn(context)
         if not inspection.pid_alive or inspection.health in {
             LeaseHealth.MISSING,
@@ -76,16 +77,16 @@ def wait_for_daemon_release(
             LeaseHealth.STALE,
         }:
             return True
-        time.sleep(0.05)
+        time.sleep(min(0.05, remaining_budget(deadline)))
     return False
 
 
 def wait_for_pid_exit(pid: int, *, timeout_s: float) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
-    while time.time() < deadline:
+    deadline = deadline_after(timeout_s)
+    while remaining_budget(deadline) > 0.0:
         if not is_pid_alive(pid):
             return True
-        time.sleep(0.05)
+        time.sleep(min(0.05, remaining_budget(deadline)))
     return not is_pid_alive(pid)
 
 

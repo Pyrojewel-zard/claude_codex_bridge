@@ -70,13 +70,14 @@ def test_spawn_keeper_process_uses_lib_root_keeper_main(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(keeper_runtime.subprocess, 'Popen', _FakePopen)
 
-    keeper_runtime.spawn_keeper_process(context)
+    keeper_runtime.spawn_keeper_process(context, startup_timeout_s=3.5)
 
     assert len(popen_calls) == 1
     call = popen_calls[0]
     expected_script = Path(keeper_runtime.__file__).resolve().parents[3] / 'ccbd' / 'keeper_main.py'
     assert call['cmd'][1] == str(expected_script)
     assert str(expected_script.parent.parent) in str(call['env']['PYTHONPATH'])
+    assert call['env']['CCB_STARTUP_TRANSACTION_TIMEOUT_S'] == '3.5'
     assert call['start_new_session'] is True
     if os.name == 'nt':
         assert call['creationflags'] & getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
@@ -158,6 +159,61 @@ def test_ensure_keeper_started_reuses_matching_keeper_state(tmp_path: Path) -> N
     )
 
     assert spawn_calls == []
+
+
+def test_ensure_keeper_started_passes_remaining_budget_to_ready_wait(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-budget'
+    paths = PathLayout(project_root)
+    context = SimpleNamespace(
+        project=SimpleNamespace(project_id='project-budget', project_root=project_root),
+        paths=paths,
+    )
+    current = {'t': 0.0}
+    monkeypatch.setattr(keeper_runtime.time, 'monotonic', lambda: current['t'])
+    monkeypatch.setattr(
+        keeper_runtime.time,
+        'sleep',
+        lambda seconds: current.__setitem__('t', current['t'] + float(seconds)),
+    )
+    spawn_timeouts: list[float] = []
+    ready_timeouts: list[float] = []
+
+    def _spawn(_context, *, startup_timeout_s: float) -> None:
+        spawn_timeouts.append(startup_timeout_s)
+        current['t'] += 0.75
+
+    monkeypatch.setattr(
+        keeper_runtime,
+        'wait_for_keeper_ready',
+        lambda _context, *, timeout_s, process_exists_fn, process_cmdline_fn: (
+            ready_timeouts.append(timeout_s) or False
+        ),
+    )
+
+    assert not keeper_runtime.ensure_keeper_started(
+        context,
+        mount_manager_factory=lambda _paths: object(),
+        ownership_guard_factory=lambda _paths, _manager: SimpleNamespace(
+            startup_lock=lambda: _NoopStartupLock()
+        ),
+        process_exists_fn=lambda pid: pid == 777,
+        process_cmdline_fn=lambda _pid: (
+            'python3',
+            '/repo/lib/ccbd/keeper_main.py',
+            '--project',
+            str(project_root),
+        ),
+        spawn_keeper_process_fn=_spawn,
+        ready_timeout_s=2.0,
+        startup_timeout_s=1.0,
+    )
+
+    assert spawn_timeouts == [1.0]
+    assert ready_timeouts == [0.25]
+    assert current['t'] == 0.75
 
 
 def test_record_running_intent_does_not_rewrite_active_startup_transaction(tmp_path: Path) -> None:

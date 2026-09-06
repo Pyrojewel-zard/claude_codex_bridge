@@ -119,6 +119,7 @@ def finalize_daemon_start(
     inspect_daemon_fn,
     connect_compatible_daemon_fn,
     incompatible_daemon_error_fn,
+    remaining_budget_s: float | None = None,
 ) -> DaemonHandle:
     _manager, _guard, inspection = inspect_daemon_fn(context)
     phase = _phase(inspection)
@@ -127,19 +128,43 @@ def finalize_daemon_start(
         if handle is not None:
             return DaemonHandle(client=handle.client, inspection=inspection, started=started)
         if inspection.socket_connectable:
-            raise CcbdServiceError(incompatible_daemon_error_fn())
+            raise CcbdServiceError(
+                _with_remaining_budget(incompatible_daemon_error_fn(), remaining_budget_s)
+            )
     if phase == 'starting' or (phase == 'mounted' and not mounted_control_plane_ready(inspection)):
         stage = str(getattr(inspection, 'startup_stage', '') or '').strip()
         state_label = 'lifecycle_starting' if phase == 'starting' else 'lifecycle_mounted'
         if stage:
-            raise CcbdServiceError(f'ccbd is unavailable: {state_label}(stage={stage})')
-        raise CcbdServiceError(f'ccbd is unavailable: {state_label}')
+            raise CcbdServiceError(
+                _with_remaining_budget(
+                    f'ccbd is unavailable: {state_label}(stage={stage})',
+                    remaining_budget_s,
+                )
+            )
+        raise CcbdServiceError(
+            _with_remaining_budget(f'ccbd is unavailable: {state_label}', remaining_budget_s)
+        )
     if phase == 'stopping':
-        raise CcbdServiceError('ccbd is unavailable: lifecycle_stopping')
+        raise CcbdServiceError(
+            _with_remaining_budget('ccbd is unavailable: lifecycle_stopping', remaining_budget_s)
+        )
     failure_reason = str(getattr(inspection, 'last_failure_reason', '') or '').strip()
     if phase == 'failed' and failure_reason:
-        raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}; lifecycle_failure: {failure_reason}')
-    raise CcbdServiceError(f'ccbd is unavailable: {inspection.reason}')
+        raise CcbdServiceError(
+            _with_remaining_budget(
+                f'ccbd is unavailable: {inspection.reason}; lifecycle_failure: {failure_reason}',
+                remaining_budget_s,
+            )
+        )
+    raise CcbdServiceError(
+        _with_remaining_budget(f'ccbd is unavailable: {inspection.reason}', remaining_budget_s)
+    )
+
+
+def _with_remaining_budget(message: str, remaining_budget_s: float | None) -> str:
+    if remaining_budget_s is None:
+        return message
+    return f'{message}; remaining_budget_s={max(0.0, float(remaining_budget_s)):.3f}'
 
 
 def _phase(inspection) -> str:

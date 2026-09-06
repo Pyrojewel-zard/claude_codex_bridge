@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import inspect
 import time
 
 from ccbd.models import LeaseHealth
+from ccbd.startup_deadline import deadline_after, remaining_budget
 
 from .models import CcbdServiceError, DaemonHandle
 from .lifecycle_start import (
@@ -28,19 +30,27 @@ def ensure_daemon_started(
     start_timeout_s: float,
     progress_stall_timeout_s: float,
 ) -> DaemonHandle:
+    local_deadline = deadline_after(start_timeout_s)
     clear_shutdown_intent_fn(context)
     startup_requested = bool(record_running_intent_fn(context))
+    ensure_keeper_with_budget = _budgeted_callable(
+        ensure_keeper_started_fn,
+        local_deadline=local_deadline,
+        keyword='timeout_s',
+    )
     state = DaemonStartState(
-        keeper_started=bool(ensure_keeper_started_fn(context)),
+        keeper_started=bool(ensure_keeper_with_budget(context)),
         started=startup_requested,
     )
-    local_deadline = time.time() + max(0.0, float(start_timeout_s))
+    transaction_deadline = None
+    progress_deadline = None
+    progress_marker = None
 
     while True:
         handle = poll_daemon_start_iteration(
             context,
             state=state,
-            ensure_keeper_started_fn=ensure_keeper_started_fn,
+            ensure_keeper_started_fn=ensure_keeper_with_budget,
             inspect_daemon_fn=inspect_daemon_fn,
             connect_compatible_daemon_fn=connect_compatible_daemon_fn,
             should_restart_unreachable_daemon_fn=should_restart_unreachable_daemon_fn,
@@ -49,13 +59,24 @@ def ensure_daemon_started(
         if handle is not None:
             return handle
         _, _, inspection = inspect_daemon_fn(context)
+        transaction_deadline = _resolve_transaction_deadline(
+            inspection,
+            existing_deadline=transaction_deadline,
+        )
+        progress_deadline, progress_marker = _resolve_progress_deadline(
+            inspection,
+            progress_stall_timeout_s=progress_stall_timeout_s,
+            existing_deadline=progress_deadline,
+            existing_marker=progress_marker,
+        )
         if _startup_wait_exhausted(
             inspection,
             local_deadline=local_deadline,
-            progress_stall_timeout_s=progress_stall_timeout_s,
+            transaction_deadline=transaction_deadline,
+            progress_deadline=progress_deadline,
         ):
             break
-        time.sleep(0.05)
+        time.sleep(min(0.05, remaining_budget(local_deadline)))
 
     return finalize_daemon_start(
         context,
@@ -63,6 +84,7 @@ def ensure_daemon_started(
         inspect_daemon_fn=inspect_daemon_fn,
         connect_compatible_daemon_fn=connect_compatible_daemon_fn,
         incompatible_daemon_error_fn=incompatible_daemon_error_fn,
+        remaining_budget_s=remaining_budget(local_deadline),
     )
 
 
@@ -156,10 +178,11 @@ def _startup_wait_exhausted(
     inspection,
     *,
     local_deadline: float,
-    progress_stall_timeout_s: float,
+    transaction_deadline: float | None,
+    progress_deadline: float | None,
 ) -> bool:
     phase = _phase(inspection)
-    now = time.time()
+    now = time.monotonic()
     if now >= local_deadline:
         return True
     if phase == 'failed':
@@ -170,15 +193,62 @@ def _startup_wait_exhausted(
         phase == 'mounted' and not mounted_control_plane_ready(inspection)
     ):
         return False
-    transaction_deadline = _timestamp_seconds(getattr(inspection, 'startup_deadline_at', None))
     if transaction_deadline is not None and now >= transaction_deadline:
         return True
-    if progress_stall_timeout_s <= 0:
-        return False
-    last_progress = _timestamp_seconds(getattr(inspection, 'last_progress_at', None))
-    if last_progress is None:
-        return False
-    return now >= last_progress + float(progress_stall_timeout_s)
+    return progress_deadline is not None and now >= progress_deadline
+
+
+def _resolve_transaction_deadline(inspection, *, existing_deadline: float | None) -> float | None:
+    if existing_deadline is not None:
+        return existing_deadline
+    wall_deadline = _timestamp_seconds(getattr(inspection, 'startup_deadline_at', None))
+    if wall_deadline is None:
+        return None
+    # The persisted timestamp is shared-process observability. Convert it once
+    # at the observation boundary, then use only monotonic time while waiting.
+    wall_remaining = wall_deadline - time.time()
+    return time.monotonic() + max(0.0, wall_remaining)
+
+
+def _resolve_progress_deadline(
+    inspection,
+    *,
+    progress_stall_timeout_s: float,
+    existing_deadline: float | None,
+    existing_marker: str | None,
+) -> tuple[float | None, str | None]:
+    marker = str(getattr(inspection, 'last_progress_at', '') or '').strip() or None
+    if marker == existing_marker:
+        return existing_deadline, existing_marker
+    if progress_stall_timeout_s <= 0.0:
+        return None, marker
+    wall_progress = _timestamp_seconds(marker)
+    if wall_progress is None:
+        return None, marker
+    # Convert the persisted wall-clock progress marker once per marker change.
+    # The wait loop itself remains monotonic even if wall time is adjusted.
+    wall_remaining = wall_progress + float(progress_stall_timeout_s) - time.time()
+    return time.monotonic() + max(0.0, wall_remaining), marker
+
+
+def _budgeted_callable(fn, *, local_deadline: float, keyword: str):
+    def invoke(context):
+        timeout_s = remaining_budget(local_deadline)
+        if timeout_s <= 0.0:
+            return False
+        try:
+            parameters = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            return fn(context)
+        accepts_keyword = keyword in parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        if accepts_keyword:
+            return fn(context, **{keyword: timeout_s})
+        return fn(context)
+
+    return invoke
 
 
 def _timestamp_seconds(value: object) -> float | None:

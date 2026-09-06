@@ -27,13 +27,16 @@ def incompatible_daemon_error() -> str:
     return 'mounted ccbd config does not match current .ccb/ccb.config'
 
 
-def ensure_keeper_started(context) -> bool:
+def ensure_keeper_started(context, *, timeout_s: float | None = None) -> bool:
+    startup_budget = STARTUP_TRANSACTION_TIMEOUT_S if timeout_s is None else max(0.0, float(timeout_s))
+    ready_budget = min(KEEPER_READY_TIMEOUT_S, startup_budget)
     return ensure_keeper_started_runtime(
         context,
         mount_manager_factory=MountManager,
         ownership_guard_factory=OwnershipGuard,
         process_exists_fn=is_pid_alive,
-        ready_timeout_s=KEEPER_READY_TIMEOUT_S,
+        ready_timeout_s=ready_budget,
+        startup_timeout_s=startup_budget,
     )
 
 

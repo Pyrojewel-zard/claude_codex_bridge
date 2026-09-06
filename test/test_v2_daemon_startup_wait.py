@@ -49,6 +49,7 @@ def test_ensure_daemon_started_can_wait_past_legacy_five_second_budget(monkeypat
         current['t'] += float(seconds)
 
     monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.time', _now)
+    monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.monotonic', _now)
     monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.sleep', _sleep)
 
     def _inspection():
@@ -105,6 +106,7 @@ def test_ensure_daemon_started_waits_for_final_mounted_stage(monkeypatch) -> Non
     connect_stages: list[str] = []
 
     monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.time', lambda: current['t'])
+    monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.monotonic', lambda: current['t'])
     monkeypatch.setattr(
         'cli.services.daemon_runtime.lifecycle.time.sleep',
         lambda seconds: current.__setitem__('t', current['t'] + float(seconds)),
@@ -158,6 +160,7 @@ def test_ensure_daemon_started_uses_shared_startup_deadline(monkeypatch) -> None
         current['t'] += float(seconds)
 
     monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.time', _now)
+    monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.monotonic', _now)
     monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.sleep', _sleep)
 
     inspection = SimpleNamespace(
@@ -191,10 +194,60 @@ def test_ensure_daemon_started_uses_shared_startup_deadline(monkeypatch) -> None
     assert current['t'] < 9.0
 
 
+def test_startup_wait_deadlines_survive_wall_clock_jump(monkeypatch) -> None:
+    current = {'monotonic': 0.0, 'wall': 1000.0}
+
+    monkeypatch.setattr(
+        'cli.services.daemon_runtime.lifecycle.time.monotonic',
+        lambda: current['monotonic'],
+    )
+    monkeypatch.setattr(
+        'cli.services.daemon_runtime.lifecycle.time.time',
+        lambda: current['wall'],
+    )
+
+    def _sleep(_seconds: float) -> None:
+        current['monotonic'] += 0.5
+        current['wall'] += 100_000.0
+
+    monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.sleep', _sleep)
+
+    inspection = SimpleNamespace(
+        phase='starting',
+        desired_state='running',
+        health=LeaseHealth.UNMOUNTED,
+        socket_connectable=False,
+        reason='startup_in_progress',
+        last_failure_reason=None,
+        startup_stage='spawn_requested',
+        last_progress_at='1970-01-01T00:16:40Z',
+        startup_deadline_at='1970-01-01T00:16:50Z',
+    )
+
+    with pytest.raises(CcbdServiceError, match=r'lifecycle_starting\(stage=spawn_requested\)'):
+        ensure_daemon_started_runtime(
+            SimpleNamespace(),
+            clear_shutdown_intent_fn=lambda context: None,
+            record_running_intent_fn=lambda context: True,
+            ensure_keeper_started_fn=lambda context: True,
+            inspect_daemon_fn=lambda context: (None, None, inspection),
+            connect_compatible_daemon_fn=lambda context, observed, restart_on_mismatch: None,
+            should_restart_unreachable_daemon_fn=lambda observed: False,
+            restart_unreachable_daemon_fn=lambda context, observed: None,
+            incompatible_daemon_error_fn=lambda: 'incompatible',
+            start_timeout_s=4.0,
+            progress_stall_timeout_s=2.0,
+        )
+
+    assert current['monotonic'] == 2.0
+    assert current['wall'] > 1000.0
+
+
 def test_ensure_daemon_started_surfaces_failed_terminal_state_without_waiting(monkeypatch) -> None:
     current = {'t': 100.0}
 
     monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.time', lambda: current['t'])
+    monkeypatch.setattr('cli.services.daemon_runtime.lifecycle.time.monotonic', lambda: current['t'])
     monkeypatch.setattr(
         'cli.services.daemon_runtime.lifecycle.time.sleep',
         lambda seconds: (_ for _ in ()).throw(AssertionError('failed startup should not sleep')),
@@ -282,7 +335,11 @@ def test_spawned_ccbd_readiness_probe_uses_shared_control_plane_timeout(monkeypa
 
     ccbd_daemon_process._wait_for_ccbd_ready(process=process, socket_path=socket_path, timeout_s=1.0)
 
-    assert captured == [ccbd_daemon_process.CONTROL_PLANE_RPC_TIMEOUT_S]
+    assert len(captured) == 1
+    assert 0.0 < captured[0] <= min(
+        1.0,
+        ccbd_daemon_process.CONTROL_PLANE_RPC_TIMEOUT_S,
+    )
 
 
 def test_spawned_ccbd_readiness_rejects_old_socket_identity(monkeypatch, tmp_path: Path) -> None:
@@ -322,7 +379,10 @@ def test_spawned_ccbd_readiness_rejects_old_socket_identity(monkeypatch, tmp_pat
     class FakeClient:
         def __init__(self, socket_path_arg, *, timeout_s=None) -> None:
             assert socket_path_arg == socket_path
-            assert timeout_s == ccbd_daemon_process.CONTROL_PLANE_RPC_TIMEOUT_S
+            assert 0.0 < timeout_s <= min(
+                1.0,
+                ccbd_daemon_process.CONTROL_PLANE_RPC_TIMEOUT_S,
+            )
 
         def ping(self, target: str = 'ccbd') -> dict[str, object]:
             assert target == 'ccbd'

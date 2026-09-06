@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import inspect
 import os
 import subprocess
 import time
@@ -22,6 +23,7 @@ from runtime_env.control_plane import control_plane_env
 from process_background import background_process_kwargs, background_spawn
 
 from cli.kill_runtime.processes import is_pid_alive
+from ccbd.startup_deadline import deadline_after, remaining_budget
 
 
 def ensure_keeper_started(
@@ -33,7 +35,11 @@ def ensure_keeper_started(
     process_cmdline_fn=None,
     spawn_keeper_process_fn=None,
     ready_timeout_s: float = 2.0,
+    startup_timeout_s: float | None = None,
 ) -> bool:
+    startup_deadline = (
+        deadline_after(startup_timeout_s) if startup_timeout_s is not None else None
+    )
     store = KeeperStateStore(context.paths)
     state = store.load()
     if _keeper_state_is_running_for_context(
@@ -57,10 +63,27 @@ def ensure_keeper_started(
             require_cmdline_match=True,
         ):
             return True
-        (spawn_keeper_process_fn or spawn_keeper_process)(context)
+        spawn_fn = spawn_keeper_process_fn or spawn_keeper_process
+        if startup_timeout_s is None:
+            spawn_fn(context)
+        else:
+            spawn_timeout = remaining_budget(startup_deadline)
+            # startup_policy enforces a 100ms minimum in the child. Do not
+            # launch a child with a budget smaller than the policy floor.
+            if spawn_timeout < 0.1:
+                return False
+            _call_with_optional_timeout(
+                spawn_fn,
+                context,
+                timeout_s=spawn_timeout,
+                keyword='startup_timeout_s',
+            )
+    ready_budget = max(0.0, float(ready_timeout_s))
+    if startup_deadline is not None:
+        ready_budget = min(ready_budget, remaining_budget(startup_deadline))
     return wait_for_keeper_ready(
         context,
-        timeout_s=ready_timeout_s,
+        timeout_s=ready_budget,
         process_exists_fn=process_exists_fn,
         process_cmdline_fn=process_cmdline_fn,
     )
@@ -197,9 +220,9 @@ def wait_for_keeper_ready(
     process_exists_fn=is_pid_alive,
     process_cmdline_fn=None,
 ) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
+    deadline = deadline_after(timeout_s)
     store = KeeperStateStore(context.paths)
-    while time.time() < deadline:
+    while remaining_budget(deadline) > 0.0:
         if _keeper_state_is_running_for_context(
             context,
             store.load(),
@@ -208,7 +231,7 @@ def wait_for_keeper_ready(
             require_cmdline_match=True,
         ):
             return True
-        time.sleep(0.05)
+        time.sleep(min(0.05, remaining_budget(deadline)))
     return _keeper_state_is_running_for_context(
         context,
         store.load(),
@@ -225,9 +248,9 @@ def wait_for_keeper_exit(
     process_exists_fn=is_pid_alive,
     process_cmdline_fn=None,
 ) -> bool:
-    deadline = time.time() + max(0.0, float(timeout_s))
+    deadline = deadline_after(timeout_s)
     store = KeeperStateStore(context.paths)
-    while time.time() < deadline:
+    while remaining_budget(deadline) > 0.0:
         state = store.load()
         if not _keeper_state_is_running_for_context(
             context,
@@ -236,7 +259,7 @@ def wait_for_keeper_exit(
             process_cmdline_fn=process_cmdline_fn,
         ):
             return True
-        time.sleep(0.05)
+        time.sleep(min(0.05, remaining_budget(deadline)))
     state = store.load()
     return not _keeper_state_is_running_for_context(
         context,
@@ -277,11 +300,16 @@ def _keeper_state_is_running_for_context(
     )
 
 
-def spawn_keeper_process(context) -> None:
+def spawn_keeper_process(context, *, startup_timeout_s: float | None = None) -> None:
     lib_root = _lib_root()
     script = lib_root / 'ccbd' / 'keeper_main.py'
     interpreter, venv_env = background_spawn()
-    env = control_plane_env(extra={'PYTHONUNBUFFERED': '1', **venv_env})
+    extra_env = {'PYTHONUNBUFFERED': '1', **venv_env}
+    if startup_timeout_s is not None:
+        extra_env['CCB_STARTUP_TRANSACTION_TIMEOUT_S'] = str(
+            max(0.1, float(startup_timeout_s))
+        )
+    env = control_plane_env(extra=extra_env)
     current_pythonpath = env.get('PYTHONPATH')
     env['PYTHONPATH'] = (
         str(lib_root)
@@ -312,6 +340,19 @@ def _current_config_signature(context) -> str | None:
     except Exception:
         return None
     return str(project_config_identity_payload(config)['config_signature'])
+
+
+def _call_with_optional_timeout(fn, context, *, timeout_s: float, keyword: str) -> object:
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(context)
+    if keyword in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return fn(context, **{keyword: timeout_s})
+    return fn(context)
 
 
 __all__ = [

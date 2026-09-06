@@ -386,13 +386,15 @@ def _incompatible_daemon_error() -> str:
     return _incompatible_daemon_error_impl()
 
 
-def _ensure_keeper_started(context: CliContext) -> bool:
+def _ensure_keeper_started(context: CliContext, *, timeout_s: float | None = None) -> bool:
+    startup_budget = _DEF_START_TIMEOUT_S if timeout_s is None else max(0.0, float(timeout_s))
     return _ensure_keeper_started_runtime_impl(
         context,
         mount_manager_factory=MountManager,
         ownership_guard_factory=OwnershipGuard,
         process_exists_fn=is_pid_alive,
-        ready_timeout_s=2.0,
+        ready_timeout_s=min(2.0, startup_budget),
+        startup_timeout_s=startup_budget,
     )
 
 

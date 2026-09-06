@@ -15,6 +15,7 @@ from ccbd.startup_fence import (
     EXPECTED_STARTUP_ID_ENV,
     KEEPER_STARTUP_ACCEPTED_PERF_COUNTER_NS_ENV,
 )
+from ccbd.startup_deadline import bounded_timeout, deadline_after, remaining_budget
 from ccbd.startup_policy import CONTROL_PLANE_RPC_TIMEOUT_S
 
 
@@ -76,12 +77,13 @@ def _wait_for_ccbd_ready(
     expected_startup_id: str | None = None,
     expected_generation: int | None = None,
 ) -> None:
-    deadline = time.time() + max(0.0, float(timeout_s))
+    deadline = deadline_after(timeout_s)
     last_error: str | None = None
-    while time.time() < deadline:
-        if socket_path.exists():
+    while remaining_budget(deadline) > 0.0:
+        rpc_timeout_s = bounded_timeout(deadline, CONTROL_PLANE_RPC_TIMEOUT_S)
+        if socket_path.exists() and rpc_timeout_s > 0.0:
             try:
-                payload = CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S).ping('ccbd')
+                payload = CcbdClient(socket_path, timeout_s=rpc_timeout_s).ping('ccbd')
                 if _ready_payload_matches_expected(
                     payload,
                     expected_startup_id=expected_startup_id,
@@ -92,9 +94,10 @@ def _wait_for_ccbd_ready(
             except CcbdClientError as exc:
                 last_error = str(exc)
         if process.poll() is not None:
-            if socket_path.exists():
+            rpc_timeout_s = bounded_timeout(deadline, CONTROL_PLANE_RPC_TIMEOUT_S)
+            if socket_path.exists() and rpc_timeout_s > 0.0:
                 try:
-                    payload = CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S).ping('ccbd')
+                    payload = CcbdClient(socket_path, timeout_s=rpc_timeout_s).ping('ccbd')
                     if _ready_payload_matches_expected(
                         payload,
                         expected_startup_id=expected_startup_id,
@@ -105,8 +108,12 @@ def _wait_for_ccbd_ready(
                 except CcbdClientError as exc:
                     last_error = str(exc)
             raise CcbdProcessError(f'ccbd exited before ready with code {process.returncode}')
-        time.sleep(0.05)
-    raise CcbdProcessError(last_error or 'timed out waiting for ccbd to become ready')
+        time.sleep(min(0.05, remaining_budget(deadline)))
+    timeout_reason = last_error or 'timed out waiting for ccbd to become ready'
+    raise CcbdProcessError(
+        f'{timeout_reason} (stage=ccbd_ready, '
+        f'remaining_budget_s={remaining_budget(deadline):.3f})'
+    )
 
 
 def _ccbd_env(
