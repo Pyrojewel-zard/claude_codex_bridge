@@ -11,6 +11,7 @@ from cli.context import CliContextBuilder
 from cli.models import ParsedDoctorCommand
 from cli.services.doctor import doctor_summary
 from cli.services.daemon_runtime.models import LocalPingSummary
+from cli.services.daemon_runtime.policy import CONTROL_PLANE_RPC_TIMEOUT_S
 from cli.services.tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 from mailbox_kernel import InboundEventRecord, InboundEventStatus, InboundEventStore, InboundEventType, MailboxRecord, MailboxState, MailboxStore
@@ -432,7 +433,7 @@ def test_doctor_summary_uses_non_mutating_remote_probe(tmp_path: Path, monkeypat
 
     assert len(seen) == 1
     assert str(seen[0][0]) == str(context.paths.ccbd_socket_path)
-    assert seen[0][1] == 0.5
+    assert seen[0][1] == CONTROL_PLANE_RPC_TIMEOUT_S
 
 
 def test_doctor_summary_skips_remote_probe_when_unmounted(tmp_path: Path, monkeypatch) -> None:
