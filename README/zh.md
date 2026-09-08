@@ -6,27 +6,26 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.10-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.13-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
-  <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
+  <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
 <p>
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
-  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
-  <img src="https://img.shields.io/badge/DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness">
-  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
+  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
+  <img src="https://img.shields.io/badge/OMP-111111?style=flat-square" alt="OMP">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
+  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
+  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
   <img src="https://img.shields.io/badge/Qwen-6A5CFF?style=flat-square" alt="Qwen">
   <img src="https://img.shields.io/badge/Cursor-111111?style=flat-square" alt="Cursor">
   <img src="https://img.shields.io/badge/Copilot-111111?style=flat-square&logo=githubcopilot&logoColor=white" alt="GitHub Copilot">
   <img src="https://img.shields.io/badge/Crush-FF5A5F?style=flat-square" alt="Crush">
   <img src="https://img.shields.io/badge/Kiro-6D5EF6?style=flat-square" alt="Kiro">
-  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
-  <img src="https://img.shields.io/badge/Z.ai-111111?style=flat-square" alt="Z.ai">
-  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
   <img src="https://img.shields.io/badge/Antigravity-6D5EF6?style=flat-square&logo=google&logoColor=white" alt="Antigravity">
   <img src="https://img.shields.io/badge/Droid-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Droid">
 </p>
@@ -77,23 +76,6 @@ CLI，并只提示一次可安全管理的更新。可使用 `--providers check`
 本次跳过。选择“暂不更新”后，下次 `ccb update` 会再次提示；选择“跳过此
 版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
 provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
-
-官方 DeepSeek Harness 以独立的 Developer Preview provider key `dsh`
-接入（`deepseek` 仍表示 Deep Code CLI）。使用受支持的 Node runtime 安装其
-npm 包，然后在 Config UI 选择 `dsh`，或使用 `research:dsh` 这样的 Agent
-leaf：
-
-```bash
-npm install -g @deepseek-ai/dsh
-dsh --version
-```
-
-CCB 会在 loopback 上启动 `dsh web`，并通过 DSH 的结构化
-HTTP/WebSocket carrier 通信。当前 POSIX 运行时可以把该服务放在受管 pane
-中，但 pane 仅承担 lifecycle/log 所有权；prompt、reply、原生结束判定、
-`ccb compact` 和恢复都不依赖终端输入或 pane 文本启发式。请在用户自有 DSH
-状态或 CCB provider profile/API 控制中配置
-`DEEPSEEK_API_KEY`，并按需配置 `DEEPSEEK_BASE_URL`；CCB 不会自动获取凭据。
 
 版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
 manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
@@ -230,9 +212,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.10 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.13 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
+- [下载 CCB Mobile v8.6.13 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.13/ccb-mobile-v8.6.13.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -321,6 +303,36 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.6.13</b> - 可靠的可见 OMP ask 与聚焦的角色选择</summary>
+
+- OMP ask 现在会在可见受管 pane 中运行，并使用 OMP 原生 completion 证据；包含工具调用的 turn 会保持活跃，直到出现最终 assistant 结果。
+- Config V1/V2 角色选择仅显示通用角色和 `agentroles.ccb_self`；workflow 专用 `ccb_*` 角色保留给 V3，不再出现在早期 schema 中。
+- 当前公开 Provider 指引聚焦主要支持的 CLI 系列。DeepSeek CLI、Z.ai 和 DeepSeek Harness 的实现及历史 release notes 保留，但不再作为当前重点支持宣传。
+- 无需迁移项目、对话或配置。原生 Windows x64 与 Herdr 仍为 beta，并继续与 Linux/macOS 共享运行时隔离。
+
+</details>
+
+<details>
+<summary><b>v8.6.12</b> - Provider profile 继承与 Mobile 会话</summary>
+
+- 在 CCB Mobile 中显示 Pi 和 OMP 原生会话，同时保持 Provider 私有 session 路径与 transcript 边界。
+- 通过不可变共享快照将 Pi profile 资产继承到 Agent 私有 HOME，并以原子方式发布并发首次启动生成的快照（PR #328）。
+- 在受管 Provider HOME 中保留 Git author/committer 身份，并在 ask 提交被接受后立即把控制权交还 Agent（PRs #329、#330）。
+- 刷新微信社区群二维码。请重启受管 Pi Agent 以更新投影的 profile 资产；无需迁移项目、对话、配对或配置。
+
+</details>
+
+<details>
+<summary><b>v8.6.11</b> - Provider 认证与隔离的 Windows 稳定性修复</summary>
+
+- 恢复 Codex CLI `0.149.0` 显式自定义 provider 的 bearer 认证，同时让只有 route 的本地 gateway 继续保持无认证模式。
+- 支持按 Agent 投影 Codex model catalog 并覆盖全局 model，保留 reconnect 与自定义 tmux 配置行为，并让 Pi clear 创建新上下文（PRs #321、#322、#325、#326）。
+- 将 Herdr 生命周期同步和原生 UTF-8 启动限制在 Windows-owned 实现中，不新增共享层到 Windows 实现的 import（PRs #320、#323）。
+- 升级后请重启受管 Codex Agent 与 CCB 项目。无需迁移项目、对话、配对或配置。
+
+</details>
+
+<details>
 <summary><b>v8.6.10</b> - Claude OAuth 重登录隔离</summary>
 
 - 外部 OAuth 重新登录后，受管重启会刷新 Agent 私有 Claude Keychain 凭据，避免继续使用已撤销 token（Issue #319）。

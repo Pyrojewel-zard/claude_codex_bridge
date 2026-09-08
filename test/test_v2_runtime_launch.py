@@ -99,6 +99,8 @@ def _spec(
     provider: str = 'codex',
     *,
     startup_args: tuple[str, ...] = (),
+    model: str | None = None,
+    thinking: str | None = None,
     provider_command_template: str | None = None,
     restore_default: RestoreMode = RestoreMode.AUTO,
 ) -> AgentSpec:
@@ -113,6 +115,8 @@ def _spec(
         permission_default=PermissionMode.MANUAL,
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
         provider_command_template=provider_command_template,
+        model=model,
+        thinking=thinking,
         startup_args=startup_args,
     )
 
@@ -2419,16 +2423,48 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert completion_event_log.stat().st_mode & 0o077 == 0
         assert dispatch_event_log.stat().st_mode & 0o077 == 0
     elif provider == 'omp':
+        extension_path = Path(payload['omp_completion_extension'])
+        completion_event_log = Path(payload['omp_completion_event_log'])
+        dispatch_event_log = Path(payload['omp_dispatch_event_log'])
         assert (
             f'PI_CODING_AGENT_DIR={shlex.quote(str(state_dir / "home" / ".omp" / "agent"))}'
+            in start_cmd
+        )
+        assert (
+            f'PI_CODING_AGENT_SESSION_DIR={shlex.quote(str(state_dir / "sessions"))}'
+            in start_cmd
+        )
+        assert (
+            f'CCB_OMP_COMPLETION_EVENTS={shlex.quote(str(completion_event_log))}'
+            in start_cmd
+        )
+        assert (
+            f'CCB_OMP_DISPATCH_EVENTS={shlex.quote(str(dispatch_event_log))}'
             in start_cmd
         )
         assert visible_parts == [
             default_executable,
             '--session-dir',
             str(state_dir / 'sessions'),
+            '--extension',
+            str(extension_path),
+            '--approval-mode',
+            'yolo',
             '--demo',
         ]
+        assert payload['omp_completion_schema_version'] == 1
+        assert extension_path.is_file()
+        assert completion_event_log.is_file()
+        assert dispatch_event_log.is_file()
+        extension_source = extension_path.read_text(encoding='utf-8')
+        assert 'pi.on("agent_settled"' not in extension_source
+        assert 'event?.willContinue === true' in extension_source
+        assert 'appendEvent("agent_settled"' in extension_source
+        assert 'pi.on("input"' in extension_source
+        assert 'CCB_OMP_COMPLETION_EVENTS' in extension_source
+        assert extension_path.stat().st_mode & 0o077 == 0
+        assert completion_event_log.stat().st_mode & 0o077 == 0
+        assert dispatch_event_log.stat().st_mode & 0o077 == 0
     elif provider == 'zai':
         assert visible_parts == [
             default_executable,
@@ -2456,6 +2492,57 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert (state_dir / 'home' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     else:
         assert visible_parts == [default_executable, '--demo']
+
+
+@pytest.mark.parametrize('thinking', [None, 'low', 'medium', 'high', 'xhigh', 'max'])
+def test_pi_launcher_includes_qualified_agent_model_without_provider_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    thinking: str | None,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    source_agent = source_home / '.pi' / 'agent'
+    source_agent.mkdir(parents=True)
+    (source_agent / 'models.json').write_text(
+        '{"providers":{"pay":{"models":[{"id":"gpt-6-astra"}]}}}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.setenv('PI_START_CMD', '/tmp/stub-pi')
+    project_root = tmp_path / 'repo-pi-model-launcher'
+    (project_root / '.ccb').mkdir(parents=True)
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('pi1',),
+        restore=False,
+        auto_permission=False,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec('pi1', provider='pi', model='pay/gpt-6-astra', thinking=thinking)
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('pi1', 'pi')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['pi']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-pi-model',
+        prepared_state=prepared,
+    )
+    visible_parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert visible_parts.count('--model') == 1
+    model_index = visible_parts.index('--model')
+    assert visible_parts[model_index + 1] == 'pay/gpt-6-astra'
+    assert '--provider' not in visible_parts
+    if thinking is None:
+        assert '--thinking' not in visible_parts
+    else:
+        assert visible_parts.count('--thinking') == 1
+        assert visible_parts[visible_parts.index('--thinking') + 1] == thinking
 
 
 def test_qoder_launcher_respects_explicit_config_and_permission_options(

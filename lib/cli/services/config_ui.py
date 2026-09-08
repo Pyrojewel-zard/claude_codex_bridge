@@ -42,6 +42,7 @@ from cli.services.theme import set_theme_preference, theme_preference_payload
 from platforms.windows.herdr.ccbd_surface_projection import herdr_surface_projection_passes_gate
 from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
+from provider_core.source_home import current_provider_source_home
 from provider_model_shortcuts import supported_provider_model_shortcuts
 from provider_profiles import supported_provider_api_shortcuts, validate_provider_runtime_home_uniqueness
 from provider_thinking_shortcuts import provider_thinking_levels
@@ -54,6 +55,7 @@ _CAPABILITIES_CLI_MODELS_BUDGET_S = 0.1
 _CAPABILITIES_CLI_MODELS_RETRY_S = 0.5
 _PROFILE_NAME_PATTERN = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]{0,63}$')
 _CONFIG_UI_RELATIVE_PATH = Path('assets/config_ui/index.html')
+_ASTRA_REASONING_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
 
 @dataclass
@@ -364,6 +366,7 @@ def config_ui_provider_capabilities(
     environ: dict[str, str] | None = None,
     project_root: Path | None = None,
     codex_models_path: Path | None = None,
+    pi_models_path: Path | None = None,
     cli_models: dict[str, list[str]] | None = None,
     roles: tuple[dict[str, object], ...] | list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
@@ -374,6 +377,10 @@ def config_ui_provider_capabilities(
         env,
         project_root=project_root,
         explicit_path=codex_models_path,
+    )
+    pi_models = _pi_models(
+        explicit_path=pi_models_path,
+        source_home=_pi_models_source_home(env, use_process_identity=environ is None),
     )
     discovered_cli_models = (
         {
@@ -466,6 +473,7 @@ def config_ui_provider_capabilities(
         ],
         'opencode': [_model(model_id, model_id) for model_id in discovered_cli_models.get('opencode', [])],
         'mimo': [_model(model_id, model_id) for model_id in discovered_cli_models.get('mimo', [])],
+        'pi': pi_models,
     }
     providers = []
     for provider in (*CORE_PROVIDER_NAMES, *OPTIONAL_PROVIDER_NAMES):
@@ -485,6 +493,8 @@ def config_ui_provider_capabilities(
             source = 'deepseek_v4_and_deepcode_contract'
         elif provider == 'dsh':
             source = 'deepseek_harness_official_catalog'
+        elif provider == 'pi':
+            source = 'pi_models_json'
         providers.append(
             {
                 'id': provider,
@@ -492,7 +502,7 @@ def config_ui_provider_capabilities(
                 'api_shortcut': provider in api_supported,
                 'model_source': source,
                 'models': suggestions.get(provider, []),
-                'custom_model': model_shortcut,
+                'custom_model': model_shortcut and provider != 'pi',
                 'static_thinking': bool(provider_thinking_levels(provider)),
             }
         )
@@ -513,18 +523,21 @@ def _config_ui_role_catalog() -> tuple[dict[str, object], ...]:
 
         return tuple(
             {
-                key: row.get(key)
-                for key in (
-                    'role_id',
-                    'name',
-                    'description',
-                    'version',
-                    'installed_version',
-                    'status',
-                    'source',
-                    'warning',
-                )
-                if key in row
+                'v2_selectable': _config_ui_v2_role_selectable(row.get('role_id')),
+                **{
+                    key: row.get(key)
+                    for key in (
+                        'role_id',
+                        'name',
+                        'description',
+                        'version',
+                        'installed_version',
+                        'status',
+                        'source',
+                        'warning',
+                    )
+                    if key in row
+                },
             }
             for row in role_catalog_status(
                 refresh_default=False,
@@ -536,6 +549,11 @@ def _config_ui_role_catalog() -> tuple[dict[str, object], ...]:
         # unusable.  The editor still preserves a currently configured role
         # and the full TOML editor remains available.
         return ()
+
+
+def _config_ui_v2_role_selectable(role_id: object) -> bool:
+    logical_name = str(role_id or '').strip().lower().rsplit('.', 1)[-1]
+    return logical_name == 'ccb_self' or not logical_name.startswith('ccb_')
 
 
 def _codex_models(
@@ -558,7 +576,9 @@ def _codex_models(
             if not isinstance(item, dict) or item.get('visibility') != 'list':
                 continue
             model_id = str(item.get('slug') or '').strip()
-            if not model_id or not (model_id.startswith('gpt-5.6') or model_id == 'gpt-5.5'):
+            if not model_id or not (
+                model_id.startswith('gpt-5.6') or model_id in {'gpt-5.5', 'gpt-6-astra'}
+            ):
                 continue
             levels = []
             for level in item.get('supported_reasoning_levels') or []:
@@ -567,12 +587,17 @@ def _codex_models(
                 effort = str(level.get('effort') or '').strip()
                 if effort:
                     levels.append(effort)
+            default_level = str(item.get('default_reasoning_level') or '').strip() or None
+            if model_id == 'gpt-6-astra':
+                levels = [level for level in _ASTRA_REASONING_LEVELS if level in levels]
+                if default_level not in levels:
+                    default_level = None
             rows.append(
                 _model(
                     model_id,
                     str(item.get('display_name') or model_id),
                     reasoning_levels=levels,
-                    default_reasoning_level=str(item.get('default_reasoning_level') or '').strip() or None,
+                    default_reasoning_level=default_level,
                     context_window_max_tokens=(
                         int(item.get('context_window'))
                         if str(item.get('context_window') or '').isdigit()
@@ -583,6 +608,12 @@ def _codex_models(
         if rows:
             return rows, source
     return [
+        _model(
+            'gpt-6-astra',
+            'GPT-6 Astra',
+            reasoning_levels=list(_ASTRA_REASONING_LEVELS),
+            default_reasoning_level='low',
+        ),
         _model(
             'gpt-5.6-sol',
             'GPT-5.6 SOL',
@@ -603,6 +634,99 @@ def _codex_models(
         ),
         _model('gpt-5.5', 'GPT-5.5', reasoning_levels=['low', 'medium', 'high', 'xhigh']),
     ], 'ccb_catalog_fallback'
+
+
+def _source_home_from_capability_environ(environ: dict[str, str]) -> Path | None:
+    for name in ('CCB_SOURCE_HOME', 'HOME'):
+        raw = str(environ.get(name) or '').strip()
+        if raw:
+            return Path(raw).expanduser()
+    return None
+
+
+def _pi_models_source_home(
+    environ: dict[str, str],
+    *,
+    use_process_identity: bool,
+) -> Path | None:
+    if not use_process_identity:
+        return _source_home_from_capability_environ(environ)
+    try:
+        return current_provider_source_home()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _pi_models(
+    *,
+    explicit_path: Path | None,
+    source_home: Path | None,
+) -> list[dict[str, object]]:
+    path = (
+        Path(explicit_path).expanduser()
+        if explicit_path is not None
+        else Path(source_home).expanduser() / '.pi' / 'agent' / 'models.json'
+        if source_home is not None
+        else None
+    )
+    if path is None:
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return []
+    providers = payload.get('providers') if isinstance(payload, dict) else None
+    if not isinstance(providers, dict):
+        return []
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for raw_provider, provider_payload in providers.items():
+        if not isinstance(raw_provider, str):
+            continue
+        provider = raw_provider.strip()
+        if not provider or '/' in provider or not isinstance(provider_payload, dict):
+            continue
+        models = provider_payload.get('models')
+        if not isinstance(models, list):
+            continue
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            raw_model_id = item.get('id')
+            if not isinstance(raw_model_id, str):
+                continue
+            model_id = raw_model_id.strip()
+            if not model_id:
+                continue
+            qualified_id = f'{provider}/{model_id}'
+            if qualified_id in seen:
+                continue
+            seen.add(qualified_id)
+            rows.append(
+                _model(
+                    qualified_id,
+                    qualified_id,
+                    reasoning_levels=_pi_model_reasoning_levels(item),
+                )
+            )
+    return rows
+
+
+def _pi_model_reasoning_levels(model: dict[str, object]) -> list[str]:
+    if model.get('reasoning') is not True:
+        return []
+    mapping = model.get('thinkingLevelMap', {})
+    if not isinstance(mapping, dict):
+        return []
+    # Pi requires explicit mappings for extended levels; null disables a level.
+    return [
+        level
+        for level in provider_thinking_levels('pi')
+        if (
+            (level not in mapping and level not in {'xhigh', 'max'})
+            or isinstance(mapping.get(level), str)
+        )
+    ]
 
 
 def _codex_models_cache_paths(

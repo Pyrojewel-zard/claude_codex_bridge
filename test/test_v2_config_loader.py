@@ -1217,6 +1217,7 @@ url = "https://api.example.test/v1"
         ('claude', 'opus', ('--model', 'opus')),
         ('gemini', 'gemini-2.5-pro', ('-m', 'gemini-2.5-pro')),
         ('opencode', 'openai/gpt-5', ('-m', 'openai/gpt-5')),
+        ('pi', 'pay/gpt-5.6-terra', ('--model', 'pay/gpt-5.6-terra')),
         ('dsh', 'deepseek-v4-flash', ()),
     ],
 )
@@ -1262,6 +1263,24 @@ startup_args = ["--search"]
 
     assert spec.model == 'gpt-5'
     assert spec.startup_args == ('-m', 'gpt-5', '--search')
+
+
+def test_load_project_config_supports_pi_model_shortcut_with_extra_startup_args(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-pi-model-extra-startup-args'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; agent1:pi
+
+[agents.agent1]
+model = "local/gemini-3.8-flash-high"
+startup_args = ["--offline"]
+''',
+    )
+
+    spec = load_project_config(project_root).config.agents['agent1']
+
+    assert spec.model == 'local/gemini-3.8-flash-high'
+    assert spec.startup_args == ('--model', 'local/gemini-3.8-flash-high', '--offline')
 
 
 @pytest.mark.parametrize(
@@ -1382,6 +1401,23 @@ def test_load_project_config_rejects_agent_model_shortcut_mixed_with_startup_arg
 [agents.agent1]
 model = "gpt-5"
 startup_args = ["--model", "gpt-4.1"]
+""",
+    )
+
+    with pytest.raises(ConfigValidationError, match='model cannot be combined with startup_args model flags'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_pi_model_shortcut_mixed_with_startup_arg_model_flag(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-pi-model-startup-conflict'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """cmd; agent1:pi
+
+[agents.agent1]
+model = "pay/gpt-5.6-terra"
+startup_args = ["--model", "local/gemini-3.8-flash-high"]
 """,
     )
 
@@ -2562,6 +2598,71 @@ url = "https://api.example.test/v1"
     assert spec.model == 'gpt-5'
     assert spec.startup_args == ('-m', 'gpt-5', '--search')
     assert spec.api == AgentApiSpec(key='sk-test', url='https://api.example.test/v1')
+
+
+def test_render_project_config_text_round_trips_pi_model_shortcut(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-render-pi-model'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; agent1:pi
+
+[agents.agent1]
+model = "pay/gpt-5.6-terra"
+startup_args = ["--offline"]
+''',
+    )
+
+    rendered = render_project_config_text(load_project_config(project_root).config)
+
+    assert 'model = "pay/gpt-5.6-terra"' in rendered
+    assert 'startup_args = ["--offline"]' in rendered
+    assert 'startup_args = ["--model", "pay/gpt-5.6-terra"' not in rendered
+
+    rewritten = tmp_path / 'repo-render-pi-model-roundtrip'
+    _write(rewritten / '.ccb' / 'ccb.config', rendered)
+    spec = load_project_config(rewritten).config.agents['agent1']
+
+    assert spec.model == 'pay/gpt-5.6-terra'
+    assert spec.startup_args == ('--model', 'pay/gpt-5.6-terra', '--offline')
+
+
+@pytest.mark.parametrize('provider', ['codex', 'pi'])
+@pytest.mark.parametrize('thinking', ['low', 'medium', 'high', 'xhigh', 'max'])
+def test_astra_thinking_round_trip(tmp_path: Path, provider: str, thinking: str) -> None:
+    model = 'gpt-6-astra' if provider == 'codex' else 'pay/gpt-6-astra'
+    config_path = tmp_path / '.ccb' / 'ccb.config'
+    _write(config_path, f'''cmd; agent1:{provider}
+
+[agents.agent1]
+model = "{model}"
+thinking = "{thinking}"
+startup_args = ["--offline"]
+''')
+    loaded = load_project_config(tmp_path).config
+    expected_args = (
+        ('-m', model, '-c', f'model_reasoning_effort="{thinking}"', '--offline')
+        if provider == 'codex'
+        else ('--model', model, '--thinking', thinking, '--offline')
+    )
+    assert loaded.agents['agent1'].startup_args == expected_args
+    rendered = render_project_config_text(loaded)
+    assert f'thinking = "{thinking}"' in rendered
+    assert 'startup_args = ["--offline"]' in rendered
+    _write(config_path, rendered)
+    assert load_project_config(tmp_path).config.agents['agent1'].startup_args == expected_args
+
+
+@pytest.mark.parametrize('args', ['["--thinking", "low"]', '["--thinking=low"]'])
+def test_pi_thinking_rejects_duplicate_startup_override(tmp_path: Path, args: str) -> None:
+    _write(tmp_path / '.ccb' / 'ccb.config', f'''cmd; agent1:pi
+
+[agents.agent1]
+model = "pay/gpt-6-astra"
+thinking = "max"
+startup_args = {args}
+''')
+    with pytest.raises(ConfigValidationError, match='thinking cannot be combined with startup_args'):
+        load_project_config(tmp_path)
 
 
 @pytest.mark.parametrize(

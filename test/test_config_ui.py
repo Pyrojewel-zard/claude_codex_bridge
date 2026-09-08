@@ -58,6 +58,9 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert 'function scanAgentHistory()' in page
     assert 'function cleanupAgentHistory()' in page
     assert '/api/storage/history' in page
+    assert '{ id: "pi", model_shortcut: true, model_source: "pi_models_json", custom_model: false' in page
+    assert 'piModelSourceSupported: "模型来源：Pi 本地模型配置。"' in page
+    assert 'piModelSourceEmpty: "未找到已配置的 Pi 模型；已有选择会被保留。"' in page
     assert 'id="config-editor-section"' in page
     assert 'id="agent-session-storage"' in page
     assert 'id="observe-section"' not in page
@@ -110,6 +113,7 @@ def test_config_ui_capabilities_expose_role_catalog_without_private_paths(monkey
 
     assert payload['roles'] == [
         {
+            'v2_selectable': True,
             'role_id': 'agentroles.mother',
             'name': 'Role Mother',
             'description': 'Role design and source audit',
@@ -119,6 +123,47 @@ def test_config_ui_capabilities_expose_role_catalog_without_private_paths(monkey
             'source': 'agentroles',
         }
     ]
+
+
+def test_config_ui_marks_ccb_workflow_roles_unselectable_in_v2_but_keeps_ccb_self(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rolepacks.sources as role_sources
+
+    monkeypatch.setattr(
+        role_sources,
+        'role_catalog_status',
+        lambda **_: tuple(
+            {'role_id': role_id, 'status': 'current'}
+            for role_id in (
+                'agentroles.ccb_frontdesk',
+                'agentroles.ccb_worker',
+                'agentroles.ccb_self',
+                'agentroles.coder',
+                'agentroles.code_reviewer',
+                'agentroles.frontend_engineer',
+            )
+        ),
+    )
+
+    rows = {
+        str(row['role_id']): row
+        for row in config_ui_module._config_ui_role_catalog()
+    }
+
+    assert rows['agentroles.ccb_frontdesk']['v2_selectable'] is False
+    assert rows['agentroles.ccb_worker']['v2_selectable'] is False
+    assert rows['agentroles.ccb_self']['v2_selectable'] is True
+    assert rows['agentroles.coder']['v2_selectable'] is True
+    assert rows['agentroles.code_reviewer']['v2_selectable'] is True
+    assert rows['agentroles.frontend_engineer']['v2_selectable'] is True
+
+
+def test_config_ui_v2_role_options_filter_catalog_but_preserve_current_value() -> None:
+    page = config_ui_asset_path().read_text(encoding='utf-8')
+
+    assert '.filter((row) => row && row.v2_selectable !== false)' in page
+    assert 'if (currentRole) ids.add(currentRole);' in page
 
 
 def test_config_ui_role_catalog_never_downloads_missing_default(
@@ -1469,10 +1514,40 @@ def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path
         ),
         encoding='utf-8',
     )
+    pi_models_path = tmp_path / 'pi-models.json'
+    pi_models_path.write_text(
+        json.dumps(
+            {
+                'providers': {
+                    'pay': {
+                        'apiKey': 'secret-pay-key',
+                        'baseUrl': 'https://secret-pay.example.test/v1',
+                        'headers': {'Authorization': 'secret-header'},
+                        'models': [
+                            {'id': 'gpt-5.6-terra', 'name': 'Terra', 'apiKey': 'model-secret'},
+                            {'id': 'gpt-5.6-terra'},
+                            {'id': 'openai/gpt-5.6-sol'},
+                            {'id': 56},
+                            {'name': 'missing-id'},
+                        ],
+                    },
+                    'local': {
+                        'models': [{'id': 'gemini-3.8-flash-high'}],
+                    },
+                    'invalid/provider': {
+                        'models': [{'id': 'must-not-appear'}],
+                    },
+                    'wrong-models': {'models': {'id': 'not-an-array'}},
+                }
+            }
+        ),
+        encoding='utf-8',
+    )
 
     payload = config_ui_provider_capabilities(
         environ={'HOME': str(tmp_path), 'PATH': ''},
         codex_models_path=cache_path,
+        pi_models_path=pi_models_path,
         cli_models={
             'opencode': ['openai/gpt-5.6-sol'],
             'mimo': ['xiaomi/mimo-v2.5-pro'],
@@ -1521,17 +1596,104 @@ def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path
     assert providers['dsh']['model_source'] == 'deepseek_harness_official_catalog'
     assert [model['id'] for model in providers['opencode']['models']] == ['openai/gpt-5.6-sol']
     assert [model['id'] for model in providers['mimo']['models']] == ['xiaomi/mimo-v2.5-pro']
+    assert [model['id'] for model in providers['pi']['models']] == [
+        'pay/gpt-5.6-terra',
+        'pay/openai/gpt-5.6-sol',
+        'local/gemini-3.8-flash-high',
+    ]
+    assert [model['label'] for model in providers['pi']['models']] == [
+        'pay/gpt-5.6-terra',
+        'pay/openai/gpt-5.6-sol',
+        'local/gemini-3.8-flash-high',
+    ]
+    assert providers['pi']['model_shortcut'] is True
+    assert providers['pi']['custom_model'] is False
+    assert providers['pi']['static_thinking'] is True
+    assert providers['pi']['model_source'] == 'pi_models_json'
+    serialized_pi = json.dumps(providers['pi'])
+    assert 'secret-pay-key' not in serialized_pi
+    assert 'secret-pay.example.test' not in serialized_pi
+    assert 'secret-header' not in serialized_pi
+    assert 'model-secret' not in serialized_pi
     assert providers['codex']['static_thinking'] is True
     assert providers['claude']['static_thinking'] is True
     assert providers['deepseek']['static_thinking'] is True
     assert all(
         provider['static_thinking'] is False
         for name, provider in providers.items()
-        if name not in {'codex', 'claude', 'deepseek', 'dsh'}
+        if name not in {'codex', 'claude', 'deepseek', 'dsh', 'pi'}
     )
 
 
-def test_config_ui_codex_fallback_keeps_current_56_family_and_55(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    'payload',
+    [
+        '{not-json',
+        '[]',
+        '{}',
+        '{"providers": []}',
+    ],
+)
+def test_config_ui_pi_model_catalog_fails_closed(tmp_path: Path, payload: str) -> None:
+    pi_models_path = tmp_path / 'models.json'
+    pi_models_path.write_text(payload, encoding='utf-8')
+
+    capabilities = config_ui_provider_capabilities(
+        environ={'HOME': str(tmp_path), 'PATH': ''},
+        pi_models_path=pi_models_path,
+        cli_models={'opencode': [], 'mimo': []},
+        roles=(),
+    )
+    pi = next(provider for provider in capabilities['providers'] if provider['id'] == 'pi')
+
+    assert pi['model_shortcut'] is True
+    assert pi['custom_model'] is False
+    assert pi['models'] == []
+
+
+def test_config_ui_pi_model_catalog_missing_file_fails_closed(tmp_path: Path) -> None:
+    capabilities = config_ui_provider_capabilities(
+        environ={'HOME': str(tmp_path), 'PATH': ''},
+        pi_models_path=tmp_path / 'missing-models.json',
+        cli_models={'opencode': [], 'mimo': []},
+        roles=(),
+    )
+    pi = next(provider for provider in capabilities['providers'] if provider['id'] == 'pi')
+
+    assert pi['models'] == []
+
+
+def test_config_ui_pi_model_catalog_uses_source_home_before_home(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    fallback_home = tmp_path / 'fallback-home'
+    source_models_path = source_home / '.pi' / 'agent' / 'models.json'
+    fallback_models_path = fallback_home / '.pi' / 'agent' / 'models.json'
+    source_models_path.parent.mkdir(parents=True)
+    fallback_models_path.parent.mkdir(parents=True)
+    source_models_path.write_text(
+        '{"providers":{"pay":{"models":[{"id":"gpt-5.6-terra"}]}}}',
+        encoding='utf-8',
+    )
+    fallback_models_path.write_text(
+        '{"providers":{"local":{"models":[{"id":"wrong-home-model"}]}}}',
+        encoding='utf-8',
+    )
+
+    capabilities = config_ui_provider_capabilities(
+        environ={
+            'CCB_SOURCE_HOME': str(source_home),
+            'HOME': str(fallback_home),
+            'PATH': '',
+        },
+        cli_models={'opencode': [], 'mimo': []},
+        roles=(),
+    )
+    pi = next(provider for provider in capabilities['providers'] if provider['id'] == 'pi')
+
+    assert [model['id'] for model in pi['models']] == ['pay/gpt-5.6-terra']
+
+
+def test_config_ui_codex_fallback_includes_astra_and_keeps_56_family_and_55(tmp_path: Path) -> None:
     payload = config_ui_provider_capabilities(
         environ={'HOME': str(tmp_path), 'PATH': ''},
         codex_models_path=tmp_path / 'missing-models-cache.json',
@@ -1541,11 +1703,89 @@ def test_config_ui_codex_fallback_keeps_current_56_family_and_55(tmp_path: Path)
 
     assert codex['model_source'] == 'ccb_catalog_fallback'
     assert [model['id'] for model in codex['models']] == [
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
     ]
+    assert codex['models'][0]['reasoning_levels'] == ['low', 'medium', 'high', 'xhigh', 'max']
+    assert codex['models'][0]['default_reasoning_level'] == 'low'
+
+
+@pytest.mark.parametrize(
+    ('visibility', 'efforts', 'default_level', 'expected', 'expected_default'),
+    [
+        ('list', ['max', 'high', 'low', 'xhigh', 'medium', 'ultra', 'off', 'max'],
+         'max', ['low', 'medium', 'high', 'xhigh', 'max'], 'max'),
+        ('list', ['low', 'high'], 'ultra', ['low', 'high'], None),
+        ('hide', ['high'], 'high', None, None),
+    ],
+)
+def test_config_ui_codex_astra_respects_cache_visibility_and_capabilities(
+    tmp_path: Path,
+    visibility: str,
+    efforts: list[str],
+    default_level: str,
+    expected: list[str] | None,
+    expected_default: str | None,
+) -> None:
+    cache = tmp_path / 'models_cache.json'
+    cache.write_text(json.dumps({'models': [
+        {
+            'slug': 'gpt-6-astra',
+            'visibility': visibility,
+            'supported_reasoning_levels': [{'effort': level} for level in efforts],
+            'default_reasoning_level': default_level,
+            'context_window': 1000000,
+        },
+        {'slug': 'gpt-5.6-sol', 'visibility': 'list'},
+    ]}), encoding='utf-8')
+    models, source = config_ui_module._codex_models(
+        {}, project_root=None, explicit_path=cache,
+    )
+    assert source == 'codex_cache_explicit'
+    astra = next((model for model in models if model['id'] == 'gpt-6-astra'), None)
+    if expected is None:
+        assert astra is None
+    else:
+        assert astra is not None
+        assert astra['reasoning_levels'] == expected
+        assert astra['default_reasoning_level'] == expected_default
+        assert astra['context_window_max_tokens'] == 1000000
+
+
+@pytest.mark.parametrize(
+    ('metadata', 'expected'),
+    [
+        ({'reasoning': True, 'thinkingLevelMap': {
+            'max': 'max', 'xhigh': 'xhigh', 'high': 'high', 'medium': 'medium',
+            'low': 'low', 'off': None, 'minimal': None,
+        }}, ['low', 'medium', 'high', 'xhigh', 'max']),
+        ({'reasoning': True}, ['off', 'minimal', 'low', 'medium', 'high']),
+        ({'reasoning': True, 'thinkingLevelMap': {
+            'off': None, 'minimal': None, 'low': None, 'medium': None,
+            'high': 'provider-high', 'xhigh': None, 'max': 'provider-max',
+        }}, ['high', 'max']),
+        ({'reasoning': False, 'thinkingLevelMap': {'max': 'max'}}, []),
+        ({}, []),
+        ({'reasoning': True, 'thinkingLevelMap': []}, []),
+        ({'reasoning': True, 'thinkingLevelMap': {'xhigh': False, 'max': 100}},
+         ['off', 'minimal', 'low', 'medium', 'high']),
+    ],
+)
+def test_config_ui_pi_thinking_uses_native_model_mapping(
+    tmp_path: Path, metadata: dict[str, object], expected: list[str],
+) -> None:
+    catalog = tmp_path / 'models.json'
+    catalog.write_text(json.dumps({'providers': {'pay': {'models': [
+        {'id': 'gpt-6-astra', **metadata},
+    ]}}}), encoding='utf-8')
+    models = config_ui_module._pi_models(explicit_path=catalog, source_home=None)
+    assert models[0]['id'] == 'pay/gpt-6-astra'
+    assert models[0]['reasoning_levels'] == expected
+    assert 'provider-high' not in json.dumps(models)
+    assert 'provider-max' not in json.dumps(models)
 
 
 def test_config_ui_prefers_project_managed_codex_model_cache(tmp_path: Path) -> None:

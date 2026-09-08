@@ -11,6 +11,8 @@ from provider_backends.codex.start_cmd_runtime.parsing import (
 )
 from provider_backends.codex.start_cmd_runtime.rewriting import (
     build_resume_start_cmd,
+    rewrite_codex_segment,
+    strip_resume_from_codex_segment,
     strip_resume_start_cmd,
 )
 
@@ -80,3 +82,49 @@ def test_build_resume_start_cmd_preserves_quoted_hapi_script() -> None:
     assert result.returncode == 0, result.stderr
     parts = shlex.split(rewritten)
     assert parts[-2:] == ['resume', 'resume-session']
+
+
+def test_rewrite_codex_segment_replaces_fork_continuation_with_resume() -> None:
+    rewritten = rewrite_codex_segment(
+        'codex fork 00000000-0000-0000-0000-000000000001',
+        '00000000-0000-0000-0000-000000000002',
+    )
+
+    assert rewritten == 'codex resume 00000000-0000-0000-0000-000000000002'
+
+
+def test_rewrite_codex_segment_swaps_resume_id_without_keeping_old_continuation() -> None:
+    rewritten = rewrite_codex_segment(
+        'codex -c disable_paste_burst=true resume old-session',
+        'new-session',
+    )
+
+    assert rewritten == 'codex -c disable_paste_burst=true resume new-session'
+
+
+def test_rewrite_codex_segment_appends_resume_when_no_continuation_present() -> None:
+    rewritten = rewrite_codex_segment('codex -m gpt-5.4', 'sess-123')
+
+    assert rewritten == 'codex -m gpt-5.4 resume sess-123'
+
+
+def test_strip_resume_from_codex_segment_removes_fork_continuation() -> None:
+    stripped = strip_resume_from_codex_segment(
+        'codex fork 00000000-0000-0000-0000-000000000001'
+    )
+
+    assert stripped == 'codex'
+
+
+def test_build_resume_start_cmd_managed_remote_path_untouched_by_fork_fix() -> None:
+    command = (
+        "export CCB_CODEX_MANAGED_REMOTE=1 CCB_CODEX_RESUME_ID='old-id'; "
+        'codex --remote unix:///tmp/app-server.sock'
+    )
+
+    rewritten = build_resume_start_cmd(command, 'new-id')
+
+    assert 'CCB_CODEX_RESUME_ID=new-id' in rewritten
+    assert 'CCB_CODEX_MANAGED_REMOTE=1' in rewritten
+    assert 'fork' not in rewritten
+    assert 'resume new-id' not in rewritten
