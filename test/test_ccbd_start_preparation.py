@@ -775,6 +775,10 @@ def test_prepare_start_agents_refreshes_ccb_only_claude_permissions_when_auto_pe
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    # This test constructs provider state directly and expects a fresh layout;
+    # keep it in the project anchor so repeated runs cannot reuse relocated
+    # state from an earlier temporary project with the same identity.
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
     project_root = tmp_path / 'repo-start-prep-claude-permissions'
     source_home = tmp_path / 'source-home'
     (source_home / '.claude').mkdir(parents=True)

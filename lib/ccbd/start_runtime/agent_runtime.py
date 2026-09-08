@@ -46,18 +46,19 @@ def _binding_attr(binding, field_name: str):
 
 
 def _best_effort_resolve_pane_pid(*, pane_id, namespace_backend_impl, resolver) -> int | None:
-    """方向 A：herdr pane-backed agent 回填 runtime_pid。
+    """回填 pane-backed agent 的 runtime_pid。
 
-    binding.runtime_pid 来自 provider session（herdr pane respawn 不经
-    provider session，故为 None）。用注入的 resolver 从 herdr ``pane
-    process-info`` 查询 pane 前台进程 pid。best-effort：任何失败返回 None。
+    binding.runtime_pid 来自 provider session 时优先使用；pane-backed
+    runtime（tmux/herdr）没有 provider session pid 时，用注入的 resolver
+    查询 pane 进程身份。best-effort：任何失败返回 None。
 
     ``pane_id`` 优先用 binding_state.runtime_pane_id（herdr 实际 pane）；
     binding.pane_id 在 herdr 下可能为空（binding 不经 provider session）。
     """
     if resolver is None:
         return None
-    if str(namespace_backend_impl or '').strip().lower() != 'herdr':
+    backend = str(namespace_backend_impl or '').strip().lower()
+    if backend not in {'tmux', 'herdr'} and not str(pane_id or '').strip().startswith('%'):
         return None
     if not pane_id:
         return None

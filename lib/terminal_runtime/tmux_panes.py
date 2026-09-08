@@ -11,6 +11,7 @@ from .tmux_panes_runtime.queries import (
     get_pane_content,
     is_pane_alive,
     list_panes_by_user_options,
+    pane_process_info,
     pane_exists,
 )
 
@@ -87,6 +88,9 @@ class TmuxPaneService:
 
     def list_panes_by_user_options(self, expected: dict[str, str]) -> list[str]:
         return list_panes_by_user_options(self, expected)
+
+    def pane_process_info(self, pane_id: str) -> dict[str, int] | None:
+        return pane_process_info(self, pane_id)
 
     def describe_pane(self, pane_id: str, *, user_options: tuple[str, ...] = ()) -> dict[str, str] | None:
         return describe_pane(self, pane_id, user_options=user_options)

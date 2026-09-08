@@ -712,6 +712,31 @@ def test_preflight_accepts_explicit_owned_external_fixture(runner, tmp_path: Pat
     assert str(uuid.UUID(context.owner_uuid)) == context.owner_uuid
 
 
+def test_runtime_state_paths_follow_relocation_reference(runner, tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    anchor = project / ".ccb"
+    relocated = tmp_path / "runtime" / "project-id"
+    anchor.mkdir(parents=True)
+    relocated.mkdir(parents=True)
+    (anchor / runner.RUNTIME_ROOT_REF_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "record_type": runner.RUNTIME_ROOT_REF_RECORD_TYPE,
+                "project_id": "project-id",
+                "runtime_state_root": str(relocated),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert runner._runtime_state_root(project) == relocated
+    assert runner._runtime_ccbd_root(project) == relocated / "ccbd"
+    assert runner._runtime_agents_root(project) == relocated / "agents"
+    assert runner._project_state_roots(project) == (anchor, relocated)
+
+
 def test_scenario_identity_stable_double_read_rejects_authority_generation_mismatch(
     runner,
     tmp_path: Path,
@@ -3146,6 +3171,15 @@ def test_full_cold_constructor_rejects_attachable_namespace_and_active_runtime_r
     assert "ready_authority_not_stopped" in reasons
     assert "cold_ready_active_runtime_residue" in reasons
     assert "constructor_process_residue_or_audit_degraded" in reasons
+
+
+def test_scenario_authority_is_stopped_accepts_never_started_project(runner) -> None:
+    identity = {
+        "authority": {"lifecycle": None, "lease": None, "namespace": None},
+        "consistency": {"authority_records": "absent"},
+    }
+
+    assert runner._scenario_authority_is_stopped(identity) is True
 
 
 def test_scenario_gate_rejects_missing_tampered_and_unreferenced_artifacts(

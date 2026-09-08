@@ -913,9 +913,8 @@ def _capture_scenario_identity_once(
     *,
     benchmark_id: str,
 ) -> dict[str, Any]:
-    ccb_root = context.project_root / ".ccb"
-    ccbd_root = ccb_root / "ccbd"
-    agents_root = ccb_root / "agents"
+    ccbd_root = _runtime_ccbd_root(context.project_root)
+    agents_root = _runtime_agents_root(context.project_root)
     reason_codes: list[str] = []
     lifecycle = _scenario_optional_json(
         ccbd_root / "lifecycle.json",
@@ -1501,7 +1500,7 @@ def _mixed_recovery_probe_evidence(
 
 
 def _supervision_cursor(context: ValidatedContext) -> dict[str, Any]:
-    path = context.project_root / ".ccb" / "ccbd" / "supervision.jsonl"
+    path = _runtime_ccbd_root(context.project_root) / "supervision.jsonl"
     try:
         payload = path.read_bytes()
     except FileNotFoundError:
@@ -1529,7 +1528,7 @@ def _supervision_recovery_audit(
             "new_event_count": 0,
             "recovery_event_count": 0,
         }
-    path = context.project_root / ".ccb" / "ccbd" / "supervision.jsonl"
+    path = _runtime_ccbd_root(context.project_root) / "supervision.jsonl"
     try:
         payload = path.read_bytes()
     except FileNotFoundError:
@@ -1780,6 +1779,15 @@ def _scenario_authority_is_stopped(identity: Mapping[str, Any]) -> bool:
     consistency = identity.get("consistency")
     if not isinstance(authority, Mapping):
         return False
+    if (
+        isinstance(consistency, Mapping)
+        and consistency.get("authority_records") == "absent"
+        and all(authority.get(key) is None for key in ("lifecycle", "lease", "namespace"))
+    ):
+        # A never-started project has no lifecycle/lease records yet.  It is
+        # already stopped for constructor purposes, provided the snapshot
+        # also proves that no authority record exists.
+        return True
     lifecycle = authority.get("lifecycle")
     lease = authority.get("lease")
     namespace = authority.get("namespace")
@@ -3015,7 +3023,7 @@ def _execute_round(
         )
         return record
 
-    report_path = context.project_root / ".ccb" / "ccbd" / "startup-report.json"
+    report_path = _runtime_ccbd_root(context.project_root) / "startup-report.json"
     before = _file_identity(report_path)
     started_utc = dependencies.utc_now().astimezone(timezone.utc)
     started_ns = dependencies.perf_counter_ns()
@@ -3146,6 +3154,11 @@ def _execute_round(
             elif stdout_process_trace_id is not None or process_bootstrap_timings_ms is not None:
                 stdout_parse_error = "control startup unexpectedly emitted process trace evidence"
 
+    # The first startup may create runtime-root-ref.json and relocate all
+    # daemon state away from the project anchor.  Resolve the report path
+    # again after the command so the benchmark observes the same state root
+    # as ccbd rather than the pre-start fallback path.
+    report_path = _runtime_ccbd_root(context.project_root) / "startup-report.json"
     report_read_error: str | None = None
     if cli_only_measurement:
         report_bytes, after, report_read_error = _read_unchanged_report(
@@ -4229,8 +4242,13 @@ def _validate_startup_report(
     if generated_at < started_utc - skew or generated_at > ended_utc + skew:
         raise ReportValidationError("startup report generated_at is outside the external command window")
 
+    runtime_root = _runtime_state_root(project_root)
+    runtime_roots = _project_state_roots(project_root)
     try:
-        lease = _read_json_object(project_root / ".ccb" / "ccbd" / "lease.json", label="ccbd lease")
+        lease = _read_json_object(
+            runtime_root / "ccbd" / "lease.json",
+            label="ccbd lease",
+        )
     except SafetyError as exc:
         raise ReportValidationError(str(exc)) from exc
     if lease.get("record_type") != "ccbd_lease" or lease.get("mount_state") != "mounted":
@@ -4242,7 +4260,7 @@ def _validate_startup_report(
     ):
         if report_value != lease_value:
             raise ReportValidationError(f"startup report {key} does not match ccbd lease")
-    lifecycle_path = project_root / ".ccb" / "ccbd" / "lifecycle.json"
+    lifecycle_path = runtime_root / "ccbd" / "lifecycle.json"
     if lifecycle_path.exists():
         try:
             lifecycle = _read_json_object(lifecycle_path, label="ccbd lifecycle")
@@ -4281,6 +4299,7 @@ def _capture_warm_reuse_identity(
     *,
     project_root: Path,
 ) -> dict[str, Any]:
+    runtime_roots = _project_state_roots(project_root)
     inspection = report.get("inspection")
     if not isinstance(inspection, Mapping) or not isinstance(inspection.get("lease"), Mapping):
         raise ReportValidationError("warm reuse identity is missing inspected lease authority")
@@ -4301,7 +4320,7 @@ def _capture_warm_reuse_identity(
 
     try:
         namespace = _read_json_object(
-            project_root / ".ccb" / "ccbd" / "state.json",
+            _runtime_ccbd_root(project_root) / "state.json",
             label="project namespace state",
         )
     except SafetyError as exc:
@@ -4376,7 +4395,7 @@ def _capture_warm_reuse_identity(
                     f"warm reuse identity agent {agent_name!r} is missing {field}"
                 )
 
-        runtime_path = project_root / ".ccb" / "agents" / agent_name / "runtime.json"
+        runtime_path = _runtime_agents_root(project_root) / agent_name / "runtime.json"
         try:
             runtime = _read_json_object(runtime_path, label=f"runtime record for {agent_name}")
         except SafetyError as exc:
@@ -4388,7 +4407,7 @@ def _capture_warm_reuse_identity(
 
         session_identity: dict[str, Any] | None = None
         session_path = Path(str(result["session_ref"])).expanduser()
-        if session_path.is_absolute() and _path_is_under(session_path, project_root / ".ccb"):
+        if session_path.is_absolute() and _path_is_under_any(session_path, runtime_roots):
             try:
                 session = _read_json_object(
                     session_path,
@@ -4405,8 +4424,8 @@ def _capture_warm_reuse_identity(
                 fifo_value = str(session_identity.get(fifo_field) or "").strip()
                 if fifo_value:
                     fifo_path = Path(fifo_value).expanduser()
-                    if not fifo_path.is_absolute() or not _path_is_under(
-                        fifo_path, project_root / ".ccb"
+                    if not fifo_path.is_absolute() or not _path_is_under_any(
+                        fifo_path, runtime_roots
                     ):
                         raise ReportValidationError(
                             f"warm reuse {fifo_field} for {agent_name!r} is outside project state"
@@ -6633,8 +6652,8 @@ def _wait_for_unmounted(
     wait_s: float,
     dependencies: BenchmarkDependencies,
 ) -> tuple[bool, dict[str, Any]]:
-    lease_path = project_root / ".ccb" / "ccbd" / "lease.json"
-    lifecycle_path = project_root / ".ccb" / "ccbd" / "lifecycle.json"
+    lease_path = _runtime_ccbd_root(project_root) / "lease.json"
+    lifecycle_path = _runtime_ccbd_root(project_root) / "lifecycle.json"
     deadline = dependencies.perf_counter_ns() + int(max(0.0, wait_s) * 1_000_000_000)
     evidence: dict[str, Any] = {}
     while True:
@@ -6832,8 +6851,8 @@ def _validate_owner_marker(
 
 
 def _validate_pristine_fixture(*, project_root: Path, source_home: Path) -> None:
-    ccbd_dir = project_root / ".ccb" / "ccbd"
-    agents_dir = project_root / ".ccb" / "agents"
+    ccbd_dir = _runtime_ccbd_root(project_root)
+    agents_dir = _runtime_agents_root(project_root)
     if ccbd_dir.exists() or agents_dir.exists():
         raise SafetyError("pristine scenario requires no existing .ccb/ccbd or .ccb/agents runtime state")
     if any(source_home.iterdir()):
@@ -7779,6 +7798,62 @@ def _write_bytes(path: Path, data: bytes) -> None:
 def _require_absolute(path: Path, label: str) -> None:
     if not path.expanduser().is_absolute():
         raise SafetyError(f"{label} must be an absolute path")
+
+
+RUNTIME_ROOT_REF_NAME = "runtime-root-ref.json"
+RUNTIME_ROOT_REF_RECORD_TYPE = "ccb_runtime_root_ref"
+
+
+def _runtime_state_root(project_root: Path) -> Path:
+    """Resolve the daemon state root while keeping the project anchor separate.
+
+    The fork relocates mutable runtime state by writing a small reference under
+    ``project/.ccb``.  The benchmark is intentionally standalone, so it mirrors
+    the product's fail-safe semantics instead of importing the full storage
+    package: malformed or missing references fall back to the anchor.
+    """
+
+    anchor = project_root / ".ccb"
+    reference = anchor / RUNTIME_ROOT_REF_NAME
+    try:
+        payload = _read_json_object(reference, label="runtime root reference")
+    except SafetyError:
+        return anchor
+    if payload.get("record_type") != RUNTIME_ROOT_REF_RECORD_TYPE:
+        return anchor
+    if payload.get("schema_version") != 1:
+        return anchor
+    if not str(payload.get("project_id") or "").strip():
+        return anchor
+    raw_root = str(payload.get("runtime_state_root") or "").strip()
+    if not raw_root:
+        return anchor
+    candidate = Path(raw_root).expanduser()
+    if not candidate.is_absolute():
+        return anchor
+    return candidate
+
+
+def _runtime_ccbd_root(project_root: Path) -> Path:
+    return _runtime_state_root(project_root) / "ccbd"
+
+
+def _runtime_agents_root(project_root: Path) -> Path:
+    return _runtime_state_root(project_root) / "agents"
+
+
+def _project_state_roots(project_root: Path) -> tuple[Path, ...]:
+    """Return anchor plus the active runtime root for containment checks."""
+
+    anchor = project_root / ".ccb"
+    runtime_root = _runtime_state_root(project_root)
+    if runtime_root == anchor:
+        return (anchor,)
+    return (anchor, runtime_root)
+
+
+def _path_is_under_any(path: Path, roots: Sequence[Path]) -> bool:
+    return any(_path_is_under(path, root) for root in roots)
 
 
 def _path_is_under(path: Path, root: Path) -> bool:

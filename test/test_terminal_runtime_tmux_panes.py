@@ -126,6 +126,25 @@ def test_tmux_pane_service_describes_pane_with_user_options() -> None:
     }
 
 
+def test_tmux_pane_service_reads_pane_process_info() -> None:
+    def tmux_run(args, **kwargs):
+        assert args == ['display-message', '-p', '-t', '%3', '#{pane_pid}']
+        return _cp(stdout='12345\n')
+
+    service = TmuxPaneService(
+        tmux_run_fn=tmux_run,
+        looks_like_pane_id_fn=lambda value: value.startswith('%'),
+        normalize_split_direction_fn=lambda direction: ('-h', 'right'),
+        pane_exists_output_fn=lambda output: output.strip().startswith('%'),
+        pane_id_by_title_marker_output_fn=lambda text, marker: None,
+        pane_is_alive_fn=lambda output: output.strip() == '0',
+        normalize_user_option_fn=lambda name: '@' + name.strip('@'),
+        strip_ansi_fn=lambda text: text,
+    )
+
+    assert service.pane_process_info('%3') == {'foreground_pid': 12345}
+
+
 def test_tmux_pane_service_finds_unique_pane_by_user_options() -> None:
     def tmux_run(args, **kwargs):
         if args == ['list-panes', '-a', '-F', '#{pane_id}\t#{@ccb_agent}\t#{@ccb_project_id}']:

@@ -23,7 +23,7 @@ from provider_backends.codex.comm_runtime.pathing import normalize_work_dir
 from provider_backends.codex.session import CodexProjectSession
 from provider_backends.codex.session_authority import remember_bound_session_authority, resume_authority_matches
 
-from ..start_cmd import build_resume_start_cmd, extract_resume_session_id
+from ..start_cmd import build_resume_start_cmd, extract_resume_session_id, strip_resume_start_cmd
 from ..start_cmd_runtime.fields_runtime import resume_template_command
 
 
@@ -76,6 +76,15 @@ def resolve_resume_payload(
         return None, incompatible
     if not _resume_session_binding_is_usable(data):
         record_startup_operations({'session_decision_binding_rejected_count': 1})
+        return None, invalid
+    lineage_issue = _resume_rollout_lineage_issue(data)
+    if lineage_issue is not None:
+        _persist_broken_lineage_binding(
+            session_path,
+            data,
+            reason=lineage_issue,
+        )
+        record_startup_operations({'session_decision_broken_lineage_recovery_count': 1})
         return None, invalid
     repaired = _repair_invalid_native_fork_binding(data)
     if repaired is not None:
@@ -225,6 +234,96 @@ def _persist_invalid_native_fork_repair(
         updated['rejected_codex_session_id'] = rejected_id
         updated['rejected_codex_session_path'] = rejected_path
         updated['codex_binding_recovery_reason'] = 'native_fork_parent_mismatch'
+        remember_bound_session_authority(updated)
+        payload = json.dumps(updated, ensure_ascii=False, indent=2) + '\n'
+        ok, _error = safe_write_session(session_path, payload)
+        return updated if ok else None
+
+
+def _resume_rollout_lineage_issue(data: dict[str, object]) -> str | None:
+    """Return a safe recovery reason when Codex cannot reconstruct a fork chain.
+
+    Codex's paginated ``thread/resume`` requires every ``forked_from_id``
+    source rollout to remain available.  The local binding can outlive that
+    source (for example after a partial history migration), so file existence
+    alone is not enough to approve resume.
+    """
+    session_path = _path_or_none(data.get('codex_session_path'))
+    session_root = _path_or_none(data.get('codex_session_root'))
+    if session_path is None or session_root is None or not session_path.is_file():
+        return None
+    try:
+        candidates = list(session_root.glob('**/*.jsonl'))
+    except OSError:
+        # An I/O error is not proof that history is corrupt.  Preserve the
+        # existing binding and let the normal Codex error/retry path surface
+        # the uncertainty instead of silently starting a new conversation.
+        record_startup_operations({'session_history_directory_scan_failure_count': 1})
+        return None
+    metadata_by_id: dict[str, dict[str, object]] = {}
+    for candidate in candidates:
+        if not candidate.is_file() or is_codex_subagent_log(candidate):
+            continue
+        candidate_meta = codex_session_meta_payload(candidate)
+        if not isinstance(candidate_meta, dict):
+            continue
+        candidate_id = str(
+            candidate_meta.get('session_id') or candidate_meta.get('id') or ''
+        ).strip()
+        if candidate_id:
+            metadata_by_id[candidate_id] = candidate_meta
+    current_meta = codex_session_meta_payload(session_path)
+    if not isinstance(current_meta, dict):
+        return None
+    current_id = str(
+        current_meta.get('session_id') or current_meta.get('id') or ''
+    ).strip()
+    if not current_id:
+        return None
+    visited: set[str] = set()
+    while current_id:
+        if current_id in visited:
+            return 'lineage_cycle'
+        visited.add(current_id)
+        meta = metadata_by_id.get(current_id)
+        if meta is None:
+            return 'missing_source_rollout'
+        current_id = str(meta.get('forked_from_id') or '').strip()
+    return None
+
+
+def _persist_broken_lineage_binding(
+    session_path: Path,
+    expected: dict[str, object],
+    *,
+    reason: str,
+) -> dict[str, object] | None:
+    """Quarantine only the resume binding and preserve all rollout files."""
+    lock_path = session_path.with_name(session_path.name + '.binding.lock')
+    with file_lock(lock_path):
+        persisted = read_session_payload(session_path)
+        if persisted is None or _binding_identity(persisted) != _binding_identity(expected):
+            return None
+        updated = dict(persisted)
+        rejected_id = str(updated.get('codex_session_id') or '').strip()
+        rejected_path = str(updated.get('codex_session_path') or '').strip()
+        template = resume_template_command(updated)
+        clean_command = strip_resume_start_cmd(template)
+        updated.pop('codex_session_id', None)
+        updated.pop('codex_session_path', None)
+        updated.pop('old_codex_session_id', None)
+        updated.pop('old_codex_session_path', None)
+        if clean_command:
+            updated['start_cmd'] = clean_command
+            updated['codex_start_cmd'] = clean_command
+        else:
+            updated.pop('start_cmd', None)
+            updated.pop('codex_start_cmd', None)
+        updated['rejected_codex_session_id'] = rejected_id
+        updated['rejected_codex_session_path'] = rejected_path
+        updated['codex_binding_recovery_reason'] = reason
+        updated['ccb_continuity_status'] = 'recovery_required'
+        updated['ccb_resume_compatibility'] = 'broken_native_lineage'
         remember_bound_session_authority(updated)
         payload = json.dumps(updated, ensure_ascii=False, indent=2) + '\n'
         ok, _error = safe_write_session(session_path, payload)

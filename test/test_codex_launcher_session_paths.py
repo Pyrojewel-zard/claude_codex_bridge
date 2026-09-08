@@ -229,6 +229,48 @@ def test_load_resume_session_id_allows_missing_rollout(tmp_path: Path) -> None:
     assert load_resume_session_id(spec, agent_dir) == 'sid-missing'
 
 
+def test_load_resume_session_id_quarantines_missing_paginated_lineage(tmp_path: Path) -> None:
+    ccb_dir = tmp_path / '.ccb'
+    agent_dir = _provider_runtime_dir(ccb_dir)
+    source_rollout = _rollout(
+        agent_dir,
+        'sid-source',
+        work_dir=tmp_path / 'repo',
+        parent='sid-missing-source',
+    )
+    rollout = _rollout(
+        agent_dir,
+        'sid-child',
+        work_dir=tmp_path / 'repo',
+        parent='sid-source',
+    )
+    session_file = ccb_dir / '.codex-agent1-session'
+    _write_session_file(ccb_dir, 'agent1', 'sid-child', rollout)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_session_id': 'sid-child',
+                'codex_session_root': str(rollout.parents[3]),
+                'codex_session_path': str(rollout),
+                'start_cmd': 'codex resume sid-child',
+                'codex_start_cmd': 'codex resume sid-child',
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    assert load_resume_session_id(SimpleNamespace(name='agent1'), agent_dir) is None
+    assert source_rollout.is_file()
+    assert rollout.is_file()
+    persisted = json.loads(session_file.read_text(encoding='utf-8'))
+    assert 'codex_session_id' not in persisted
+    assert 'codex_session_path' not in persisted
+    assert persisted['rejected_codex_session_id'] == 'sid-child'
+    assert persisted['codex_binding_recovery_reason'] == 'missing_source_rollout'
+    assert persisted['ccb_continuity_status'] == 'recovery_required'
+    assert 'resume' not in persisted['start_cmd']
+
+
 def test_load_linked_continuation_uses_latest_unambiguous_native_descendant(tmp_path: Path) -> None:
     ccb_dir = tmp_path / '.ccb'
     work_dir = tmp_path / 'repo'

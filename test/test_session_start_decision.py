@@ -306,6 +306,13 @@ def test_shared_payload_preserves_descendant_selection(launch, shape, linked):
         fields = {**fields, 'codex_session_id': 'old', 'codex_session_path': str(old)}
     _binding(launch, **fields)
     decision, args = _resolve(launch)
+    if shape == 'cycle' and not linked:
+        assert decision.reason is Reason.UNKNOWN_INVALID and args == []
+        persisted = json.loads(launch.binding.read_text())
+        assert persisted['codex_binding_recovery_reason'] == 'lineage_cycle'
+        assert persisted['ccb_continuity_status'] == 'recovery_required'
+        assert old.is_file() and child.is_file()
+        return
     assert decision.reason is (Reason.FORK if linked else Reason.RESUME)
     expected_id = 'child' if shape == 'linear' else 'old'
     assert args == ['fork' if linked else 'resume', expected_id]

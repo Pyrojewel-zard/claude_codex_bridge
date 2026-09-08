@@ -471,7 +471,14 @@ def _best_effort_query_pane_pid(tmux_backend, namespace_ref, pane_id: str) -> in
     if not hasattr(tmux_backend, 'pane_process_info'):
         return None
     session_name = str((namespace_ref or {}).get('session_name') or '').strip() or None
-    pane_ref = {'backend_impl': 'herdr', 'pane_id': pane_id, 'session_name': session_name}
+    # tmux APIs take the native ``%N`` pane target; Herdr APIs take a pane
+    # reference object.  Keep the best-effort probe backend-neutral so tmux
+    # provider sessions can also contribute a runtime identity.
+    pane_ref = (
+        pane_id
+        if str(pane_id or '').strip().startswith('%')
+        else {'backend_impl': 'herdr', 'pane_id': pane_id, 'session_name': session_name}
+    )
     try:
         info = tmux_backend.pane_process_info(pane_ref)
     except Exception:

@@ -139,6 +139,15 @@ def _runtime(**overrides) -> AgentRuntime:
     return AgentRuntime(**values)
 
 
+@pytest.mark.parametrize('backend', ['tmux', 'herdr'])
+def test_best_effort_resolve_pane_pid_supports_pane_backends(backend: str) -> None:
+    assert agent_runtime_module._best_effort_resolve_pane_pid(
+        pane_id='%7',
+        namespace_backend_impl=backend,
+        resolver=lambda pane_id: 4321 if pane_id == '%7' else None,
+    ) == 4321
+
+
 def test_start_agent_runtime_degrades_unresolved_stale_binding() -> None:
     runtime_service = _RuntimeService()
 

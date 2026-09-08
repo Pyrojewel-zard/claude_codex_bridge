@@ -47,6 +47,9 @@ class TmuxBackendPaneQueryMixin:
     def list_panes_by_user_options(self, expected: dict[str, str]) -> list[str]:
         return self._services.pane_service.list_panes_by_user_options(expected)
 
+    def pane_process_info(self, pane_id: str) -> dict[str, int] | None:
+        return self._services.pane_service.pane_process_info(pane_id)
+
     def describe_pane(
         self,
         pane_id: str,

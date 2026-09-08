@@ -57,6 +57,25 @@ def describe_pane(service, pane_id: str, *, user_options: tuple[str, ...] = ()) 
     return describe_pane_output(getattr(cp, "stdout", "") or "", normalized_options)
 
 
+def pane_process_info(service, pane_id: str) -> dict[str, int] | None:
+    """Return the tmux pane's owning shell pid when it is available."""
+    if not service.looks_like_pane_id_fn(pane_id):
+        return None
+    cp = run_tmux_capture(
+        service,
+        ["display-message", "-p", "-t", pane_id, "#{pane_pid}"],
+        timeout=0.5,
+    )
+    if cp is None or getattr(cp, "returncode", 1) != 0:
+        return None
+    raw_pid = (getattr(cp, "stdout", "") or "").strip()
+    try:
+        pid = int(raw_pid)
+    except (TypeError, ValueError):
+        return None
+    return {"foreground_pid": pid} if pid > 0 else None
+
+
 def get_pane_content(service, pane_id: str, *, lines: int = 20) -> str | None:
     if not pane_id:
         return None
