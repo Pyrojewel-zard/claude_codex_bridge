@@ -32,6 +32,12 @@ from mobile_gateway import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _anchor_runtime_state_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin runtime state under .ccb for project-anchored path assertions."""
+    monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
+
+
 class _FakeCcbdClient:
     def __init__(
         self,
