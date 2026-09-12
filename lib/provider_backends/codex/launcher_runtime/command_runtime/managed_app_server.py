@@ -9,6 +9,22 @@ import subprocess
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 
 
+_REMOTE_RESUME_PERMISSION_OPTIONS_WITH_VALUES = frozenset(
+    {
+        '-a',
+        '--ask-for-approval',
+        '-s',
+        '--sandbox',
+    }
+)
+_REMOTE_RESUME_PERMISSION_OPTIONS = frozenset(
+    {
+        '--approve-for-me',
+        '--dangerously-bypass-approvals-and-sandbox',
+    }
+)
+
+
 def supports_managed_app_server(provider_start: tuple[str, ...]) -> bool:
     if len(provider_start) != 1:
         return False
@@ -112,7 +128,12 @@ def build_managed_app_server_command(
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     socket_path = artifacts.app_server_socket
     socket_url = f'unix://{socket_path}'
-    remote_args = [base_args[0], '--remote', socket_url, *base_args[1:]]
+    remote_base_args = (
+        _strip_remote_resume_permission_overrides(base_args)
+        if continuation_mode == 'resume'
+        else list(base_args)
+    )
+    remote_args = [remote_base_args[0], '--remote', socket_url, *remote_base_args[1:]]
     local_args = list(base_args)
     command = _managed_shell_command(
         remote_args=remote_args,
@@ -129,6 +150,28 @@ def build_managed_app_server_command(
         'codex_app_server_remote_marker': str(artifacts.app_server_remote_marker),
         'codex_app_server_command': [executable, 'app-server', '--listen', socket_url],
     }
+
+
+def _strip_remote_resume_permission_overrides(args: list[str]) -> list[str]:
+    sanitized: list[str] = []
+    index = 0
+    while index < len(args):
+        token = str(args[index])
+        if token in _REMOTE_RESUME_PERMISSION_OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        if token in _REMOTE_RESUME_PERMISSION_OPTIONS:
+            index += 1
+            continue
+        if any(
+            token.startswith(f'{option}=')
+            for option in _REMOTE_RESUME_PERMISSION_OPTIONS_WITH_VALUES
+        ):
+            index += 1
+            continue
+        sanitized.append(args[index])
+        index += 1
+    return sanitized
 
 
 def _split_continuation(codex_args: list[str]) -> tuple[list[str], str, str]:

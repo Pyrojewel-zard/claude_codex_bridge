@@ -411,6 +411,60 @@ def test_managed_launcher_preserves_resume_rewrites_and_fallback(tmp_path: Path)
     assert 'CCB_CODEX_MANAGED_REMOTE=1' in stripped
 
 
+def test_managed_launcher_removes_permission_overrides_from_remote_resume_only(tmp_path: Path) -> None:
+    session_id = '12345678-1234-1234-1234-123456789abc'
+    command, _state = build_managed_app_server_command(
+        [
+            'codex',
+            '--ask-for-approval',
+            'never',
+            '-s',
+            'danger-full-access',
+            '--sandbox=read-only',
+            '--approve-for-me',
+            '--dangerously-bypass-approvals-and-sandbox',
+            '--dangerously-bypass-hook-trust',
+            '--profile',
+            'ccb',
+            'resume',
+            session_id,
+        ],
+        runtime_dir=tmp_path,
+    )
+
+    remote_exec = (
+        f'exec codex --remote unix://{tmp_path / "app-server.sock"} '
+        f'--dangerously-bypass-hook-trust --profile ccb resume "$CCB_CODEX_RESUME_ID"'
+    )
+    local_exec = (
+        'exec codex --ask-for-approval never -s danger-full-access '
+        '--sandbox=read-only --approve-for-me '
+        '--dangerously-bypass-approvals-and-sandbox '
+        '--dangerously-bypass-hook-trust --profile ccb '
+        'resume "$CCB_CODEX_RESUME_ID"'
+    )
+
+    assert remote_exec in command
+    assert local_exec in command
+
+    fresh_command, _fresh_state = build_managed_app_server_command(
+        [
+            'codex',
+            '--ask-for-approval',
+            'never',
+            '-s',
+            'danger-full-access',
+            '--dangerously-bypass-hook-trust',
+        ],
+        runtime_dir=tmp_path / 'fresh',
+    )
+    assert (
+        f'codex --remote unix://{tmp_path / "fresh" / "app-server.sock"} '
+        '--ask-for-approval never -s danger-full-access '
+        '--dangerously-bypass-hook-trust'
+    ) in fresh_command
+
+
 def test_managed_launcher_rejects_unverified_remote_fork_combination(tmp_path: Path) -> None:
     session_id = '12345678-1234-1234-1234-123456789abc'
 
