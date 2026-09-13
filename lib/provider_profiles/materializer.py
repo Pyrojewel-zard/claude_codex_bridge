@@ -222,7 +222,6 @@ def _materialize_codex_profile(
             memory_projection_marker_path=runtime_dir / 'codex-memory-projection.json',
             model=spec.model,
             model_catalog_json=profile_spec.env.get('model_catalog_json'),
-            permission_mode=spec.permission_default.value,
         )
 
     return ResolvedProviderProfile(

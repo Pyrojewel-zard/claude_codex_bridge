@@ -8,7 +8,6 @@ import shlex
 import sys
 
 from agents.models import RuntimeMode
-from agents.policy import resolve_effective_permission_mode
 from provider_core.one_way_inheritance import ensure_private_directory
 from provider_core.source_home import current_provider_source_home
 from provider_backends.claude.launcher_runtime.legacy_binary_cache import detach_legacy_claude_binary_cache
@@ -245,10 +244,6 @@ def _materialize_provider_home(
         )
         return
     if provider == 'codex':
-        permission_mode = resolve_effective_permission_mode(
-            spec.permission_default,
-            cli_auto_permission=auto_permission,
-        )
         materialize_codex_home_config(
             resolve_codex_home_layout(runtime_dir, resolved_profile).codex_home,
             profile=resolved_profile,
@@ -264,7 +259,6 @@ def _materialize_provider_home(
             # than read out of the possibly-stale profile env.
             model=spec.model,
             model_catalog_json=spec.provider_profile.env.get('model_catalog_json'),
-            permission_mode=permission_mode.value,
         )
         return
     if provider == 'droid':

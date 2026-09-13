@@ -8,6 +8,8 @@ import subprocess
 
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 
+from .recovery import resume_with_fresh_fallback
+
 
 _REMOTE_RESUME_PERMISSION_OPTIONS_WITH_VALUES = frozenset(
     {
@@ -21,6 +23,7 @@ _REMOTE_RESUME_PERMISSION_OPTIONS = frozenset(
     {
         '--approve-for-me',
         '--dangerously-bypass-approvals-and-sandbox',
+        '--yolo',
     }
 )
 
@@ -160,6 +163,10 @@ def build_managed_app_server_command(
 
 
 def _strip_remote_resume_permission_overrides(args: list[str]) -> list[str]:
+    return strip_codex_permission_overrides(args)
+
+
+def strip_codex_permission_overrides(args: list[str]) -> list[str]:
     sanitized: list[str] = []
     index = 0
     while index < len(args):
@@ -215,11 +222,11 @@ def _managed_shell_command(
     remote_fresh = ' '.join(shlex.quote(str(part)) for part in remote_fresh_args)
     local = ' '.join(shlex.quote(str(part)) for part in local_args)
     mode = continuation_mode if continuation_mode in {'resume', 'fork'} else 'resume'
-    remote_start = _resume_with_fresh_fallback(
+    remote_start = resume_with_fresh_fallback(
         resume_command=f'{remote_resume} {mode} "$CCB_CODEX_RESUME_ID"',
         fresh_command=remote_fresh,
     )
-    local_start = _resume_with_fresh_fallback(
+    local_start = resume_with_fresh_fallback(
         resume_command=f'{local} {mode} "$CCB_CODEX_RESUME_ID"',
         fresh_command=local,
     )
@@ -246,26 +253,13 @@ def _managed_shell_command(
     )
 
 
-def _resume_with_fresh_fallback(*, resume_command: str, fresh_command: str) -> str:
-    """Run one resume attempt, then replace it with a fresh context on failure.
-
-    Codex can reject a saved remote task before opening an editable TUI.  The
-    shell owns the interactive process, so this is the only place where we can
-    recover without asking CCB to create a second pane.  Signals used for a
-    deliberate user/CCB stop are preserved and never trigger a new context.
-    """
-    return (
-        f'if ( {resume_command} ); then exit 0; else '
-        '_ccb_resume_status=$?; '
-        'case "$_ccb_resume_status" in 130|131|143) exit "$_ccb_resume_status";; esac; '
-        "printf '%s\\n' 'CCB: Codex resume failed; starting a fresh context.' >&2; "
-        'export CCB_CODEX_RESUME_FALLBACK=1; '
-        f'exec {fresh_command}; fi'
-    )
+# Keep the historical private import stable for existing callers/tests.
+_resume_with_fresh_fallback = resume_with_fresh_fallback
 
 
 __all__ = [
     'build_managed_app_server_command',
+    'strip_codex_permission_overrides',
     'supports_managed_app_server',
     'supports_session_fork',
 ]

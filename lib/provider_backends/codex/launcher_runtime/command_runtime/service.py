@@ -24,6 +24,8 @@ from provider_profiles.codex_home_config import codex_api_authority
 from ..session_paths import session_file_for_runtime_dir
 from ..session_decision import resolve_session_start
 from provider_backends.session_start import SessionStartReason
+from .managed_app_server import _split_continuation, strip_codex_permission_overrides
+from .recovery import resume_with_fresh_fallback
 
 
 def build_start_cmd(
@@ -106,6 +108,7 @@ def build_start_cmd(
     if managed_enabled:
         cmd, managed_state = build_managed_app_server_command_fn(codex_args, runtime_dir=runtime_dir)
         launch_context.update(managed_state)
+        launch_context['codex_launch_transport'] = 'managed_app_server'
         launch_context['codex_app_server_env'] = dict(env_map)
         launch_context['codex_app_server_unset_env'] = [
             part.split(None, 1)[1]
@@ -114,6 +117,7 @@ def build_start_cmd(
         ]
     else:
         launch_context['codex_app_server_enabled'] = False
+        launch_context['codex_launch_transport'] = 'hapi' if hapi_launch_context else 'local'
         if hapi_launch_context:
             wrapper_argv = decorate_hapi_argv(
                 command=str(hapi_launch_context.get('command') or 'hapi'),
@@ -126,9 +130,11 @@ def build_start_cmd(
                 launch_session_id=launch_session_id,
             )
         else:
-            cmd = ' '.join(shlex.quote(str(part)) for part in codex_args)
-        if not hapi_launch_context:
-            cmd = apply_provider_command_template(cmd, spec.provider_command_template)
+            cmd = _build_local_codex_command(
+                codex_args,
+                provider_command_template=spec.provider_command_template,
+                enable_fallback=bool(command.auto_permission),
+            )
     if prefix_parts:
         return f"{'; '.join(prefix_parts)}; {cmd}"
     return cmd
@@ -168,25 +174,29 @@ def _codex_args(
 ) -> list[str]:
     codex_args = list(provider_start_parts)
     codex_args.extend(['-c', 'disable_paste_burst=true'])
-    if role_command_policy_requires_enforcement(role_command_policy_for_spec(spec)):
+    role_policy = role_command_policy_for_spec(spec)
+    role_policy_restricted = role_command_policy_requires_enforcement(role_policy)
+    if role_policy_restricted:
         codex_args.extend(['--ask-for-approval', 'never', '--sandbox', 'read-only'])
     elif command.auto_permission:
+        codex_args = strip_codex_permission_overrides(codex_args)
         codex_args.extend(
             [
-                '--dangerously-bypass-approvals-and-sandbox',
+                '--yolo',
                 '--dangerously-bypass-hook-trust',
             ]
         )
-    codex_args.extend(spec.startup_args)
+    startup_args = list(spec.startup_args)
+    if command.auto_permission and not role_policy_restricted:
+        startup_args = strip_codex_permission_overrides(startup_args)
+        startup_args = [
+            token for token in startup_args
+            if token != '--dangerously-bypass-hook-trust'
+        ]
+    codex_args.extend(startup_args)
     decision, session_args = resolve_session_start(
         spec, runtime_dir,
-        # Remote resume restores the old task policy and rejects permission
-        # overrides. Auto mode must start a clean context locally so the
-        # explicit full-access option applies to this process.
-        restore=(
-            not bool(command.auto_permission)
-            and should_restore_provider_history(spec.restore_default, cli_restore=command.restore)
-        ),
+        restore=should_restore_provider_history(spec.restore_default, cli_restore=command.restore),
         profile=profile,
         authority_fingerprint_fn=current_provider_authority_fingerprint,
         memory_fingerprint_fn=current_memory_projection_fingerprint,
@@ -199,10 +209,34 @@ def _codex_args(
     )
     codex_args.extend(session_args)
     if launch_context is not None:
+        launch_context['codex_auto_permission'] = bool(command.auto_permission)
         launch_context['session_start_decision'] = decision
         if decision.reason is SessionStartReason.FORK:
             launch_context['ccb_continuation_launch_mode'] = 'fork'
     return codex_args
+
+
+def _build_local_codex_command(
+    codex_args: list[str],
+    *,
+    provider_command_template: str | None,
+    enable_fallback: bool,
+) -> str:
+    base_args, continuation_mode, session_id = _split_continuation(codex_args)
+    if not continuation_mode or not enable_fallback:
+        return _render_local_codex_args(codex_args, provider_command_template)
+    resume_args = [*base_args, continuation_mode, session_id]
+    resume_command = _render_local_codex_args(resume_args, provider_command_template)
+    fresh_command = _render_local_codex_args(base_args, provider_command_template)
+    return resume_with_fresh_fallback(
+        resume_command=resume_command,
+        fresh_command=fresh_command,
+    )
+
+
+def _render_local_codex_args(args: list[str], provider_command_template: str | None) -> str:
+    command = ' '.join(shlex.quote(str(part)) for part in args)
+    return apply_provider_command_template(command, provider_command_template)
 
 
 def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_home_overrides: dict[str, str]) -> dict[str, str]:

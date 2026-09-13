@@ -871,6 +871,8 @@ def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path
     assert payload['bridge_log'] == str(ctx.paths.agent_dir('agent1') / 'provider-runtime' / 'codex' / 'bridge.log')
     assert payload['codex_home'] == str(expected_codex_home)
     assert payload['codex_session_root'] == str(expected_session_root)
+    assert payload['codex_launch_transport'] in {'local', 'managed_app_server'}
+    assert payload['codex_auto_permission'] is False
     assert payload['pane_title_marker'].startswith('CCB-agent1-')
     assert payload['tmux_socket_name'] == 'sock-agent'
     assert payload['tmux_socket_path'] == '/tmp/ccb-agent.sock'
@@ -3081,13 +3083,139 @@ def test_codex_launcher_build_start_cmd_uses_native_auto_permission_flags(monkey
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-auto-permission')
 
-    assert '--dangerously-bypass-approvals-and-sandbox' in cmd
+    assert '--yolo' in cmd
+    assert '--dangerously-bypass-approvals-and-sandbox' not in cmd
     assert '--ask-for-approval never' not in cmd
     assert '--sandbox danger-full-access' not in cmd
     assert '--dangerously-bypass-hook-trust' in cmd
     assert 'trust_level=' not in cmd
     assert 'approval_policy=' not in cmd
     assert 'sandbox_mode=' not in cmd
+
+
+def test_codex_auto_permission_strips_conflicting_provider_flags(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime-codex-auto-normalized'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(
+        'CODEX_START_CMD',
+        'codex --ask-for-approval never --sandbox workspace-write --yolo '
+        '--dangerously-bypass-approvals-and-sandbox',
+    )
+
+    spec = _spec(
+        'agent1',
+        startup_args=(
+            '--ask-for-approval',
+            'on-request',
+            '--sandbox=read-only',
+            '--yolo',
+        ),
+    )
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=True)
+
+    cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-auto-normalized')
+    visible_parts = shlex.split(cmd.rsplit('; ', 1)[-1])
+
+    assert visible_parts.count('--yolo') == 1
+    assert '--ask-for-approval' not in visible_parts
+    assert '--sandbox' not in visible_parts
+    assert '--sandbox=read-only' not in visible_parts
+    assert '--dangerously-bypass-approvals-and-sandbox' not in visible_parts
+
+
+def test_codex_restricted_role_keeps_read_only_policy_over_auto_permission(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime-codex-restricted-role'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    monkeypatch.setattr(
+        codex_command_service,
+        'role_command_policy_for_spec',
+        lambda _spec: SimpleNamespace(mode='deny_all_except', enforcement='required'),
+    )
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=True)
+
+    cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-restricted-role')
+    visible_parts = shlex.split(cmd.rsplit('; ', 1)[-1])
+
+    assert visible_parts[visible_parts.index('--ask-for-approval') + 1] == 'never'
+    assert visible_parts[visible_parts.index('--sandbox') + 1] == 'read-only'
+    assert '--yolo' not in visible_parts
+
+
+def test_codex_auto_resume_uses_local_fresh_fallback(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-auto-resume'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    ccb_dir = project_root / '.ccb'
+    ccb_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    fake_codex = tmp_path / 'fake-codex'
+    calls = tmp_path / 'codex-calls.log'
+    fake_codex.write_text(
+        '#!/bin/sh\n'
+        'printf "%s\\n" "$*" >> "$CCB_TEST_CALLS"\n'
+        'case " $* " in *" resume auto-resume-session "*) exit 17;; esac\n'
+        'exit 0\n',
+        encoding='utf-8',
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv('CODEX_START_CMD', str(fake_codex))
+
+    spec = _spec('agent1')
+    prepared = _prepare_codex_home_for_test(spec, runtime_dir)
+    marker = json.loads((runtime_dir / 'codex-memory-projection.json').read_text(encoding='utf-8'))
+    fingerprint = current_provider_authority_fingerprint(None, runtime_dir=runtime_dir)
+    (ccb_dir / '.codex-agent1-session').write_text(
+        json.dumps(
+            {
+                'codex_session_id': 'auto-resume-session',
+                'codex_memory_projection_sha256': marker['sha256'],
+                'codex_provider_authority_fingerprint': fingerprint,
+                'codex_session_authority_fingerprint': fingerprint,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=True)
+
+    cmd = codex_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-auto-resume',
+        prepared_state=prepared,
+    )
+
+    assert '--remote' not in cmd
+    assert 'CCB_CODEX_RESUME_FALLBACK=1' in cmd
+    assert 'resume auto-resume-session' in cmd
+    assert 'starting a fresh context' in cmd
+    assert prepared['codex_launch_transport'] == 'local'
+    assert prepared['codex_auto_permission'] is True
+
+    result = subprocess.run(
+        ['bash', '-c', cmd],
+        env={**os.environ, 'CCB_TEST_CALLS': str(calls)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert calls.read_text(encoding='utf-8').splitlines() == [
+        '-c disable_paste_burst=true --yolo --dangerously-bypass-hook-trust resume auto-resume-session',
+        '-c disable_paste_burst=true --yolo --dangerously-bypass-hook-trust',
+    ]
 
 
 def test_codex_launcher_build_start_cmd_skips_hook_trust_bypass_in_safe_mode(monkeypatch, tmp_path: Path) -> None:

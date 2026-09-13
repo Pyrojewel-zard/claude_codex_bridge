@@ -104,6 +104,14 @@ def build_session_payload(
         'start_cmd': start_cmd,
     }
     payload['codex_session_root'] = str(layout.session_root)
+    payload['codex_launch_transport'] = str(
+        prepared_state.get('codex_launch_transport') or (
+            'managed_app_server'
+            if bool(prepared_state.get('codex_app_server_enabled'))
+            else 'local'
+        )
+    )
+    payload['codex_auto_permission'] = bool(prepared_state.get('codex_auto_permission'))
     if layout.codex_home is not None:
         payload['codex_home'] = str(layout.codex_home)
     memory_projection_fingerprint = current_memory_projection_fingerprint(runtime_dir)
