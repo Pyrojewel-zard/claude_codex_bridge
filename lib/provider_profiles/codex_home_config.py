@@ -154,6 +154,7 @@ def materialize_codex_home_config(
     memory_projection_marker_path: Path | None = None,
     model: str | None = None,
     model_catalog_json: str | None = None,
+    permission_mode: str | None = None,
 ) -> Path:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
@@ -227,6 +228,16 @@ def materialize_codex_home_config(
             project_root=project_root,
             workspace_path=workspace_path,
         )
+
+    permission_overrides = _codex_permission_overrides(permission_mode)
+    if permission_overrides:
+        if raw_config_text is None:
+            payload.update(permission_overrides)
+        else:
+            raw_config_text = _merge_managed_codex_permission_overrides(
+                raw_config_text,
+                permission_overrides,
+            )
 
     role_command_applied = _apply_role_command_mcp_server(
         payload,
@@ -835,6 +846,50 @@ def _merge_managed_codex_startup_update_override(text: str) -> str:
     while insert_at > 0 and not prefix[insert_at - 1].strip():
         insert_at -= 1
     prefix[insert_at:insert_at] = [f'{_MANAGED_CODEX_STARTUP_UPDATE_KEY} = false']
+    merged = [*prefix, *lines[first_table:]]
+    return '\n'.join(merged).rstrip() + '\n'
+
+
+def _codex_permission_overrides(permission_mode: object) -> dict[str, str]:
+    normalized = getattr(permission_mode, 'value', permission_mode)
+    normalized = str(normalized or '').strip().lower()
+    if not normalized or normalized == 'manual':
+        return {}
+    if normalized == 'auto':
+        return {
+            'approval_policy': 'never',
+            'sandbox_mode': 'danger-full-access',
+        }
+    if normalized == 'readonly':
+        return {
+            'approval_policy': 'never',
+            'sandbox_mode': 'read-only',
+        }
+    raise ValueError(f'unsupported Codex permission mode: {normalized}')
+
+
+def _merge_managed_codex_permission_overrides(
+    text: str,
+    overrides: dict[str, str],
+) -> str:
+    lines = text.splitlines()
+    first_table = next(
+        (index for index, line in enumerate(lines) if _TOML_TABLE_HEADER_RE.match(line)),
+        len(lines),
+    )
+    keys = set(overrides)
+    prefix = [
+        line
+        for line in lines[:first_table]
+        if _toml_key_name(line) not in keys
+    ]
+    insert_at = len(prefix)
+    while insert_at > 0 and not prefix[insert_at - 1].strip():
+        insert_at -= 1
+    prefix[insert_at:insert_at] = [
+        f'{key} = {json.dumps(value)}'
+        for key, value in overrides.items()
+    ]
     merged = [*prefix, *lines[first_table:]]
     return '\n'.join(merged).rstrip() + '\n'
 
