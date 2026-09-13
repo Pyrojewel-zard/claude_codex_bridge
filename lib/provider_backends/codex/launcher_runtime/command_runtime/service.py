@@ -98,6 +98,7 @@ def build_start_cmd(
         # a native fork continuation.  Keep authority-changing forks on the
         # native local CLI until the remote surface proves fork semantics.
         and str(launch_context.get('ccb_continuation_launch_mode') or '').strip() != 'fork'
+        and not bool(command.auto_permission)
         and supports_managed_app_server_fn is not None
         and build_managed_app_server_command_fn is not None
         and supports_managed_app_server_fn(tuple(provider_start_parts))
@@ -176,13 +177,20 @@ def _codex_args(
                 'never',
                 '--sandbox',
                 'danger-full-access',
+                '--dangerously-bypass-approvals-and-sandbox',
                 '--dangerously-bypass-hook-trust',
             ]
         )
     codex_args.extend(spec.startup_args)
     decision, session_args = resolve_session_start(
         spec, runtime_dir,
-        restore=should_restore_provider_history(spec.restore_default, cli_restore=command.restore),
+        # Remote resume restores the old task policy and rejects permission
+        # overrides. Auto mode must start a clean context locally so the
+        # explicit full-access option applies to this process.
+        restore=(
+            not bool(command.auto_permission)
+            and should_restore_provider_history(spec.restore_default, cli_restore=command.restore)
+        ),
         profile=profile,
         authority_fingerprint_fn=current_provider_authority_fingerprint,
         memory_fingerprint_fn=current_memory_projection_fingerprint,
