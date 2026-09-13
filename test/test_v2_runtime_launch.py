@@ -3081,8 +3081,9 @@ def test_codex_launcher_build_start_cmd_uses_native_auto_permission_flags(monkey
 
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-auto-permission')
 
-    assert '--ask-for-approval never' in cmd
-    assert '--sandbox danger-full-access' in cmd
+    assert '--dangerously-bypass-approvals-and-sandbox' in cmd
+    assert '--ask-for-approval never' not in cmd
+    assert '--sandbox danger-full-access' not in cmd
     assert '--dangerously-bypass-hook-trust' in cmd
     assert 'trust_level=' not in cmd
     assert 'approval_policy=' not in cmd

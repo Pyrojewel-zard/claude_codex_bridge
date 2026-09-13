@@ -173,10 +173,6 @@ def _codex_args(
     elif command.auto_permission:
         codex_args.extend(
             [
-                '--ask-for-approval',
-                'never',
-                '--sandbox',
-                'danger-full-access',
                 '--dangerously-bypass-approvals-and-sandbox',
                 '--dangerously-bypass-hook-trust',
             ]
