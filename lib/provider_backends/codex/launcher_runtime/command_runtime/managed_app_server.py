@@ -128,15 +128,22 @@ def build_managed_app_server_command(
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     socket_path = artifacts.app_server_socket
     socket_url = f'unix://{socket_path}'
-    remote_base_args = (
+    remote_resume_base_args = (
         _strip_remote_resume_permission_overrides(base_args)
         if continuation_mode == 'resume'
         else list(base_args)
     )
-    remote_args = [remote_base_args[0], '--remote', socket_url, *remote_base_args[1:]]
+    remote_resume_args = [
+        remote_resume_base_args[0],
+        '--remote',
+        socket_url,
+        *remote_resume_base_args[1:],
+    ]
+    remote_fresh_args = [base_args[0], '--remote', socket_url, *base_args[1:]]
     local_args = list(base_args)
     command = _managed_shell_command(
-        remote_args=remote_args,
+        remote_resume_args=remote_resume_args,
+        remote_fresh_args=remote_fresh_args,
         local_args=local_args,
         socket_path=socket_path,
         remote_marker=artifacts.app_server_remote_marker,
@@ -193,7 +200,8 @@ def _split_resume(codex_args: list[str]) -> tuple[list[str], str]:
 
 def _managed_shell_command(
     *,
-    remote_args: list[str],
+    remote_resume_args: list[str],
+    remote_fresh_args: list[str],
     local_args: list[str],
     socket_path: Path,
     remote_marker: Path,
@@ -203,9 +211,18 @@ def _managed_shell_command(
     quoted_socket = shlex.quote(str(socket_path))
     quoted_marker = shlex.quote(str(remote_marker))
     quoted_resume = shlex.quote(resume_id)
-    remote = ' '.join(shlex.quote(str(part)) for part in remote_args)
+    remote_resume = ' '.join(shlex.quote(str(part)) for part in remote_resume_args)
+    remote_fresh = ' '.join(shlex.quote(str(part)) for part in remote_fresh_args)
     local = ' '.join(shlex.quote(str(part)) for part in local_args)
     mode = continuation_mode if continuation_mode in {'resume', 'fork'} else 'resume'
+    remote_start = _resume_with_fresh_fallback(
+        resume_command=f'{remote_resume} {mode} "$CCB_CODEX_RESUME_ID"',
+        fresh_command=remote_fresh,
+    )
+    local_start = _resume_with_fresh_fallback(
+        resume_command=f'{local} {mode} "$CCB_CODEX_RESUME_ID"',
+        fresh_command=local,
+    )
     return '; '.join(
         (
             f'export CCB_CODEX_MANAGED_REMOTE=1 CCB_CODEX_RESUME_ID={quoted_resume}',
@@ -218,14 +235,32 @@ def _managed_shell_command(
             (
                 f'if [ -S {quoted_socket} ]; then '
                 f"printf '%s\\n' {quoted_socket} > {quoted_marker}; "
-                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then exec {remote} {mode} "$CCB_CODEX_RESUME_ID"; '
-                f'else exec {remote}; fi; fi'
+                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then {remote_start}; '
+                f'else exec {remote_fresh}; fi; fi'
             ),
             (
-                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then exec {local} {mode} "$CCB_CODEX_RESUME_ID"; '
+                f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then {local_start}; '
                 f'else exec {local}; fi'
             ),
         )
+    )
+
+
+def _resume_with_fresh_fallback(*, resume_command: str, fresh_command: str) -> str:
+    """Run one resume attempt, then replace it with a fresh context on failure.
+
+    Codex can reject a saved remote task before opening an editable TUI.  The
+    shell owns the interactive process, so this is the only place where we can
+    recover without asking CCB to create a second pane.  Signals used for a
+    deliberate user/CCB stop are preserved and never trigger a new context.
+    """
+    return (
+        f'if ( {resume_command} ); then exit 0; else '
+        '_ccb_resume_status=$?; '
+        'case "$_ccb_resume_status" in 130|131|143) exit "$_ccb_resume_status";; esac; '
+        "printf '%s\\n' 'CCB: Codex resume failed; starting a fresh context.' >&2; "
+        'export CCB_CODEX_RESUME_FALLBACK=1; '
+        f'exec {fresh_command}; fi'
     )
 
 

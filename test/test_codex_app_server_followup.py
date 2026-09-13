@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import socket
 import subprocess
 import struct
@@ -20,6 +21,7 @@ from provider_backends.codex.app_server_followup import steer_active_turn
 from provider_backends.codex.bridge_runtime.app_server import ManagedCodexAppServer
 from provider_backends.codex.execution import CodexProviderAdapter
 from provider_backends.codex.launcher_runtime.command_runtime.managed_app_server import (
+    _resume_with_fresh_fallback,
     build_managed_app_server_command,
     supports_managed_app_server,
     supports_session_fork,
@@ -432,20 +434,34 @@ def test_managed_launcher_removes_permission_overrides_from_remote_resume_only(t
         runtime_dir=tmp_path,
     )
 
-    remote_exec = (
-        f'exec codex --remote unix://{tmp_path / "app-server.sock"} '
-        f'--dangerously-bypass-hook-trust --profile ccb resume "$CCB_CODEX_RESUME_ID"'
+    remote_resume = (
+        f'if ( codex --remote unix://{tmp_path / "app-server.sock"} '
+        f'--dangerously-bypass-hook-trust --profile ccb resume "$CCB_CODEX_RESUME_ID" ); then exit 0; else'
     )
-    local_exec = (
-        'exec codex --ask-for-approval never -s danger-full-access '
+    remote_fresh = (
+        f'exec codex --remote unix://{tmp_path / "app-server.sock"} '
+        f'--ask-for-approval never -s danger-full-access --sandbox=read-only '
+        f'--approve-for-me --dangerously-bypass-approvals-and-sandbox '
+        f'--dangerously-bypass-hook-trust --profile ccb'
+    )
+    local_resume = (
+        'if ( codex --ask-for-approval never -s danger-full-access '
         '--sandbox=read-only --approve-for-me '
         '--dangerously-bypass-approvals-and-sandbox '
         '--dangerously-bypass-hook-trust --profile ccb '
-        'resume "$CCB_CODEX_RESUME_ID"'
+        'resume "$CCB_CODEX_RESUME_ID" ); then exit 0; else'
+    )
+    local_fresh = (
+        'exec codex --ask-for-approval never -s danger-full-access '
+        '--sandbox=read-only --approve-for-me '
+        '--dangerously-bypass-approvals-and-sandbox '
+        '--dangerously-bypass-hook-trust --profile ccb'
     )
 
-    assert remote_exec in command
-    assert local_exec in command
+    assert remote_resume in command
+    assert remote_fresh in command
+    assert local_resume in command
+    assert local_fresh in command
 
     fresh_command, _fresh_state = build_managed_app_server_command(
         [
@@ -463,6 +479,38 @@ def test_managed_launcher_removes_permission_overrides_from_remote_resume_only(t
         '--ask-for-approval never -s danger-full-access '
         '--dangerously-bypass-hook-trust'
     ) in fresh_command
+
+
+def test_resume_fallback_starts_one_fresh_context_after_resume_failure(tmp_path: Path) -> None:
+    fake_codex = tmp_path / 'fake-codex'
+    calls = tmp_path / 'calls.log'
+    fake_codex.write_text(
+        '#!/bin/sh\n'
+        'printf "%s|%s\\n" "$*" "${CCB_CODEX_RESUME_FALLBACK:-}" >> "$CCB_TEST_CALLS"\n'
+        'if [ "$1" = resume ]; then exit 17; fi\n'
+        'exit 0\n',
+        encoding='utf-8',
+    )
+    fake_codex.chmod(0o755)
+
+    command = _resume_with_fresh_fallback(
+        resume_command=f'{shlex.quote(str(fake_codex))} resume old-session',
+        fresh_command=shlex.quote(str(fake_codex)),
+    )
+    result = subprocess.run(
+        ['bash', '-c', command],
+        env={**os.environ, 'CCB_TEST_CALLS': str(calls)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert calls.read_text(encoding='utf-8').splitlines() == [
+        'resume old-session|',
+        '|1',
+    ]
+    assert 'starting a fresh context' in result.stderr
 
 
 def test_managed_launcher_rejects_unverified_remote_fork_combination(tmp_path: Path) -> None:
