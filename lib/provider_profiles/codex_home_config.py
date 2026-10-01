@@ -198,6 +198,7 @@ def materialize_codex_home_config(
         payload = _managed_codex_config_payload_from_source(
             source_snapshot.payload,
             authority=authority,
+            profile=profile,
         )
         _merge_codex_plugin_overrides(payload, profile=profile)
         _merge_codex_mcp_server_overrides(payload, profile=profile)
@@ -720,7 +721,7 @@ def _write_codex_api_authority_config(
     workspace_path: Path | None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = _managed_codex_config_payload(source_config, authority=authority)
+    payload = _managed_codex_config_payload(source_config, authority=authority, profile=profile)
     _merge_codex_plugin_overrides(payload, profile=profile)
     _merge_codex_mcp_server_overrides(payload, profile=profile)
     _trust_managed_codex_project_paths(payload, project_root=project_root, workspace_path=workspace_path)
@@ -953,6 +954,7 @@ def _managed_codex_config_payload_from_source(
     source_payload: dict[str, object],
     *,
     authority: CodexApiAuthority,
+    profile=None,
 ) -> dict[str, object]:
     payload = {'model_provider': authority.provider_id}
     inherited_payload = _strip_route_authority(source_payload)
@@ -966,13 +968,21 @@ def _managed_codex_config_payload_from_source(
             'base_url': authority.base_url,
         }
     }
+    # env_key is a required environment lookup in Codex, not an optional hint.
+    # Mirror the launcher's explicit / allowed inherited API environment so
+    # unauthenticated local endpoints do not acquire a new key requirement.
+    if _explicit_api_key(profile) or (
+        _inherits_api(profile) and str(os.environ.get('OPENAI_API_KEY') or '').strip()
+    ):
+        payload['model_providers'][authority.provider_id]['env_key'] = 'OPENAI_API_KEY'
     return _disable_interactive_migration_features(payload)
 
 
-def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority) -> dict[str, object]:
+def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority, profile=None) -> dict[str, object]:
     return _managed_codex_config_payload_from_source(
         _read_source_config_payload(source_config),
         authority=authority,
+        profile=profile,
     )
 
 

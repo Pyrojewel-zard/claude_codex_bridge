@@ -983,6 +983,11 @@ def test_post_update_does_not_prompt_for_new_non_default_role_install(
     _clear_post_update_env(monkeypatch)
     monkeypatch.setenv("CCB_INSTALL_ROLES", "1")
     calls: list[list[str]] = []
+    workflow_ids = (
+        'agentroles.ccb_checker', 'agentroles.ccb_clarification_broker',
+        'agentroles.ccb_plan_reviewer', 'agentroles.ccb_round_checker',
+        'agentroles.ccb_worker', 'agentroles.su_ccb',
+    )
     rows = (
         {
             "role_id": "agentroles.ccb_self",
@@ -999,6 +1004,9 @@ def test_post_update_does_not_prompt_for_new_non_default_role_install(
             "description": "New catalog role.",
         },
     )
+
+    rows += tuple({'role_id': role_id, 'status': 'available', 'version': '0.1.0'}
+                  for role_id in workflow_ids)
 
     class _TtyInput:
         def isatty(self) -> bool:
@@ -1030,6 +1038,24 @@ def test_post_update_does_not_prompt_for_new_non_default_role_install(
     assert "install: ccb roles install agentroles.new" in output
     assert "bind:    ccb roles add agentroles.new:<provider>" in output
     assert "Install newly available Agent Roles now?" not in output
+    for role_id in workflow_ids:
+        assert role_id not in output
+
+
+def test_catalog_followups_with_only_workflow_preview_roles_are_quiet(capsys) -> None:
+    update_runtime._print_catalog_followups((
+        {'role_id': 'agentroles.ccb_worker', 'status': 'available'},
+        {'role_id': 'agentroles.su_ccb', 'status': 'available'},
+    ))
+    assert capsys.readouterr().out == ''
+
+
+def test_workflow_preview_missing_source_diagnostic_is_preserved(capsys) -> None:
+    update_runtime._print_catalog_followups((
+        {'role_id': 'agentroles.ccb_worker', 'status': 'installed_source_missing',
+         'path': '/missing/role'},
+    ))
+    assert 'Installed Role Pack source missing: agentroles.ccb_worker (/missing/role)' in capsys.readouterr().out
 
 
 def test_post_update_required_default_role_install_failure_returns_failure(

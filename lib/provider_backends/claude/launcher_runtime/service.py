@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import re
 import shlex
 
 from agents.policy import should_restore_provider_history
@@ -20,11 +21,22 @@ from provider_core.caller_env import (
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import apply_provider_command_template
 
+from .env_runtime.exports import CLAUDE_AUTH_COMMAND_CONTROL_ENV_KEYS
+
 
 _ROOT_SANDBOX_ENV = {'IS_SANDBOX': '1'}
 _ROOT_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions'
 _SENSITIVE_PERSISTED_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'}
 _SHELL_OPERATORS = {';', '&&', '||', '|', '&', '<', '>', '<<', '>>'}
+
+
+def _automatic_restore_requested(command, spec) -> bool:
+    # User-selected session controls must not be combined with CCB --continue.
+    explicit = {'--continue', '-c', '--resume', '-r', '--session-id', '--fork-session'}
+    return (
+        should_restore_provider_history(spec.restore_default, cli_restore=command.restore)
+        and not any(str(arg).split('=', 1)[0] in explicit for arg in spec.startup_args)
+    )
 
 
 def build_runtime_launcher(
@@ -85,7 +97,7 @@ def build_start_cmd(
     restore_target = resolve_restore_target_fn(
         spec=spec,
         runtime_dir=runtime_dir,
-        restore=should_restore_provider_history(spec.restore_default, cli_restore=command.restore),
+        restore=_automatic_restore_requested(command, spec),
     )
     launch_context['session_start_decision'] = getattr(restore_target, 'session_start_decision', None)
     home_overrides = prepare_home_overrides_fn(
@@ -100,20 +112,24 @@ def build_start_cmd(
         settings_path = _ensure_skip_prompt_settings(runtime_dir, settings_path)
         _ensure_skip_prompt_home_settings(home_overrides)
         _ensure_bypass_permission_acceptance(home_overrides, project_root=restore_target.run_cwd)
-    env_prefix = join_env_prefix(
-        build_env_prefix_fn(profile=profile, extra_env=spec.env),
-        export_env_clause(
+    managed_env = {'DISABLE_AUTOUPDATER': '1'}
+    auth_command_prefix = ''
+    if profile is None or bool(getattr(profile, 'inherit_auth', True)):
+        # Inherited auth is read-only from inside the managed process.
+        managed_env.update(
             {
-                'DISABLE_AUTOUPDATER': '1',
-                # A managed Claude process inherits a private credential copy.
-                # Disable /login and /logout so neither command can reach an
-                # ambient OS credential backend and mutate the user's external
-                # login. Authentication changes are made outside CCB and
-                # inherited again on the next managed start.
                 'DISABLE_LOGIN_COMMAND': '1',
                 'DISABLE_LOGOUT_COMMAND': '1',
             }
-        ),
+        )
+    else:
+        auth_command_prefix = '; '.join(
+            f'unset {key}' for key in sorted(CLAUDE_AUTH_COMMAND_CONTROL_ENV_KEYS)
+        )
+    env_prefix = join_env_prefix(
+        build_env_prefix_fn(profile=profile, extra_env=spec.env),
+        auth_command_prefix,
+        export_env_clause(managed_env),
         export_env_clause(provider_user_session_env()),
         export_env_clause(home_overrides),
         export_env_clause(_ROOT_SANDBOX_ENV if root_user else {}),
@@ -162,6 +178,9 @@ def build_start_cmd(
         )
     elif restore_target.has_history:
         cmd_parts.append('--continue')
+    launch_context['ccb_claude_auto_restore'] = bool(
+        restore_target.has_history or launch_context.get('ccb_continuation_launch_mode')
+    )
     cmd_parts.extend(spec.startup_args)
 
     if hapi_launch_context:
@@ -201,7 +220,7 @@ def resolve_run_cwd(
         spec=spec,
         runtime_dir=runtime_dir,
         workspace_path=plan.workspace_path,
-        restore=should_restore_provider_history(spec.restore_default, cli_restore=command.restore),
+        restore=_automatic_restore_requested(command, spec),
     ).run_cwd
 
 
@@ -249,6 +268,8 @@ def build_session_payload(
         payload['claude_provider_authority_fingerprint'] = authority_fingerprint
     if str(prepared_state.get('ccb_continuation_launch_mode') or '').strip() == 'fork':
         payload['ccb_continuation_launch_mode'] = 'fork'
+    if 'ccb_claude_auto_restore' in prepared_state:
+        payload['ccb_claude_auto_restore'] = bool(prepared_state['ccb_claude_auto_restore'])
     return payload
 
 
@@ -327,7 +348,15 @@ def rehydrate_claude_persisted_start_cmd(
     )
     if not command:
         return export
-    return f'{export}; {command}'
+    # Preserve the command verbatim, including quoting and shell templates.
+    # Generated launchers start with export/unset statements; credentials must
+    # follow those statements so their alias cleanup cannot erase them.
+    word = r'''(?:[^\s;'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+'''
+    setup = re.compile(r'\s*(?:export|unset)\s+' + word + r'(?:\s+' + word + r')*\s*;\s*')
+    offset = 0
+    while match := setup.match(command, offset):
+        offset = match.end()
+    return f'{command[:offset]}{export}; {command[offset:]}'
 
 
 def claude_respawn_credential_env(runtime_dir: Path | None) -> dict[str, str]:

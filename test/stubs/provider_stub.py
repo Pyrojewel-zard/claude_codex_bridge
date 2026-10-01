@@ -1670,6 +1670,18 @@ def _handle_agy(req_id: str, prompt: str, delay_s: float) -> None:
     _print_agy_ready_prompt()
 
 
+def _print_guarded_idle_composer(provider: str) -> None:
+    # Pane-backed lifecycle tests must model a focused empty composer. A blank
+    # line-oriented stub is correctly classified as unknown by the draft guard.
+    if not sys.stdout.isatty():
+        return
+    if provider == "codex":
+        sys.stdout.write("\r\x1b[J› Ask Codex to do anything\r\n\r\n  ? for shortcuts\x1b[2A\x1b[3G")
+    elif provider == "claude":
+        sys.stdout.write("\r\x1b[J──────────────────────────────\r\n❯ \r\n──────────────────────────────\x1b[1A\x1b[3G")
+    sys.stdout.flush()
+
+
 def _print_agy_ready_prompt() -> None:
     print("────────────────────────────────────────────────────────────", flush=True)
     print(">", flush=True)
@@ -1839,10 +1851,12 @@ def main(argv: list[str]) -> int:
         print("agent (stub-kimi ○)", flush=True)
     if provider == "agy":
         _print_agy_ready_prompt()
+    _print_guarded_idle_composer(provider)
 
     def _handle_request(req_id: str, prompt: str) -> None:
         if provider == "codex":
             _handle_codex(req_id, prompt, delay_s)
+            _print_guarded_idle_composer(provider)
             return
         if provider == "gemini":
             if delay_s:
@@ -1858,6 +1872,7 @@ def main(argv: list[str]) -> int:
             assert claude_session_path is not None
             _handle_claude(req_id, prompt, delay_s, claude_session_path)
             _write_hook_event(provider, Path.cwd(), req_id, f"stub reply for {req_id}")
+            _print_guarded_idle_composer(provider)
             return
         if provider == "opencode":
             assert opencode_state is not None
@@ -1910,10 +1925,17 @@ def main(argv: list[str]) -> int:
             time.sleep(0.05)
             continue
         line = line.rstrip("\n")
+        current_lines, current_req = _sync_prompt_buffer_request(line, current_lines, current_req)
+        if provider in {"codex", "claude"} and not current_req and not DONE_RE.match(line):
+            # Exact-turn completion can precede optional guidance. The sender
+            # strips trailing newlines, so its delayed Enter may finish a
+            # nonempty guidance line. It is not a new anchored request; repaint
+            # after terminal echo, just as a native idle TUI would.
+            current_lines = []
+            _print_guarded_idle_composer(provider)
+            continue
         if not line and not current_lines:
             continue
-
-        current_lines, current_req = _sync_prompt_buffer_request(line, current_lines, current_req)
 
         current_lines.append(line)
 

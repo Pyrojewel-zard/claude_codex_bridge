@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.13-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.5-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -32,7 +32,7 @@
 
 [中文](README/zh.md) | **English** | [日本語](README/ja.md) | [Français](README/fr.md) | [Deutsch](README/de.md) | [العربية](README/ar.md) | [Español](README/es.md) | [Português](README/pt.md) | [한국어](README/ko.md) | [Русский](README/ru.md)
 
-[Quick Start](#quick-start) · [Mobile App](#mobile-app) · [Rich Mode](#rich-mode) · [Configure Agents](#configure-agents) · [User Guide](docs/manuals/user-guide/) · [Developer Guide](docs/manuals/developer-guide/)
+[Quick Start](#quick-start) · [Message Queues](#message-queues) · [Mobile App](#mobile-app) · [Rich Mode](#rich-mode) · [Configure Agents](#configure-agents) · [User Guide](docs/manuals/user-guide/) · [Developer Guide](docs/manuals/developer-guide/)
 
 <p align="center">
   <img src="assets/readme_v7/ccb-hero-en-light.png" alt="CCB visible multi-agent CLI workspace" width="960">
@@ -51,6 +51,85 @@
 - The background daemon keeps project state alive even when the foreground UI is closed.
 - Hub capability: run multiple CLI providers concurrently from one command.
 - Mobile remote controller: cross-provider voice control, file transfer, and remote terminal access.
+
+## New in 8.7.5: Safe OMP/Pi Model Selection
+
+Opening `/model` or another control-only selector no longer supersedes an
+active OMP/Pi ask. CCB now waits for a real provider turn boundary before
+classifying different user input as replacement work. See the
+[verification and upgrade guidance](docs/releases/v8.7.5.md).
+
+## New in 8.7.4: Conversation Continuity First
+
+Claude and Codex preserve usable local history across account/key/gateway
+changes. Pi follows manual session switches; OMP accepts its newer history
+header format. See [verified scope and upgrade guidance](docs/releases/v8.7.4.md).
+
+## New in 8.7.3: Model-Independent Input Protection
+
+Codex composer detection no longer matches model names. Claude suggestion,
+accepted-draft and ordered return-delivery regressions accompany real continuous
+communication verification. Experimental Claude native plugins remain disabled.
+Install/update onboarding no longer recommends the six V3 preview roles;
+explicit installation and updates for installed roles remain available.
+See [upgrade guidance and layout limitations](docs/releases/v8.7.3.md).
+
+## New in 8.7.2: Recovery and Queued Delivery Fixes
+
+Fix Codex recovery commands with duplicate resume arguments, abandoned OMP editor
+sockets, and padded Codex empty-input detection. Queue details now show input-guard
+waiting reasons. See [upgrade guidance and remaining limitations](docs/releases/v8.7.2.md).
+
+## New in 8.7.1: Open Rich Files with Your Default App
+
+Click a file or press Enter to open it with the system default application;
+folders stay inside the file browser. Both safe and rich profiles use the same
+behavior. macOS uses `open`; Linux prefers `gio open`, then `xdg-open` when GIO
+is absent; WSL uses `wslview` from `wslu` to open with the Windows default app.
+WSL requires enabled Windows interop and reports a missing bridge explicitly.
+After upgrading CCB, run `ccb update rich` and reopen the file-browser pane.
+See the [8.7.1 notes](docs/releases/v8.7.1.md) for validation and limitations.
+
+<a id="message-queues"></a>
+
+## New in 8.7.0: Humans and Agents Share the Queue
+
+### Human / agent queue mode
+
+Incoming agent messages wait while you compose a draft, avoiding interruption
+or accidental submission of your text together with a returned result. CCB first
+waits for the target agent's current turn to end, then checks the input box for
+the message at the front of the queue.
+
+- Empty input: deliver the next eligible message in queue order.
+- Nonempty input: wait up to **180 seconds**. Clearing or submitting your draft
+  releases the message once the agent is idle again.
+- Still nonempty after 180 seconds: clear the draft once, confirm the box is
+  empty, then deliver. Continuing to type does **not** reset this timer; this
+  mode does not preserve a draft indefinitely.
+- Busy, modal or unrecognized input state: keep waiting without clearing or
+  sending. Closing the modal or restoring the normal input surface allows
+  checks to continue.
+
+### Agent / agent queue mode
+
+Requests (`ask`) and returned results (`back`) share one chronological FIFO
+queue per target agent. Each message waits until the target finishes processing
+the previous one, including returned results. Later replies cannot interrupt
+an earlier reply's processing turn; different agents can still work in parallel.
+
+**We recommend testing these queue modes with Claude, Codex and OMP in managed
+tmux panes.** Input protection for other providers will follow; their existing
+delivery behavior is unchanged and should not be assumed to protect drafts.
+OMP currently requires its default Status Band input layout and the new managed
+extension. After upgrading, restart the project when idle to load the new daemon
+and provider extensions.
+
+This is a first version for testing. Codex/Claude deadline clearing uses `Ctrl-C`;
+a simultaneous user action can still cause interruption. The final screen-check,
+paste and Enter sequence is not atomic against typing at that exact instant.
+See the [8.7.0 notes](docs/releases/v8.7.0.md) for tested
+scope, upgrade guidance and the Codex remote-session recovery limitation.
 
 <a id="how-to-install"></a>
 
@@ -242,9 +321,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.6.13 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.7.5 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.6.13 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.13/ccb-mobile-v8.6.13.apk)
+- [Download CCB Mobile v8.7.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.5/ccb-mobile-v8.7.5.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -315,7 +394,7 @@ Supported managed Agents receive the built-in `ask`, `ccb-clear`, `ccb-compact`,
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png?v=7335e843" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=c943ca65" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
@@ -333,6 +412,44 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.7.5</b> - Safe OMP/Pi model selection</summary>
+
+[Full bilingual notes](docs/releases/v8.7.5.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.4</b> - Conversation continuity first</summary>
+
+[Full bilingual notes](docs/releases/v8.7.4.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.3</b> - Model-independent input protection</summary>
+
+[Full bilingual notes](docs/releases/v8.7.3.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.2</b> - Recovery and queued delivery fixes</summary>
+
+[Full bilingual notes](docs/releases/v8.7.2.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.1</b> - Rich system-default file opening</summary>
+
+- Click or Enter opens files with system defaults on macOS, Linux and WSL; folders stay inside Yazi.
+- Shares safe/rich configuration, preserves filenames and provides explicit WSL bridge errors.
+- [Full bilingual notes and validation scope](docs/releases/v8.7.1.md).
+- Prior changes: [v8.7.0 input protection](docs/releases/v8.7.0.md) and [v8.6.19 queues and inspection guidance](docs/releases/v8.6.19.md).
+
+</details>
+
+<details>
 <summary><b>v8.6.13</b> - Reliable visible OMP asks and focused role selection</summary>
 
 - Run OMP asks in the visible managed pane and use OMP's native completion evidence, so tool-using turns remain active until the final assistant result.

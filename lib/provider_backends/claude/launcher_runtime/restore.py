@@ -5,10 +5,8 @@ from pathlib import Path
 
 from provider_backends.session_authority import (
     current_provider_authority_fingerprint,
-    linked_continuation_pending,
     provider_authority_matches,
     rebind_provider_session_authority,
-    stored_provider_authority_fingerprint,
 )
 from provider_backends.runtime_restore import ProviderRestoreTarget, resolve_restore_context
 from provider_backends.session_start import (
@@ -100,37 +98,10 @@ def project_session_restore_target(
         allow_legacy_missing=True,
     )
     session_cwd = existing_dir(getattr(session, 'work_dir', ''))
-    stored_fingerprint = stored_provider_authority_fingerprint(data, 'claude')
-    if stored_fingerprint and not authority_matches:
-        # A known authority change must never inspect or resume native history.
-        # Missing legacy metadata is handled below as adoptable evidence.
-        rebind_provider_session_authority(
-            session,
-            'claude',
-            authority_fingerprint,
-            native_resume_compatible=False,
-        )
-        continuation_id = linked_continuation_session_id(
-            data,
-            managed_home=managed_home,
-        )
-        return ProviderRestoreTarget(
-            run_cwd=session_cwd or workspace_path,
-            has_history=False,
-            continuation_session_id=continuation_id,
-            continuation_mode='fork' if continuation_id else None,
-        )
-    if linked_continuation_pending(data, 'claude'):
-        continuation_id = linked_continuation_session_id(
-            data,
-            managed_home=managed_home,
-        )
-        return ProviderRestoreTarget(
-            run_cwd=session_cwd or workspace_path,
-            has_history=False,
-            continuation_session_id=continuation_id,
-            continuation_mode='fork' if continuation_id else None,
-        )
+    # Credentials and routing select the next request's authority, not whether
+    # this Agent's local transcript can be restored. This also retries history
+    # lookup for linked-only records left by the old fingerprint veto. Do not
+    # resurrect old_* bindings: an explicit clear may have replaced them.
     if session_cwd is None:
         if not authority_matches:
             rebind_provider_session_authority(

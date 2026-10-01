@@ -6,7 +6,7 @@
 **نسّق Codex وClaude وGemini وغيرهم من وكلاء CLI ضمن سير عمل مرئي وقابل للتحكم والتدخل المباشر**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.5-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -184,7 +184,7 @@ ccb update mobile
 
 يتضمن CCB 8.6.6 مصدر Flutter الخاص بـ CCB Mobile داخل [`mobile/`](../mobile/) وينشر Android APK عبر GitHub Releases:
 
-- [تنزيل CCB Mobile v8.6.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
+- [تنزيل CCB Mobile v8.7.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.5/ccb-mobile-v8.7.5.apk)
 - مصدر التطبيق: [`mobile/app`](../mobile/app)
 - مصدر gateway الخادم: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -247,7 +247,7 @@ ccb update rich
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=7335e843" alt="مجموعة WeChat" width="240">
+  <img src="../assets/weixin.png?v=c943ca65" alt="مجموعة WeChat" width="240">
 </p>
 
 <a id="community"></a>
@@ -263,6 +263,43 @@ ccb update rich
 ## ملاحظات الإصدار
 
 <details open>
+<summary><b>v8.7.5</b> - Safe OMP/Pi model selection</summary>
+
+[Full bilingual notes](../docs/releases/v8.7.5.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.4</b> - Conversation continuity first</summary>
+
+[Full bilingual notes](../docs/releases/v8.7.4.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.3</b></summary>
+
+[English / 简体中文 — v8.7.3](../docs/releases/v8.7.3.md)
+
+</details>
+
+<details>
+<summary><b>v8.7.2</b></summary>
+
+[English / 简体中文 — v8.7.2](../docs/releases/v8.7.2.md)
+
+</details>
+
+<details>
+<summary><b>v8.7.1</b></summary>
+
+[English / 简体中文 — v8.7.1](../docs/releases/v8.7.1.md)
+
+[v8.7.0](../docs/releases/v8.7.0.md) · [v8.6.19](../docs/releases/v8.6.19.md)
+
+</details>
+
+<details>
 <summary><b>v8.4.0</b> - Mobile Relay مشفر واقتران مبسط وهوية مشروع ثابتة وإعادة اتصال Codex</summary>
 
 - يضيف Relay مشفراً من طرف إلى طرف ودعوات أحادية الاستخدام وتدفقات متعددة ووضعاً رسمياً أو مستضافاً ذاتياً.

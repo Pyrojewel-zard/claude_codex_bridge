@@ -20,6 +20,14 @@ to resume across agents and sessions.
 
 ## Baseline
 
+Core PR maintenance requirements, reaffirmed by the project owner on
+2026-09-07: **CCB only inherits Provider state in one direction and must not
+reverse-manage Providers; Windows/Herdr development and PRs must remain
+isolated from Linux/macOS and shared surfaces.** These are merge requirements
+for every relevant plan and PR. See
+[Core PR Maintenance Requirements](baseline/test-and-release-gates.md#core-pr-maintenance-requirements)
+for the authority links and required review evidence.
+
 - [baseline/README.md](baseline/README.md) indexes the lightweight project
   baseline used by plan roots.
 
@@ -55,9 +63,9 @@ to resume across agents and sessions.
 | [managed-provider-completion-reliability](plans/managed-provider-completion-reliability/README.md) | Planning | Track managed pane-backed provider completion terminalization, empty-reply guards, and timeout reliability fixes. |
 | [managed-provider-job-integrity](plans/managed-provider-job-integrity/README.md) | In progress | Repair provider plugin inheritance, native resume, turn binding, cancellation, execution diagnostics, and active-job control findings from PR257-PR266 in a gated order. |
 | [provider-auth-authority](plans/provider-auth-authority/README.md) | In progress | Define one-way external Provider auth/config inheritance, CCB-local explicit API authority, and server-side-safe credential ownership without reverse interference. |
-| [inter-agent-comm-reliability](plans/inter-agent-comm-reliability/README.md) | Planning | Track inter-agent message transport reliability proposals such as PR226-style persistent FIFO, ACK, large-payload spool, and cancel visibility for Linux, macOS, and WSL. |
+| [inter-agent-comm-reliability](plans/inter-agent-comm-reliability/README.md) | Planning | Current: unified chronological ask/back FIFO through processing-turn completion, and empty-result caller notices without automatic empty-result recovery. Retains earlier transport proposals for Linux, macOS, and WSL. |
 | [callback-continuation-safety](plans/callback-continuation-safety/README.md) | In progress | Prevent callback continuation jobs from being misinterpreted as new upstream callback work, especially in mixed Codex/Claude chains. |
-| [native-cli-providers](plans/native-cli-providers/README.md) | In progress | Add first-class optional provider adapters and control-skill projection for native CLIs plus the service-backed official DeepSeek Harness (`dsh`). |
+| [native-cli-providers](plans/native-cli-providers/README.md) | In progress; v8.7.5 published | Add first-class optional provider adapters and control-skill projection for native CLIs plus the service-backed official DeepSeek Harness (`dsh`). |
 | [workspace-sharing](plans/workspace-sharing/README.md) | In progress | Add explicit external workspace paths and internal shared worktree groups without changing default per-agent worktree behavior. |
 | [ask-parameter-policy](plans/ask-parameter-policy/README.md) | Planning | Clarify how ask skills choose silence, compact, callback, and artifact flags from result intent, dependency, and content-preservation needs. |
 | [ccb-manuals](plans/ccb-manuals/README.md) | Complete | Produced source-backed CCB developer and user manuals, including Archi/Hippo architecture analysis and a deep communication-logic chapter. |

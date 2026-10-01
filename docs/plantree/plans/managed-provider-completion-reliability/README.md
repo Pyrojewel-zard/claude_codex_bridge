@@ -10,6 +10,10 @@ behavior, and diagnostics.
 
 Current active incidents:
 
+- Issues #345–#348: Codex app-server lifecycle, remote resume/clear reporting,
+  terminal error propagation, and Kimi timeout environment filtering. See the
+  [repair plan](topics/issues-345-348-repair.md) for current scope and gates.
+
 - Claude-backed `ask` jobs can visibly finish in the provider session, emit
   `assistant_chunk` with `stop_reason = "end_turn"`, but not reach CCB
   `terminal=true` until the 900-second reliability timeout.
@@ -40,6 +44,10 @@ does not override provider/session contracts.
   slices, and recovery guardrails.
 
 ## Related Plans
+
+- [Empty-result caller notices](../inter-agent-comm-reliability/topics/empty-result-caller-notice.md):
+  2026-09-18 planned policy replaces automatic empty-result recovery with a
+  caller inspection notice; preserves exact terminal evidence and attribution.
 
 - [../ccb-maintenance-heartbeat/README.md](../ccb-maintenance-heartbeat/README.md)
 - [../ccb-maintenance-heartbeat/topics/ask-runtime-health-mechanism.md](../ccb-maintenance-heartbeat/topics/ask-runtime-health-mechanism.md)

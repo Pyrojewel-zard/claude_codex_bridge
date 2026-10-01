@@ -6,7 +6,7 @@
 **Coordina Codex, Claude, Gemini y otros agentes CLI en flujos visibles y controlables que puedes tomar directamente**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.5-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -184,7 +184,7 @@ Este comando guía la instalación y configuración.
 
 CCB 8.6.6 incluye el código Flutter de CCB Mobile en [`mobile/`](../mobile/) y publica el APK Android mediante GitHub Releases:
 
-- [Descargar CCB Mobile v8.6.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
+- [Descargar CCB Mobile v8.7.5 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.5/ccb-mobile-v8.7.5.apk)
 - Fuente de la app: [`mobile/app`](../mobile/app)
 - Fuente del gateway del servidor: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -247,7 +247,7 @@ Para la configuración normal del proyecto, usa el panel **⚙ Configuración**.
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=7335e843" alt="Grupo WeChat" width="240">
+  <img src="../assets/weixin.png?v=c943ca65" alt="Grupo WeChat" width="240">
 </p>
 
 <a id="community"></a>
@@ -263,6 +263,43 @@ Gracias a [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) po
 ## Notas de versión
 
 <details open>
+<summary><b>v8.7.5</b> - Safe OMP/Pi model selection</summary>
+
+[Full bilingual notes](../docs/releases/v8.7.5.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.4</b> - Conversation continuity first</summary>
+
+[Full bilingual notes](../docs/releases/v8.7.4.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.3</b></summary>
+
+[English / 简体中文 — v8.7.3](../docs/releases/v8.7.3.md)
+
+</details>
+
+<details>
+<summary><b>v8.7.2</b></summary>
+
+[English / 简体中文 — v8.7.2](../docs/releases/v8.7.2.md)
+
+</details>
+
+<details>
+<summary><b>v8.7.1</b></summary>
+
+[English / 简体中文 — v8.7.1](../docs/releases/v8.7.1.md)
+
+[v8.7.0](../docs/releases/v8.7.0.md) · [v8.6.19](../docs/releases/v8.6.19.md)
+
+</details>
+
+<details>
 <summary><b>v8.4.0</b> - Relay móvil cifrado, emparejamiento simple, identidad estable y reconexión Codex</summary>
 
 - Añade Relay móvil cifrado de extremo a extremo, invitaciones de un solo uso, streams multiplexados y modos oficial o autohospedado.

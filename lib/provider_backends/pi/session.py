@@ -95,6 +95,40 @@ def resume_binding_for_launch(
         return {"pi_resume_status": f"fresh_{mismatch}"}
     session_id = str(data.get("pi_session_id") or "").strip()
     session_path_raw = str(data.get("pi_session_path") or "").strip()
+    # Manual input and /new or /resume do not pass through the ask adapter.
+    # The previous launch's observation supersedes an older persisted binding.
+    event_path = str(data.get("pi_completion_event_log") or "").strip()
+    if event_path:
+        try:
+            with Path(event_path).open("rb") as stream:
+                stream.seek(0, 2)
+                stream.seek(max(0, stream.tell() - 8 * 1024 * 1024))
+                if stream.tell():
+                    stream.readline()
+                lines = stream.read().splitlines()
+        except OSError:
+            return {"pi_resume_status": "fresh_observation_unavailable"}
+        for line in reversed(lines):
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(event, dict) or event.get("schema_version") != 1:
+                continue
+            if event.get("actor") != agent_name or event.get("launch_session_id") != data.get("ccb_session_id"):
+                continue
+            if not event.get("runtime_instance_id") or event.get("type") not in {"extension_ready", "native_session"}:
+                continue
+            session_id = str(event.get("pi_session_id") or "").strip()
+            session_path_raw = str(event.get("pi_session_path") or "").strip()
+            if not session_id or not session_path_raw:
+                return {"pi_resume_status": "fresh_no_observed_native_session"}
+            if _is_legacy_ccb_session_id(session_id):
+                return {"pi_resume_status": "fresh_native_session_id_invalid"}
+            data["pi_session_binding_source"] = "pi_extension_observation"
+            break
+        else:
+            return {"pi_resume_status": "fresh_no_current_session_observation"}
     if session_id and session_path_raw and not _is_legacy_ccb_session_id(session_id):
         session_path = _native_path_from_record(session_path_raw, session_dir=session_dir)
         valid, reason = validate_native_session_binding(
@@ -250,6 +284,7 @@ def validate_native_session_binding(
     session_path: Path,
     work_dir: Path,
     session_dir: Path,
+    allow_omp_title_slot: bool = False,
 ) -> tuple[bool, str]:
     normalized_id = str(session_id or "").strip()
     if not _SESSION_ID_RE.fullmatch(normalized_id):
@@ -284,6 +319,18 @@ def validate_native_session_binding(
     try:
         with candidate.open("r", encoding="utf-8-sig") as stream:
             header = json.loads(stream.readline())
+            # OMP 18.3.x puts one typed title slot before the real header.
+            # Match its session-title-slot parser; never scan past arbitrary
+            # entries or relax Pi's first-line header contract.
+            if (
+                allow_omp_title_slot
+                and isinstance(header, dict)
+                and header.get("type") == "title"
+                and type(header.get("v")) is int and header["v"] == 1
+                and all(isinstance(header.get(key), str) for key in ("title", "updatedAt", "pad"))
+                and ("source" not in header or header["source"] in ("auto", "user"))
+            ):
+                header = json.loads(stream.readline())
     except (OSError, ValueError):
         return False, "native_session_header_invalid"
     if not isinstance(header, dict) or header.get("type") != "session" or str(header.get("id") or "") != normalized_id:
@@ -301,6 +348,9 @@ def prepare_restart_start_cmd(session: PiProjectSession) -> str:
         return current_cmd
     command_template = str(data.get("pi_restart_start_cmd_template") or "")
     fresh_cmd = render_restart_command(command_template, exact_args="") or current_cmd
+    if data.get("pi_restore_enabled") is False:
+        _persist_fresh_restart(session, fresh_cmd, status="fresh_restore_disabled")
+        return fresh_cmd
     session_dir_text = str(data.get("pi_session_dir") or "").strip()
     if not session_dir_text:
         _persist_fresh_restart(session, fresh_cmd, status="fresh_session_dir_missing")

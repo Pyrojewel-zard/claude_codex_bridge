@@ -58,6 +58,15 @@ execution order.
 
 ## File Map
 
+- [evidence/v8.7.4-release-20260929.md](evidence/v8.7.4-release-20260929.md):
+  public release identity, assets, installation verification, and CI qualification.
+- [evidence/codex-omp-pi-continuity-20260929.md](evidence/codex-omp-pi-continuity-20260929.md):
+  Codex authority rebinding and OMP/Pi history fixes, with real route/key replay.
+- [decisions/008-continuity-first-native-restore.md](decisions/008-continuity-first-native-restore.md):
+  continuity-first restoration after account/route changes; supersedes the
+  preemptive fresh fallback in decision 007. First implementation slice: Claude.
+- [evidence/claude-continuity-first-20260929.md](evidence/claude-continuity-first-20260929.md):
+  local implementation, regression tests, native loopback replay, and remaining provider gaps.
 - [roadmap.md](roadmap.md): phases, readiness gates, and deferred work.
 - [implementation-status.md](implementation-status.md): current landed slice,
   verification, and next implementation target.

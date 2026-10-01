@@ -258,7 +258,7 @@ def test_explicit_gemini_route_ignores_competing_ambient_alias(monkeypatch, tmp_
     assert fingerprint_a == fingerprint_b
 
 
-def test_claude_authority_change_blocks_continue_before_history_lookup(tmp_path: Path) -> None:
+def test_claude_authority_change_continues_managed_history(tmp_path: Path) -> None:
     workspace = tmp_path / 'workspace'
     managed_home = tmp_path / 'managed-home'
     workspace.mkdir()
@@ -272,34 +272,34 @@ def test_claude_authority_change_blocks_continue_before_history_lookup(tmp_path:
         workspace,
         'reviewer',
         load_project_session_fn=lambda *args, **kwargs: session,
-        claude_history_state_fn=lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError('mismatched authority must not inspect Claude history')
-        ),
+        claude_history_state_fn=lambda **kwargs: ('native-a', True, workspace),
         managed_home=managed_home,
         authority_fingerprint='authority-b',
     )
 
     assert target is not None
     assert target.run_cwd == workspace
-    assert target.has_history is False
+    assert target.has_history is True
     assert session.data['claude_provider_authority_fingerprint'] == 'authority-b'
-    assert session.data['ccb_resume_compatibility'] == 'linked_continuation'
+    assert session.data['ccb_resume_compatibility'] == 'managed_local_history'
+    conversation_id = session.data['ccb_conversation_id']
+    generation = session.data['ccb_authority_generation']
 
     second_target = project_session_restore_target(
         workspace,
         'reviewer',
         load_project_session_fn=lambda *args, **kwargs: session,
-        claude_history_state_fn=lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError('pending linked continuation must not resume old history')
-        ),
+        claude_history_state_fn=lambda **kwargs: ('native-a', True, workspace),
         managed_home=managed_home,
         authority_fingerprint='authority-b',
     )
     assert second_target is not None
-    assert second_target.has_history is False
+    assert second_target.has_history is True
+    assert session.data['ccb_conversation_id'] == conversation_id
+    assert session.data['ccb_authority_generation'] == generation
 
 
-def test_claude_authority_change_forks_managed_native_history(tmp_path: Path) -> None:
+def test_claude_authority_change_preserves_managed_native_binding(tmp_path: Path) -> None:
     workspace = tmp_path / 'workspace'
     managed_home = tmp_path / 'managed-home'
     session_path = managed_home / '.claude' / 'projects' / 'workspace' / 'native-a.jsonl'
@@ -320,18 +320,17 @@ def test_claude_authority_change_forks_managed_native_history(tmp_path: Path) ->
         workspace,
         'reviewer',
         load_project_session_fn=lambda *args, **kwargs: session,
-        claude_history_state_fn=lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError('mismatched authority must not inspect Claude history')
-        ),
+        claude_history_state_fn=lambda **kwargs: ('native-a', True, workspace),
         managed_home=managed_home,
         authority_fingerprint='authority-b',
     )
 
     assert target is not None
-    assert target.has_history is False
-    assert target.continuation_mode == 'fork'
-    assert target.continuation_session_id == 'native-a'
-    assert session.data['old_claude_session_path'] == str(session_path)
+    assert target.has_history is True
+    assert target.continuation_mode is None
+    assert session.data['claude_session_id'] == 'native-a'
+    assert session.data['claude_session_path'] == str(session_path)
+    assert session.data['claude_session_authority_fingerprint'] == 'authority-b'
     assert session_path.is_file()
 
 

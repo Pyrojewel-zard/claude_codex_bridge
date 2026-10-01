@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from provider_backends.codex.launcher_runtime.command_runtime.home import (
     _ensure_session_namespace_authority,
@@ -34,7 +37,8 @@ def _profile(home: Path, *, api_key: str) -> ResolvedProviderProfile:
     )
 
 
-def test_api_key_change_links_session_and_keeps_native_history_visible(tmp_path: Path) -> None:
+@pytest.mark.parametrize('change', ['key', 'route'])
+def test_api_key_change_resumes_same_session_and_keeps_native_history_visible(tmp_path: Path, change) -> None:
     project_root = tmp_path / 'repo'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     codex_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
@@ -52,7 +56,7 @@ def test_api_key_change_links_session_and_keeps_native_history_visible(tmp_path:
     fingerprint_a = current_provider_authority_fingerprint(profile_a, runtime_dir=runtime_dir)
     session_log = session_root / '2026' / '08' / '04' / 'rollout-session-a.jsonl'
     session_log.parent.mkdir(parents=True)
-    session_log.write_text('{"type":"session_meta"}\n', encoding='utf-8')
+    session_log.write_text('{"type":"session_meta","payload":{"id":"session-a"}}\n', encoding='utf-8')
     session_file = project_root / '.ccb' / '.codex-agent1-session'
     session_file.write_text(
         json.dumps(
@@ -78,7 +82,8 @@ def test_api_key_change_links_session_and_keeps_native_history_visible(tmp_path:
         current_fingerprint=fingerprint_a,
     ) == 'session-a'
 
-    profile_b = _profile(codex_home, api_key='key-b')
+    profile_b = (_profile(codex_home, api_key='key-b') if change == 'key' else
+                 replace(profile_a, env={**profile_a.env, 'OPENAI_BASE_URL': 'https://second.example.test'}))
     fingerprint_b = current_provider_authority_fingerprint(profile_b, runtime_dir=runtime_dir)
     assert fingerprint_b != fingerprint_a
 
@@ -94,19 +99,18 @@ def test_api_key_change_links_session_and_keeps_native_history_visible(tmp_path:
         runtime_dir,
         profile_b,
         current_fingerprint=fingerprint_b,
-    ) is None
+    ) == 'session-a'
     assert session_log.is_file()
     assert not (codex_home / 'archived-sessions').exists()
     rewritten = json.loads(session_file.read_text(encoding='utf-8'))
-    assert 'codex_session_id' not in rewritten
-    assert 'resume session-a' not in rewritten['start_cmd']
+    assert rewritten['codex_session_id'] == 'session-a'
+    assert 'resume session-a' in rewritten['start_cmd']
     assert rewritten['codex_provider_authority_fingerprint'] == fingerprint_b
     assert rewritten['ccb_conversation_id'] == 'ccb-launch-a'
     assert rewritten['ccb_authority_generation'] == 2
     assert rewritten['ccb_continuity_status'] == 'continued_on_new_authority'
-    assert rewritten['ccb_resume_compatibility'] == 'linked_continuation'
-    assert rewritten['old_codex_session_id'] == 'session-a'
-    assert rewritten['old_codex_session_path'] == str(session_log)
+    assert rewritten['ccb_resume_compatibility'] == 'managed_local_history'
+    assert rewritten['codex_session_path'] == str(session_log)
     assert rewritten['ccb_session_history'] == [
         {
             'provider': 'codex',
@@ -121,7 +125,75 @@ def test_api_key_change_links_session_and_keeps_native_history_visible(tmp_path:
         SimpleNamespace(name='agent1'),
         runtime_dir,
         current_fingerprint=fingerprint_b,
-    ) == 'session-a'
+    ) is None
+    # Repeated preparation must neither create another generation nor lose
+    # continuity metadata when the launch writes the new CCB session record.
+    _ensure_session_namespace_authority(runtime_dir, codex_home, session_root, profile=profile_b)
+    persisted = json.loads(session_file.read_text())
+    assert persisted['ccb_authority_generation'] == 2
+    from cli.services.runtime_launch_runtime.session_files import _merge_existing_session_binding
+    payload = {'codex_provider_authority_fingerprint': fingerprint_b}
+    _merge_existing_session_binding(payload, persisted, provider='codex')
+    assert payload['ccb_conversation_id'] == 'ccb-launch-a'
+    assert payload['codex_session_id'] == 'session-a'
+    assert payload['ccb_authority_generation'] == 2
+    fresh = {'codex_provider_authority_fingerprint': fingerprint_b, 'ccb_codex_auto_restore': False}
+    _merge_existing_session_binding(fresh, persisted, provider='codex')
+    assert 'codex_session_id' not in fresh
+    assert 'ccb_conversation_id' not in fresh
+
+
+@pytest.mark.parametrize('damage', ['id', 'corrupt', 'subagent', 'outside', 'missing'])
+def test_new_authority_never_promotes_unverified_native_binding(tmp_path, damage):
+    from provider_backends.codex.launcher_runtime.command_runtime.home import _link_project_session_binding
+    home = tmp_path / 'managed'
+    root = home / 'sessions'
+    root.mkdir(parents=True)
+    transcript = root / 'native.jsonl'
+    meta = {'type': 'session_meta', 'payload': {'id': 'native'}}
+    if damage == 'id':
+        meta['payload']['id'] = 'other'
+    if damage == 'subagent':
+        meta['payload']['thread_source'] = 'subagent'
+    if damage == 'outside':
+        transcript = tmp_path / 'foreign.jsonl'
+    if damage != 'missing':
+        transcript.write_text('broken' if damage == 'corrupt' else json.dumps(meta) + '\n')
+    record = tmp_path / 'session'
+    record.write_text(json.dumps({'codex_provider_authority_fingerprint': 'old',
+        'codex_session_id': 'native', 'codex_session_path': str(transcript)}))
+    _link_project_session_binding(record, codex_home=home, session_root=root, current_fingerprint='new')
+    data = json.loads(record.read_text())
+    assert 'codex_session_id' not in data
+    assert data['ccb_resume_compatibility'] == 'linked_continuation'
+
+
+def test_source_account_switch_rebinds_local_history_without_writing_source(monkeypatch, tmp_path):
+    runtime = tmp_path / 'repo/.ccb/agents/agent1/provider-runtime/codex'
+    runtime.mkdir(parents=True)
+    home = runtime.parent.parent / 'provider-state/codex/home'
+    root = home / 'sessions'
+    root.mkdir(parents=True)
+    source = tmp_path / 'source'
+    source.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(source))
+    auth = source / 'auth.json'
+    auth.write_text('{"tokens":{"account_id":"fake-a","access_token":"fake-a"}}')
+    _ensure_session_namespace_authority(runtime, home, root, profile=None)
+    old = current_provider_authority_fingerprint(None, runtime_dir=runtime)
+    native = root / 'native.jsonl'
+    native.write_text('{"type":"session_meta","payload":{"id":"native"}}\n')
+    record = tmp_path / 'repo/.ccb/.codex-agent1-session'
+    record.write_text(json.dumps({'codex_session_id': 'native', 'codex_session_path': str(native),
+        'codex_provider_authority_fingerprint': old, 'codex_session_authority_fingerprint': old}))
+    changed = '{"tokens":{"account_id":"fake-b","access_token":"fake-b"}}'
+    auth.write_text(changed)
+    _ensure_session_namespace_authority(runtime, home, root, profile=None)
+    new = current_provider_authority_fingerprint(None, runtime_dir=runtime)
+    assert old != new
+    assert load_resume_session_id(SimpleNamespace(name='agent1'), runtime,
+                                 current_fingerprint=new) == 'native'
+    assert auth.read_text() == changed
 
 
 def test_unrelated_source_config_change_does_not_rotate_codex_authority(

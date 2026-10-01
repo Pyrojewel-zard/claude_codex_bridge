@@ -126,9 +126,25 @@ def rewrite_codex_segment(segment: str, session_id: str) -> str | None:
 
 
 def _continuation_subcommand_index(tokens: list[str], codex_index: int) -> int | None:
-    for index in range(codex_index + 1, len(tokens)):
-        if tokens[index] in _CONTINUATION_SUBCOMMANDS:
-            return index
+    value_options = {'-c', '--config', '-m', '--model', '-p', '--profile',
+                     '-s', '--sandbox', '-a', '--ask-for-approval', '-C', '--cd',
+                     '-i', '--image', '--add-dir', '--enable', '--disable',
+                     '--local-provider', '--remote'}
+    flags = {'--oss', '--full-auto', '--dangerously-bypass-approvals-and-sandbox',
+             '--dangerously-bypass-hook-trust',
+             '--search', '--no-alt-screen', '-h', '--help', '-V', '--version'}
+    index = codex_index + 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in value_options:
+            index += 2
+        elif token in flags or any(token.startswith(option + '=') for option in value_options):
+            index += 1
+        elif any(token.startswith(option) and len(token) > 2 for option in value_options if len(option) == 2):
+            index += 1
+        else:
+            # Only the first positional token can be the continuation command.
+            return index if token in _CONTINUATION_SUBCOMMANDS else None
     return None
 
 

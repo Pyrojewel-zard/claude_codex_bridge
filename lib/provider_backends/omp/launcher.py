@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 from provider_backends.native_cli_support import NativeCliLaunchConfig
@@ -15,7 +16,13 @@ from provider_backends.native_cli_support.launcher import (
     prepare_launch_context as prepare_native_launch_context,
 )
 from provider_backends.pi.launcher import _PI_COMPLETION_EXTENSION_SOURCE
+from provider_backends.pi.launcher import _has_session_control, _template_parts
+from provider_backends.omp.session import (
+    OMP_RESTART_SESSION_MARKER, render_restart_command, resume_binding_for_launch,
+)
 from provider_core.contracts import ProviderRuntimeLauncher
+from provider_core.pathing import session_filename_for_agent
+from provider_core.runtime_shared import provider_start_parts
 
 _OMP_COMPLETION_SCHEMA_VERSION = 1
 _OMP_EXTENSION_FILENAME = "ccb-omp-completion.ts"
@@ -79,6 +86,12 @@ def prepare_launch_context(
         prepared_state,
     )
     payload["omp_session_dir"] = str(_omp_session_dir(payload))
+    payload.update(resume_binding_for_launch(
+        context.paths.ccb_dir / session_filename_for_agent("omp", spec.name),
+        agent_name=spec.name, project_id=context.project.project_id,
+        work_dir=Path(str(payload.get("workspace_path") or plan.workspace_path)),
+        session_dir=_omp_session_dir(payload),
+    ))
     return payload
 
 
@@ -94,6 +107,7 @@ def _launch_config() -> NativeCliLaunchConfig:
         visible_raw_env_names=(
             "CCB_OMP_COMPLETION_EVENTS",
             "CCB_OMP_DISPATCH_EVENTS",
+            "CCB_OMP_COMPOSER_SOCKET",
         ),
     )
 
@@ -109,12 +123,24 @@ def _build_start_cmd(
 ) -> str:
     if prepared_state is None:
         raise RuntimeError("omp launch requires prepared_state")
+    explicit = _has_session_control((
+        *provider_start_parts("omp"), *spec.startup_args,
+        *_template_parts(getattr(spec, "provider_command_template", None)),
+    ))
+    prepared_state["omp_explicit_session_control"] = explicit
+    prepared_state["omp_restore_enabled"] = bool(command.restore)
+    if explicit:
+        prepared_state["omp_resume_status"] = "explicit_session_control"
+    elif not command.restore:
+        prepared_state["omp_resume_status"] = "fresh_restore_disabled"
+    elif prepared_state.get("omp_resume_status") == "exact_session_ready":
+        prepared_state["omp_resume_status"] = "exact_session_selected"
     _materialize_completion_extension(
         prepared_state,
         runtime_dir=runtime_dir,
         launch_session_id=launch_session_id,
     )
-    return build_native_start_cmd(
+    template = build_native_start_cmd(
         config,
         command,
         spec,
@@ -122,6 +148,13 @@ def _build_start_cmd(
         launch_session_id,
         prepared_state=prepared_state,
     )
+    if explicit:
+        return template
+    if template.count(OMP_RESTART_SESSION_MARKER) != 1:
+        raise RuntimeError("omp restart command template must preserve session marker")
+    prepared_state["omp_restart_start_cmd_template"] = template
+    path = prepared_state.get("omp_resume_session_path") if prepared_state.get("omp_resume_status") == "exact_session_selected" else None
+    return render_restart_command(template, path)
 
 
 def _build_session_payload(
@@ -153,6 +186,8 @@ def _build_session_payload(
     payload.update(
         {
             "omp_completion_schema_version": _OMP_COMPLETION_SCHEMA_VERSION,
+            "omp_draft_guard_version": 1,
+            "omp_draft_guard_socket": str(prepared_state.get("omp_draft_guard_socket") or ""),
             "omp_completion_extension": str(
                 prepared_state.get("omp_completion_extension") or ""
             ),
@@ -168,6 +203,16 @@ def _build_session_payload(
             ),
         }
     )
+    # Native identity and CCB launch identity are different namespaces.
+    payload.pop("omp_session_id", None)
+    for key in ("omp_resume_status", "omp_explicit_session_control", "omp_restore_enabled", "omp_restart_start_cmd_template"):
+        payload[key] = prepared_state.get(key)
+    if prepared_state.get("omp_resume_status") == "exact_session_selected":
+        payload.update({
+            "omp_session_id": prepared_state["omp_resume_session_id"],
+            "omp_session_path": prepared_state["omp_resume_session_path"],
+            "omp_session_binding_source": prepared_state.get("omp_resume_binding_source"),
+        })
     return payload
 
 
@@ -178,7 +223,7 @@ def _omp_visible_args(prepared_state: dict[str, object]) -> tuple[str, ...]:
         "omp_completion_extension",
     )
     session_dir.mkdir(parents=True, exist_ok=True)
-    return (
+    args = (
         "--session-dir",
         str(session_dir),
         "--extension",
@@ -186,6 +231,9 @@ def _omp_visible_args(prepared_state: dict[str, object]) -> tuple[str, ...]:
         "--approval-mode",
         "yolo",
     )
+    if prepared_state.get("omp_explicit_session_control") is False:
+        return (*args, OMP_RESTART_SESSION_MARKER)
+    return args
 
 
 def _omp_visible_env(prepared_state: dict[str, object]) -> dict[str, str]:
@@ -206,6 +254,7 @@ def _omp_visible_env(prepared_state: dict[str, object]) -> dict[str, str]:
         "PI_CODING_AGENT_SESSION_DIR": str(session_dir),
         "CCB_OMP_COMPLETION_EVENTS": str(completion_events),
         "CCB_OMP_DISPATCH_EVENTS": str(dispatch_events),
+        "CCB_OMP_COMPOSER_SOCKET": str(prepared_state.get("omp_draft_guard_socket") or ""),
     }
 
 
@@ -246,6 +295,10 @@ def _materialize_completion_extension(
     prepared_state["omp_completion_extension"] = str(extension_path)
     prepared_state["omp_completion_event_log"] = str(completion_events)
     prepared_state["omp_dispatch_event_log"] = str(dispatch_events)
+    socket_token = hashlib.sha256(str(completion_events.resolve()).encode()).hexdigest()[:24]
+    prepared_state["omp_draft_guard_socket"] = str(
+        Path(tempfile.gettempdir()) / f"ccb-editor-{socket_token}.sock"
+    )
 
 
 def _write_owner_only(path: Path, content: str) -> None:
@@ -318,7 +371,32 @@ def _omp_completion_extension_source() -> str:
   });'''
     if old_agent_end not in source:
         raise RuntimeError("Pi completion extension template changed unexpectedly")
-    return source.replace(old_agent_end, new_agent_end)
+    source = source.replace(old_agent_end, new_agent_end)
+    # Observe interactive turns and switches too, not just CCB-managed asks.
+    source = source.replace(
+        '  pi.on("input", async (event: any) => {',
+        '''  const observeNativeSession = (ctx: any) => {
+    const manager = ctx?.sessionManager;
+    appendEvent("native_session", {
+      omp_session_id: String(manager?.getSessionId?.() || ""),
+      omp_session_path: String(manager?.getSessionFile?.() || ""),
+    });
+  };
+  pi.on("session_switch", async (_event: any, ctx: any) => {
+    observeNativeSession(ctx);
+  });
+  pi.on("input", async (event: any, ctx: any) => {
+    observeNativeSession(ctx);''',
+    )
+    source = source.replace(
+        '  pi.on("turn_end", async (event: any) => {',
+        '  pi.on("turn_end", async (event: any, ctx: any) => {\n    observeNativeSession(ctx);',
+    )
+    from .composer_bridge import BRIDGE, IMPORTS
+    return IMPORTS + source.replace(
+        'export default function ccbOmpCompletion(pi: any): void {',
+        'export default function ccbOmpCompletion(pi: any): void {' + BRIDGE,
+    )
 
 
 __all__ = ["build_runtime_launcher", "prepare_launch_context"]

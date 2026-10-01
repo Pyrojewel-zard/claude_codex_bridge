@@ -81,6 +81,8 @@ class ClaudeProjectSession:
     def prepare_crash_recovery(self, reason: str) -> tuple[bool, str] | None:
         if reason != 'provider_session_missing':
             return None
+        if self.data.get('ccb_claude_auto_restore') is False:
+            return False, 'Claude restore was not selected by CCB; preserve explicit session controls'
         command_repaired = False
         for key in ('claude_start_cmd', 'start_cmd'):
             current = self.data.get(key)
@@ -98,7 +100,11 @@ class ClaudeProjectSession:
             )
         for key in ('claude_session_id', 'claude_session_path'):
             if self.data.get(key):
+                self.data[f'old_{key}'] = self.data[key]
                 self.data[key] = ''
+        self.data['ccb_claude_auto_restore'] = False
+        self.data['ccb_continuity_status'] = 'fresh_after_native_restore_failure'
+        self.data['ccb_claude_restore_fallback_reason'] = reason
         self._write_back()
         return True, 'Removed stale CCB Claude --continue binding; starting a fresh managed conversation'
 

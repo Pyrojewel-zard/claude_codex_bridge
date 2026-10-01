@@ -47,6 +47,14 @@ override the shipped contracts.
 
 ## File Map
 
+- [v8.7.5 publication receipt](evidence/v8.7.5-release-20260930.md):
+  immutable source/tag identity, public assets, npm installation, CI, and
+  retained Pi qualification limit.
+- [OMP/Pi control-input supersession repair](evidence/omp-pi-control-input-supersession-20260930.md):
+  `/model` no longer terminates an active ask; true new model turns and session
+  switches retain explicit supersession evidence.
+- [Codex/OMP/Pi continuity evidence](../provider-auth-authority/evidence/codex-omp-pi-continuity-20260929.md):
+  local OMP title-slot and Pi manual-session resume repairs, native cross-route replay.
 - [roadmap.md](roadmap.md): current phase, landed work, next tasks, and
   deferred follow-ups.
 - [implementation-status.md](implementation-status.md): operational handoff for

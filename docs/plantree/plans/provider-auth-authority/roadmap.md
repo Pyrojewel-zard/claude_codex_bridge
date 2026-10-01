@@ -4,16 +4,35 @@ Date: 2026-08-18
 
 ## Status Summary
 
-- Current status: Issue #319 is published in CCB `v8.6.10` from release commit
-  `705c932ec`, with annotated tag, bilingual GitHub Release assets, and npm
-  `latest` at `@seemseam/ccb@8.6.10`.
-- Current phase: qualify organic reconnect faults and continue the remaining
-  credential-writer and Provider-capability boundaries.
-- Next target: complete the macOS platform gate for Issue #319, then continue
-  organic real-fault qualification and the arbitrary `provider_profile.home`
-  writable-state boundary.
+- Current status: Claude/Codex continuity-first and OMP/Pi resume repair are
+  published in stable `v8.7.4`, commit `947f1a4a574ea601b4bb970fbcd6ca3cea36d3c2`;
+  GitHub assets, npm `latest`, and isolated installation are verified.
+  [Release receipt and CI limits](evidence/v8.7.4-release-20260929.md).
+- Current phase: public distribution and all release-commit CI workflows verified;
+  the WSL first-attempt failure and unchanged rerun are retained in the receipt.
+  Business panes were not restarted.
+- Next target: harden the WSL timing-sensitive fixture, qualify interactive restoration,
+  and align Gemini authority gates. Prior credential-writer/platform gates remain.
 
 ## Done
+
+- Published the scoped continuity repair as `v8.7.4`; release notes are bilingual,
+  all ten expected assets are present, and archive payloads match the tagged source.
+  [Receipt](evidence/v8.7.4-release-20260929.md).
+- Codex preserves validated native bindings across authority changes; OMP title
+  slots and Pi manual-session observations are handled. All three real CLIs
+  replay history on changed local route/key and repeat reopen.
+  [Evidence](evidence/codex-omp-pi-continuity-20260929.md).
+- Implemented Claude continuity-first selection, continuity persistence, explicit
+  session-control precedence, and fallback evidence locally. Tests: 232 focused
+  regressions plus one real Claude CLI replay. [Evidence](evidence/claude-continuity-first-20260929.md).
+- Corrected managed Claude API-key approval for explicit profile/agent env and
+  allowed ambient credentials without external writes. Local implementation:
+  [approval evidence](evidence/claude-explicit-key-approval-20260917.md).
+
+- PR353 merged with owner authorization; local compatibility follow-up keeps
+  custom endpoints without keys usable while binding explicit/allowed inherited
+  keys. [Regression and real HTTP evidence](evidence/pr353-env-key-20260917.md).
 
 - Established the one-way external-state requirement and explicit CCB-local
   configuration boundary.
@@ -107,6 +126,11 @@ Date: 2026-08-18
 
 ## In Progress
 
+- Review/integrate the combined slice and qualify interactive restoration;
+  align Gemini with [decision 008](decisions/008-continuity-first-native-restore.md).
+- Qualify the local PR350 integration and repaired auth boundaries on
+  `integrate/pr350-auth-fixes`; native platform and remote OAuth qualification
+  remain open. See [integration evidence](../../baseline/evidence/pr350-local-integration-20260916.md).
 - Complete organic real-fault qualification for `codex-reconnect` without
   manufacturing provider pressure.
 - Close the writable-home boundary for `provider_profile.home`.

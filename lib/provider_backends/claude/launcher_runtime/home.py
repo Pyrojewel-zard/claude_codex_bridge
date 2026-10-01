@@ -26,6 +26,12 @@ from provider_core.inherited_skills import (
     required_control_skill_names,
     route_inherited_skill_entries,
 )
+from provider_core.macos_keychain import (
+    prepare_private_keychain,
+    private_keychain_path,
+    remove_keychain_preferences,
+)
+from provider_core.platform_info import is_macos
 from provider_core.projected_assets import (
     remove_projected_path,
     route_projected_tree,
@@ -51,6 +57,11 @@ from storage.atomic import atomic_write_text
 
 from ..home_layout import ClaudeHomeLayout, claude_layout_for_home, claude_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
+from .env_runtime.exports import (
+    CLAUDE_INDEPENDENT_AUTH_ENV_KEYS,
+    collect_explicit_api_env,
+    inherit_api_env,
+)
 
 _CLAUDE_RUNTIME_SETTINGS_KEYS = ('hooks', 'permissions')
 _CLAUDE_CCB_PERMISSION_PREFIX = 'Bash(ccb '
@@ -463,6 +474,7 @@ def _prepare_managed_home(
         project_root=project_root,
         workspace_path=workspace_path,
         auto_permission=auto_permission,
+        extra_env=extra_env,
     )
     return _materialize_inherited_assets(
         source_home,
@@ -665,10 +677,13 @@ def _materialize_trust(
     project_root: Path | None,
     workspace_path: Path | None,
     auto_permission: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> None:
     source_trust = source_home / '.claude.json'
     profile_servers = _profile_mcp_servers(profile)
-    custom_api_key = _claude_custom_api_key_from_settings(target_layout.settings_path)
+    custom_api_key = _claude_effective_custom_api_key(
+        target_layout.settings_path, profile=profile, extra_env=extra_env,
+    )
     if (
         source_trust.is_file()
         or target_layout.trust_path.exists()
@@ -723,6 +738,30 @@ def _merge_json_objects(
 def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     previous = _read_claude_auth_projection(target_layout)
     previous_files = _manifest_string_set(previous, 'projected_files')
+    previous_json_keys = _manifest_string_set(previous, 'projected_json_keys')
+    if _valid_claude_auth_projection(previous) and 'projected_json_keys' not in previous:
+        previous_json_keys.update(_CLAUDE_JSON_AUTH_METADATA_KEYS)
+    source_trust = (
+        _read_source_json_object(
+            source_home / '.claude.json',
+            label='Claude account metadata',
+        )
+        if _inherits_external_auth(profile)
+        else {}
+    )
+    projected_json_keys = {
+        key
+        for key in _CLAUDE_JSON_AUTH_METADATA_KEYS
+        if _inherits_external_auth(profile) and key in source_trust
+    }
+    expired_json_keys = previous_json_keys - projected_json_keys
+    for trust_path in (target_layout.legacy_trust_path, target_layout.trust_path):
+        trust_payload = _read_json_object(trust_path)
+        changed = False
+        for key in expired_json_keys:
+            changed = trust_payload.pop(key, None) is not None or changed
+        if changed:
+            _write_json_object(trust_path, trust_payload)
     credentials_name = _relative_to_home(
         target_layout.credentials_path,
         target_layout.home_root,
@@ -744,6 +783,7 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
             source_home=source_home,
             projected_files=(),
             projected_env_keys=(),
+            projected_json_keys=(),
             status=(
                 'explicit_api_authority'
                 if _profile_has_explicit_credential(profile)
@@ -788,22 +828,24 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
         source_home=source_home,
         projected_files=tuple(sorted(projected_files)),
         projected_env_keys=tuple(sorted(projected_env_keys)),
+        projected_json_keys=tuple(sorted(projected_json_keys)),
         status=status,
     )
 
 
 def _materialize_macos_keychain_preferences(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
-    del source_home, profile
-    target = target_layout.home_root / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    del source_home
     target_keychains = target_layout.home_root / 'Library' / 'Keychains'
     # Older CCB releases linked this path back to the user's real Keychains
     # directory.  That made a managed provider logout capable of mutating the
-    # external login authority.  Credential inheritance is now copy-only, so
-    # detach any legacy link before doing anything else.
+    # external login authority. Detach it before preparing private state.
     _remove_keychains_link(target_keychains)
-    # A copied preference file can itself point Security.framework back to the
-    # user's global keychain database, so remove legacy copies as well.
-    _remove_file(target)
+    if is_macos():
+        prepare_private_keychain(target_layout.home_root)
+    else:
+        # An inherited preference can point Security.framework back to the
+        # user's login Keychain, so never retain it in a managed HOME.
+        remove_keychain_preferences(target_layout.home_root)
 
 
 def _remove_keychains_link(path: Path) -> None:
@@ -842,9 +884,8 @@ def _projected_claude_json_payload(
 
     _merge_profile_mcp_servers(merged, profile=profile)
 
-    if not _inherits_auth(profile):
-        for key in _CLAUDE_JSON_AUTH_METADATA_KEYS:
-            merged.pop(key, None)
+    if not _inherits_external_auth(profile):
+        # Preserve Agent-owned metadata without importing source metadata.
         return merged
 
     for key in (*_CLAUDE_JSON_AUTH_METADATA_KEYS, *_CLAUDE_JSON_AUTH_COMPANION_KEYS):
@@ -1212,13 +1253,17 @@ def _sync_managed_macos_keychain_auth(
     service = _managed_macos_keychain_service(target_layout)
     if service in _macos_keychain_services():
         raise RuntimeError('refusing to overwrite the external Claude Keychain login')
+    managed_env = dict(os.environ)
+    managed_env['HOME'] = str(target_layout.home_root)
     try:
         existing = subprocess.run(
-            [security, 'find-generic-password', '-a', account, '-s', service, '-w'],
+            [security, 'find-generic-password', '-a', account, '-s', service, '-w',
+             str(private_keychain_path(target_layout.home_root))],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
+            env=managed_env,
         )
     except Exception as exc:
         raise RuntimeError(f'cannot inspect agent-private Claude Keychain login: {exc}') from exc
@@ -1243,14 +1288,16 @@ def _sync_managed_macos_keychain_auth(
                 service,
                 '-w',
                 credential_text,
+                str(private_keychain_path(target_layout.home_root)),
             ],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
+            env=managed_env,
         )
     except Exception as exc:
-        raise RuntimeError(f'cannot seed agent-private Claude Keychain login: {exc}') from exc
+        raise RuntimeError(f'cannot seed agent-private Claude Keychain login: {type(exc).__name__}') from None
     if result.returncode != 0:
         raise RuntimeError('cannot seed agent-private Claude Keychain login')
 
@@ -1265,13 +1312,17 @@ def _remove_managed_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None
     service = _managed_macos_keychain_service(target_layout)
     if service in _macos_keychain_services():
         return
+    managed_env = dict(os.environ)
+    managed_env['HOME'] = str(target_layout.home_root)
     try:
         subprocess.run(
-            [security, 'delete-generic-password', '-a', account, '-s', service],
+            [security, 'delete-generic-password', '-a', account, '-s', service,
+             str(private_keychain_path(target_layout.home_root))],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
+            env=managed_env,
         )
     except Exception:
         pass
@@ -1297,9 +1348,9 @@ def _projected_settings_payload(
     if not _inherits_api(profile):
         for key in provider_api_env_keys('claude'):
             env_payload.pop(key, None)
-    elif not _inherits_external_auth(profile):
-        env_payload.pop('ANTHROPIC_AUTH_TOKEN', None)
-        env_payload.pop('ANTHROPIC_API_KEY', None)
+    if not _inherits_external_auth(profile):
+        for key in CLAUDE_INDEPENDENT_AUTH_ENV_KEYS:
+            env_payload.pop(key, None)
         # When the agent owns an explicit base URL, the inherited host route must
         # not win over it: the shell env already exports the agent's resolved
         # profile env, so drop the host's route key instead of shadowing it.
@@ -1511,6 +1562,24 @@ def _claude_custom_api_key_from_settings(settings_path: Path) -> object:
     settings = _read_json_object(settings_path)
     env_payload = _read_env_payload(settings)
     return env_payload.get('ANTHROPIC_API_KEY')
+
+
+def _claude_effective_custom_api_key(settings_path: Path, *, profile, extra_env) -> object:
+    api_keys = provider_api_env_keys('claude')
+    explicit = collect_explicit_api_env(
+        profile=profile, extra_env=extra_env, api_keys=api_keys,
+    )
+    # Explicit credentials are exported by the launcher, intentionally absent
+    # from projected settings. Never approve an inherited key in their place.
+    if any(_env_value_present(explicit.get(key)) for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')):
+        return explicit.get('ANTHROPIC_API_KEY')
+    managed = _read_env_payload(_read_json_object(settings_path))
+    if any(_env_value_present(managed.get(key)) for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')):
+        return managed.get('ANTHROPIC_API_KEY')
+    inherited = inherit_api_env(
+        explicit, profile=profile, inherited_env=dict(os.environ), api_keys=api_keys,
+    )
+    return inherited.get('ANTHROPIC_API_KEY')
 
 
 def _approve_claude_custom_api_key(payload: dict[str, object], api_key: object) -> None:
@@ -1852,6 +1921,7 @@ def _write_claude_auth_projection(
     source_home: Path,
     projected_files: tuple[str, ...],
     projected_env_keys: tuple[str, ...],
+    projected_json_keys: tuple[str, ...],
     status: str,
 ) -> None:
     path = target_layout.home_root / _CLAUDE_AUTH_PROJECTION_MANIFEST
@@ -1862,6 +1932,7 @@ def _write_claude_auth_projection(
         'source_home': str(Path(source_home).expanduser()),
         'projected_files': list(projected_files),
         'projected_env_keys': list(projected_env_keys),
+        'projected_json_keys': list(projected_json_keys),
     }
     atomic_write_text(
         path,

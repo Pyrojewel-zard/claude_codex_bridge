@@ -163,6 +163,9 @@ def _stable_claude_cli_capabilities(monkeypatch) -> None:
     )
 
 
+pytestmark = pytest.mark.usefixtures('stub_claude_private_keychain')
+
+
 def _clipboard_bind_call(key: str) -> tuple[str, tuple[str, ...]]:
     return (
         'bind-key',
@@ -2337,8 +2340,9 @@ def test_native_cli_launcher_builds_provider_state_payload(
     assert payload[f'{provider}_state_dir'] == str(state_dir)
     assert payload[f'{provider}_home'] == str(state_dir / 'home')
     assert payload[f'{provider}_data_dir'] == str(state_dir / 'data')
-    if provider == 'pi':
-        assert 'pi_session_id' not in payload
+    if provider in {'pi', 'omp'}:
+        # CCB launch identity is not a provider-native conversation identity.
+        assert f'{provider}_session_id' not in payload
     else:
         assert payload[f'{provider}_session_id'] == 'sess-native'
     assert f'HOME={shlex.quote(str(state_dir / "home"))}' in start_cmd
@@ -3351,6 +3355,124 @@ def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeyp
     assert 'agent2-session-id' not in cmd
 
 
+def test_codex_launcher_resume_with_permission_overrides_stays_local_cli(monkeypatch, tmp_path: Path) -> None:
+    """#346: `resume <id>` combined with permission overrides must not use the
+    managed remote path, which the Codex CLI rejects. The requested permission
+    policy stays effective on the native local CLI."""
+    from provider_backends.codex.launcher_runtime.command_runtime import (
+        build_start_cmd as build_start_cmd_impl,
+    )
+    from provider_backends.codex.launcher_runtime.command_runtime.managed_app_server import (
+        build_managed_app_server_command,
+    )
+
+    project_root = tmp_path / 'repo-codex-resume-remote-policy'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    ccb_dir = project_root / '.ccb'
+    ccb_dir.mkdir(parents=True, exist_ok=True)
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=True)
+
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    _write_project_memory(project_root, 'shared memory\n')
+    prepared = _prepare_codex_home_for_test(spec, runtime_dir)
+    marker = json.loads((runtime_dir / 'codex-memory-projection.json').read_text(encoding='utf-8'))
+    (ccb_dir / '.codex-agent1-session').write_text(
+        json.dumps(
+            {
+                'codex_session_id': 'agent1-session-id',
+                'codex_memory_projection_sha256': marker['sha256'],
+                'codex_start_cmd': 'codex resume agent1-session-id',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    cmd = build_start_cmd_impl(
+        command,
+        spec,
+        runtime_dir,
+        'sess-resume-policy',
+        prepared_state=prepared,
+        load_resolved_provider_profile_fn=lambda runtime_dir: None,
+        prepare_codex_home_overrides_fn=lambda runtime_dir, profile, **kwargs: {},
+        provider_start_parts_fn=lambda provider: ['codex'],
+        load_resume_session_id_fn=lambda spec, runtime_dir, profile, current_fingerprint, current_memory_fingerprint: 'agent1-session-id',
+        build_codex_shell_prefix_fn=lambda profile: [],
+        supports_session_fork_fn=lambda parts: False,
+        supports_managed_app_server_fn=lambda parts: True,
+        build_managed_app_server_command_fn=build_managed_app_server_command,
+    )
+
+    assert extract_resume_session_id(cmd) == 'agent1-session-id'
+    # Permission policy survives on the local resume. This CCB fork expresses
+    # auto permission as the explicit `--yolo` switch (see the frontend: `ccb`
+    # passes `-y` unless suppressed), which is equivalent to the upstream
+    # `--ask-for-approval never --sandbox danger-full-access` pair.
+    assert '--yolo' in cmd
+    assert '--dangerously-bypass-hook-trust' in cmd
+    # The managed remote path is deliberately not used for this resume.
+    assert '--remote' not in cmd
+    assert prepared.get('codex_app_server_enabled') is False
+
+def test_codex_launcher_resume_without_overrides_can_use_remote(monkeypatch, tmp_path: Path) -> None:
+    """#346 control: a resume without permission overrides keeps the managed
+    remote surface (unchanged pre-existing behavior)."""
+    from provider_backends.codex.launcher_runtime.command_runtime import (
+        build_start_cmd as build_start_cmd_impl,
+    )
+    from provider_backends.codex.launcher_runtime.command_runtime.managed_app_server import (
+        build_managed_app_server_command,
+    )
+
+    runtime_dir = tmp_path / 'runtime-codex-resume-remote-plain'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=True, auto_permission=False)
+
+    cmd = build_start_cmd_impl(
+        command,
+        spec,
+        runtime_dir,
+        'sess-resume-plain',
+        prepared_state={'project_root': tmp_path, 'workspace_path': tmp_path},
+        load_resolved_provider_profile_fn=lambda runtime_dir: None,
+        prepare_codex_home_overrides_fn=lambda runtime_dir, profile, **kwargs: {},
+        provider_start_parts_fn=lambda provider: ['codex'],
+        load_resume_session_id_fn=lambda spec, runtime_dir, profile, current_fingerprint, current_memory_fingerprint: 'agent1-session-id',
+        build_codex_shell_prefix_fn=lambda profile: [],
+        supports_session_fork_fn=lambda parts: False,
+        supports_managed_app_server_fn=lambda parts: True,
+        build_managed_app_server_command_fn=build_managed_app_server_command,
+    )
+
+    # Without permission overrides, the managed remote resume stays in place.
+    assert '--remote' in cmd
+    assert extract_resume_session_id(cmd) == 'agent1-session-id'
+
+
+def test_codex_launcher_fresh_start_with_overrides_can_use_remote(monkeypatch, tmp_path: Path) -> None:
+    """#346 control: a fresh start (no resume) keeps the managed remote path
+    even with permission overrides; the CLI restriction only covers resume."""
+    runtime_dir = tmp_path / 'runtime-codex-fresh-remote'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=True)
+
+    cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-fresh-remote')
+
+    # Fork auto mode: the explicit `--yolo` switch carries the permission
+    # policy instead of the upstream ask-for-approval/sandbox pair.
+    assert '--yolo' in cmd
+    # No resume id: the remote branch is allowed (when supported).
+    assert extract_resume_session_id(cmd) is None
+
+
 def test_codex_launcher_provider_command_template_wraps_original_resume_command(
     monkeypatch,
     tmp_path: Path,
@@ -3506,6 +3628,57 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
         f'claude --setting-sources user,project,local --settings {shlex.quote(json.dumps(settings_payload, ensure_ascii=False))} '
         '--permission-mode bypassPermissions --continue'
     )
+
+
+def test_claude_launcher_allows_login_commands_for_agent_private_auth(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    profile = ResolvedProviderProfile(
+        provider='claude',
+        agent_name='reviewer',
+        mode='isolated',
+        inherit_auth=False,
+        inherit_api=True,
+    )
+    monkeypatch.setenv('ANTHROPIC_AUTH_TOKEN', 'ambient-oauth')
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'ambient-api-key')
+    monkeypatch.setenv('CLAUDE_CODE_OAUTH_TOKEN', 'ambient-claude-oauth')
+    monkeypatch.setenv('CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', '9')
+    monkeypatch.setenv('DISABLE_LOGIN_COMMAND', '1')
+    monkeypatch.setenv('DISABLE_LOGOUT_COMMAND', '1')
+    monkeypatch.setattr(claude_launcher, 'load_resolved_provider_profile', lambda _runtime: profile)
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        ParsedStartCommand(
+            project=None,
+            agent_names=('reviewer',),
+            restore=False,
+            auto_permission=False,
+        ),
+        _spec('reviewer', provider='claude'),
+        runtime_dir,
+        'claude-private-auth',
+        prepared_state=_claude_prepared_state(runtime_dir),
+    )
+
+    assert 'DISABLE_LOGIN_COMMAND=1' not in start_cmd
+    assert 'DISABLE_LOGOUT_COMMAND=1' not in start_cmd
+    assert 'DISABLE_AUTOUPDATER=1' in start_cmd
+    assert 'unset ANTHROPIC_AUTH_TOKEN' in start_cmd
+    assert 'unset ANTHROPIC_API_KEY' in start_cmd
+    assert 'unset CLAUDE_CODE_OAUTH_TOKEN' in start_cmd
+    assert 'unset CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR' in start_cmd
+    assert 'unset DISABLE_LOGIN_COMMAND' in start_cmd
+    assert 'unset DISABLE_LOGOUT_COMMAND' in start_cmd
 
 
 def test_claude_launcher_exports_plugin_seed_before_process_start(monkeypatch, tmp_path: Path) -> None:
@@ -4327,7 +4500,7 @@ def test_codex_launcher_build_start_cmd_api_override_clears_global_route_config(
     assert 'requires_openai_auth = false' in config_text
     assert 'external_migration = false' in config_text
     assert 'https://api.ikuncode.cc/v1' not in config_text
-    assert 'env_key' not in config_text
+    assert 'env_key = "OPENAI_API_KEY"' in config_text
     assert (profile_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"profile-key"}\n'
 
 
@@ -5032,6 +5205,7 @@ def test_claude_launcher_build_start_cmd_exports_user_session_transport_without_
     monkeypatch.setenv('AGENT_ROLES_STORE', '/home/demo/.roles')
     monkeypatch.setenv('CLAUDE_PROJECTS_ROOT', str(ambient_projects))
     monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
     monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: source_home)
     monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: source_home)
     monkeypatch.setattr(

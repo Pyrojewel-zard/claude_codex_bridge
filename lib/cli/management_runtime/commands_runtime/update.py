@@ -56,6 +56,16 @@ POST_UPDATE_TIMEOUT_SECONDS = 300.0
 POST_UPDATE_WITH_PROVIDERS_TIMEOUT_SECONDS = 60.0 * 60.0
 ENTRYPOINT_SMOKE_TIMEOUT_SECONDS = 30.0
 DEFAULT_CATALOG_ROLE_IDS = ('agentroles.archi', 'agentroles.ccb_self')
+# Workflow preview roles remain explicitly installable, but are not advertised
+# by general install/update onboarding before the V3 workflow is released.
+WORKFLOW_PREVIEW_ROLE_IDS = frozenset({
+    'agentroles.ccb_checker',
+    'agentroles.ccb_clarification_broker',
+    'agentroles.ccb_plan_reviewer',
+    'agentroles.ccb_round_checker',
+    'agentroles.ccb_worker',
+    'agentroles.su_ccb',
+})
 
 
 def set_tmux_ui_active(active: bool) -> None:
@@ -1022,6 +1032,7 @@ def _print_catalog_followups(rows: tuple[dict[str, object], ...], *, include_def
         row
         for row in rows
         if row.get('status') == 'available'
+        and str(row.get('role_id') or '').strip() not in WORKFLOW_PREVIEW_ROLE_IDS
     ]
     recommended = [
         row

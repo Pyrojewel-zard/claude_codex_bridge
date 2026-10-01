@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import pytest
 from pathlib import Path
 
 from provider_backends.claude.launcher_runtime.env import build_claude_env_prefix, claude_user_base_url, write_claude_settings_overlay
@@ -124,9 +127,33 @@ def test_rehydrate_claude_persisted_start_cmd_restores_proxy_auth_token() -> Non
         credential_env={'ANTHROPIC_AUTH_TOKEN': 'proxy-token'},
     )
 
-    assert restored.startswith('export ANTHROPIC_AUTH_TOKEN=proxy-token;')
+    assert 'export ANTHROPIC_AUTH_TOKEN=proxy-token;' in restored
     assert 'ANTHROPIC_BASE_URL=https://proxy.example.test' in restored
     assert restored.endswith('claude --continue')
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX launcher execution')
+@pytest.mark.parametrize('key', ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'])
+def test_rehydrated_generated_launcher_keeps_credentials_after_cleanup(tmp_path, key):
+    secret = "synthetic 'token; with spaces"
+    profile = ResolvedProviderProfile(provider='claude', agent_name='test',
+        env={key: secret, 'ANTHROPIC_BASE_URL': 'https://example.invalid'})
+    prefix = build_claude_env_prefix(profile=profile, env={},
+        should_drop_base_url_fn=lambda value: False, claude_user_base_url_fn=lambda: '')
+    persisted = _persistable_start_cmd(prefix + '; true', settings_path=tmp_path / 'settings.json')
+    assert secret not in persisted
+    restored = rehydrate_claude_persisted_start_cmd(persisted, credential_env=profile.env)
+    result = subprocess.run(['sh', '-c', restored + '; printf "%s" "$' + key + '"'],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout == secret
+
+
+def test_rehydration_preserves_quoted_prefix_and_shell_template():
+    prefix = "export LABEL='a; unset ANTHROPIC_AUTH_TOKEN'; unset ANTHROPIC_AUTH_TOKEN; "
+    suffix = 'exec wrapper "$SHELL" -- claude --continue'
+    restored = rehydrate_claude_persisted_start_cmd(prefix + suffix,
+        credential_env={'ANTHROPIC_AUTH_TOKEN': 'synthetic'})
+    assert restored == prefix + 'export ANTHROPIC_AUTH_TOKEN=synthetic; ' + suffix
 
 
 def test_claude_respawn_credential_env_reads_provider_profile(tmp_path: Path) -> None:

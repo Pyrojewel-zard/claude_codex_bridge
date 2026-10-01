@@ -42,6 +42,9 @@ from provider_core.pathing import session_filename_for_agent
 from storage.paths import PathLayout
 
 
+pytestmark = pytest.mark.usefixtures('stub_claude_private_keychain')
+
+
 @pytest.fixture(autouse=True)
 def _anchor_runtime_state_for_tests(monkeypatch) -> None:
     """Pin runtime state under .ccb for stable path assertions.
@@ -1807,7 +1810,7 @@ def test_materialize_codex_profile_writes_agent_local_provider_config_for_explic
     assert 'requires_openai_auth = false' in config_text
     assert 'external_migration = false' in config_text
     assert 'https://stale.example.test/v1' not in config_text
-    assert 'env_key' not in config_text
+    assert 'env_key = "OPENAI_API_KEY"' in config_text
     assert codex_provider_authority_fingerprint(profile)
     auth_payload = json.loads((runtime_home / 'auth.json').read_text(encoding='utf-8'))
     assert auth_payload == {'OPENAI_API_KEY': 'profile-key'}
@@ -1928,6 +1931,40 @@ def test_materialize_codex_home_config_agent_model_overrides_inherited_global_mo
     )
     config = tomllib.loads((agent_home / 'config.toml').read_text(encoding='utf-8'))
     assert config['model'] == 'deepseek-v4-pro'
+
+
+@pytest.mark.parametrize(
+    'explicit_key,ambient_key,inherit_api,expects_env_key',
+    [
+        ('profile-key', '', False, True),
+        ('profile-key', 'ambient-key', True, True),
+        ('', 'ambient-key', True, True),
+        ('', 'ambient-key', False, False),
+        ('', '', True, False),
+        ('', '   ', True, False),
+    ],
+)
+def test_codex_custom_endpoint_only_requires_available_api_env(
+    tmp_path: Path, monkeypatch, explicit_key, ambient_key, inherit_api, expects_env_key,
+) -> None:
+    source = tmp_path / 'source'
+    source.mkdir()
+    config = source / 'config.toml'
+    config.write_text('model = "local-model"\n', encoding='utf-8')
+    monkeypatch.setenv('OPENAI_API_KEY', ambient_key)
+    env = {'OPENAI_BASE_URL': 'http://127.0.0.1:11434/v1'}
+    if explicit_key:
+        env['OPENAI_API_KEY'] = explicit_key
+    profile = ProviderProfileSpec(mode='isolated', inherit_api=inherit_api, env=env)
+    target = tmp_path / 'managed'
+    materialize_codex_home_config(target, profile=profile, source_home=source)
+    payload = tomllib.loads((target / 'config.toml').read_text(encoding='utf-8'))
+    provider = payload['model_providers']['custom']
+    assert (provider.get('env_key') == 'OPENAI_API_KEY') is expects_env_key
+    assert provider['requires_openai_auth'] is False
+    assert provider['base_url'] == env['OPENAI_BASE_URL']
+    assert config.read_text(encoding='utf-8') == 'model = "local-model"\n'
+    assert not (source / 'auth.json').exists()
 
 
 def test_materialize_codex_home_config_explicit_model_catalog_wins_over_stale_profile_env(tmp_path: Path) -> None:
@@ -2663,6 +2700,41 @@ def test_materialize_claude_home_config_projects_system_settings_into_managed_ho
     assert 'customApiKeyResponses' not in trust
 
 
+@pytest.mark.parametrize('inherit', [False, True])
+@pytest.mark.parametrize('source', ['profile', 'agent', 'ambient', 'token'])
+def test_claude_approval_matches_launch_credential(tmp_path: Path, monkeypatch, inherit, source) -> None:
+    source_home = tmp_path / 'source'
+    source_home.mkdir()
+    monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+    monkeypatch.delenv('ANTHROPIC_AUTH_TOKEN', raising=False)
+    key = 'fixture-current-api-key-12345678901234567890'
+    env = {'ANTHROPIC_BASE_URL': 'https://endpoint.example.test'}
+    extra_env = {}
+    if source == 'profile':
+        env['ANTHROPIC_API_KEY'] = key
+    elif source == 'agent':
+        env['ANTHROPIC_API_KEY'] = 'stale-profile-key'
+        extra_env['ANTHROPIC_API_KEY'] = key
+    elif source == 'ambient':
+        monkeypatch.setenv('ANTHROPIC_API_KEY', key)
+    else:
+        env['ANTHROPIC_AUTH_TOKEN'] = 'fixture-token'
+        monkeypatch.setenv('ANTHROPIC_API_KEY', key)
+    profile = ProviderProfileSpec(
+        mode='isolated', inherit_api=inherit, inherit_auth=inherit, env=env,
+    )
+    layout = materialize_claude_home_config(
+        tmp_path / 'managed', source_home=source_home, profile=profile, extra_env=extra_env,
+    )
+    trust = json.loads(layout.trust_path.read_text())
+    approved = trust.get('customApiKeyResponses', {}).get('approved', [])
+    expected = source in ('profile', 'agent') or (source == 'ambient' and inherit)
+    assert (key[-20:] in approved) is expected
+    assert 'stale-profile-key' not in approved
+    assert key not in layout.trust_path.read_text()
+    assert list(source_home.iterdir()) == []
+
+
 def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
@@ -2768,6 +2840,7 @@ def test_materialize_claude_home_config_projects_official_login_auth_into_manage
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_credentials = source_home / '.claude' / '.credentials.json'
@@ -3061,9 +3134,12 @@ def test_materialize_claude_home_config_strips_mcp_config_when_config_not_inheri
     assert 'mcpServers' not in payload['projects'][target_project_key]
 
 
-def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inherited(
+def test_materialize_claude_home_config_preserves_private_login_metadata_when_auth_not_inherited(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     target_trust = target_home / '.claude' / '.claude.json'
@@ -3071,7 +3147,7 @@ def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inhe
     target_trust.write_text(
         json.dumps(
             {
-                'oauthAccount': {'emailAddress': 'stale@example.test'},
+                'oauthAccount': {'emailAddress': 'agent@example.test'},
                 'primaryApiKey': 'stale-key',
                 '/managed/workspace': {'hasTrustDialogAccepted': True},
             },
@@ -3090,9 +3166,190 @@ def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inhe
     )
 
     payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
-    assert 'oauthAccount' not in payload
+    assert payload['oauthAccount']['emailAddress'] == 'agent@example.test'
     assert 'primaryApiKey' not in payload
     assert payload['/managed/workspace']['hasTrustDialogAccepted'] is True
+
+
+def test_materialize_claude_home_config_filters_source_settings_auth_for_private_login(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
+    source_home = tmp_path / 'system-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'source-auth',
+                    'ANTHROPIC_API_KEY': 'source-api-key',
+                    'CLAUDE_CODE_OAUTH_TOKEN': 'source-oauth',
+                    'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR': '9',
+                    'DISABLE_LOGIN_COMMAND': '1',
+                    'DISABLE_LOGOUT_COMMAND': '1',
+                    'MCP_TIMEOUT': '30000',
+                }
+            }
+        ) + '\n',
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        tmp_path / 'managed-home',
+        profile=ProviderProfileSpec(inherit_auth=False),
+        source_home=source_home,
+    )
+
+    env = json.loads(layout.settings_path.read_text(encoding='utf-8'))['env']
+    assert env == {'MCP_TIMEOUT': '30000'}
+
+
+def test_materialize_claude_home_config_drops_legacy_projected_metadata_when_auth_not_inherited(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    target_trust = target_home / '.claude' / '.claude.json'
+    target_trust.parent.mkdir(parents=True)
+    target_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'source@example.test'},
+                '/managed/workspace': {'hasTrustDialogAccepted': True},
+            }
+        ) + '\n',
+        encoding='utf-8',
+    )
+    (target_home / '.ccb-auth-projection.json').write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_claude_auth_projection',
+                'status': 'inherited_auth',
+                'source_home': str(source_home),
+                'projected_files': [],
+                'projected_env_keys': [],
+            }
+        ) + '\n',
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert 'oauthAccount' not in payload
+    assert payload['/managed/workspace']['hasTrustDialogAccepted'] is True
+    manifest = json.loads((target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8'))
+    assert manifest['projected_json_keys'] == []
+
+
+def test_materialize_claude_home_config_does_not_project_account_metadata_with_explicit_api_key(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
+    source_home = tmp_path / 'system-home'
+    source_trust = source_home / '.claude.json'
+    source_trust.parent.mkdir(parents=True)
+    source_trust.write_text(
+        '{"oauthAccount":{"emailAddress":"source@example.test"}}\n',
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        tmp_path / 'managed-home',
+        profile=ProviderProfileSpec(
+            inherit_auth=True,
+            inherit_api=False,
+            env={'ANTHROPIC_API_KEY': 'agent-api-key'},
+        ),
+        source_home=source_home,
+    )
+
+    assert 'oauthAccount' not in json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    manifest = json.loads((layout.home_root / '.ccb-auth-projection.json').read_text(encoding='utf-8'))
+    assert manifest['projected_json_keys'] == []
+
+
+def test_materialize_claude_home_config_drops_projected_metadata_once_then_preserves_private_login(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_trust = source_home / '.claude.json'
+    source_trust.parent.mkdir(parents=True)
+    source_trust.write_text(
+        '{"oauthAccount":{"emailAddress":"source@example.test"}}\n',
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    assert json.loads(layout.trust_path.read_text(encoding='utf-8'))['oauthAccount']['emailAddress'] == 'source@example.test'
+
+    source_trust.write_text('{}\n', encoding='utf-8')
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    assert 'oauthAccount' not in json.loads(layout.trust_path.read_text(encoding='utf-8'))
+
+    independent = ProviderProfileSpec(inherit_auth=False, inherit_api=False)
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=independent,
+        source_home=source_home,
+    )
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert 'oauthAccount' not in payload
+
+    payload['oauthAccount'] = {'emailAddress': 'agent@example.test'}
+    layout.trust_path.write_text(json.dumps(payload) + '\n', encoding='utf-8')
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=independent,
+        source_home=source_home,
+    )
+    assert json.loads(layout.trust_path.read_text(encoding='utf-8'))['oauthAccount']['emailAddress'] == 'agent@example.test'
+
+
+def test_materialize_claude_home_config_preserves_projected_metadata_on_source_read_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_trust = source_home / '.claude.json'
+    source_trust.parent.mkdir(parents=True)
+    source_trust.write_text(
+        '{"oauthAccount":{"emailAddress":"source@example.test"}}\n',
+        encoding='utf-8',
+    )
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    source_trust.write_text('{invalid-json\n', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='cannot read inherited Claude account metadata source'):
+        materialize_claude_home_config(target_home, source_home=source_home)
+    assert json.loads(layout.trust_path.read_text(encoding='utf-8'))['oauthAccount']['emailAddress'] == 'source@example.test'
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False),
+        source_home=source_home,
+    )
+    assert 'oauthAccount' not in json.loads(layout.trust_path.read_text(encoding='utf-8'))
 
 
 def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
@@ -3103,6 +3360,7 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
     target_home = tmp_path / 'managed-home'
     source_home.mkdir(parents=True, exist_ok=True)
     calls: list[list[str]] = []
+    managed_command_homes: list[str | None] = []
 
     class Result:
         def __init__(self, returncode: int, stdout: str = '') -> None:
@@ -3116,6 +3374,8 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         assert kwargs['text'] is True
         command = str(argv[1])
         service = str(argv[argv.index('-s') + 1])
+        if service not in claude_home_runtime._macos_keychain_services():
+            managed_command_homes.append((kwargs.get('env') or {}).get('HOME'))
         if command == 'find-generic-password' and service == 'Claude Code-credentials':
             return Result(
                 0,
@@ -3126,6 +3386,7 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3150,6 +3411,7 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         and call[call.index('-s') + 1] == managed_service
         for call in calls
     )
+    assert managed_command_homes == [str(target_home), str(target_home)]
     assert not any(
         call[1] in {'add-generic-password', 'delete-generic-password'}
         and call[call.index('-s') + 1] == 'Claude Code-credentials'
@@ -3196,6 +3458,7 @@ def test_materialize_claude_home_config_refreshes_existing_macos_keychain_after_
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3265,6 +3528,7 @@ def test_materialize_claude_home_config_preserves_private_macos_keychain_refresh
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3338,6 +3602,7 @@ def test_materialize_claude_home_config_does_not_follow_owned_credentials_symlin
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3391,6 +3656,7 @@ def test_materialize_claude_home_config_observes_macos_keychain_logout(
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3450,6 +3716,7 @@ def test_materialize_claude_home_config_keychain_error_preserves_projection(
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3494,6 +3761,7 @@ def test_materialize_claude_home_config_private_keychain_inspection_error_fails_
         return Result(0)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3518,12 +3786,36 @@ def test_materialize_claude_home_config_does_not_project_macos_keychain_preferen
     )
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
 
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
     assert not target_plist.exists()
     assert source_plist.is_file()
+
+
+def test_materialize_claude_home_config_prepares_private_keychain_for_inherited_auth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir()
+    prepared: list[Path] = []
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
+    monkeypatch.setattr(
+        claude_home_runtime,
+        'prepare_private_keychain',
+        lambda home: prepared.append(home) or home / 'Library' / 'Keychains' / 'ccb-provider.keychain-db',
+    )
+    monkeypatch.setattr(claude_home_runtime, '_read_macos_keychain_claude_credentials', lambda: None)
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert prepared == [target_home.resolve()]
 
 
 def test_materialize_claude_home_config_never_links_macos_keychains_when_preferences_absent(
@@ -3536,11 +3828,12 @@ def test_materialize_claude_home_config_never_links_macos_keychains_when_prefere
     source_keychains.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
 
     materialize_claude_home_config(target_home, source_home=source_home)
 
     target_keychains = target_home / 'Library' / 'Keychains'
-    assert not target_keychains.exists()
+    assert target_keychains.is_dir()
     assert not target_keychains.is_symlink()
 
 
@@ -3557,10 +3850,11 @@ def test_materialize_claude_home_config_detaches_legacy_macos_keychains_link(
     os.symlink(source_keychains, target_keychains)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
 
     materialize_claude_home_config(target_home, source_home=source_home)
 
-    assert not target_keychains.exists()
+    assert target_keychains.is_dir()
     assert not target_keychains.is_symlink()
     assert source_keychains.is_dir()
 
@@ -3576,6 +3870,7 @@ def test_materialize_claude_home_config_does_not_copy_keychain_preferences_on_no
     source_plist.write_text('<plist/>\n', encoding='utf-8')
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
 
     materialize_claude_home_config(target_home, source_home=source_home)
 
@@ -3583,7 +3878,7 @@ def test_materialize_claude_home_config_does_not_copy_keychain_preferences_on_no
     assert not target_plist.exists()
 
 
-def test_materialize_claude_home_config_removes_keychain_preferences_when_auth_not_inherited(
+def test_materialize_claude_home_config_prepares_private_keychain_when_auth_not_inherited(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3595,8 +3890,20 @@ def test_materialize_claude_home_config_removes_keychain_preferences_when_auth_n
     target_plist.parent.mkdir(parents=True, exist_ok=True)
     source_plist.write_text('<plist><dict><key>DefaultKeychain</key><array/></dict></plist>\n', encoding='utf-8')
     target_plist.write_text('<plist><dict><key>OldKeychain</key><array/></dict></plist>\n', encoding='utf-8')
+    prepared: list[Path] = []
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
+    monkeypatch.setattr(
+        claude_home_runtime,
+        'prepare_private_keychain',
+        lambda home: prepared.append(home) or home / 'Library' / 'Keychains' / 'ccb-provider.keychain-db',
+    )
+    monkeypatch.setattr(
+        claude_home_runtime,
+        '_read_macos_keychain_claude_credentials',
+        lambda: pytest.fail('external Keychain must not be read'),
+    )
 
     materialize_claude_home_config(
         target_home,
@@ -3604,10 +3911,11 @@ def test_materialize_claude_home_config_removes_keychain_preferences_when_auth_n
         source_home=source_home,
     )
 
-    assert not target_plist.exists()
+    assert prepared == [target_home.resolve()]
+    assert target_plist.is_file()
 
 
-def test_materialize_claude_home_config_removes_macos_keychains_when_auth_not_inherited(
+def test_materialize_claude_home_config_replaces_legacy_keychain_link_for_private_auth(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3618,8 +3926,18 @@ def test_materialize_claude_home_config_removes_macos_keychains_when_auth_not_in
     source_keychains.mkdir(parents=True, exist_ok=True)
     target_keychains.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(source_keychains, target_keychains)
+    prepared: list[Path] = []
+
+    def prepare(home: Path) -> Path:
+        prepared.append(home)
+        keychain = home / 'Library' / 'Keychains' / 'ccb-provider.keychain-db'
+        keychain.parent.mkdir(parents=True, exist_ok=True)
+        keychain.write_bytes(b'private')
+        return keychain
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
+    monkeypatch.setattr(claude_home_runtime, 'prepare_private_keychain', prepare)
 
     materialize_claude_home_config(
         target_home,
@@ -3627,8 +3945,10 @@ def test_materialize_claude_home_config_removes_macos_keychains_when_auth_not_in
         source_home=source_home,
     )
 
-    assert not target_keychains.exists()
+    assert prepared == [target_home.resolve()]
+    assert target_keychains.is_dir()
     assert not target_keychains.is_symlink()
+    assert source_keychains.is_dir()
 
 
 def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_service(
@@ -3657,6 +3977,7 @@ def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_serv
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -3723,6 +4044,7 @@ def test_materialize_claude_home_config_reads_explicit_macos_keychain_override(
         return Result(44)
 
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: True)
     monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
     monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
     monkeypatch.setenv('USER', 'mac-user')
@@ -4879,6 +5201,7 @@ def test_materialize_claude_home_config_removes_only_source_owned_auth_after_log
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.claude' / 'settings.json'
@@ -4967,6 +5290,7 @@ def test_materialize_claude_home_config_preserves_unmarked_auth_with_malformed_m
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_home.mkdir(parents=True)
@@ -4998,6 +5322,7 @@ def test_materialize_claude_home_config_source_read_error_preserves_projection(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_credentials = source_home / '.claude' / '.credentials.json'
@@ -5026,7 +5351,10 @@ def test_materialize_claude_home_config_source_read_error_preserves_projection(
 
 def test_materialize_claude_home_config_preserves_unmarked_private_auth_when_auth_is_not_inherited(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     target_settings = target_home / '.claude' / 'settings.json'
@@ -5072,6 +5400,7 @@ def test_materialize_claude_home_config_preserves_managed_official_login_when_so
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(claude_home_runtime, 'is_macos', lambda: False)
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.claude' / 'settings.json'

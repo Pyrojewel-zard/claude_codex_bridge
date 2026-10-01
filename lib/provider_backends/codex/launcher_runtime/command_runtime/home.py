@@ -16,6 +16,7 @@ from provider_backends.codex.session_authority import (
     stored_session_authority_fingerprint,
 )
 from provider_backends.codex.start_cmd import strip_resume_start_cmd
+from provider_backends.codex.comm_runtime.binding import codex_session_meta_payload, is_codex_subagent_log
 from provider_backends.session_authority import rebind_provider_session_data
 from provider_sessions.files import safe_write_session
 from provider_core.inherited_skills import materialize_required_control_skills
@@ -683,6 +684,20 @@ def _link_project_session_binding(
 
     old_id = str(data.get('codex_session_id') or '').strip()
     old_path = _path_or_none(data.get('codex_session_path'))
+    # Authority selects credentials/routing, not conversation identity. Keep a
+    # proven Agent-local native binding on the normal exact-resume path. Do not
+    # resurrect old_* bindings after an explicit clear/session switch.
+    if old_id and old_path is not None and _session_binding_path_is_usable(data, session_root):
+        meta = codex_session_meta_payload(old_path)
+        if meta and str(meta.get('id') or '') == old_id and not is_codex_subagent_log(old_path):
+            rebind_provider_session_data(data, 'codex', current_fingerprint,
+                                         native_resume_compatible=True)
+            data['codex_home'] = str(codex_home)
+            data['codex_session_root'] = str(session_root)
+            ok, error = safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2))
+            if not ok:
+                raise RuntimeError(error or f'failed to rebind Codex session continuity: {session_file}')
+            return
     if old_path is not None and _relative_session_path(old_path, session_root) is None:
         data.pop('codex_session_path', None)
         old_path = None

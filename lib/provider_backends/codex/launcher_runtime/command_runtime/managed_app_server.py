@@ -218,6 +218,7 @@ def _managed_shell_command(
     quoted_socket = shlex.quote(str(socket_path))
     quoted_marker = shlex.quote(str(remote_marker))
     quoted_resume = shlex.quote(resume_id)
+    quoted_ref = shlex.quote(str(remote_marker) + '.wait-ref')
     remote_resume = ' '.join(shlex.quote(str(part)) for part in remote_resume_args)
     remote_fresh = ' '.join(shlex.quote(str(part)) for part in remote_fresh_args)
     local = ' '.join(shlex.quote(str(part)) for part in local_args)
@@ -234,24 +235,38 @@ def _managed_shell_command(
         (
             f'export CCB_CODEX_MANAGED_REMOTE=1 CCB_CODEX_RESUME_ID={quoted_resume}',
             f'rm -f {quoted_marker}',
+            # The wait reference is stamped before the first existence check
+            # so a leftover socket node from a previous generation (created
+            # before this pane started) cannot satisfy the wait: a stale node
+            # is never newer than the reference. A socket bound by the
+            # current generation after this pane started is newer and is
+            # accepted; when `find -newer` is unavailable the plain `-S`
+            # existence check still applies, and the final `exec ... --remote`
+            # remains the real connection arbiter (#345).
+            f': > {quoted_ref}',
             '_ccb_codex_wait=0',
             (
-                f'while [ ! -S {quoted_socket} ] && [ "$_ccb_codex_wait" -lt 100 ]; '
-                'do sleep 0.05; _ccb_codex_wait=$((_ccb_codex_wait + 1)); done'
+                f'while [ "$_ccb_codex_wait" -lt 100 ]; do '
+                f'if [ -S {quoted_socket} ] && {{ '
+                f'[ -n "$(find {quoted_socket} -newer {quoted_ref} 2>/dev/null)" ] || [ ! -x "$(command -v find)" ]; '
+                '}; then break; fi; '
+                'sleep 0.05; _ccb_codex_wait=$((_ccb_codex_wait + 1)); done'
             ),
             (
-                f'if [ -S {quoted_socket} ]; then '
+                f'if [ -S {quoted_socket} ] && {{ '
+                f'[ -n "$(find {quoted_socket} -newer {quoted_ref} 2>/dev/null)" ] || [ ! -x "$(command -v find)" ]; '
+                '}; then '
                 f"printf '%s\\n' {quoted_socket} > {quoted_marker}; "
                 f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then {remote_start}; '
                 f'else exec {remote_fresh}; fi; fi'
             ),
+            f'rm -f {quoted_ref}',
             (
                 f'if [ -n "$CCB_CODEX_RESUME_ID" ]; then {local_start}; '
                 f'else exec {local}; fi'
             ),
         )
     )
-
 
 # Keep the historical private import stable for existing callers/tests.
 _resume_with_fresh_fallback = resume_with_fresh_fallback

@@ -122,6 +122,8 @@ def build_session_payload(
         payload['codex_provider_authority_fingerprint'] = provider_authority_fingerprint
     if str(prepared_state.get('ccb_continuation_launch_mode') or '').strip() == 'fork':
         payload['ccb_continuation_launch_mode'] = 'fork'
+    if 'ccb_codex_auto_restore' in prepared_state:
+        payload['ccb_codex_auto_restore'] = bool(prepared_state['ccb_codex_auto_restore'])
     if bool(prepared_state.get('codex_app_server_enabled')):
         payload['codex_app_server_enabled'] = True
         payload['codex_app_server_socket'] = str(prepared_state.get('codex_app_server_socket') or '')

@@ -158,11 +158,23 @@ def _merge_existing_session_binding(
             ),
         )
         current_fingerprint = str(payload.get('claude_provider_authority_fingerprint') or '').strip()
-        if provider_authority_matches(existing_payload, 'claude', current_fingerprint):
+        # Restore selection rebinds validated local history before this write.
+        # Preserve its continuity receipt as well as the native binding. An
+        # explicit fresh/user-selected session must not inherit the old binding.
+        if (
+            payload.get('ccb_claude_auto_restore') is not False
+            and provider_authority_matches(existing_payload, 'claude', current_fingerprint)
+        ):
             _merge_keys(
                 payload,
                 existing_payload,
-                keys=('claude_session_id', 'claude_session_path'),
+                keys=(
+                    'claude_session_id', 'claude_session_path',
+                    'claude_session_authority_fingerprint',
+                    'ccb_continuity_schema_version', 'ccb_conversation_id',
+                    'ccb_authority_generation', 'ccb_continuity_status',
+                    'ccb_resume_compatibility', 'ccb_session_history',
+                ),
             )
     elif provider == 'gemini':
         _merge_keys(
@@ -199,7 +211,9 @@ def _merge_codex_session_binding(payload: dict[str, object], existing_payload: d
         ),
     )
     current_fingerprint = str(payload.get('codex_provider_authority_fingerprint') or '').strip()
-    if not resume_authority_matches(existing_payload, current_fingerprint=current_fingerprint):
+    if payload.get('ccb_codex_auto_restore') is False or not resume_authority_matches(
+        existing_payload, current_fingerprint=current_fingerprint,
+    ):
         return
     _merge_keys(
         payload,
@@ -209,6 +223,9 @@ def _merge_codex_session_binding(payload: dict[str, object], existing_payload: d
             'codex_session_path',
             'codex_session_authority_fingerprint',
             'updated_at',
+            'ccb_continuity_schema_version', 'ccb_conversation_id',
+            'ccb_authority_generation', 'ccb_continuity_status',
+            'ccb_resume_compatibility', 'ccb_session_history',
         ),
     )
 

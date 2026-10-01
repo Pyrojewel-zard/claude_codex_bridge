@@ -5,6 +5,16 @@ Last verified: 2026-07-23
 
 ## Done
 
+- 2026-09-28, released in v8.7.3: install/update catalog followups suppress
+  the six workflow preview roles (`ccb_checker`, `ccb_clarification_broker`,
+  `ccb_plan_reviewer`, `ccb_round_checker`, `ccb_worker`, and `su_ccb`, all
+  under `agentroles`). Explicit installation, installed-role updates and
+  missing-source diagnostics retain their existing behavior. This promotes
+  the uncommitted 2026-09-21 patch, not the older config-panel filtering fix.
+  Update/RolePack/config-UI regression suites: 188 passed. Public archive and
+  fresh npm payload both verify the filter and retained ordinary/default-role
+  recommendations. See [release receipts](../inter-agent-comm-reliability/evidence/release-873-verification-20260928.md).
+
 - Existing installer detects `CCB_LANG`/locale and has a `msg` function for
   selected shell installer messages.
 - Existing installer blocks accidental root installs unless the user confirms

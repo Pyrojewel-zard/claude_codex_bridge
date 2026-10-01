@@ -107,10 +107,15 @@ The managed `sessions/` tree is a first-class namespace, not disposable residue:
   `codex fork <id>` creates a new native conversation initialized from it
 - therefore `ccb` treats `sessions/` as Agent-owned conversation history, not
   route or credential authority
-- an authority fingerprint fences which binding may be passed to `resume` or
-  `fork`; it does not authorize hiding, moving, or deleting the transcript tree
-- authority change keeps the tree in place and turns the prior binding into
-  historical linked-continuation evidence
+- an authority fingerprint records the prepared credential/route generation;
+  it does not authorize hiding, moving, or deleting the transcript tree
+- on authority change, a current native binding inside the same managed root,
+  with matching session metadata and no subagent identity, is rebound to the
+  new generation and remains eligible for exact `resume`; changing credentials
+  or gateways alone is not a reason to fork or start fresh
+- unverified, missing, or foreign bindings retain the existing linked fallback;
+  this does not claim imported context. Explicit fresh remains authoritative,
+  and historical `old_*` bindings are not blindly resurrected after a clear
 
 If the effective Codex home is explicitly overridden by a provider profile, the effective session root must still be:
 

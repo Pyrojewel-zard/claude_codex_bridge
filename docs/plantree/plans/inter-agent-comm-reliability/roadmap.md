@@ -2,13 +2,208 @@
 
 Date: 2026-06-14
 
-Last updated: 2026-07-07
+Last updated: 2026-09-20
+
+## Current Slice: Unified FIFO And Empty-Result Notices
+
+v8.7.3 is published; [qualification](evidence/release-873-verification-20260928.md)
+records merged source, passing candidate gates, public hashes and a fresh npm
+installation with verified six-role recommendation filtering. No native Claude
+plugin enablement is included. Post-merge macOS timing failure/rerun evidence
+is tracked separately; reporter-specific unsupported layouts remain open.
+
+2026-09-28: [native Claude plugin experiment](evidence/claude-native-composer-live-20260928.md)
+passed real editor read/fill, ghost acceptance and negative-control probes.
+Production integration is not ready: qualify modal/busy binding, folded-paste
+and attachment clear, freshness and experimental-interface compatibility first.
+
+2026-09-27: owner requires model-independent observation for Codex/Claude/OMP.
+[Local implementation and tests](evidence/composer-model-independence-20260927.md)
+remove Codex model-prefix matching; Claude/OMP retain their existing structural
+and native-editor checks. Next: review and live layout qualification before release.
+Claude [dynamic-suggestion return-delivery regressions](evidence/claude-suggestion-reply-delivery-20260927.md)
+are recorded locally: suggestions do not hold the covered FIFO return paths;
+accepted drafts remain protected. Fresh live qualification remains pending.
+The fresh dual-Claude attempt delivered requests but hit upstream API 502
+access-forbidden errors before tool work or replies. A working provider route
+and startup-hook interpreter verification blocked that initial acceptance attempt.
+After the owner switched source, a fresh project passed real Claude question,
+shell work, Claude-to-Claude result continuation and subsequent delivery; both
+queues drained. The persistent test venv also avoided the startup-hook error.
+Live Tab/ghost transition qualification remains separate from this passing chain.
+[Continuous real qualification](evidence/claude-continuous-queue-live-20260927.md)
+subsequently passed 19 jobs, all one attempt: three chains, manual busy turn,
+early clear, real 180-second draft gate, held return and menu recovery. Journal
+timestamps confirm FIFO; queues drained. This is local evidence, not publication.
+
+2026-09-26 maintenance: [v8.7.1 ask-stall repair](evidence/ask-stall-871-20260926.md)
+reproduces Bun stale editor-socket recovery failure and adds queue wait reasons.
+Source changes and focused tests are isolated from the shared installation.
+Fresh-project Codex ask, OMP same-socket crash recovery and real 180-second
+draft/FIFO delivery checks passed; OMP responses are blocked by provider 402.
+Codex-to-Codex testing additionally reproduced duplicate resume arguments after
+a crash; recognizing CCB's generated hook-trust flag fixes the accumulation.
+Same-session auto-recovery and queued child delivery passed; 567 regressions pass.
+Promotion: PRs #357–#359 merged; v8.7.2 tagged at `91fb0a4d2`. Full Linux/macOS
+regressions and real macOS/WSL gates passed, including the candidate rerun.
+Actual old-package upgrade and npm-installed Codex-to-Codex recovery passed;
+see [release qualification](evidence/release-872-verification-20260926.md).
+Public GitHub assets/checksums, npm 8.7.2 latest and a fresh registry install
+are verified. Next: collect the reporter's remaining healthy-pane
+delivery-stall evidence. Issue #356 stays open.
+
+Status: Implemented in the working tree; the watchdog overlap found in
+[independent review](evidence/agent1-independent-review-20260919.md) is fixed by
+[reusing existing provider turn completion](evidence/provider-turn-end-only-20260919.md),
+and the dispatcher polling gate now shares one provider turn-end rule set for
+asks and deliveries ([shared gate round](evidence/ask-back-shared-turn-end-gate-20260919.md)):
+job-record delivery identity, no per-provider delivery fork, no legacy-flag
+capability semantics. 406 focused tests pass, including elapsed-time hold and
+turn-end advance. Real installed Codex/OMP FIFO and Codex empty-notice tests
+passed; OMP empty-terminal and Claude qualification remain open. Earlier transport
+history is retained below.
+
+### Done
+
+- Read-only `ccb screen <agent> [--lines 0..1000] [--json]` and abnormal ask
+  reply guidance: inspect pane, correlate original job trace, then let caller
+  choose wait/retrieve/continue/resend/pause. Original statuses and errors
+  remain; pure empty-provider outcomes cannot bypass the no-retry rule through
+  generic retryable diagnostics. [Verification](evidence/screen-caller-inspection-20260919.md).
+- Recorded owner decisions: chronological ask/back FIFO without class priority;
+  processing-turn completion before the next delivery; caller-owned recovery
+  after an empty-result notice, without automatic empty-result resend.
+- Inspected reply dispatch completion, reply message construction, empty-result
+  detectors, formatting, and retry classification in current source.
+- Q1 audit answers recorded in the FIFO and empty-result topic files
+  (durable order key, chain routes, per-provider turn evidence, busy-turn
+  reconciliation, Claude final-text grace retention).
+- Q2: unified mailbox-head claim in `lifecycle_start_runtime/queue.py` (single
+  arbitration fork from the head event type; no reply-first pass);
+  `DispatcherState.rebuild` now derives per-agent pending order from mailbox
+  inbound admission order with JobStore order as legacy fallback
+  (`fifo_order.py`, `records.py`).
+- Q3: Codex `_reply_delivery_accepted_result` and Claude
+  `_reply_delivery_terminal_if_dispatched` send/anchor shortcuts removed;
+  deliveries complete on anchored turn-end evidence. The dispatcher polling
+  gate normalizes proven empty turn ends to
+  `COMPLETED/reply_delivery_turn_complete`; cursor/grok/pi dispatch shortcuts
+  were also removed in the review-fix round below; the fake
+  provider now marks deliveries provider-tracked so source-run campaigns
+  exercise the held path. Mailbox lease safety re-verified (1800 s TTL sweep
+  skips agents with running jobs).
+- E1: empty results removed from automatic retry eligibility
+  (`finalization_retry_runtime/policy.py`); one-time caller inspection notice
+  constructed at finalization before retry planning
+  (`finalization_runtime/empty_result_notice.py`), stored on the ReplyRecord
+  (reply-level `notice`/`notice_kind` markers lifted in `record_reply`);
+  dead empty-exhaustion warning branches removed; cancellation, explicit
+  errors, silence, chain lineage, and the Claude 180 s final-text grace
+  unchanged.
+- V1 deterministic: new `test/test_unified_message_fifo.py` (request-first
+  ordering, strict held-delivery A->X->B, single claim per target,
+  same-timestamp order, restart rebuild from mailbox order, empty turn end
+  consumption, polling-gate unit cases); rewritten pins for codex/claude
+  delivery completion and empty-result notice/retry behavior.
+- V1 isolated runtime: real daemon + pane layout + fake providers driven
+  through `ccb_test` from an external allowed project with isolated HOME
+  (evidence under `/var/tmp/ccb-fifo-qual-20260918/.ccb/agents/*/jobs.jsonl`):
+  mid-turn snapshot shows request queued while the head turn runs; timestamps
+  show strict serial order; reply delivery consumed after a full fake turn.
+- Review-fix round (agent1 acceptance findings, 2026-09-19):
+  1. Provider coverage: dispatch-completion shortcuts removed in cursor,
+     grok, and pi (OMP inherits pi), all of which complete held deliveries on
+     their anchored event-stream evidence; `start_completion.py` no longer
+     completes any delivery on send. The initially added 1800 s watchdog was
+     rejected in independent review and removed after owner clarification:
+     all deliveries reuse existing provider turn-end decisions; an absent
+     delivery flag does not imply missing completion capabilities. The
+     polling gate now normalizes the `<provider>_empty_reply` family and
+     requires prompt+anchor proof for the pi/omp/cursor/grok families.
+     (Superseded 2026-09-19 by the shared-gate round below: the dispatcher
+     no longer maintains that per-provider delivery proof fork.)
+  2. Terminal disposition: `resolve_reply_delivery_terminal` distinguishes
+     pre-acceptance transport failures (requeue, bounded to 3 by
+     `reply_delivery_requeued` history before `reply_delivery_abandoned`)
+     from post-acceptance terminals (consume, event
+     `reply_delivery_terminal_after_delivery`); cancelled deliveries are
+     never resurrected. Regressions: cancel-not-resurrected + queue advance
+     + restart idempotence; live cancel probe consumed the head.
+  3. Notice breadth: `is_empty_result_outcome` now covers every terminal
+     INCOMPLETE/COMPLETED outcome owing the caller a result with no body and
+     no artifact (e.g. `incomplete/omp_request_superseded` with
+     `superseded_by=unmanaged_input`); CANCELLED/FAILED keep their own
+     semantics. Chain regressions prove the original caller receives the
+     notice when the final continuation is empty.
+  4. Retry boundary: `is_pure_empty_provider_outcome` outranks
+     `delivery_retryable` in `is_retryable_failure`, so pure empty provider
+     results never auto-retry/reactivate (probe test proves one attempt, no
+     activation, one notice); independent transport/runtime/API policies
+     unchanged.
+- Fix-round verification: 402 passed across the 19 dispatcher/delivery/
+  adapter suites (including rewritten cursor/grok/pi held-delivery tests and
+  the pi/omp gate unit cases); live external source-run re-verified strict
+  serial order, a delivery completed through a full fake turn, and a
+  mid-turn delivery cancel that consumed the head without resurrection
+  (evidence: `/var/tmp/ccb-fifo-qual-20260918/.ccb/agents/*/jobs.jsonl`).
+- Shared-gate round (owner-confirmed minimal reuse, 2026-09-19):
+  `_reply_delivery_turn_end_decision`/`_reply_delivery_turn_end_proven`
+  removed from `polling_service.py`; asks and deliveries now pass through
+  one gate (authority annotation + unchanged codex acceptance isolation),
+  delivery identity comes from the durable job record via
+  `is_reply_delivery_job` with the legacy
+  `reply_delivery_complete_on_dispatch` flag kept only as a no-job compat
+  fallback, and the only delivery-specific policy is
+  `_reply_delivery_turn_end_outcome` (empty INCOMPLETE turn end completes
+  as `reply_delivery_turn_complete`; FAILED/CANCELLED/attributable
+  incompletes unchanged; asks keep the `non_empty_reply` gate and notice
+  policy). Codex deliveries without proven acceptance now finalize as
+  `terminal_before_provider_acceptance` instead of the ask-oriented
+  `task_complete_empty_reply` (fail-closed in both). Verified: 406 passed
+  across the same 19 suites plus 113 in adjacent gate-consumer suites; see
+  [evidence](evidence/ask-back-shared-turn-end-gate-20260919.md).
+
+- Real installed Codex/OMP qualification (2026-09-19): both targets passed
+  A→X→B FIFO with 25 s tool work in A; Codex real empty return produced one
+  caller notice and no CCB retry. See [evidence](evidence/installed-codex-omp-qualification-20260919.md).
+
+### Next
+
+0. Prepare the owner-requested local v8.7.0 source commit; public publication
+   remains separate. Ready-check the [input draft protection candidate](topics/input-draft-delivery-guard.md).
+   Its reported installed real-project evidence covers Codex/Claude/OMP and
+   469 tests, but it is not rollout approval. Block enablement until Codex and
+   Claude replace `Ctrl-C` deadline clearing with a qualified input-only clear,
+   and until ambiguous terminal-write handling uses approved provider-specific
+   semantics rather than generic `draft_guard_send_unknown` terminalization.
+   OMP's extension trust/lifecycle review is also required. Shared installation
+   promotion remains separate.
+1. Real Claude held-delivery qualification remains open. Earlier isolated
+   authentication failures do not apply to the successful Codex/OMP installed
+   campaign. Use authorized managed state without changing external auth.
+2. Investigate OMP native empty continuation: agent_end reported
+   will_continue=true without agent_settled, so the real empty-result notice
+   path was not reached. The probe was explicitly cancelled after observation;
+   do not label this a successful empty-terminal qualification.
+3. Update protocol/operator docs for the removed automatic empty-result retry
+   in the documentation pass before release promotion.
+
+### Deferred
+
+- Priority scheduling, return-result preference, native queue-key substitution,
+  automatic semantic recovery, and native Windows transport changes.
+
+Next target: resolve the documented candidate blockers through a separate
+implementation authorization, then independently qualify the corrected paths.
+This planning update does not authorize runtime edits, commits, pushes or releases.
 
 ## Status Summary
 
-- Current status: first small hard-gate source slice and no-progress Codex
-  delivery timeout slice implemented in the working tree; release promotion
-  still requires normal review/commit/release gates.
+- Current status: unified FIFO + empty-result notice slice implemented in
+  the working tree, including the 2026-09-19 agent1 review-fix round
+  (provider coverage, terminal disposition, notice breadth, retry boundary);
+  real Codex/Claude qualification open in the checked environments; release
+  promotion still requires normal review/commit/release gates.
 - Last analysis: PR226 improves low-probability Linux/macOS/WSL transport
   races, but it should not be treated as a completed stability boundary without
   follow-up guards.

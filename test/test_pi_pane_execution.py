@@ -595,7 +595,7 @@ def test_pi_runtime_instance_change_does_not_rebind_inflight_job(
     assert result.decision.reason == "pi_runtime_restarted"
 
 
-def test_pi_unmanaged_input_supersedes_inflight_job(
+def test_pi_unmanaged_agent_turn_supersedes_inflight_job(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -607,8 +607,8 @@ def test_pi_unmanaged_input_supersedes_inflight_job(
         _event(
             "request_superseded",
             req_id=req_id,
-            superseded_by="unmanaged_input",
-            input_source="interactive",
+            superseded_by="unmanaged_agent_turn",
+            input_source="before_agent_start",
         ),
         _event(
             "agent_settled",
@@ -623,7 +623,7 @@ def test_pi_unmanaged_input_supersedes_inflight_job(
     assert result.decision.status is CompletionStatus.INCOMPLETE
     assert result.decision.reason == "pi_request_superseded"
     assert result.decision.reply == ""
-    assert result.decision.diagnostics["superseded_by"] == "unmanaged_input"
+    assert result.decision.diagnostics["superseded_by"] == "unmanaged_agent_turn"
 
 
 def test_pi_busy_pane_defers_without_sending_then_dispatches_when_idle(
@@ -683,27 +683,52 @@ def test_pi_extension_readiness_timeout_never_sends_prompt(
     assert dispatch.read_text(encoding="utf-8") == ""
 
 
-def test_pi_reply_delivery_completes_on_visible_dispatch(
+def test_pi_reply_delivery_dispatches_and_holds_until_agent_settled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     job = _job(
         body="raw delivery",
         message_type="reply_delivery",
-        no_wrap=True,
     )
-    adapter, submission, backend, _, _ = _start_ready(
+    adapter, submission, backend, events, _ = _start_ready(
         monkeypatch,
         tmp_path,
         job=job,
     )
+    req_id = submission.job_id
 
-    result = adapter.poll(submission, now="2026-07-29T00:00:01Z")
+    held = adapter.poll(submission, now="2026-07-29T00:00:01Z")
 
-    assert backend.sent == [("%9", "raw delivery")]
-    assert result is not None and result.decision is not None
-    assert result.decision.status is CompletionStatus.COMPLETED
-    assert result.decision.reason == "reply_delivery_sent"
+    assert backend.sent[0][0] == "%9"
+    assert f"CCB_REQ_ID: {req_id}" in backend.sent[0][1]
+    # Sending is transport only: the delivery holds until the anchored
+    # agent_settled turn end.
+    assert held is None or held.decision is None
+
+    _append(
+        events,
+        _event(
+            "request_start",
+            req_id=req_id,
+            dispatch_matched=True,
+            anchor_req_id=req_id,
+        ),
+        _event(
+            "agent_settled",
+            req_id=req_id,
+            assistant=_assistant("DELIVERED_ACK"),
+        ),
+    )
+
+    settled = adapter.poll(
+        held.submission if held is not None else submission,
+        now="2026-07-29T00:00:05Z",
+    )
+
+    assert settled is not None and settled.decision is not None
+    assert settled.decision.status is CompletionStatus.COMPLETED
+    assert settled.decision.reason == "pi_run_stop"
 
 
 def test_pi_visible_prompt_preserves_compact_reply_mode_without_static_guidance(

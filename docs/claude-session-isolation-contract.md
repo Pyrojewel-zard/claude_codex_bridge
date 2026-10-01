@@ -180,12 +180,13 @@ When `ccb` starts a managed Claude agent:
 - it must ensure `CLAUDE_PROJECTS_ROOT == <claude_home>/.claude/projects`
 - it must explicitly set
   `CLAUDE_SESSION_ENV_ROOT == <claude_home>/.claude/session-env`
-- it must use the user-installed Claude executable, disable Claude self-update
-  and both provider login/logout commands in the managed pane, and must not
-  create a project-scoped CCB binary cache
-- it must export `DISABLE_LOGIN_COMMAND=1` and `DISABLE_LOGOUT_COMMAND=1` so a
-  managed Claude command cannot replace or remove ambient macOS Keychain login
-  state
+- it must use the user-installed Claude executable, disable Claude self-update,
+  and must not create a project-scoped CCB binary cache
+- with inherited auth it must export `DISABLE_LOGIN_COMMAND=1` and
+  `DISABLE_LOGOUT_COMMAND=1` so a managed Claude command cannot replace or
+  remove ambient macOS Keychain login state; with `inherit_auth=false` it must
+  explicitly unset both flags and all supported ambient OAuth/token descriptor
+  inputs before applying Agent-explicit environment values
 - it may detach only recognized CCB-owned legacy binary-cache symlinks from the
   managed home; it must preserve foreign symlinks and defer cache-payload
   deletion to explicit stopped-project cleanup
@@ -193,23 +194,24 @@ When `ccb` starts a managed Claude agent:
   launching Claude
 - it must materialize required Claude auth/config projections into the managed
   home without treating them as conversation identity
-- before adding `--continue`, it must prove that the recorded
-  `claude_provider_authority_fingerprint` matches the newly prepared launch;
-  mismatched proof must not directly continue the old native id
-- on a mismatch, the old transcript path must be a regular file inside the
-  current Agent-managed Claude home before it may seed a continuation
-- Claude Code 2.1.220 supports `--resume <id> --fork-session`; when capability
-  probing confirms that flag, startup uses it to create a new native id with
-  imported context and binds that id to the current authority generation
-- if the flag is unavailable or the old path cannot be proven Agent-owned,
-  startup creates a linked fresh binding while preserving the old transcript
-  and must not label the result as a native fork
-- a legacy managed session with no authority fingerprint may continue once
-  when its history and home remain inside the same Agent-managed Claude home;
-  the new launch persists the current fingerprint, so later restarts return to
-  strict matching
+- account, credential, and endpoint changes must not preemptively suppress
+  `--continue`; local history belongs to the conversation, while the newly
+  prepared authority controls future requests
+- the recorded home must remain inside the current Agent-managed home; a
+  recorded native transcript path must be an existing file inside that home
+- validated local history is attempted through native `--continue`, including
+  legacy linked-pending records; authority generations remain diagnostic
+  provenance and do not require native fork support
+- explicit fresh or user-selected startup session controls take precedence;
+  automatic continuation must not resurrect `old_*` bindings after clear
+- absent usable history permits fresh launch; the existing recognized native
+  missing-conversation recovery may remove CCB's continue flag once, preserving
+  historical binding evidence and recording the fallback reason
+- auth/network/rate-limit errors and ambiguous transcript incompatibility
+  must not cause automatic context clearing; arbitrary gateway compatibility
+  and interactive pane recovery require provider-specific qualification
 - `ccb restart <agent>` must use normal managed-home/profile preparation and
-  this authority check rather than replaying the persisted `start_cmd`
+  this continuity selection rather than replaying the persisted `start_cmd`
 - it must not use an existing managed provider home as the inherited source
   home; if the current process `HOME` is a CCB provider-state home, startup must
   fall back to the real account home or an explicit source-home override
@@ -266,6 +268,15 @@ When `ccb` starts a managed Claude agent:
   `Library/Keychains` path to the user's Keychains; startup must remove a
   recognized legacy managed link and legacy copied preference without
   traversing the user's Keychain
+- on macOS, startup must create an owner-only Keychain database under the
+  Agent's managed `Library/Keychains`; the managed default and search list must
+  contain only that database. In inherited mode CCB may seed only the
+  agent-derived service in that database and keeps login/logout disabled. With
+  `inherit_auth=false`, CCB must not project the user's OAuth item and leaves
+  login/logout enabled for an independent Agent login
+- the first switch from inherited to independent auth may remove only account
+  metadata recorded as CCB-projected; subsequent starts must preserve account
+  metadata written by the independent managed Claude process
 - managed login-auth projection may also synchronize older or alternate Claude
   Code credential cache artifacts such as `.config/claude-code/auth.json` when
   they exist in the source home

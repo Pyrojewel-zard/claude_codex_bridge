@@ -27,6 +27,9 @@ from provider_hooks.settings import (
 from storage.paths import PathLayout
 
 
+pytestmark = pytest.mark.usefixtures('stub_claude_private_keychain')
+
+
 @pytest.fixture(autouse=True)
 def _anchor_runtime_state_for_tests(monkeypatch) -> None:
     """These tests assert materialize behavior against project-anchored paths.
