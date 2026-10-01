@@ -125,6 +125,11 @@ def build_agent_spec(agent_name: str, raw: dict[str, Any]) -> AgentSpec:
                 if raw.get('thinking') is not None
                 else None
             ),
+            service_tier=(
+                expect_string(raw['service_tier'], field_name=f'agents.{agent_name}.service_tier')
+                if raw.get('service_tier') is not None
+                else None
+            ),
             startup_args=expect_string_list(raw.get('startup_args', []), field_name=f'agents.{agent_name}.startup_args'),
             env=env,
             api=api,

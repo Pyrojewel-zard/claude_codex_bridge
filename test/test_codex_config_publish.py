@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib
+
 import pytest
 
 from provider_profiles import codex_home_config
@@ -114,3 +119,27 @@ def test_single_publish_keeps_profile_and_project_priority(tmp_path):
     assert 'external_migration = false' in config_text
     assert '[plugins.review]' in config_text
     assert '[mcp_servers.reviewer]' in config_text
+
+
+def test_materialize_codex_home_config_applies_agent_model_reasoning_and_service_tier(
+    tmp_path,
+) -> None:
+    source = _source_home(
+        tmp_path,
+        'model = "gpt-global"\nmodel_reasoning_effort = "low"\nservice_tier = "default"\n',
+    )
+    target = tmp_path / 'target-codex-overrides'
+
+    codex_home_config.materialize_codex_home_config(
+        target,
+        source_home=source,
+        project_root=tmp_path,
+        model='gpt-6-astra',
+        thinking='max',
+        service_tier='fast',
+    )
+
+    config = tomllib.loads((target / 'config.toml').read_text(encoding='utf-8'))
+    assert config['model'] == 'gpt-6-astra'
+    assert config['model_reasoning_effort'] == 'max'
+    assert config['service_tier'] == 'fast'

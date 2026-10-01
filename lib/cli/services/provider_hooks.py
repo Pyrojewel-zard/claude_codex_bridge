@@ -255,9 +255,11 @@ def _materialize_provider_home(
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=Path(runtime_dir) / 'codex-memory-projection.json',
             # The cached resolved profile can predate a ccb.config edit, so the
-            # agent's current model/catalog are plumbed from the live spec rather
-            # than read out of the possibly-stale profile env.
+            # agent's current Codex overrides are plumbed from the live spec
+            # rather than read out of the possibly-stale profile env.
             model=spec.model,
+            thinking=spec.thinking,
+            service_tier=spec.service_tier,
             model_catalog_json=spec.provider_profile.env.get('model_catalog_json'),
         )
         return

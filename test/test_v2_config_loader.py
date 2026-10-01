@@ -1341,6 +1341,51 @@ thinking = "high"
     assert spec.startup_args == ('-c', 'model_reasoning_effort="high"')
 
 
+def test_load_project_config_supports_codex_service_tier_and_renders_agent_overlay(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-config-overrides'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; lead:codex, teamworker:codex
+
+[agents.lead]
+model = "gpt-6-astra"
+thinking = "max"
+service_tier = "fast"
+
+[agents.teamworker]
+model = "gpt-5.6-luan"
+thinking = "high"
+service_tier = "default"
+''',
+    )
+
+    config = load_project_config(project_root).config
+
+    assert config.agents['lead'].model == 'gpt-6-astra'
+    assert config.agents['lead'].thinking == 'max'
+    assert config.agents['lead'].service_tier == 'fast'
+    assert config.agents['teamworker'].service_tier == 'default'
+
+    rendered = render_project_config_text(config)
+    assert 'service_tier = "fast"' in rendered
+    assert 'service_tier = "default"' in rendered
+
+
+def test_load_project_config_rejects_codex_service_tier_for_non_codex_agent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-non-codex-service-tier'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; agent1:claude
+
+[agents.agent1]
+service_tier = "fast"
+''',
+    )
+
+    with pytest.raises(ConfigValidationError, match='service_tier is supported only for codex'):
+        load_project_config(project_root)
+
+
 def test_load_project_config_rejects_static_thinking_startup_arg_conflict(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-thinking-startup-conflict'
     _write(

@@ -62,6 +62,7 @@ ALLOWED_AGENT_KEYS = {
     'model',
     'model_catalog_json',
     'thinking',
+    'service_tier',
     'key',
     'url',
     'startup_args',

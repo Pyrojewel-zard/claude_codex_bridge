@@ -44,6 +44,8 @@ def update_optional_agent_fields(payload: dict[str, object], spec) -> None:
         payload['model_catalog_json'] = model_catalog_json
     if spec.thinking is not None:
         payload['thinking'] = spec.thinking
+    if spec.service_tier is not None:
+        payload['service_tier'] = spec.service_tier
     startup_args = _config_startup_args(spec)
     if startup_args:
         payload['startup_args'] = list(startup_args)

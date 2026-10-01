@@ -153,6 +153,8 @@ def materialize_codex_home_config(
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
     model: str | None = None,
+    thinking: str | None = None,
+    service_tier: str | None = None,
     model_catalog_json: str | None = None,
 ) -> Path:
     target_home = Path(target_home).expanduser()
@@ -260,6 +262,14 @@ def materialize_codex_home_config(
     if model is not None:
         _set_codex_model_payload(payload, model)
         if str(model or '').strip():
+            raw_config_text = None
+    if thinking is not None:
+        _set_codex_model_reasoning_effort_payload(payload, thinking)
+        if str(thinking or '').strip():
+            raw_config_text = None
+    if service_tier is not None:
+        _set_codex_service_tier_payload(payload, service_tier)
+        if str(service_tier or '').strip():
             raw_config_text = None
 
     previous_auth_projection = _read_auth_projection_manifest(target_home)
@@ -1473,6 +1483,18 @@ def _set_codex_model_payload(payload: dict[str, object], model: str) -> None:
     normalized = str(model or '').strip()
     if normalized:
         payload['model'] = normalized
+
+
+def _set_codex_model_reasoning_effort_payload(payload: dict[str, object], thinking: str) -> None:
+    normalized = str(thinking or '').strip()
+    if normalized:
+        payload['model_reasoning_effort'] = normalized
+
+
+def _set_codex_service_tier_payload(payload: dict[str, object], service_tier: str) -> None:
+    normalized = str(service_tier or '').strip()
+    if normalized:
+        payload['service_tier'] = normalized
 
 
 def _codex_model_catalog_sidecar_name(value: object) -> str | None:

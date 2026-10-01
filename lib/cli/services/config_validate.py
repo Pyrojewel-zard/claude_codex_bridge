@@ -328,6 +328,8 @@ def _role_candidate(spec) -> dict[str, object]:
         payload['model'] = spec.model
     if getattr(spec, 'thinking', None):
         payload['thinking'] = spec.thinking
+    if getattr(spec, 'service_tier', None):
+        payload['service_tier'] = spec.service_tier
     return payload
 
 

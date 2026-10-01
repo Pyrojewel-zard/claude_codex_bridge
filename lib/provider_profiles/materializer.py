@@ -221,6 +221,8 @@ def _materialize_codex_profile(
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=runtime_dir / 'codex-memory-projection.json',
             model=spec.model,
+            thinking=spec.thinking,
+            service_tier=spec.service_tier,
             model_catalog_json=profile_spec.env.get('model_catalog_json'),
         )
 

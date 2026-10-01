@@ -38,7 +38,15 @@ def _anchor_runtime_state_for_tests(monkeypatch) -> None:
     monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
-def _spec(name: str, provider: str = "claude", *, provider_profile: ProviderProfileSpec | None = None) -> AgentSpec:
+def _spec(
+    name: str,
+    provider: str = "claude",
+    *,
+    provider_profile: ProviderProfileSpec | None = None,
+    model: str | None = None,
+    thinking: str | None = None,
+    service_tier: str | None = None,
+) -> AgentSpec:
     return AgentSpec(
         name=name,
         provider=provider,
@@ -49,6 +57,9 @@ def _spec(name: str, provider: str = "claude", *, provider_profile: ProviderProf
         restore_default=RestoreMode.AUTO,
         permission_default=PermissionMode.MANUAL,
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+        model=model,
+        thinking=thinking,
+        service_tier=service_tier,
         provider_profile=provider_profile or ProviderProfileSpec(),
     )
 
@@ -784,6 +795,44 @@ def test_prepare_provider_workspace_materializes_codex_home_once(
     )
 
     assert len(calls) == 1
+
+
+def test_prepare_provider_workspace_materializes_live_codex_config_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    source_codex_home = tmp_path / 'source-home' / '.codex'
+    source_codex_home.mkdir(parents=True)
+    (source_codex_home / 'config.toml').write_text(
+        'model = "gpt-global"\nmodel_reasoning_effort = "low"\nservice_tier = "default"\n',
+        encoding='utf-8',
+    )
+    project_root.mkdir(parents=True)
+    monkeypatch.setenv('CODEX_HOME', str(source_codex_home))
+    layout = PathLayout(project_root)
+
+    prepare_provider_workspace(
+        layout=layout,
+        spec=_spec(
+            'lead',
+            provider='codex',
+            model='gpt-6-astra',
+            thinking='max',
+            service_tier='fast',
+        ),
+        workspace_path=workspace,
+        completion_dir=layout.agent_provider_runtime_dir('lead', 'codex') / 'completion',
+        agent_name='lead',
+        refresh_profile=True,
+    )
+
+    codex_home = project_root / '.ccb' / 'agents' / 'lead' / 'provider-state' / 'codex' / 'home'
+    config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
+    assert config['model'] == 'gpt-6-astra'
+    assert config['model_reasoning_effort'] == 'max'
+    assert config['service_tier'] == 'fast'
 
 
 def test_prepare_provider_workspace_does_not_materialize_codex_activity_hooks(

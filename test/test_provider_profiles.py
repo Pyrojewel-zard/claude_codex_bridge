@@ -52,7 +52,15 @@ def _anchor_runtime_state_for_tests(monkeypatch) -> None:
     monkeypatch.setenv('CCB_RUNTIME_STATE_ANCHOR', '1')
 
 
-def _spec(name: str, provider: str = "codex", *, provider_profile: ProviderProfileSpec | None = None, model: str | None = None) -> AgentSpec:
+def _spec(
+    name: str,
+    provider: str = "codex",
+    *,
+    provider_profile: ProviderProfileSpec | None = None,
+    model: str | None = None,
+    thinking: str | None = None,
+    service_tier: str | None = None,
+) -> AgentSpec:
     return AgentSpec(
         name=name,
         provider=provider,
@@ -65,6 +73,8 @@ def _spec(name: str, provider: str = "codex", *, provider_profile: ProviderProfi
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
         provider_profile=provider_profile or ProviderProfileSpec(),
         model=model,
+        thinking=thinking,
+        service_tier=service_tier,
     )
 
 
@@ -1985,6 +1995,37 @@ def test_materialize_codex_profile_writes_agent_model_and_catalog_over_inherited
     assert (runtime_home / 'models.json').read_text(encoding='utf-8') == (
         '{"deepseek-v4-pro":{"context_window":128000}}\n'
     )
+
+
+def test_materialize_codex_profile_writes_agent_reasoning_and_service_tier(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        'model = "gpt-global"\nmodel_reasoning_effort = "low"\nservice_tier = "default"\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'lead',
+            model='gpt-6-astra',
+            thinking='max',
+            service_tier='fast',
+        ),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    config = tomllib.loads((runtime_home / 'config.toml').read_text(encoding='utf-8'))
+    assert config['model'] == 'gpt-6-astra'
+    assert config['model_reasoning_effort'] == 'max'
+    assert config['service_tier'] == 'fast'
 
 
 def test_materialize_codex_profile_refreshes_plugin_projection_when_source_changes(tmp_path: Path, monkeypatch) -> None:

@@ -59,6 +59,7 @@ class AgentSpec:
     provider_command_template: str | None = None
     model: str | None = None
     thinking: str | None = None
+    service_tier: str | None = None
     startup_args: tuple[str, ...] = field(default_factory=tuple)
     env: dict[str, str] = field(default_factory=dict)
     api: AgentApiSpec = field(default_factory=AgentApiSpec)
@@ -100,6 +101,7 @@ class AgentSpec:
         object.__setattr__(self, 'runtime_mode', normalize_runtime_mode(self.runtime_mode))
         model = self._normalize_model()
         thinking = self._normalize_thinking(provider=provider)
+        service_tier = self._normalize_service_tier(provider=provider)
         env = {str(key): str(value) for key, value in dict(self.env).items()}
         provider_profile = normalize_provider_profile(self.provider_profile)
         self._validate_runtime_shortcut_env(
@@ -112,6 +114,7 @@ class AgentSpec:
         startup_args = tuple(str(item) for item in self.startup_args)
         object.__setattr__(self, 'model', model)
         object.__setattr__(self, 'thinking', thinking)
+        object.__setattr__(self, 'service_tier', service_tier)
         object.__setattr__(
             self,
             'startup_args',
@@ -156,6 +159,16 @@ class AgentSpec:
             return normalize_provider_thinking(provider, self.thinking)
         except ValueError as exc:
             raise AgentValidationError(str(exc)) from exc
+
+    def _normalize_service_tier(self, *, provider: str) -> str | None:
+        if self.service_tier is None:
+            return None
+        normalized = str(self.service_tier).strip()
+        if not normalized:
+            raise AgentValidationError('service_tier cannot be empty')
+        if provider != 'codex':
+            raise AgentValidationError('service_tier is supported only for codex')
+        return normalized
 
     def _validate_runtime_shortcut_env(
         self,
@@ -283,6 +296,7 @@ class AgentSpec:
             'queue_policy': self.queue_policy.value,
             'model': self.model,
             'thinking': self.thinking,
+            'service_tier': self.service_tier,
             'startup_args': list(self.startup_args),
             'env': dict(self.env),
             'api': self.api.to_record(),

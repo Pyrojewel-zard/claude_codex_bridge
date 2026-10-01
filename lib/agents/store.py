@@ -107,6 +107,7 @@ def _agent_spec_from_record(record: dict) -> AgentSpec:
         queue_policy=QueuePolicy(record['queue_policy']),
         model=record.get('model'),
         thinking=record.get('thinking'),
+        service_tier=record.get('service_tier'),
         startup_args=tuple(record.get('startup_args', [])),
         env=dict(record.get('env', {})),
         api=AgentApiSpec(**dict(record.get('api') or {})),

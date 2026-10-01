@@ -1287,6 +1287,7 @@ def _restart_bound_agent_names(config) -> tuple[str, ...]:
             or getattr(spec, 'provider_command_template', None) is not None
             or getattr(spec, 'model', None) is not None
             or getattr(spec, 'thinking', None) is not None
+            or getattr(spec, 'service_tier', None) is not None
             or bool(tuple(getattr(spec, 'startup_args', ()) or ()))
             or bool(dict(getattr(spec, 'env', {}) or {}))
             or (profile is not None and profile != ProviderProfileSpec())
