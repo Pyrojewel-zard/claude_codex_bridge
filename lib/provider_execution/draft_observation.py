@@ -121,25 +121,67 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
     return result('nonempty', 'claude_draft')
 
 
-def _codex_footer(lines, styled, cursor_y: int) -> int | None:
-    # The status bar is the last nonblank row, separated from the editor by
-    # a blank row. Its configurable labels (including model names) are opaque.
-    footer = next((i for i in range(len(lines)-1, cursor_y, -1) if lines[i].strip()), None)
-    if footer is None or footer <= cursor_y+1 or lines[footer-1].strip():
-        return None
-    row = lines[footer]
+# A labelled bar row starts at the two-space margin; a wrapped continuation
+# row has no label and is set back deeper.
+_CODEX_STATUS_LABEL_RE = re.compile(r'^  \S')
+_CODEX_STATUS_CONTINUATION_RE = re.compile(r'^ {4,}\S')
+# A wrapped bar field keeps its separator aligned with the row above, so it
+# sits well past where a short dotted draft would put its own separator.
+_CODEX_STATUS_MIN_SEPARATOR_COLUMN = 12
+# `tui.status_line` takes at most four fields; allow one spare wrapped row.
+_CODEX_STATUS_MAX_BAR_ROWS = 3
+
+
+def _codex_status_like(row: str, styled_row: list) -> bool:
+    """One row of the Codex status bar below the editor.
+
+    A bar row is separated by a spaced middle dot, as upstream already
+    requires. Codex does not reliably keep the dim attribute on that
+    separator, so when the styling is absent fall back to layout: the fields
+    of a bar row are spread out, well past where a short dotted draft would
+    put its separator. A model label never decides the verdict.
+    """
     if not row.startswith('  '):
+        return False
+    if re.match(r'^  (?:\d+% [Cc]ontext\b|Context \d+% used\b|\? for shortcuts\b)', row):
+        return True
+    separators = [
+        index for index, (char, _, _) in enumerate(styled_row)
+        if char == '·' and 0 < index < len(row) - 1 and row[index-1:index+2] == ' · '
+    ]
+    if not separators:
+        return False
+    if any(styled_row[index][1] for index in separators):
+        return True
+    labelled = bool(_CODEX_STATUS_LABEL_RE.match(row))
+    continuation = bool(_CODEX_STATUS_CONTINUATION_RE.match(row))
+    return any(
+        index >= _CODEX_STATUS_MIN_SEPARATOR_COLUMN and (labelled or continuation)
+        for index in separators
+    )
+
+
+def _codex_footer(lines, styled, cursor_y: int) -> int | None:
+    """First row of the status bar below the editor, or None when unsupported.
+
+    The bar ends the screen and is separated from the editor by one blank row.
+    `tui.status_line` accepts up to four fields, so the bar may wrap onto
+    several rows; only its first row anchors the composer boundary and the
+    wrapped rows below are ignored. A dotted or trailing-text row that is not
+    a bar row never ends the screen, so a draft below the bar still fails
+    closed.
+    """
+    footer = next((i for i in range(len(lines)-1, cursor_y, -1) if lines[i].strip()), None)
+    if footer is None or not _codex_status_like(lines[footer], styled[footer]):
         return None
-    if re.match(r'^  (?:\d+% [Cc]ontext\b|\? for shortcuts\b)', row):
-        return footer
-    # Custom status bars separate fields with a dim middle dot. Require the
-    # rendering attribute as well as spacing; ordinary draft prose is not a
-    # status bar just because it contains a dot or a model-like word.
-    if any(char == '·' and dim and 0 < i < len(row)-1
-           and row[i-1:i+2] == ' · '
-           for i, (char, dim, _) in enumerate(styled[footer])):
-        return footer
-    return None
+    first = footer
+    while (first - 1 > cursor_y
+           and first - footer < _CODEX_STATUS_MAX_BAR_ROWS - 1
+           and lines[first-1].strip() and lines[first-1].startswith('  ')):
+        first -= 1
+    if first <= cursor_y+1 or lines[first-1].strip():
+        return None
+    return first
 
 
 def _editor_mode_in_footer(lines: list[str]) -> bool:
