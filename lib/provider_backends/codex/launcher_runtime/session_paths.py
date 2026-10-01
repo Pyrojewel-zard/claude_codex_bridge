@@ -79,7 +79,7 @@ def resolve_resume_payload(
         return None, invalid
     lineage_issue = _resume_rollout_lineage_issue(data)
     if lineage_issue is not None:
-        _persist_broken_lineage_binding(
+        quarantine_broken_lineage_binding(
             session_path,
             data,
             reason=lineage_issue,
@@ -292,7 +292,7 @@ def _resume_rollout_lineage_issue(data: dict[str, object]) -> str | None:
     return None
 
 
-def _persist_broken_lineage_binding(
+def quarantine_broken_lineage_binding(
     session_path: Path,
     expected: dict[str, object],
     *,
@@ -687,6 +687,7 @@ def _is_within(path: Path, root: Path) -> bool:
 __all__ = [
     'load_linked_continuation_session_id',
     'load_resume_session_id',
+    'quarantine_broken_lineage_binding',
     'session_file_for_runtime_dir',
     'state_dir_for_runtime_dir',
 ]

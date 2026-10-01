@@ -28,10 +28,15 @@ _AUTH_REVOKED_SIGNATURES = (
 )
 _SESSION_MISSING_SIGNATURES = ('no conversation found to continue',)
 _HELPER_UNAVAILABLE_SIGNATURES = ('failed to connect to remote app server',)
+_SESSION_LINEAGE_SIGNATURES = (
+    'invalid paginated history lineage',
+    'missing source rollout',
+)
 _CRASH_SIGNATURES = {
     'provider_auth_revoked': _AUTH_REVOKED_SIGNATURES,
     'provider_session_missing': _SESSION_MISSING_SIGNATURES,
     'provider_helper_unavailable': _HELPER_UNAVAILABLE_SIGNATURES,
+    'provider_session_lineage_broken': _SESSION_LINEAGE_SIGNATURES,
 }
 MAX_PANE_CRASH_LOGS = 50
 
@@ -49,6 +54,11 @@ _CRASH_REASON_DETAIL = {
     'provider_helper_unavailable': (
         'The managed provider helper/app server is unavailable. Automatic pane '
         'respawn is blocked; restart the affected agent or remount the project.'
+    ),
+    'provider_session_lineage_broken': (
+        'The Codex paginated history lineage is incomplete. CCB will quarantine '
+        'the stale resume binding, preserve the rollout files, and start a fresh '
+        'managed conversation.'
     ),
 }
 

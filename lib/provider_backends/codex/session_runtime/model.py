@@ -34,6 +34,32 @@ class CodexProjectSession(PaneLogProjectSessionBase):
         return effective_start_cmd(self.data)
 
     def prepare_crash_recovery(self, reason: str) -> tuple[bool, str] | None:
+        if reason == 'provider_session_lineage_broken':
+            # Pane rebound happens after the launcher has already persisted its
+            # start command, so it cannot rely on the normal command-builder
+            # preflight. Reuse the same lock-protected quarantine path here and
+            # publish the returned copy on the live session before respawn reads
+            # ``start_cmd`` again.
+            from ..launcher_runtime.session_paths import quarantine_broken_lineage_binding
+
+            updated = quarantine_broken_lineage_binding(
+                self.session_file,
+                self.data,
+                reason=reason,
+            )
+            if updated is None:
+                return (
+                    False,
+                    'Codex paginated history lineage is broken, but its session '
+                    'binding changed or could not be persisted; automatic pane '
+                    'respawn was stopped.',
+                )
+            self.data = dict(updated)
+            return (
+                True,
+                'Codex paginated history lineage was quarantined; starting a '
+                'fresh managed conversation.',
+            )
         if reason == 'provider_helper_unavailable':
             return (
                 False,
