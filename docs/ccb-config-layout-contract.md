@@ -561,6 +561,58 @@ Contract:
 - Config rendering preserves `thinking` and removes generated provider launch
   arguments from user-facing TOML.
 
+### 4.5.1 Codex `config.toml` Overrides
+
+Codex agent overlays may also set values that CCB writes into each managed
+agent's generated `config.toml`:
+
+```toml
+[agents.lead]
+model = "gpt-6-astra"
+thinking = "max"
+service_tier = "fast"
+permission = "auto"
+
+[agents.teamworker]
+model = "gpt-5.6-luan"
+thinking = "high"
+service_tier = "default"
+```
+
+Contract:
+
+- `model` sets the generated Codex `model` value. It remains available through
+  CCB's normal model shortcut/startup path as well.
+- `thinking` sets the generated Codex `model_reasoning_effort` value and keeps
+  the existing `-c model_reasoning_effort="<level>"` launch compatibility.
+- `service_tier` sets the generated Codex `service_tier` value. It is accepted
+  only for Codex agents and must be non-empty; Codex remains responsible for
+  validating provider-specific tier names.
+- If any of these fields is omitted, CCB preserves the corresponding value
+  inherited from the source user Codex config. CCB rebuilds the managed
+  `config.toml` when the agent starts, so edits to `ccb.config` take effect on
+  the next normal reload/restart flow.
+- These fields are agent-local overlays. They do not mutate the user's global
+  `~/.codex/config.toml`.
+
+Codex permission overlays use the existing agent-level `permission` field:
+
+- `permission = "auto"` materializes `approval_policy = "never"` and
+  `sandbox_mode = "danger-full-access"` in the managed Codex home. This is
+  CCB's YOLO default for the current operating-system account, including
+  managed remote resumes where Codex rejects permission CLI overrides.
+- `permission = "readonly"` materializes `approval_policy = "never"` and
+  `sandbox_mode = "read-only"`.
+- `permission = "manual"` preserves the inherited Codex permission settings.
+- Restricted CCB role-command agents retain their final `read-only` policy,
+  regardless of the ordinary agent permission setting.
+
+Plain `ccb` continues to enable the effective auto-permission policy by
+default. `ccb -s` suppresses that implicit CLI elevation; an explicit
+`permission = "auto"` remains an intentional project policy. `danger-full-access`
+does not grant privileges beyond the user running CCB and does not mutate the
+source user's global Codex configuration.
+
 ### 4.6 Provider Command Template
 
 For provider-specific launch wrappers, rich or hybrid `ccb.config` may define an
